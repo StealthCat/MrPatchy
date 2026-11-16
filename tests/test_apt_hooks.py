@@ -215,6 +215,19 @@ def test_unquoted_word_inside_a_block_is_an_untagged_item(text, expected):
     assert result['apt_behavior'] == 'determined'
 
 
+def test_top_level_bare_word_is_a_root_item_and_never_resets_an_option():
+    # apt-config 2.8.3 dumps ``DPkg::Post-Invoke::T;`` as a root untagged item (`` "DPkg::Post-Invoke::T"``)
+    # and creates no ``T`` child, so a later ``T`` keeps its own position and an earlier value survives.
+    result = resolve(part('10a', 'DPkg::Post-Invoke::T;\nDPkg::Post-Invoke::k1 "a";\nDPkg::Post-Invoke::T "/bin/x";'))
+    assert commands(result) == [('DPkg::Post-Invoke', 'a'), ('DPkg::Post-Invoke', '/bin/x')]
+    assert result['apt_behavior'] == 'determined'
+    result = resolve(part('10a', 'DPkg::Post-Invoke::T "/bin/x";\nDPkg::Post-Invoke::T;\nDPkg::Post-Invoke { "a"; };\n'
+                                 'DPkg::Post-Invoke;\nDPkg::Path "/opt/bin";\nDPkg::Path;\nA::::B;'))
+    assert commands(result) == [('DPkg::Post-Invoke', '/bin/x'), ('DPkg::Post-Invoke', 'a')]
+    assert ('DPkg::Path', '/opt/bin') in [(h['option'], h['value']) for h in result['hooks']]
+    assert result['apt_behavior'] == 'determined'
+
+
 def test_clear_with_trailing_separator_clears_nothing():
     # apt-config 2.8.3 keeps both items after ``#clear DPkg::Post-Invoke::;``.
     result = resolve(part('10a', 'DPkg::Post-Invoke {"a";};\nDPkg::Post-Invoke::t "t";\n#clear DPkg::Post-Invoke::;'))
@@ -250,7 +263,7 @@ def test_same_line_block_comment_joins_the_text_around_it(text, expected):
 
 
 def test_block_comment_inside_a_tagged_word_sets_no_hook():
-    # apt-config 2.8.3 reads ``DPkg::Post-Invoke::tef;`` and sets an empty-named root option; nothing runs.
+    # apt-config 2.8.3 reads ``DPkg::Post-Invoke::tef;`` as a root untagged item; nothing runs.
     result = resolve(part('10a', 'DPkg::Post-Invoke::te/*c*/f;'))
     assert commands(result) == []
 

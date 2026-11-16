@@ -271,8 +271,15 @@ def _statements(text: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]
                 continue
             if kind != 'word' or value.startswith('#'):
                 raise _Syntax(line, 'Expected an option name.')
-            path = key_path(value, line)
             nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+            if nxt and nxt[1] in (';', '}'):
+                # APT reads a bare word as an untagged item of the enclosing block, or of the
+                # root at the top level (``DPkg::Post-Invoke::T;`` adds an item whose value is
+                # the text; it creates no ``T`` option). The word is never split on ``::``.
+                statements.append({'op': 'set', 'path': prefix + [''], 'value': value, 'line': line})
+                i += 2 if nxt[1] == ';' else 1
+                continue
+            path = key_path(value, line)
             if nxt and nxt[1] == '{':
                 if path[-1] == '' or len(stack) >= MAX_DEPTH:
                     raise _Syntax(line, 'Unsupported block name or nesting.')
@@ -285,14 +292,6 @@ def _statements(text: str) -> tuple[list[dict[str, Any]], dict[str, Any] | None]
                     raise _Syntax(line, 'An option value must end with a semicolon.')
                 statements.append({'op': 'set', 'path': prefix + path, 'value': nxt[2], 'line': line})
                 i += 3 if after[1] == ';' else 2
-                continue
-            if nxt and nxt[1] in (';', '}'):
-                if stack:
-                    # Inside a block APT reads a bare word as an untagged item: ``{ /tmp/x; }``.
-                    statements.append({'op': 'set', 'path': prefix + [''], 'value': value, 'line': line})
-                else:
-                    statements.append({'op': 'set', 'path': prefix + path, 'value': '', 'line': line})
-                i += 2 if nxt[1] == ';' else 1
                 continue
             raise _Syntax(line, 'An option must end with a semicolon.')
         if lexical:
