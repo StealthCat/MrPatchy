@@ -1,3 +1,7 @@
+## 1.75.12 — 2026-11-16
+
+1. [PR #947](https://github.com/StealthCat/MrPatchy/pull/947): Add administrator count and retry controls for investigations blocked on one server. The host-scoped action uses the existing retry locks, lifecycle checks, 200-row bound and audit; the fleet action stays unchanged. Compatibility: additive API and server-tab UI; no provider call, schema or response-authorization change. Limits: blocked advisory-plan work is not included.
+
 ## 1.75.11 — 2026-11-16
 
 1. [PR #971](https://github.com/StealthCat/MrPatchy/pull/971): Add an I/O-free dpkg configuration contract that reports command hooks, relocations, behavior-changing options, source locations and fail-closed coverage gaps. Compatibility: no runtime behavior changes; the parser is not wired to a collector or UI. Limits: the option table follows dpkg 1.22.6, and per-user/per-run configuration remains unobserved.
