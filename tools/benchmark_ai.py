@@ -56,44 +56,82 @@ def _mysql_tables(connection):
     return [(name, kind) for name, kind in connection.execute(text('SHOW FULL TABLES'))]
 
 
-def claim_empty_mysql(url):
-    """Refuse any database that already has tables; return (engine, server version).
+def _mysql_lock_name(url):
+    # Advisory lock names are server-wide and limited to 64 characters.
+    return 'mrpatchy-ai-benchmark:' + hashlib.sha256(url.database.encode()).hexdigest()[:32]
 
-    An empty schema is the tool's evidence that the target is disposable. Nothing
-    is written before this check passes.
+
+class MySQLClaim:
+    """An empty database held by one benchmark run through a MySQL advisory lock."""
+
+    def __init__(self, engine, connection, lock_name, version):
+        self.engine, self.connection, self.lock_name, self.version = engine, connection, lock_name, version
+        # Only the application's own tables are dropped. The metadata is read at release
+        # time because models keep registering until init() has run.
+        self.fixture_tables = set()
+        self.metadata = None
+
+    def release(self):
+        """Drop the fixture's own tables, report anything else, and release the lock."""
+        from sqlalchemy import text
+        from sqlalchemy.exc import SQLAlchemyError
+
+        try:
+            try:
+                self.connection.execute(text('SELECT 1'))
+                connection = self.connection
+            except SQLAlchemyError:
+                # The lock died with its connection; cleanup of our own tables is still safe.
+                connection = self.engine.connect()
+            foreign = 0
+            owned = self.fixture_tables | set(self.metadata.tables if self.metadata is not None else ())
+            connection.execute(text('SET FOREIGN_KEY_CHECKS=0'))
+            for name, kind in _mysql_tables(connection):
+                if kind == 'VIEW' or name not in owned:
+                    foreign += 1
+                    continue
+                connection.execute(text('DROP TABLE `' + name.replace('`', '``') + '`'))
+            connection.execute(text('SET FOREIGN_KEY_CHECKS=1'))
+            connection.execute(text('SELECT RELEASE_LOCK(:name)'), {'name': self.lock_name})
+            connection.commit()
+            connection.close()
+            if foreign:
+                print(f'warning: left {foreign} table(s) or view(s) the benchmark did not create in the '
+                      'MySQL database; it is no longer empty', file=sys.stderr)
+        finally:
+            self.engine.dispose()
+
+
+def claim_empty_mysql(url):
+    """Lock the database for this run and refuse it unless it has no tables.
+
+    An empty schema is the tool's evidence that the target is disposable. The
+    advisory lock stops two benchmark runs from sharing one database. Nothing
+    is written before both checks pass.
     """
     from sqlalchemy import create_engine, text
     from sqlalchemy.exc import SQLAlchemyError
 
-    scratch = create_engine(url, pool_pre_ping=True)
+    engine = create_engine(url, pool_pre_ping=True)
+    lock_name = _mysql_lock_name(url)
     try:
-        with scratch.connect() as connection:
-            version = str(connection.execute(text('SELECT VERSION()')).scalar_one())[:64]
-            occupied = bool(_mysql_tables(connection))
+        connection = engine.connect()
+        version = str(connection.execute(text('SELECT VERSION()')).scalar_one())[:64]
+        locked = connection.execute(text('SELECT GET_LOCK(:name, 0)'), {'name': lock_name}).scalar_one() == 1
+        occupied = locked and bool(_mysql_tables(connection))
+        if occupied:
+            connection.execute(text('SELECT RELEASE_LOCK(:name)'), {'name': lock_name})
+        connection.commit()
     except SQLAlchemyError as error:
-        scratch.dispose()
+        engine.dispose()
         raise DatabaseRefused(f'cannot inspect the benchmark MySQL database ({type(error).__name__})') from None
-    if occupied:
-        scratch.dispose()
-        raise DatabaseRefused('the benchmark MySQL database already has tables; '
-                              'use an empty disposable database (nothing was changed)')
-    return scratch, version
-
-
-def drop_mysql_tables(scratch):
-    """Remove everything the fixture created in the database that started empty."""
-    from sqlalchemy import text
-
-    try:
-        with scratch.connect() as connection:
-            connection.execute(text('SET FOREIGN_KEY_CHECKS=0'))
-            for name, kind in _mysql_tables(connection):
-                quoted = '`' + name.replace('`', '``') + '`'
-                connection.execute(text(('DROP VIEW ' if kind == 'VIEW' else 'DROP TABLE ') + quoted))
-            connection.commit()
-    finally:
-        scratch.dispose()
-
+    if not locked or occupied:
+        connection.close(); engine.dispose()
+        raise DatabaseRefused(
+            'the benchmark MySQL database already has tables; use an empty disposable database '
+            '(nothing was changed)' if occupied else
+            'another benchmark run holds the benchmark MySQL database; wait for it to finish (nothing was changed)')
+    return MySQLClaim(engine, connection, lock_name, version)
 
 def workload_fingerprint(provider_requests, ssh_requests):
     """Hash the observed synthetic requests independently of dispatch order."""
@@ -158,11 +196,12 @@ def main():
         if args.database == 'mysql':
             try:
                 target = mysql_target(os.environ)
-                scratch, database_version = claim_empty_mysql(target)
+                claim = claim_empty_mysql(target)
             except DatabaseRefused as refusal:
                 parser.error(str(refusal))
-            # Registered only after the empty check, so every table present at exit is the fixture's own.
-            cleanup.callback(drop_mysql_tables, scratch)
+            # Registered only after the lock and empty check; drops only the application's own tables.
+            cleanup.callback(claim.release)
+            database_version = claim.version
             database_url = target.render_as_string(hide_password=False)
         os.environ.pop(MYSQL_URL_ENV, None)
         os.environ.update(DATA_DIR=directory, DATABASE_URL=database_url, DISABLE_SCHEDULER='1')
@@ -172,6 +211,9 @@ def main():
         from app import ai, ai_policy, worker, ai_runs
         from app.db import init, Session, Host, Setting, Behavior, engine
         from app.security import seal
+        if args.database == 'mysql':
+            from app.db import Base
+            claim.metadata = Base.metadata
         single_server_slots = ai_policy.MAX_CONCURRENCY if args.same_server else None
         if single_server_slots is not None and args.concurrency > single_server_slots:
             parser.error(f'--same-server requires --concurrency at most {single_server_slots}')

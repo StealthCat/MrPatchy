@@ -3007,10 +3007,16 @@ python tools/compare_ai_benchmarks.py serial.json parallel.json
   a host and a database. The tool refuses to start unless that database has no
   tables or views, and changes nothing in a refused database. Never point it at
   a Mr Patchy deployment database.
-- **Cleanup:** on success and on failure it drops every table and view in that
-  database, which started empty, so the next run can reuse it.
-- **No secrets in output:** refusals are fixed text. A connection failure reports
-  only the error class. The report never contains the URL.
+- **One run at a time:** the run holds a MySQL advisory lock named after the
+  database from before the empty check until cleanup. A second run against the
+  same database is refused and changes nothing.
+- **Cleanup:** on success and on failure it drops only the application's own
+  tables, so the next run can reuse the database. A table or view that someone
+  else created during the run is left in place and reported as a count on
+  stderr; the database is then no longer empty.
+- **No secrets in output:** refusals before the run starts are fixed text. A
+  connection failure reports only the error class. The report never contains
+  the URL. A failure inside the fixture itself is an ordinary Python traceback.
 - **Report:** `database` is `sqlite` or `mysql`, and `database_version` is the
   server (or SQLite library) version. The comparator reads older reports as
   SQLite, refuses a pair measured on different backends and states the backend.

@@ -154,17 +154,66 @@ def test_mysql_mode_cleans_up_after_a_failure_once_the_database_was_claimed(empt
 
 
 @needs_mysql
-def test_cleanup_removes_every_fixture_table_and_view(empty_mysql):
+def test_cleanup_drops_only_fixture_tables_and_keeps_anything_else(empty_mysql, capsys):
     from sqlalchemy import text
-    scratch, version = benchmark_ai.claim_empty_mysql(benchmark_ai.mysql_target({ENV: MYSQL_URL}))
-    assert version
+    claim = benchmark_ai.claim_empty_mysql(benchmark_ai.mysql_target({ENV: MYSQL_URL}))
+    assert claim.version
+    claim.fixture_tables.update({'parent', 'odd`name'})
     with empty_mysql.begin() as connection:
         connection.execute(text('CREATE TABLE parent (id INT PRIMARY KEY)'))
         connection.execute(text('CREATE TABLE `odd``name` (id INT PRIMARY KEY, parent INT, '
                                 'FOREIGN KEY (parent) REFERENCES parent (id))'))
-        connection.execute(text('CREATE VIEW parent_view AS SELECT id FROM parent'))
+        connection.execute(text('CREATE TABLE operator_data (id INT PRIMARY KEY, note VARCHAR(20))'))
+        connection.execute(text("INSERT INTO operator_data VALUES (1, 'keep me')"))
+        connection.execute(text('CREATE VIEW operator_view AS SELECT id FROM operator_data'))
     empty_mysql.dispose()
-    with pytest.raises(benchmark_ai.DatabaseRefused, match='already has tables'):
-        benchmark_ai.claim_empty_mysql(benchmark_ai.mysql_target({ENV: MYSQL_URL}))
-    benchmark_ai.drop_mysql_tables(scratch)
-    assert _tables(empty_mysql) == []
+    claim.release()
+    assert _tables(empty_mysql) == ['operator_data', 'operator_view']
+    with empty_mysql.connect() as connection:
+        assert connection.execute(text('SELECT note FROM operator_data')).scalar_one() == 'keep me'
+    assert 'left 2 table(s) or view(s) the benchmark did not create' in capsys.readouterr().err
+
+
+@needs_mysql
+def test_a_table_created_during_a_run_survives_it(empty_mysql):
+    import threading
+    import time
+    from sqlalchemy import text
+
+    def intrude():
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if 'hosts' in _tables(empty_mysql):
+                with empty_mysql.begin() as connection:
+                    connection.execute(text('CREATE TABLE operator_data (id INT PRIMARY KEY, note VARCHAR(20))'))
+                    connection.execute(text("INSERT INTO operator_data VALUES (1, 'keep me')"))
+                return
+            time.sleep(0.05)
+
+    intruder = threading.Thread(target=intrude)
+    intruder.start()
+    result = run('--database', 'mysql', '--runs', '4', '--provider-delay-ms', '500', '--ssh-delay-ms', '1',
+                 url=MYSQL_URL)
+    intruder.join()
+    assert result.returncode == 0, result.stderr
+    assert 'left 1 table(s) or view(s) the benchmark did not create' in result.stderr
+    assert _tables(empty_mysql) == ['operator_data']
+    with empty_mysql.connect() as connection:
+        assert connection.execute(text('SELECT note FROM operator_data')).scalar_one() == 'keep me'
+
+
+@needs_mysql
+def test_a_second_run_is_refused_while_the_first_holds_the_database(empty_mysql):
+    first = benchmark_ai.claim_empty_mysql(benchmark_ai.mysql_target({ENV: MYSQL_URL}))
+    try:
+        with pytest.raises(benchmark_ai.DatabaseRefused, match='another benchmark run holds'):
+            benchmark_ai.claim_empty_mysql(benchmark_ai.mysql_target({ENV: MYSQL_URL}))
+        second = run('--database', 'mysql', '--runs', '2', url=MYSQL_URL, timeout=60)
+        assert second.returncode == 2 and second.stdout == ''
+        assert 'another benchmark run holds the benchmark MySQL database' in second.stderr
+        assert 'nothing was changed' in second.stderr
+        assert _tables(empty_mysql) == []
+    finally:
+        first.release()
+    # The lock is free again once the first run has finished.
+    benchmark_ai.claim_empty_mysql(benchmark_ai.mysql_target({ENV: MYSQL_URL})).release()
