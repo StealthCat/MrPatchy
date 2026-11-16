@@ -4,7 +4,7 @@ Budget days are local calendar days, so they are 23 or 25 hours long when the cl
 change, and a few zones change their clocks at local midnight itself. These tests pin the
 real reservation path on such days. They change no runtime behavior.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -71,17 +71,36 @@ def test_budget_windows_tile_time_across_every_clock_change(name):
         assert min(lengths) < 24 * HOUR < max(lengths)
 
 
+def offset_step(name, moment):
+    """Return how far the UTC offset moved in the hour ending at moment."""
+    zone = ZoneInfo(name)
+    def offset(instant):
+        return datetime.fromtimestamp(instant, timezone.utc).astimezone(zone).utcoffset()
+    return offset(moment) - offset(moment - HOUR)
+
+
 def dst_day(name, kind):
-    """Return the first short or long budget day in PERIOD, or skip when the zone has none."""
-    for change in offset_changes(name):
+    """Return the first short or long budget day in PERIOD.
+
+    Whether such a day exists is decided from the tz database alone: a rising offset makes
+    that local day short and a falling one makes it long. Only a zone with no change in that
+    direction is skipped. When the tz database has one, ``_window`` (the code under test) must
+    report the matching day, so a window regression fails instead of turning into a skip.
+    """
+    wanted = [change for change in offset_changes(name)
+              if (offset_step(name, change) > timedelta(0)) == (kind == 'short')]
+    if not wanted:
+        if name in STABLE_DST:
+            pytest.fail(f'{name} has no {kind} day in the installed tz database for the test period')
+        pytest.skip(f'the installed tz database has no {kind} day for {name} in the test period')
+    for change in wanted:
         # The hour scan reports the hour after the change; step back to the change itself.
         for moment in (change, change - HOUR):
             start, reset = ai_budget._window(moment, name)
             if (reset - start < 24 * HOUR) if kind == 'short' else (reset - start > 24 * HOUR):
                 return start, reset
-    if name in STABLE_DST:
-        pytest.fail(f'{name} has no {kind} budget day in the test period')
-    pytest.skip(f'the installed tz database has no {kind} day for {name} in the test period')
+    pytest.fail(f'the tz database has {len(wanted)} {kind}-day clock change(s) for {name}, '
+                f'but no budget window around them is {kind}')
 
 
 @pytest.mark.parametrize('name', ('America/New_York', 'Australia/Lord_Howe') + MIDNIGHT_DST)
