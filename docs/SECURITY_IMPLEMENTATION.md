@@ -2805,6 +2805,23 @@ Amounts remain local public-price estimates for comparison with provider billing
 records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
 and the wider roadmap A acceptance remain planned.
 
+### Spend ledger retained after AI history pruning — worker checkpoint #986
+
+The scheduler's hourly AI run-history cleanup is now `ai_runs.prune_history(session,
+cutoff)`. It runs the same four deletions as before (events, calls and host links of
+finished runs started before the cutoff, then the runs) and still keeps `running`
+runs. The scheduler calls it with the unchanged `history_days` cutoff.
+`tests/test_ai_budget_pruning_acceptance.py` covers the milestone 4 item "retained
+ledgers after history pruning". It runs that deletion at the shortest retention (one day) against ledger
+rows in every status. The rows are linked to pruned runs, retained runs and no run, across the
+current and an older window. Every ledger row, `status()`, `history()`, the CSV
+and capped admission read identically afterwards. A cap reached by spend whose
+runs were pruned still refuses admission. Entries whose runs were pruned still
+reconcile, release and become uncertain. Mutations that delete ledger rows with
+their runs, or prune children of running runs, fail the suite. The suite runs on
+SQLite locally and on MySQL in the hosted shards. Pruning cadence, retention
+settings and the rest of milestone 4 are unchanged and remain open.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
