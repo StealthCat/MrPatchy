@@ -1,3 +1,7 @@
+## 1.75.13 — 2026-11-16
+
+1. [PR #978](https://github.com/StealthCat/MrPatchy/pull/978): Give fleet and per-server investigation lists URL-addressed pagination, including the cached filter; page navigation, reloads and Back/Forward restore the selected page. Page 1 keeps existing addresses. Compatibility: frontend-only; no API, schema, role or authorization change. Limits: other paged lists still have no page address.
+
 ## 1.75.12 — 2026-11-16
 
 1. [PR #947](https://github.com/StealthCat/MrPatchy/pull/947): Add administrator count and retry controls for investigations blocked on one server. The host-scoped action uses the existing retry locks, lifecycle checks, 200-row bound and audit; the fleet action stays unchanged. Compatibility: additive API and server-tab UI; no provider call, schema or response-authorization change. Limits: blocked advisory-plan work is not included.
