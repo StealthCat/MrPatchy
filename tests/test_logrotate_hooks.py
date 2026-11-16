@@ -214,3 +214,57 @@ def test_helpers():
     assert lh.taboo('a.rhn-cfg-tmp-9') == '*.rhn-cfg-tmp-*' and lh.taboo('.hidden') is None
     assert lh.split_patterns(' /a\t"/b c" \'/d\'\n/e*') == ['/a', '/b c', '/d', '/e*']
     assert lh.split_patterns('/a "open') is None
+
+
+def test_hidden_names_are_never_taboo():
+    # logrotate matches taboo patterns with FNM_PERIOD, so "*" does not cover a leading period.
+    # 3.21.0 reads every one of these names and runs their scripts.
+    names = ('.bak', '.swp', '.x.bak', '.x~', '.~', '.,v', '.rpmsave', '.disabled', '.dpkg-old', '.rhn-cfg-tmp-1')
+    assert [lh.taboo(name) for name in names] == [None] * len(names)
+    includes = directory(*((name, 'file', f'/l{i} {{ postrotate\n echo {i}\n endscript\n}}\n')
+                           for i, name in enumerate(names)),
+                         ('x.bak', 'file', '/no { postrotate\n echo no\n endscript\n}\n'))
+    result = lh.resolve(main(f'include {D}\n'), includes)
+    assert result['logrotate_reading'] == 'determined'
+    assert sorted(s['path'] for s in result['scripts']) == sorted(f'{D}/{name}' for name in names)
+    assert [f['path'] for f in result['files'] if f['state'] == 'ignored'] == [f'{D}/x.bak']
+
+
+def test_equals_separates_a_directive_from_its_value():
+    includes = {'/etc/extra': {'type': 'file', 'content': '/x { postrotate\n echo x\n endscript\n}\n'}}
+    text = ('include=/etc/extra\ncompresscmd=/bin/a\n'
+            '/a {\n rotate=1\n compresscmd = /bin/b\n uncompresscmd\t=/bin/c\n su=root adm\n}\n')
+    result = lh.resolve(main(text), includes)
+    assert result['logrotate_reading'] == 'determined'
+    assert codes(result) == BASE_GAPS
+    assert [(s['path'], s['patterns']) for s in result['scripts']] == [('/etc/extra', ['/x'])]
+    assert [(d['directive'], d['value'], d['scope']) for d in result['directives']] == [
+        ('compresscmd', '/bin/a', 'global'), ('compresscmd', '/bin/b', 'section'),
+        ('uncompresscmd', '/bin/c', 'section'), ('su', 'root adm', 'section')]
+    for form in ('include = /etc/extra\n', 'include\t=\t/etc/extra\n'):
+        assert [s['path'] for s in lh.resolve(main(form), includes)['scripts']] == ['/etc/extra']
+
+
+def test_input_logrotate_rejects_is_undetermined_and_later_content_kept():
+    script = ' postrotate\n echo x\n endscript\n'
+    cases = {
+        '/a {\r\n' + script.replace('\n', '\r\n') + '}\r\n': 'control_whitespace',
+        'var/log/x {\n' + script + '}\n': 'keyword_not_separated',
+        '*.log {\n' + script + '}\n': 'unexpected_line_start',
+        '/a {\n postrotate/x\n' + script + '}\n': 'keyword_not_separated',
+        '/a {\n compresscmd:/bin/true\n' + script + '}\n': 'keyword_not_separated',
+        '/a {\n \x0bmissingok\n' + script + '}\n': 'control_whitespace',
+        '﻿/a {\n' + script + '}\n': 'unexpected_line_start',
+        '/a { rotate 1 } /b {\n' + script + '}\n': 'brace_in_value',
+    }
+    for text, code in cases.items():
+        result = lh.resolve(main(text))
+        assert result['logrotate_reading'] == 'undetermined', text
+        assert code in codes(result), text
+        # Listed as an upper bound, so a rejected line cannot hide a script.
+        assert [s['kind'] for s in result['scripts']] == ['postrotate'], text
+    # A rejected top-level line does not swallow the include that follows it.
+    includes = {'/etc/extra': {'type': 'file', 'content': '/x { lastaction\n echo x\n endscript\n}\n'}}
+    result = lh.resolve(main('*junk\ninclude /etc/extra\n/a { }\n'), includes)
+    assert codes(result)[2:] == ['unexpected_line_start']
+    assert [s['path'] for s in result['scripts']] == ['/etc/extra']

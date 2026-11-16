@@ -19,8 +19,13 @@ binary:
 - ``include`` names a file or a directory. Directory entries are read in byte
   order, hidden names included. A name matching a taboo pattern, an empty
   file, a non-regular entry and a dangling link are not read.
-- A word starting with a letter is a directive. Anything else at top level
-  starts a log section: patterns up to ``{``, then directives up to ``}``.
+- A word starting with a letter is a directive and must be followed by a
+  blank or ``=``; one ``=`` may separate a directive from its value
+  (``include=/path``). A top-level line starting with ``/`` or a quote starts
+  a log section: patterns up to ``{``, then directives up to ``}``. logrotate
+  rejects any other line start.
+- A name matching a taboo pattern is ignored, but ``*`` never covers a leading
+  period, so hidden names such as ``.cache~`` are read.
 - A script starts directly after its keyword, on the same line, and ends before
   the first later line whose first word is ``endscript``. Parsing continues
   after that word on the same line.
@@ -33,7 +38,10 @@ Fail-closed rules:
   ``undetermined`` instead of hiding later content. An unknown directive, a
   script outside a section (still listed) or without ``endscript``, an
   ``include`` inside a
-  section (its target is still parsed), an unterminated section or quote, a script
+  section (its target is still parsed), a keyword not followed by a blank or
+  ``=``, a top-level line that starts with neither a keyword nor a file name, a
+  brace inside a directive value, a carriage return, vertical tab or form feed
+  (logrotate does not skip them as blanks), an unterminated section or quote, a script
   body with a line that starts with a script keyword, a NUL byte, an uncollected,
   unreadable or oversized file, an include that is relative, uses ``~``, loops
   or nests too deeply, and over-cap input are gaps.
@@ -91,6 +99,7 @@ DEFAULT_TABOO = ('*.bak', '*.cfsaved', '*.disabled', '*.dpkg-bak', '*.dpkg-del',
 _SPACE = ' \t\n\v\f\r'
 _KEY = re.compile(r'[A-Za-z][A-Za-z0-9]*')
 _NESTED_SCRIPT = re.compile(r'\n[ \t\v\f\r]*(?:' + '|'.join(SCRIPT_KEYS) + r')(?=[ \t\v\f\r\n]|$)')
+_OTHER_SPACE = re.compile(r'[\r\v\f]')
 _ENDSCRIPT = re.compile(r'^[ \t\v\f\r]*endscript(?=[ \t\v\f\r\n]|$)', re.MULTILINE)
 
 
@@ -99,7 +108,13 @@ def _gap(code: str, detail: str, **extra: Any) -> dict[str, Any]:
 
 
 def taboo(name: str) -> str | None:
-    """Return the built-in taboo pattern that makes logrotate ignore ``name``, if any."""
+    """Return the built-in taboo pattern that makes logrotate ignore ``name``, if any.
+
+    logrotate matches with ``FNM_PERIOD``: a leading period is never covered by
+    ``*``, so a hidden name such as ``.cache~`` or ``.x.bak`` is read.
+    """
+    if name.startswith('.'):
+        return None
     return next((pattern for pattern in DEFAULT_TABOO if fnmatch.fnmatchcase(name, pattern)), None)
 
 
@@ -183,8 +198,25 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
             pos = end
             return value
 
+        def value_of_line(at: int) -> str:
+            """The value of a directive; logrotate accepts one ``=`` before it."""
+            nonlocal pos
+            while pos < len(text) and text[pos] in ' \t':
+                pos += 1
+            if pos < len(text) and text[pos] == '=':
+                pos += 1
+            value = rest_of_line()
+            if '{' in value or '}' in value:
+                problem('brace_in_value', 'A brace on a directive line belongs to its value; logrotate does not '
+                        'open or close a section there and may reject the value.', at)
+            return value
+
         if '\x00' in text:
             problem('nul_byte', 'The file contains a NUL byte; logrotate stops reading there.', text.index('\x00'))
+        other_space = _OTHER_SPACE.search(text)
+        if other_space is not None:
+            problem('control_whitespace', 'The file contains a carriage return, vertical tab or form feed; '
+                    'logrotate does not skip them as blanks and may reject those lines.', other_space.start())
         while pos < len(text):
             char = text[pos]
             if char in _SPACE:
@@ -206,11 +238,23 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                         start)
                 continue
             match = _KEY.match(text, pos)
-            if match is None or (section is None and match.end() < len(text)
-                                 and text[match.end()] not in _SPACE + '{}'):
+            if match is not None and match.end() < len(text) and text[match.end()] not in _SPACE + '=':
+                # logrotate 3.21.0 rejects the keyword and drops the section or the rest of the file.
+                # The line is skipped and later content is still parsed, so nothing is hidden.
+                rest_of_line()
+                problem('keyword_not_separated', 'A word that starts with a letter is not followed by a blank '
+                        'or "="; logrotate rejects it and skips the section or the rest of the file.', start)
+                continue
+            if match is None:
                 if section is not None:
                     rest_of_line()
                     problem('unknown_directive', 'logrotate ignores or rejects this line.', start)
+                    continue
+                if char not in '/"\'':
+                    # Only "/", a quote or a letter can start a top-level line; logrotate skips the line.
+                    rest_of_line()
+                    problem('unexpected_line_start', 'A top-level line starts with neither a keyword nor a log '
+                            'file name; logrotate rejects and skips it.', start)
                     continue
                 brace = text.find('{', pos)
                 if brace < 0:
@@ -281,7 +325,7 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                 rest_of_line()
                 problem('unknown_directive', 'logrotate ignores or rejects this line.', start)
                 continue
-            value = rest_of_line()
+            value = value_of_line(start)
             if key in REPORTED_VALUE_KEYS:
                 record(directives, {'directive': key, 'value': value[:MAX_PATH],
                                     'scope': 'global' if section is None else 'section',

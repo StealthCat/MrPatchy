@@ -4161,13 +4161,21 @@ scheduled root commands that the catalog previously listed as metadata only.
 - **Effective files.** `include` of a file or directory is followed. Directory
   entries are read in byte order, hidden names included. Names matching
   logrotate 3.21.0's built-in taboo list, empty files, non-regular entries and
-  dangling links are reported as ignored with a reason.
+  dangling links are reported as ignored with a reason. A hidden name is never
+  taboo: logrotate's match does not let `*` cover a leading period, so
+  `.cache~` and `.x.bak` are read. One `=` may separate a directive from its
+  value, so `include=/path` is followed.
 - **Fail closed.** The result is `undetermined` on an unknown directive, a
   script outside a section (still listed) or without `endscript`, an
   unterminated section or
   quote, a script body with a line that starts with a script keyword, a changed taboo list, an `include` inside a section, an include that
   was not collected, is relative, loops or nests too deeply, an unreadable or
-  oversized file, and over-cap input. Later content is still parsed. After a
+  oversized file, and over-cap input. Input that logrotate rejects is
+  undetermined as well: a keyword not followed by a blank or `=`, a top-level
+  line that starts with neither a keyword nor a file name, a brace inside a
+  directive value, and a carriage return, vertical tab or form feed. Such a
+  line is skipped, not read as a log section, so it cannot swallow a later
+  `include`. Later content is still parsed. After a
   `tabooext` or `taboopat` directive no name is treated as taboo, and the
   target of an `include` inside a section is parsed, because logrotate reads
   it.
