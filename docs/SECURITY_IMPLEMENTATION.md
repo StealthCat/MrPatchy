@@ -2858,6 +2858,35 @@ behavior are unchanged. API clients that saved without previewing were accepted
 and audited at this checkpoint. #881 now refuses unconfirmed expansions.
 Automatic migration of legacy installations remains open.
 
+### Lost or crashed triage leases under a daily cap — worker checkpoint #992
+
+Milestone 4 acceptance for **lease loss/crash** combined with the shared daily cap.
+`tests/test_ai_budget_lease_acceptance.py` drives the real `worker.investigate_one`
+path, replacing only the provider transport and the SSH call with fixtures:
+
+- **Late result after lease loss.** A late response from a worker whose lease expired
+  mid-call is reconciled into that call's own ledger row and stays counted. No
+  assessment or verdict is accepted from it, and its run is `interrupted`. The
+  successor reserves and settles its own row, and its run is the only one that
+  produces the assessment.
+- **Hung worker at the cap.** When the cap has room only for the hung call's sent
+  reservation, a successor recovering the expired subject is not admitted. It
+  creates no run and no ledger row, sends nothing, and the subject stays `pending`
+  until the reset. When the hung call later fails with an unknown outcome, its row
+  becomes `uncertain` and stays counted. After the reset the subject is admitted
+  with a fresh reservation in the new window.
+- **Lease lost during follow-up evidence collection.** The second-stage call is never
+  reserved or sent. The first call settles and stays counted, and no assessment is
+  accepted.
+
+No defect found and no runtime change. One observation: when the owning worker
+detects its own lost lease before any successor reconciles it, the run is recorded
+as `error`, not `interrupted`. Its message still says no stale result was accepted
+and that a sent call may still be billable. From code reading, not tested here: process death between `reserve` and
+`mark_sent` leaves a `reserved` row counted until its window closes. That is
+conservative, because no transmission happened. Multi-process admission,
+stale/replayed results and before/after performance remain open.
+
 ### Non-expanding legacy migration proposal — worker checkpoint #879 (fixes #878)
 
 `ai_control_preview.legacy_migration()` derives the suggested move from legacy
