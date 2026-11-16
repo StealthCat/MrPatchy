@@ -77,7 +77,10 @@ COMMAND_LISTS = {
     ('dpkg', 'post-invoke'): 'DPkg::Post-Invoke',
     ('dpkg', 'pre-install-pkgs'): 'DPkg::Pre-Install-Pkgs',
 }
-DIRECTORY_KEYS = {('dir',), ('dir', 'etc'), ('dir', 'etc', 'parts'), ('dir', 'etc', 'main')}
+# Options APT uses to locate its configuration. APT resolves the main file's path only after
+# it has read the parts directory, so setting or clearing any of these there can move or drop
+# ``apt.conf``; ``RootDir`` is prefixed to every such path.
+DIRECTORY_KEYS = {('rootdir',), ('dir',), ('dir', 'etc'), ('dir', 'etc', 'parts'), ('dir', 'etc', 'main')}
 KINDS = ('command', 'proxy_command', 'binary_override', 'path_override', 'dpkg_options')
 NOT_A_VERDICT = ('Effective APT hook options are reported for review only. They are not a safety verdict, '
                  'and unrecognized options are not evaluated.')
@@ -419,7 +422,9 @@ def resolve(parts: Any, main: Any = None) -> dict[str, Any]:
                 add_gap('include_not_followed', 'An #include target is not followed by this contract.',
                         path=path, line=statement['line'], target=statement['target'][:MAX_VALUE])
                 continue
-            if statement['op'] == 'set' and tuple(p.lower() for p in statement['path']) in DIRECTORY_KEYS:
+            if tuple(p.lower() for p in statement['path']) in DIRECTORY_KEYS:
+                # A ``#clear`` counts as much as an assignment: ``#clear Dir::Etc::Main;`` in a
+                # parts file leaves APT without a main file to read.
                 add_gap('directory_override', 'The configuration changes where APT reads its configuration.',
                         path=path, line=statement['line'])
             _apply(root, statement, (path, statement['line']))

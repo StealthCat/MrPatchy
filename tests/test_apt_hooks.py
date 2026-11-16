@@ -171,6 +171,40 @@ def test_include_is_never_followed_and_directory_overrides_are_gaps():
     assert gaps['directory_override']['line'] == 2
 
 
+@pytest.mark.parametrize('line', [
+    '#clear Dir;',
+    '#clear Dir::Etc;',
+    '#clear Dir::Etc::Main;',
+    '#clear dir::ETC::main;',
+    '#clear Dir::Etc::Parts;',
+    'RootDir "/srv/other";',
+    'RootDir { "/srv/other"; };',
+    '#clear RootDir;',
+])
+def test_clearing_or_relocating_the_configuration_directories_is_a_gap(line):
+    # apt 2.8.3 resolves the main file's path after reading the parts directory, so these
+    # statements can stop it reading /etc/apt/apt.conf (or make it read another file).
+    result = resolve(part('10a', 'DPkg::Pre-Invoke:: "kept";\n' + line),
+                     main={'present': True, 'content': 'DPkg::Post-Invoke:: "/bin/from-main";'})
+    expected = 'determined' if line.startswith('RootDir {') else 'undetermined'
+    assert result['apt_behavior'] == expected
+    gaps = [g for g in result['gaps'] if g['code'] == 'directory_override']
+    if expected == 'undetermined':
+        assert [(g['path'], g['line']) for g in gaps] == [(PARTS + '/10a', 2)]
+    else:
+        assert gaps == []
+    # Hooks stay visible either way.
+    assert ('DPkg::Pre-Invoke', 'kept') in commands(result)
+
+
+@pytest.mark.parametrize('line', ['#clear Dir::Etc::Main::x;', '#clear Dir::State;', 'Dir::Etc::Main::x "y";',
+                                  'Dir::Etc::Main;', 'RootDir::x "/n";'])
+def test_statements_beside_the_configuration_directories_are_not_gaps(line):
+    result = resolve(part('10a', line), main={'present': True, 'content': 'DPkg::Post-Invoke:: "/bin/from-main";'})
+    assert result['apt_behavior'] == 'determined'
+    assert commands(result) == [('DPkg::Post-Invoke', '/bin/from-main')]
+
+
 def test_unreadable_oversized_and_invalid_observations_fail_closed():
     big = 'x' * (apt_hooks.MAX_FILE_BYTES + 1)
     result = resolve(part('10a', None), part('20b', big), {'name': '../x', 'type': 'file', 'content': ''})

@@ -3802,7 +3802,9 @@ entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
 - **Fail closed:** syntax errors (including a quoted value left open at the end
   of a line, a quoted string touching other text and `*/` directly followed by
   `/`, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
-  overrides, over-cap input and uncollected files make APT behavior
+  overrides (setting or clearing `RootDir`, `Dir`, `Dir::Etc`, `Dir::Etc::Main`
+  or `Dir::Etc::Parts`, since APT locates `apt.conf` after reading the parts
+  directory), over-cap input and uncollected files make APT behavior
   `undetermined`. Hooks parsed before an error stay visible. The unobservable
   `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.
 - **Still open:** collector content capture, catalog `entries_parsed` wiring,
