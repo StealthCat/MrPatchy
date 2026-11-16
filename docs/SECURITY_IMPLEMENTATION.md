@@ -3953,7 +3953,9 @@ part of the catalog's `event_hooks` mechanism. It takes supplied file metadata,
 performs no I/O and never reads a script's contents.
 
 - **Source.** The rules follow `nm-dispatcher.c` as read in NetworkManager
-  1.36.6 and 1.46.0. The two agree except that 1.36 has no device handlers.
+  1.36.6, 1.46.0, 1.52.0, 1.54.3 and 1.58.1. The functions are byte-identical
+  in the four releases from 1.46.0, and 1.36.6 agrees with them except that it
+  has no device handlers. A version above 1.58 gets a non-blocking gap.
 - **Scanned directories.** `/usr/lib/NetworkManager/dispatcher.d` and
   `/etc/NetworkManager/dispatcher.d`, with `pre-up.d` (pre-up, vpn-pre-up) and
   `pre-down.d` (pre-down, vpn-pre-down). The top directory serves every other
@@ -3976,9 +3978,13 @@ performs no I/O and never reads a script's contents.
 - **Device handlers.** From 1.46, `device/<name>` runs only for a generic
   connection that names it, so handlers are listed separately with that
   condition. `/etc` is tried first and `/usr/lib` is used when the `/etc` file
-  is unusable; there is no masking and no name filter. On 1.36 they are reported
-  as unsupported. For versions in between they are unresolved with a blocking
-  gap, because those versions were not read.
+  is unusable; there is no masking. The dispatcher applies no name filter,
+  but NetworkManager rejects a connection whose handler name starts with a dot
+  or has a character other than letters, digits, `-`, `_` and `.`, so a file
+  with such a name is reported as `ignored` with the reason that no connection
+  can name it. Upstream NEWS lists device handlers as new in 1.46, so on 1.36
+  to 1.44 they are reported as unsupported. On a 1.45 development snapshot,
+  which was not read, they are unresolved with a blocking gap.
 - **Fail closed.** The caller states for every scanned directory whether it was
   listed, absent or unreadable, and supplies the NetworkManager version.
   A directory or version that was not observed, a version older than 1.36,

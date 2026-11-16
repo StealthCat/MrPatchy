@@ -7,8 +7,9 @@ run. It never reads a script's contents.
 
 Semantics follow ``src/nm-dispatcher/nm-dispatcher.c`` (``check_filename``,
 ``check_file``, ``check_permissions``, ``find_scripts`` and
-``script_must_wait``), read in NetworkManager 1.36.6 and 1.46.0, which agree
-except for device handlers:
+``script_must_wait``), read in NetworkManager 1.36.6, 1.46.0, 1.52.0, 1.54.3 and
+1.58.1. The four releases from 1.46.0 are byte-identical in these functions, and
+1.36.6 agrees with them except that it has no device handlers:
 
 * The scanned directories are ``/usr/lib/NetworkManager/dispatcher.d`` and
   ``/etc/NetworkManager/dispatcher.d``, plus their ``pre-up.d`` and
@@ -29,8 +30,12 @@ except for device handlers:
   in ``/no-wait.d`` runs without blocking the scripts after it.
 * From 1.46, ``device/<name>`` is a device handler run only for a generic
   connection that names it. ``/etc`` is tried first and ``/usr/lib`` is used
-  when the ``/etc`` file fails the file check; there is no masking and no name
-  filter.
+  when the ``/etc`` file fails the file check; there is no masking and the
+  dispatcher applies no name filter. NetworkManager itself rejects a connection
+  whose ``generic.device-handler`` starts with ``.`` or has a character outside
+  ``A-Z a-z 0-9 - _ .`` (``verify`` in ``nm-setting-generic.c``), so a file with
+  such a name is reported as one no connection can name. Upstream NEWS lists
+  device handlers as new in 1.46; 1.45 development snapshots were not read.
 
 It performs no I/O, never runs a command and never authorizes a response
 action. Missing or malformed metadata, an unobserved directory or symlink
@@ -44,9 +49,11 @@ import re
 from typing import Any
 
 CONTRACT_VERSION = 1
-REFERENCE_VERSIONS = ('1.36.6', '1.46.0')
+REFERENCE_VERSIONS = ('1.36.6', '1.46.0', '1.52.0', '1.54.3', '1.58.1')
 MIN_VERSION = (1, 36)
 DEVICE_HANDLER_VERSION = (1, 46)
+DEVICE_HANDLER_UNVERIFIED = (1, 45)  # development series that led to 1.46; not read
+MAX_VERSION = (1, 58)
 MAX_FILES = 1024
 MAX_PATH = 4096
 MAX_GAPS = 64
@@ -96,9 +103,13 @@ REASONS = {
     'device_handler_fallback': 'Device handler under /usr/lib, used because the /etc file with this name is '
                                'unusable. Runs as root only for a generic connection that names it.',
     'device_handlers_unsupported': 'This NetworkManager version has no device handlers.',
+    'device_handler_name_invalid': 'NetworkManager rejects a connection that names this device handler (the name '
+                                   'starts with a dot or has a character other than letters, digits, "-", "_" and '
+                                   '"."), so it is not run for any connection.',
     'unresolved': 'Required metadata was not supplied, so the outcome is not determined.',
 }
 _CONTROL = re.compile(r'[\x00-\x1f\x7f]')
+_HANDLER_NAME = re.compile(r'[A-Za-z0-9_-][A-Za-z0-9_.-]*')
 _VERSION = re.compile(r'(\d{1,4})\.(\d{1,4})(?:\.(\d{1,6}))?(?:[-+~.][0-9A-Za-z.+~-]{0,64})?')
 
 
@@ -192,9 +203,9 @@ def _parse_version(version: Any, gaps: list[dict[str, Any]]) -> tuple[int, int] 
         _gap(gaps, 'version_unsupported',
              detail='The rules were checked from NetworkManager 1.36; older versions are not assessed.')
         return None
-    if parsed > DEVICE_HANDLER_VERSION:
+    if parsed > MAX_VERSION:
         _gap(gaps, 'version_newer_than_reference',
-             detail='The rules were checked up to NetworkManager 1.46; a newer version may differ.')
+             detail='The rules were checked up to NetworkManager 1.58; a newer version may differ.')
     return parsed
 
 
@@ -282,8 +293,10 @@ def evaluate(files: Any, *, version: Any = None, directories: Any = None) -> dic
     ``symlink``, ``directory`` or ``other``) and, for anything but a symlink, ``mode`` (permission
     bits including set-UID, 0–0o7777), ``uid`` and ``size``. A symlink carries ``link_target`` (the
     raw link text), ``target`` (the same stat fields for what it resolves to, or ``None`` when it
-    resolves to nothing) and optionally ``link_dir_realpath`` (the resolved directory of the link
-    target). ``directories`` is a list of ``{'path', 'state'}`` with state ``listed``, ``absent`` or
+    resolves to nothing) and optionally ``link_dir_realpath``: ``realpath`` of the directory part
+    of the link text, taken relative to the script's own directory when the text is relative. That
+    is what nm-dispatcher resolves; it is not the directory of the fully resolved target, which
+    differs when the last component of the link text is itself a symlink. ``directories`` is a list of ``{'path', 'state'}`` with state ``listed``, ``absent`` or
     ``unreadable`` for each scanned directory. ``version`` is the NetworkManager version string.
     """
     gaps: list[dict[str, Any]] = []
@@ -345,14 +358,18 @@ def evaluate(files: Any, *, version: Any = None, directories: Any = None) -> dic
         if kind == 'device':
             if parsed_version is None or parsed_version < DEVICE_HANDLER_VERSION:
                 for entry in by_base.values():
-                    if parsed_version is not None and parsed_version == MIN_VERSION:
+                    if parsed_version is not None and parsed_version < DEVICE_HANDLER_UNVERIFIED:
                         records[entry['path']] = _record(entry, 'ignored', 'device_handlers_unsupported')
                     else:
                         if parsed_version is not None:
                             _gap(gaps, 'device_handler_version_unverified', entry['path'],
-                                 'Device handlers were checked in NetworkManager 1.46 (present) and 1.36 '
-                                 '(absent) only.')
+                                 'Device handlers are new in NetworkManager 1.46; the 1.45 development series '
+                                 'was not read.')
                         records[entry['path']] = _record(entry, 'unresolved', 'unresolved')
+                continue
+            if _HANDLER_NAME.fullmatch(name) is None:
+                for entry in by_base.values():
+                    records[entry['path']] = _record(entry, 'ignored', 'device_handler_name_invalid')
                 continue
             etc_runs = False
             if etc is not None:

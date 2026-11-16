@@ -136,17 +136,22 @@ def test_device_handlers_prefer_etc_and_fall_back_without_masking():
         f(f'{ETC}/device/both'), f(f'{LIB}/device/both'),
         f(f'{ETC}/device/broken', mode=0o644), f(f'{LIB}/device/broken'),
         f(f'{LIB}/device/only'),
-        f(f'{ETC}/device/.dot'),
+        f(f'{ETC}/device/.dot'), f(f'{ETC}/device/x~'), f(f'{ETC}/device/my handler'), f(f'{LIB}/device/my handler'),
+        f(f'{ETC}/device/\u00e9'), f(f'{ETC}/device/ok_1.sh-'), f(f'{ETC}/device/-lead'),
         f(f'{ETC}/device/sub/deep'),
     ])
     assert [(h['name'], h['path']) for h in result['device_handlers']] == [
-        ('.dot', f'{ETC}/device/.dot'), ('both', f'{ETC}/device/both'), ('broken', f'{LIB}/device/broken'),
-        ('only', f'{LIB}/device/only')]
+        ('-lead', f'{ETC}/device/-lead'), ('both', f'{ETC}/device/both'), ('broken', f'{LIB}/device/broken'),
+        ('ok_1.sh-', f'{ETC}/device/ok_1.sh-'), ('only', f'{LIB}/device/only')]
     assert all(h['conditions'] == ['connection_names_handler'] for h in result['device_handlers'])
     got = status(result)
     assert got[f'{LIB}/device/both'] == ('overridden', 'overridden')
     assert got[f'{ETC}/device/broken'] == ('rejected', 'not_owner_executable')
     assert got[f'{LIB}/device/broken'] == ('runs', 'device_handler_fallback')
+    # NetworkManager rejects a connection naming these, so no connection can run them.
+    for path in (f'{ETC}/device/.dot', f'{ETC}/device/x~', f'{ETC}/device/my handler', f'{LIB}/device/my handler',
+                 f'{ETC}/device/\u00e9'):
+        assert got[path] == ('ignored', 'device_handler_name_invalid')
     assert got[f'{ETC}/device/sub/deep'] == ('ignored', 'outside_scanned_directories')
     assert names(result) == [] and result['complete'] is True
 
@@ -156,16 +161,23 @@ def test_device_handlers_depend_on_the_version():
     old = run(files, version='1.36.6')
     assert status(old)[f'{ETC}/device/h'] == ('ignored', 'device_handlers_unsupported')
     assert old['device_handlers'] == [] and names(old) == ['s'] and old['complete'] is True
-    between = run(files, version='1.42.4-1ubuntu2')
-    assert status(between)[f'{ETC}/device/h'] == ('unresolved', 'unresolved')
-    assert 'device_handler_version_unverified' in codes(between) and between['complete'] is False
-    assert names(between) == ['s']
+    for version in ('1.38.0', '1.42.4-1ubuntu2', '1.44.2'):
+        stable = run(files, version=version)
+        assert status(stable)[f'{ETC}/device/h'] == ('ignored', 'device_handlers_unsupported')
+        assert stable['device_handlers'] == [] and stable['complete'] is True and stable['gaps'] == []
+    development = run(files, version='1.45.90')
+    assert status(development)[f'{ETC}/device/h'] == ('unresolved', 'unresolved')
+    assert 'device_handler_version_unverified' in codes(development) and development['complete'] is False
+    assert names(development) == ['s']
+    for version in ('1.46.0', '1.52.0', '1.54.3', '1.58.1'):
+        current = run(files, version=version)
+        assert [h['name'] for h in current['device_handlers']] == ['h'] and current['gaps'] == []
 
 
 @pytest.mark.parametrize('version,code,complete', [
     (None, 'version_not_observed', False), ('1.30.0', 'version_unsupported', False),
     ('banana', 'version_unsupported', False), (1.46, 'version_unsupported', False),
-    ('1.52.0', 'version_newer_than_reference', True),
+    ('1.59.1', 'version_newer_than_reference', True), ('2.0', 'version_newer_than_reference', True),
 ])
 def test_version_gaps(version, code, complete):
     result = run([f(f'{ETC}/s')], version=version)
