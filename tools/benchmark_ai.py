@@ -1,5 +1,6 @@
 """Disposable serial/parallel triage fixture; no external provider or SSH target."""
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -7,6 +8,7 @@ import os
 from pathlib import Path
 import statistics
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -16,6 +18,81 @@ from contextvars import ContextVar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+MYSQL_URL_ENV = 'AI_BENCHMARK_MYSQL_URL'
+
+
+class DatabaseRefused(Exception):
+    """Fixed-text refusal; never carries the URL, credentials or driver text."""
+
+
+def mysql_target(environ):
+    """Return the validated disposable MySQL URL from the environment.
+
+    The URL is read only from MYSQL_URL_ENV so its password never appears in the
+    process arguments, and DATABASE_URL is deliberately ignored.
+    """
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    raw = environ.get(MYSQL_URL_ENV, '').strip()
+    if not raw:
+        raise DatabaseRefused(f'--database mysql requires {MYSQL_URL_ENV} to hold the disposable database URL')
+    try:
+        url = make_url(raw)
+        url.port  # a malformed port raises here
+    except (ArgumentError, ValueError):
+        raise DatabaseRefused(f'{MYSQL_URL_ENV} is not a valid database URL') from None
+    if url.drivername != 'mysql+pymysql':
+        raise DatabaseRefused(f'{MYSQL_URL_ENV} must be a mysql+pymysql:// URL')
+    if not url.host or not url.database:
+        raise DatabaseRefused(f'{MYSQL_URL_ENV} must name a host and a database')
+    return url
+
+
+def _mysql_tables(connection):
+    from sqlalchemy import text
+
+    return [(name, kind) for name, kind in connection.execute(text('SHOW FULL TABLES'))]
+
+
+def claim_empty_mysql(url):
+    """Refuse any database that already has tables; return (engine, server version).
+
+    An empty schema is the tool's evidence that the target is disposable. Nothing
+    is written before this check passes.
+    """
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    scratch = create_engine(url, pool_pre_ping=True)
+    try:
+        with scratch.connect() as connection:
+            version = str(connection.execute(text('SELECT VERSION()')).scalar_one())[:64]
+            occupied = bool(_mysql_tables(connection))
+    except SQLAlchemyError as error:
+        scratch.dispose()
+        raise DatabaseRefused(f'cannot inspect the benchmark MySQL database ({type(error).__name__})') from None
+    if occupied:
+        scratch.dispose()
+        raise DatabaseRefused('the benchmark MySQL database already has tables; '
+                              'use an empty disposable database (nothing was changed)')
+    return scratch, version
+
+
+def drop_mysql_tables(scratch):
+    """Remove everything the fixture created in the database that started empty."""
+    from sqlalchemy import text
+
+    try:
+        with scratch.connect() as connection:
+            connection.execute(text('SET FOREIGN_KEY_CHECKS=0'))
+            for name, kind in _mysql_tables(connection):
+                quoted = '`' + name.replace('`', '``') + '`'
+                connection.execute(text(('DROP VIEW ' if kind == 'VIEW' else 'DROP TABLE ') + quoted))
+            connection.commit()
+    finally:
+        scratch.dispose()
 
 
 def workload_fingerprint(provider_requests, ssh_requests):
@@ -51,6 +128,9 @@ def main():
                         help='synthetic age of queued observations without a real wait (default: 2)')
     parser.add_argument('--retained-history-rows', type=int, default=0,
                         help='number of older completed observations to seed (default: 0)')
+    parser.add_argument('--database', choices=('sqlite', 'mysql'), default='sqlite',
+                        help='sqlite: temporary file (default). mysql: the EMPTY disposable database named by '
+                             f'the {MYSQL_URL_ENV} environment variable; its tables are removed afterwards')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
     if args.follow_up_runs is not None and not 0 <= args.follow_up_runs <= args.runs:
@@ -73,8 +153,19 @@ def main():
         parser.error('--retained-history-rows must be between 0 and 50000')
     begin=ContextVar('benchmark_begin');two_stage=ContextVar('benchmark_two_stage',default=False)
     # Set before importing runtime modules; never inherit a deployment database.
-    with tempfile.TemporaryDirectory(prefix='mrpatchy-ai-benchmark-') as directory:
-        os.environ.update(DATA_DIR=directory, DATABASE_URL='sqlite:///'+directory+'/bench.db', DISABLE_SCHEDULER='1')
+    with tempfile.TemporaryDirectory(prefix='mrpatchy-ai-benchmark-') as directory, contextlib.ExitStack() as cleanup:
+        database_url = 'sqlite:///'+directory+'/bench.db'; database_version = sqlite3.sqlite_version
+        if args.database == 'mysql':
+            try:
+                target = mysql_target(os.environ)
+                scratch, database_version = claim_empty_mysql(target)
+            except DatabaseRefused as refusal:
+                parser.error(str(refusal))
+            # Registered only after the empty check, so every table present at exit is the fixture's own.
+            cleanup.callback(drop_mysql_tables, scratch)
+            database_url = target.render_as_string(hide_password=False)
+        os.environ.pop(MYSQL_URL_ENV, None)
+        os.environ.update(DATA_DIR=directory, DATABASE_URL=database_url, DISABLE_SCHEDULER='1')
         for name in list(os.environ):
             if name.lower().endswith('_proxy'):os.environ.pop(name)
         from sqlalchemy import insert
@@ -214,6 +305,7 @@ def main():
             print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
                 'fixture_hosts':len(set(observed_hosts.values())), 'single_server_slots':single_server_slots,
                 'peak_provider_requests':peak_provider_requests,
+                'database':args.database, 'database_version':database_version,
                 'retained_history_rows':retained_history_rows,'connections':len(connections),
                 'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),

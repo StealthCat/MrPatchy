@@ -2987,7 +2987,45 @@ only the fixture database URL. Three matched eight-subject pairs retained the
 same evidence fingerprint, 12 provider calls and four follow-ups per execution.
 Peak simultaneous provider handling rose from one to four in all three pairs.
 Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
-The CLI has no MySQL mode, and matched production measurements remain open.
+At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
+one. Matched production measurements remain open.
+
+### Native MySQL mode for the triage benchmark — worker checkpoint #976
+
+`tools/benchmark_ai.py --database mysql` runs the same disposable fixture on a
+MySQL database, so a serial/parallel pair can be repeated natively:
+
+```bash
+export AI_BENCHMARK_MYSQL_URL='mysql+pymysql://USER:PASSWORD@HOST:3306/EMPTY_DATABASE?charset=utf8mb4'
+python tools/benchmark_ai.py --database mysql --runs 8 --concurrency 1 --provider-delay-ms 150 > serial.json
+python tools/benchmark_ai.py --database mysql --runs 8 --concurrency 4 --provider-delay-ms 150 > parallel.json
+python tools/compare_ai_benchmarks.py serial.json parallel.json
+```
+
+- **Disposable only:** the URL is read from `AI_BENCHMARK_MYSQL_URL`, never from
+  the command line or `DATABASE_URL`. It must be a `mysql+pymysql` URL that names
+  a host and a database. The tool refuses to start unless that database has no
+  tables or views, and changes nothing in a refused database. Never point it at
+  a Mr Patchy deployment database.
+- **Cleanup:** on success and on failure it drops every table and view in that
+  database, which started empty, so the next run can reuse it.
+- **No secrets in output:** refusals are fixed text. A connection failure reports
+  only the error class. The report never contains the URL.
+- **Report:** `database` is `sqlite` or `mysql`, and `database_version` is the
+  server (or SQLite library) version. The comparator reads older reports as
+  SQLite, refuses a pair measured on different backends and states the backend.
+  Server versions are informational and may differ.
+- **Unchanged:** SQLite stays the default. The workload, assertions, provider and
+  SSH stubs, admission, budget, pause and response authorization are the same on
+  both backends; no application code changed.
+
+One matched eight-subject pair on a local MySQL 8.0.46 server (150 ms provider
+delay) kept the same evidence fingerprint and 12 provider calls. Peak
+simultaneous provider handling rose from one to four and throughput from 2.222
+to 5.590 subjects per second. These are loopback fixture numbers on one
+machine, not a production claim. The CI `mysql` job runs a four-subject pair on
+MySQL 8.4. Multi-process workers against MySQL and matched production
+measurements remain open.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
