@@ -772,7 +772,7 @@ provider invoices. Administrators can filter them by the exact IANA timezone rec
 The bundled public price catalog has an exact reviewed-at and expiry window shown in
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary
 before consuming smooth-rate capacity or contacting the provider. A reviewed catalog
-update is therefore required before **2026-11-26 00:00 UTC** for capped calls to
+update is therefore required before **2026-12-16 00:00 UTC** for capped calls to
 continue. During the final seven days, administrators receive a durable medium-severity
 operational and in-app warning; it escalates and reopens delivery at expiry, then
 resolves after a verified refresh or when applicable cap enforcement is disabled.
