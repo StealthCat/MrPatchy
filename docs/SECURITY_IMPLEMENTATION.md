@@ -3893,6 +3893,70 @@ exactly one class with its basis, verification strength (`authenticated`,
 vendor artifacts from targets; persistence; UI; AI classification; response actions.
 No schema, API, auth or response-authorization change.
 
+### Kernel-module configuration contract — worker checkpoint #952
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/kernel_modules.py` is a pure, versioned contract for the catalog's
+`modprobe` and `modules_load` mechanisms. It parses supplied text and performs
+no I/O.
+
+- **Effective files.** Only `*.conf` files are read. A name in a higher-priority
+  directory (`/etc`, `/run`, `/usr/local/lib`, `/usr/lib`, `/lib`) replaces the
+  same name in a lower one, and the remaining files are processed in name order.
+  Every supplied file is reported as effective, overridden, masked, ignored or
+  unreadable, with its reason.
+- **modprobe.d directives.** `install`, `remove`, `alias`, `blacklist`,
+  `options`, `softdep` and `weakdep` are parsed with line-start `#` comments,
+  backslash continuations and `-`/`_` equivalence. Deprecated `include`/`config`
+  lines and unknown or malformed lines are reported with file and line.
+- **Commands.** Each `install`/`remove` entry carries its module pattern, bounded
+  command text, full-command SHA-256, source and processing order. `/bin/true`
+  and `/bin/false` are labelled `disable`. Later entries for an already defined
+  pattern are marked shadowed. `commands_for()` returns both the first matching
+  entry and, when it differs, the first exact-name entry, because libkmod
+  chooses between them by where it found the module.
+- **Boot requests.** `modules-load.d` files and Debian's `/etc/modules`
+  (including the `modules.conf` link to it) list one module per line. Extra
+  tokens are reported and not interpreted.
+- **Boot-time command chains.** `boot_commands()` lists the `install` commands
+  each boot-requested module could run. It follows configuration aliases and
+  `softdep` pre/post modules with depth, chain and step limits, records how each
+  command was reached and flags blacklisted modules without dropping them. Only
+  the first matching `softdep` entry is used, and an alias target is not looked
+  up as an alias again. A pattern containing a backslash escape is a blocking
+  gap.
+- **Conditions instead of guesses.** The kernel's module tables are not
+  observed, so a command whose execution depends on them is listed and counted
+  with `conditions`, never dropped or reported as shadowed. An empty list means
+  the command runs whatever the tables hold.
+  - `module_in_kernel_tables`: a wildcard `install` entry, or anything reached
+    through a name the configuration does not define, runs only if that module
+    exists in the kernel tables.
+  - `module_not_in_kernel_tables`: an exact-name entry after an earlier
+    wildcard match runs only if the module is absent from the kernel tables.
+    Both entries are listed.
+  - `softdep_target_unresolved`: a module whose `softdep` names only modules
+    the configuration does not define runs its own command unless one of them
+    is in the kernel tables.
+  A module's own command is listed as ignored only when the configuration
+  itself defines one of its soft dependencies (an alias or an exact-name
+  `install`/`remove` entry). The result's `conditional` field counts the
+  chains that carry a condition.
+- **Checked against libkmod.** The resolver was compared with libkmod 31's
+  dry-run probe (what `modprobe -n -v` prints) on generated configurations,
+  with an empty module tree and with a populated `modules.dep.bin`. Blacklist
+  handling and backslash patterns were excluded from that comparison.
+- **Fail closed.** Unreadable files, unfollowed symlinks (other than `/dev/null`
+  masks), invalid UTF-8, NUL bytes and over-limit input mark the result
+  incomplete. An unreadable winning file still shadows lower-priority files.
+  Every result names what it cannot observe: the kernel command line, the
+  kernel's alias and dependency tables, the initramfs copy and tool overrides.
+  `origin` is always `not_assessed` and no result is a safety verdict.
+
+**Not covered:** agent collection of these files' text, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
 ### Individual queued at jobs — worker checkpoint #831
 
 The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
