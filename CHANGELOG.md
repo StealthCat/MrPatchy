@@ -1,3 +1,7 @@
+## 1.75.5 — 2026-11-16
+
+1. [PR #965](https://github.com/StealthCat/MrPatchy/pull/965): Restore the kernel-module configuration contract section in `docs/SECURITY_IMPLEMENTATION.md`, which the v1.75.4 integration merge omitted. Compatibility: documentation only; no application, runtime, API, schema, UI or authorization change. Limit: the broader startup-awareness requirement remains incomplete.
+
 ## 1.75.4 — 2026-11-16
 
 1. [PR #959](https://github.com/StealthCat/MrPatchy/pull/959): Give the Investigations “Cached known good” filter bookmarkable fleet and per-server addresses (`#investigations/cached` and `#servers/<id>/investigations/cached`) that restore the filter on reload and Back/Forward, while the bare address shows all investigations. Compatibility: the cached choice no longer persists at the bare address; use the filtered address to restore it. No API, schema, role or response-authorization change. Limits: page offset has no address; the per-server assessment back-link and phone-width focus visibility were not separately browser-verified.
