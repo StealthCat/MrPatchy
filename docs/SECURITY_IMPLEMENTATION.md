@@ -3942,8 +3942,9 @@ each service, the ordered modules it loads, with:
   entry (unknown type, missing control or module) is reported as `must_fail`.
 - **Includes.** `include`, `substack` and Debian's `@include` are resolved in
   place. Each entry keeps its own file and line and the chain of including
-  lines. Debian and Ubuntu look up a relative include only in `/etc/pam.d`;
-  upstream also uses the vendor directories. The caller states the family.
+  lines. A relative include name is looked up like a service, `/etc/pam.d`
+  first and then the distribution directories. The caller states the family,
+  which decides whether `@include` is recognised.
 - **`other`.** Types the service file leaves empty are listed as using the
   `other` service. A `substack` line holds its type even when the named file
   yields nothing. libpam reads `other` for every service, so a blocking gap

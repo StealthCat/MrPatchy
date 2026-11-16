@@ -26,10 +26,12 @@ compiler annotations), Debian's ``031_pam_include`` patch for 1.5.3 and
   becomes an entry that always fails when its type is used (``must_fail``);
   an unknown type is filed under ``auth``, or under the including line's type.
 - ``include`` and ``substack`` read another file in place, keeping only lines
-  of the including line's type. Upstream looks the name up like a service;
-  Debian and Ubuntu look only in ``/etc/pam.d``. Debian's ``@include <name>``
-  takes the place of the type and keeps every type the current file was read
-  for. A name starting with ``/`` is used as a path.
+  of the including line's type. A name without ``/`` is looked up like a
+  service, in the same directory order (compiled Ubuntu libpam 1.5.3 does this
+  too). Debian's ``@include <name>`` takes the place of the type and keeps
+  every type the current file was read for. A name starting with ``/`` is used
+  as a path. libpam also accepts a relative name containing ``/``; the
+  contract reports it as a missing target.
 - Types for which the service file yields no entry use the ``other`` service.
   A ``substack`` line counts as an entry of its type even when the file it
   names yields nothing. libpam reads ``other`` for every service.
@@ -287,9 +289,6 @@ class _Resolver:
         if name.startswith('/'):
             path = posixpath.normpath(name)
             return path if path in self.records else None
-        if self.family == 'debian':
-            path = f'{CONFIG_DIR}/{name}'
-            return path if '/' not in name and path in self.records else None
         return self.service_file(name) if '/' not in name else None
 
     def walk(self, path: str, requested: str | None, level: int, chain: list[dict[str, Any]],

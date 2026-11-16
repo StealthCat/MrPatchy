@@ -123,14 +123,20 @@ def test_at_include_is_an_invalid_type_upstream():
     assert (entry['type'], entry['status'], entry['reason']) == ('auth', 'must_fail', 'type_invalid')
 
 
-def test_include_lookup_differs_between_debian_and_upstream():
-    files = [f('sshd', 'auth include vendor-auth\n'),
+def test_a_relative_include_is_looked_up_like_a_service_in_both_families():
+    # Compiled Ubuntu libpam 1.5.3-5ubuntu5.7 loads /usr/lib/pam.d/<name> when /etc/pam.d/<name> is absent.
+    files = [f('sshd', 'auth include vendor-auth\n@include vendor-auth\nauth substack vendor-auth\n'),
              f('vendor-auth', 'auth required pam_unix.so\n', '/usr/lib/pam.d')]
-    upstream = run(files, family='upstream')
-    assert modules(upstream, 'sshd') == ['pam_unix.so'] and service(upstream, 'sshd')['complete']
     debian = run(files)
-    assert modules(debian, 'sshd') == [] and codes(service(debian, 'sshd')) == ['include_target_missing']
-    assert not debian['complete'] and service(debian, 'vendor-auth')['complete']
+    assert modules(debian, 'sshd') == ['pam_unix.so'] * 3 and debian['complete']
+    assert {entry['source']['path'] for entry in service(debian, 'sshd')['entries']} == {'/usr/lib/pam.d/vendor-auth'}
+    upstream = run([f('sshd', 'auth include vendor-auth\n'), files[1]], family='upstream')
+    assert modules(upstream, 'sshd') == ['pam_unix.so'] and service(upstream, 'sshd')['complete']
+    # /etc/pam.d wins, and a relative name with a slash stays a reported gap.
+    both = run(files + [f('vendor-auth', 'auth required pam_deny.so\n')])
+    assert modules(both, 'sshd') == ['pam_deny.so'] * 3
+    slash = run([f('sshd', 'auth include ../pam.d/vendor-auth\n'), files[1]])
+    assert codes(service(slash, 'sshd')) == ['include_target_missing']
 
 
 def test_absolute_include_and_missing_targets():
