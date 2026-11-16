@@ -2448,6 +2448,21 @@ from an assessment page returns to the filtered list when the visitor came from
 it. This is frontend-only, with no API, schema, admission, spend, pause,
 approval, role or authorization change. The page offset still has no address.
 
+Worker checkpoint #974 gives the page its own address. Page 2 and later are
+`<view>/page/<n>`, where `<view>` is any of the four addresses above; page 1
+keeps the bare view address, so existing links are unchanged. **Next** and
+**Previous** change the address, so a reload, a bookmark, a shared link and
+Back/Forward reproduce the page. This replaces the in-memory page offset:
+opening the bare address always shows page 1, and Back returns to the page the
+visitor left. Changing the filter still returns to page 1. A malformed page
+address is replaced by the nearest valid one without a history entry. A page
+past the end of the list says so and links to the first page. The link back
+from an assessment page returns to the page and filter the visitor came from.
+The bulk Re-triage selection is still kept across pages. This is frontend-only,
+with no API, schema, admission, spend, pause, approval, role or authorization
+change. Other paged lists (Activity, History, AI activity) still have no page
+address.
+
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
 when the newest retained assessment for the row's exact current state
