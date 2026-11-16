@@ -4199,7 +4199,9 @@ scheduled root commands that the catalog previously listed as metadata only.
   quote, a script body with a line that starts with a script keyword, a changed taboo list, an `include` inside a section, an include that
   was not collected, is relative, loops or nests too deeply, an unreadable or
   oversized file, and over-cap input. Input that logrotate rejects is
-  undetermined as well: a keyword not followed by a blank or `=`, a top-level
+  undetermined as well: a keyword not followed by a blank or `=`, an
+  `endscript` followed by anything but a blank or line end (logrotate still
+  ends the script there, and so does the contract), a top-level
   line that starts with neither a keyword nor a file name, a brace inside a
   directive value, and a carriage return, vertical tab or form feed. Such a
   line is skipped, not read as a log section, so it cannot swallow a later

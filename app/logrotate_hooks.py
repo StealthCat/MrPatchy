@@ -27,8 +27,9 @@ binary:
 - A name matching a taboo pattern is ignored, but ``*`` never covers a leading
   period, so hidden names such as ``.cache~`` are read.
 - A script starts directly after its keyword, on the same line, and ends before
-  the first later line whose first word is ``endscript``. Parsing continues
-  after that word on the same line.
+  the first later line whose first word is ``endscript``. A word is a run of
+  letters, so ``endscript;`` and ``endscript}`` end the script too. Parsing
+  continues after that word on the same line.
 - ``#`` starts a comment only where a directive could start.
 
 It performs no I/O, runs nothing and never authorizes a response action.
@@ -39,7 +40,8 @@ Fail-closed rules:
   script outside a section (still listed) or without ``endscript``, an
   ``include`` inside a
   section (its target is still parsed), a keyword not followed by a blank or
-  ``=``, a top-level line that starts with neither a keyword nor a file name, a
+  ``=``, an ``endscript`` followed by anything but a blank or a line end, a
+  top-level line that starts with neither a keyword nor a file name, a
   brace inside a directive value, a carriage return, vertical tab or form feed
   (logrotate does not skip them as blanks), an unterminated section or quote, a script
   body with a line that starts with a script keyword, a NUL byte, an uncollected,
@@ -97,10 +99,11 @@ DEFAULT_TABOO = ('*.bak', '*.cfsaved', '*.disabled', '*.dpkg-bak', '*.dpkg-del',
                  '*.ucf-dist', '*.ucf-new', '*.ucf-old', '*,v', '*~')
 
 _SPACE = ' \t\n\v\f\r'
-_KEY = re.compile(r'[A-Za-z][A-Za-z0-9]*')
-_NESTED_SCRIPT = re.compile(r'\n[ \t\v\f\r]*(?:' + '|'.join(SCRIPT_KEYS) + r')(?=[ \t\v\f\r\n]|$)')
+_KEY = re.compile(r'[A-Za-z]+')
+_NESTED_SCRIPT = re.compile(r'\n[ \t\v\f\r]*(?:' + '|'.join(SCRIPT_KEYS) + r')(?![A-Za-z])')
 _OTHER_SPACE = re.compile(r'[\r\v\f]')
-_ENDSCRIPT = re.compile(r'^[ \t\v\f\r]*endscript(?=[ \t\v\f\r\n]|$)', re.MULTILINE)
+# logrotate takes the letters at the start of a line as its first word, so any non-letter ends it.
+_ENDSCRIPT = re.compile(r'^[ \t\v\f\r]*endscript(?![A-Za-z])', re.MULTILINE)
 
 
 def _gap(code: str, detail: str, **extra: Any) -> dict[str, Any]:
@@ -282,6 +285,10 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                     continue
                 body = text[pos:end.start()]
                 pos = end.end()
+                if pos < len(text) and text[pos] not in _SPACE:
+                    # logrotate 3.21.0 still ends the script here; what follows on the line is parsed.
+                    problem('endscript_not_separated', 'endscript is followed by a character that is neither a '
+                            'blank nor a line end; logrotate ends the script there.', pos, kind=key)
                 item = {'kind': key, 'script': body[:MAX_SCRIPT_CHARS], 'truncated': len(body) > MAX_SCRIPT_CHARS,
                         'empty': not body.strip(_SPACE), 'scope': 'global' if section is None else 'section',
                         'patterns': None if section is None else section['patterns'],

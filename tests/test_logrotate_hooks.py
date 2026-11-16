@@ -268,3 +268,22 @@ def test_input_logrotate_rejects_is_undetermined_and_later_content_kept():
     result = lh.resolve(main('*junk\ninclude /etc/extra\n/a { }\n'), includes)
     assert codes(result)[2:] == ['unexpected_line_start']
     assert [s['path'] for s in result['scripts']] == ['/etc/extra']
+
+
+def test_endscript_followed_by_a_non_letter_ends_the_script():
+    # logrotate 3.21.0 takes the letters at the start of a line as its first word: "endscript;" ends the
+    # script, the section closes and the include that follows is read.
+    includes = {'/etc/extra': {'type': 'file', 'content': '/x { postrotate\n echo x\n endscript\n}\n'}}
+    for tail in (';', '}', '#c', '=', '/', '.', '1'):
+        text = ('/a {\n rotate 1\n postrotate\n  echo one\n endscript' + tail + '\n}\n'
+                'include /etc/extra\n/b {\n su nobody nogroup\n compresscmd /bin/evil\n}\nendscript\n}\n')
+        result = lh.resolve(main(text), includes)
+        assert result['logrotate_reading'] == 'undetermined', tail
+        assert 'endscript_not_separated' in codes(result), tail
+        assert [(s['path'], s['script']) for s in result['scripts']] == [
+            (lh.MAIN_FILE, '\n  echo one\n'), ('/etc/extra', '\n echo x\n')], tail
+        assert [(d['directive'], d['value']) for d in result['directives']] == [
+            ('su', 'nobody nogroup'), ('compresscmd', '/bin/evil')], tail
+    # A following letter keeps the word going, so the line stays script text.
+    result = lh.resolve(main('/a { postrotate\n endscriptX\n endscript\n}\n'))
+    assert (result['logrotate_reading'], result['scripts'][0]['script']) == ('determined', '\n endscriptX\n')
