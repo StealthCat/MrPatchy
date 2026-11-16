@@ -216,6 +216,17 @@ def test_pam_exec_options_command_and_type_filter():
     assert service(run([f('sshd', text)]), 'sshd')['exec_commands'] == 4
 
 
+def test_pam_exec_needs_every_type_option_to_match():
+    text = ('session optional pam_exec.so type=auth type=open_session /bin/a\n'
+            'session optional pam_exec.so type=open_session type=auth /bin/b\n'
+            'session optional pam_exec.so type=open_session type=open_session /bin/c\n')
+    first, second, third = (entry['exec'] for entry in service(run([f('sshd', text)]), 'sshd')['entries'])
+    assert not first['applies'] and first['type_filter'] == 'auth'
+    assert not second['applies'] and second['type_filter'] == 'auth'
+    assert third['applies'] and third['type_filter'] == 'open_session'
+    assert first['command'] == ['/bin/a'] and first['options'] == ['type=auth', 'type=open_session']
+
+
 def test_long_arguments_are_bounded_with_a_full_hash():
     long = 'x' * 600
     entry = service(run([f('a', f'auth required pam_exec.so /bin/{long}\n')]), 'a')['entries'][0]

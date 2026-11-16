@@ -206,6 +206,7 @@ def _parse_file(record: dict[str, Any]) -> list[tuple[int, list[str]]]:
 def _exec(entry_type: str, args: list[str]) -> dict[str, Any]:
     options: list[str] = []
     type_filter = None
+    applies = True
     index = 0
     while index < len(args):
         arg = args[index]
@@ -215,7 +216,11 @@ def _exec(entry_type: str, args: list[str]) -> dict[str, Any]:
         if lower in EXEC_FLAGS or lower.startswith('log='):
             options.append(_bound(arg))
         elif lower.startswith('type='):
-            type_filter = arg[5:]
+            # pam_exec returns as soon as one type= differs from the PAM call it
+            # serves, so every type= has to match; the first mismatch is kept.
+            if applies:
+                type_filter = arg[5:]
+                applies = type_filter in EXEC_TYPES[entry_type]
             options.append(_bound(arg))
         else:
             break
@@ -226,7 +231,7 @@ def _exec(entry_type: str, args: list[str]) -> dict[str, Any]:
         'options': options,
         'type_filter': _bound(type_filter) if type_filter is not None else None,
         # pam_exec compares type= case-sensitively with the PAM call it serves.
-        'applies': type_filter is None or type_filter in EXEC_TYPES[entry_type],
+        'applies': applies,
         'seteuid': 'seteuid' in flags,
         'expose_authtok': 'expose_authtok' in flags,
         'command': [_bound(part) for part in command],
