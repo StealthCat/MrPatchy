@@ -1,3 +1,47 @@
+## 1.75.7 — 2026-11-16
+
+1. [PR #951](https://github.com/StealthCat/MrPatchy/pull/951): Add a pure APT configuration contract that resolves recognized command hooks and binary/path overrides from captured `apt.conf.d` and `apt.conf` inputs, applying APT file and option semantics with explicit fail-closed gaps. Compatibility: none; the module has no caller. Limits: includes are not followed, `APT_CONFIG` and unrecognized execution options remain unobserved, and collection, persistence, UI, provenance and classification are not included; roadmap F remains incomplete.
+
+## 1.75.6 — 2026-11-16
+
+1. [PR #961](https://github.com/StealthCat/MrPatchy/pull/961): Add a pure contract for captured `/etc/ld.so.preload` entries and `/etc/ld.so.conf` directories/includes, including glibc comment-window behavior, with explicit gaps for unobserved or unsupported inputs. Compatibility: none; the new module has no caller. Limits: compared with glibc 2.39, selected include patterns and older releases remain gaps; no collection, persistence, UI, provenance or classification. Roadmap F remains incomplete.
+
+## 1.75.5 — 2026-11-16
+
+1. [PR #965](https://github.com/StealthCat/MrPatchy/pull/965): Restore the kernel-module configuration contract section in `docs/SECURITY_IMPLEMENTATION.md`, which the v1.75.4 integration merge omitted. Compatibility: documentation only; no application, runtime, API, schema, UI or authorization change. Limit: the broader startup-awareness requirement remains incomplete.
+
+## 1.75.4 — 2026-11-16
+
+1. [PR #959](https://github.com/StealthCat/MrPatchy/pull/959): Give the Investigations “Cached known good” filter bookmarkable fleet and per-server addresses (`#investigations/cached` and `#servers/<id>/investigations/cached`) that restore the filter on reload and Back/Forward, while the bare address shows all investigations. Compatibility: the cached choice no longer persists at the bare address; use the filtered address to restore it. No API, schema, role or response-authorization change. Limits: page offset has no address; the per-server assessment back-link and phone-width focus visibility were not separately browser-verified.
+
+## 1.75.3 — 2026-11-16
+
+1. [PR #957](https://github.com/StealthCat/MrPatchy/pull/957): Fix the known-good summary browser test race by awaiting mocked identity responses, asserting after the viewer render, and restoring an administrator render before the next test. Compatibility: no application, UI or runtime behavior change. Limits: this test-only change does not establish a fix for the separate investigation-history link timeout seen on #955.
+
+## 1.75.2 — 2026-11-16
+
+1. [PR #955](https://github.com/StealthCat/MrPatchy/pull/955): Give the serial SQLite suite its own 60-minute step limit within a 75-minute CI job, leaving 15 minutes for the Docker, Caddy and Compose smoke checks; report the 25 slowest tests and update the measured-runtime comment. Compatibility: no application behavior or compatibility change. Limits: a hung test job can occupy a runner for up to 75 minutes (was 45); the suite remains serial and unsharded.
+
+## 1.75.1 — 2026-11-15
+
+1. [PR #954](https://github.com/StealthCat/MrPatchy/pull/954): Add a bounded, pure parser and resolver for captured `modprobe.d`, `modules-load.d` and `/etc/modules` text, including effective-file precedence and potential boot-time install commands. It performs no I/O, runs no commands and authorizes nothing. Compatibility: no schema, API, UI, agent or runtime behavior change; no existing module is modified. Limits: file collection, catalog wiring, persistence, UI and runtime coverage remain out of scope; kernel aliases/dependencies, command-line settings and initramfs copies are unobserved, and requirement F remains incomplete.
+
+## 1.75.0 — 2026-11-15
+
+1. [PR #941](https://github.com/StealthCat/MrPatchy/pull/941): Add per-server restrict-only malware automatic-response overrides through Server → Security and admin API. An override can cap a server at Monitor only or Disabled and add path/hash exclusions; it never expands the fleet policy or authorizes response actions. It is recorded and audited but not enforced because no containment executor exists. Compatibility: additive setting rows and API, with no schema change; fleet policy API behavior is unchanged. Limits: group overrides and fleet listing remain open, and requirement E and other #682 runtime items remain incomplete.
+
+## 1.74.0 — 2026-11-15
+
+1. [PR #949](https://github.com/StealthCat/MrPatchy/pull/949): Add an administrator-configurable in-app telemetry-loss notice threshold from 5 to 1440 minutes (default 15), expose its effective value in settings, and audit changes. The default preserves existing notice behavior and text; SMTP/webhook stale alerts (120 seconds) are unchanged. Compatibility: additive optional `telemetry_lost_minutes` API field; no schema change or migration, and clients omitting the field retain stored values. A changed threshold can revise the text of still-qualifying active notices once. Limit: endpoint-agent readiness and alerting remains open (#737).
+
+## 1.73.1 — 2026-11-15
+
+1. [PR #945](https://github.com/StealthCat/MrPatchy/pull/945): Fix whole-microsecond rounding so scan-coverage `first_seen` and security-policy `enabled_since` markers never land after their observation time; also add deterministic and seeded property regressions. Compatibility: no schema, API, role or authorization change, and already-stored markers remain unchanged. Limits: marker precision remains whole microseconds; the representation may be less than one microsecond earlier than the observation. Resolves [issue #942](https://github.com/StealthCat/MrPatchy/issues/942).
+
+## 1.73.0 — 2026-11-15
+
+1. [PR #944](https://github.com/StealthCat/MrPatchy/pull/944): Add a GCP join-worker installer mode for 1–16 replicas on the same Docker host as a controller-only installation. The installer reuses the controller's rendered project, identity, data volume and database; the worker wrapper refuses to target the controller Compose project. Compatibility: additive; complete and controller installation modes remain unchanged, with no application runtime, schema, role or response-authorization change. Limits: same host only; live `docker compose up` was not exercised without a Docker daemon; remote-machine workers and multi-host acceptance remain outside this roadmap slice (#943 remains open).
+
 ## 1.72.0 — 2026-11-15
 
 1. [PR #935](https://github.com/StealthCat/MrPatchy/pull/935): Add an admin-only fleet action to retry up to 200 process investigations blocked under the current AI configuration, using the existing triage and per-host queue locks, rechecking candidates under lock, and recording one audit event for each non-empty batch. Compatibility: additive route and UI; no schema, authorization, provider-call, pause, data-sharing, reservation, or response-authorization change; normal scheduler admission still governs execution. Limits: Fleet Investigations only; blocked advisory-plan work is excluded; batches are capped at 200, and the displayed blocked count can differ from the eligible retry count.
