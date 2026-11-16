@@ -1,3 +1,7 @@
+## 1.75.8 — 2026-11-16
+
+1. [PR #963](https://github.com/StealthCat/MrPatchy/pull/963): Add a pure NetworkManager dispatcher contract that reports root-run scripts in byte order and event groups from captured file metadata, including `/etc` overrides and masks, no-wait links and device handlers with explicit coverage gaps. Compatibility: none; nothing calls the module. Limits: source review covered upstream 1.36.6–1.58.1 and native comparison only 1.46.0; distribution patches and custom build paths are not assessed; script contents, event occurrence, collection, catalog wiring, persistence, UI, provenance, classification and other hook directories remain outside scope. Roadmap F remains incomplete.
+
 ## 1.75.7 — 2026-11-16
 
 1. [PR #951](https://github.com/StealthCat/MrPatchy/pull/951): Add a pure APT configuration contract that resolves recognized command hooks and binary/path overrides from captured `apt.conf.d` and `apt.conf` inputs, applying APT file and option semantics with explicit fail-closed gaps. Compatibility: none; the module has no caller. Limits: includes are not followed, `APT_CONFIG` and unrecognized execution options remain unobserved, and collection, persistence, UI, provenance and classification are not included; roadmap F remains incomplete.
