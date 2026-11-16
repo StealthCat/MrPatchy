@@ -111,7 +111,7 @@ async function investigationAssessmentPage(revision,context,base){
  if(!isAdmin()){root.innerHTML=PatchyUI.error('Administrator access required','Assessment history contains retained evidence.');return;}
  const raw=location.hash.slice((base+'/item/').length).split('/');let id,record;
  try{id=decodeURIComponent(raw[0]||'');record=decodeURIComponent(raw[2]||'');}catch{id='';}
- const back=`<a class="button" href="${base}">← Investigations</a>`;
+ const back=`<a class="button" href="${base}${investigationFilterContext.get(context?.hostId||'fleet')==='cached'?'/cached':''}">← Investigations</a>`;
  if(!id||id.length>64||id.includes('/')||raw[1]!=='history'||record.length>36){root.innerHTML=PatchyUI.error('Invalid assessment link','Return to investigations and select a saved assessment.',back);return;}
  const historyBase=base+'/item/'+encodeURIComponent(id)+'/history';
  const scope=context?'&host_id='+encodeURIComponent(context.hostId):'';
