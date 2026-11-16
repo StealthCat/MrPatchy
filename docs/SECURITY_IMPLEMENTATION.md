@@ -3925,6 +3925,50 @@ comparable.
 
 Remaining roadmap F work is tracked above.
 
+### PAM service-stack contract — worker checkpoint #967
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`/etc/pam.d` stays catalogued as `login_hooks` with metadata-only parsing, and
+nothing calls the new module yet.
+
+`app/pam_stacks.py` is a pure function over captured, read-only text of PAM
+service files. `evaluate(files, family, version, vendor_dir=None)` returns, for
+each service, the ordered modules it loads, with:
+
+- **File choice.** `/etc/pam.d/<service>` replaces the same name in
+  `/usr/lib/pam.d` and an optional vendor directory. Replaced files are listed.
+- **Line rules.** Comments, backslash continuation, the `-` type prefix and
+  bracketed fields follow libpam. A line libpam installs as an always-failing
+  entry (unknown type, missing control or module) is reported as `must_fail`.
+- **Includes.** `include`, `substack` and Debian's `@include` are resolved in
+  place. Each entry keeps its own file and line and the chain of including
+  lines. Debian and Ubuntu look up a relative include only in `/etc/pam.d`;
+  upstream also uses the vendor directories. The caller states the family.
+- **`other`.** Types the service file leaves empty are listed as using the
+  `other` service.
+- **Executed commands.** A `pam_exec.so` entry reports its options, its `type=`
+  filter, `seteuid`, `expose_authtok` and the command argv. Modules named by
+  absolute path are flagged. Values are bounded and carry a SHA-256 of the full
+  text.
+
+The contract fails closed. Each of these is a blocking gap for every service
+that reaches it, never a shorter stack: an include target that was not
+captured, an include loop, nesting past libpam's limit, an unfinished
+continuation, a line near libpam's 1024-byte buffer, a control character
+(including a carriage return), an unreadable file, invalid UTF-8 and over-limit
+input. An unreadable file still shadows a lower-priority file of the same name.
+
+The rules were read from Linux-PAM 1.4.0 and 1.5.3 (`pam_handlers.c`,
+`pam_misc.c`, `pam_exec.c`) and Debian's `031_pam_include` patch. Other
+versions report the blocking `version_unverified` gap; 1.7.0 rewrote the line
+reader and was not compared.
+
+**Not covered:** comparison with a compiled libpam, `/etc/pam.conf`, validation
+of bracketed control values, module binaries and the programs they run,
+collection from servers, catalog wiring, persistence, UI, provenance and AI
+classification. No schema, API, UI or authorization change, and nothing is
+labelled safe.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
