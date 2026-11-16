@@ -203,6 +203,7 @@ const assert=require('assert/strict');
     await require('./ui_ai_costs.cjs')(page,capture);
     await require('./ui_ai_retry.cjs')(page,capture);
     await require('./ui_retry_blocked_investigations.cjs')(page,capture);
+    await require('./ui_host_retry_blocked_investigations.cjs')(page,capture);
     await require('./ui_investigation_cached_known_good.cjs')(page,capture);
     await require('./ui_investigation_cached_filter.cjs')(page,capture);
     await require('./ui_ai_unclaimed_backlog.cjs')(page,capture);
