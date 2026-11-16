@@ -2942,8 +2942,11 @@ placed in exactly one class:
 
 Each row also reports the pending total, the oldest pending observation,
 whether AI is paused for the server, its per-server investigation limit (a
-corrupt stored limit is shown as the fail-closed minimum) and whether active
-leases have reached it. The list holds at most 50 servers, largest backlog
+corrupt stored limit is shown as the fail-closed minimum), `active_leases` and
+whether those leases have reached the limit. `active_leases` is the admission
+count: every unexpired claim on the server, including one whose behavior was
+approved while it runs, so the limit flag matches what `ai_claims.acquire`
+enforces. The list holds at most 50 servers, largest backlog
 first, and states the number of servers with a backlog and whether it was
 truncated.
 
@@ -2959,7 +2962,9 @@ so an investigation on its last attempt is `active` here while the fleet
   claims, pause, budget, schema, roles and response authorization are unchanged.
 - **Limitations:** this is a point-in-time read, and "eligible" is not a promise
   to start: shared start gates, worker capacity, the per-server limit and pause
-  still apply. No page shows the breakdown yet; the UI panel, servers beyond the
+  still apply. Pause is read as the fleet status reads it, so a manually
+  corrupted per-server AI policy is not shown as paused although provider calls
+  for that server are refused. No page shows the breakdown yet; the UI panel, servers beyond the
   first 50 and matched production acceptance remain open.
 
 ### Active admission control in the investigations queue notice — worker checkpoint #685

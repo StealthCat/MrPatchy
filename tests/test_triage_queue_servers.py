@@ -86,6 +86,7 @@ def test_each_pending_investigation_is_classified_once_per_server(admin, monkeyp
         'pending': 10, 'active': 1, 'eligible': 4, 'blocked': 2, 'retry_wait': 3}
     assert busy['name'] == 'srv-busy' and busy['paused'] is False
     assert busy['investigation_limit'] == 1 and busy['at_investigation_limit'] is True
+    assert busy['active_leases'] == 1 and paused['active_leases'] == quiet['active_leases'] == 0
     assert busy['oldest_pending_observation_at'] == pytest.approx(now - 900)
     assert busy['next_retry_at'] == pytest.approx(now + 600)
     assert paused['paused'] is True and paused['pending'] == 2 and paused['eligible'] == 2
@@ -106,6 +107,17 @@ def test_rows_add_up_to_the_fleet_status_totals(admin):
     assert sum(row['active'] for row in servers) == fleet['active']
     # The fleet total still counts the running last attempt as blocked; here it is active.
     assert sum(row['blocked'] for row in servers if not row['paused']) == fleet['blocked'] - 1
+
+
+def test_limit_uses_the_admission_lease_count_when_a_claimed_behavior_leaves_the_pending_scope(admin):
+    now = seed()
+    with Session() as s:
+        s.get(Behavior, 'busy-running').approved = True    # approved while its investigation still runs
+        s.commit()
+        admission = ai_claims.occupancy(s, 'busy', now)['active_lease_count']
+    busy = breakdown(now)['servers'][0]
+    assert busy['host_id'] == 'busy' and busy['pending'] == 9 and busy['active'] == 0
+    assert busy['active_leases'] == admission == 1 and busy['at_investigation_limit'] is True
 
 
 def test_a_corrupt_per_server_limit_is_reported_as_the_fail_closed_minimum(admin):
@@ -165,7 +177,7 @@ def test_admin_endpoint_reports_counts_without_private_data(admin, monkeypatch):
     assert [row['host_id'] for row in body['servers']] == ['busy', 'paused', 'quiet']
     assert set(body['servers'][0]) == {
         'host_id', 'name', 'pending', 'active', 'eligible', 'blocked', 'retry_wait', 'paused',
-        'investigation_limit', 'at_investigation_limit', 'oldest_pending_observation_at', 'next_retry_at'}
+        'active_leases', 'investigation_limit', 'at_investigation_limit', 'oldest_pending_observation_at', 'next_retry_at'}
     text = json.dumps(body)
     for private in ('secret-tool', 'secret-cmd', 'private analysis text', 'private provider text', 'private-key',
                     'fixture-model', 'busy-new', 'srv-disabled', 'srv-deleted', 'srv-clean'):

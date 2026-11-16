@@ -16,6 +16,10 @@ deleted) server is placed in exactly one class, using the predicates
 A running claim takes precedence, so an investigation on its last attempt is
 ``active`` here although the fleet ``blocked`` total counts it until it ends.
 
+``active_leases`` is the admission count: every unexpired claim on the server,
+whether or not its behavior is still pending. ``at_investigation_limit``
+compares that count, because that is what ``ai_claims.acquire`` enforces.
+
 The payload carries server ID and name, counts, limits and timestamps only,
 never evidence, paths, command lines, analysis, provider text or key material.
 It sends no provider request, writes nothing, and changes no admission, claim,
@@ -33,6 +37,10 @@ LIMITATIONS = (
     ('"Eligible" means retry-eligible and unclaimed. The shared AI start gates (rate throttle, daily cap, '
      'provider backoff, legacy hourly allowance), worker capacity and the per-server investigation limit still '
      'decide when an investigation starts, and nothing starts on a paused server until it is resumed.'),
+    ('"Active leases" counts every unexpired claim on the server, as admission does. It can exceed "active" '
+     'while an investigation that was approved or resolved in the meantime is still finishing.'),
+    ('Pause is read as the fleet status reads it. A manually corrupted per-server AI policy is not shown as '
+     'paused here although provider calls for that server are refused.'),
     ('The breakdown is a point-in-time read. The AI worker or a collector running at the same time can change '
      'the counts immediately afterwards.'),
 )
@@ -72,6 +80,11 @@ def status(session, now=None, limit=MAX_SERVERS):
     names = dict(session.execute(select(Host.id, Host.name).where(Host.id.in_(identifiers))).all())
     policies = {row.key[len(ai_policy.PREFIX):]: row.value for row in session.scalars(select(Setting).where(
         Setting.key.in_([ai_policy.PREFIX + identifier for identifier in identifiers])))}
+    # Admission (ai_claims.acquire) counts every unexpired claim on the server,
+    # including one whose behavior was approved while it runs and so left the
+    # pending scope. The limit comparison must use that count, not `active`.
+    leases = dict(session.execute(select(claim.host_id, func.count(claim.subject)).where(
+        claim.host_id.in_(identifiers), claim.expires > now).group_by(claim.host_id)).all())
     servers = []
     for host_id, count, active, eligible, held, retry_wait, oldest, next_retry, paused in rows:
         policy = policies.get(host_id)
@@ -79,7 +92,8 @@ def status(session, now=None, limit=MAX_SERVERS):
         servers.append({
             'host_id': host_id, 'name': names.get(host_id, ''), 'pending': count, 'active': active,
             'eligible': eligible, 'blocked': held, 'retry_wait': retry_wait, 'paused': bool(paused),
-            'investigation_limit': allowed, 'at_investigation_limit': active >= allowed,
+            'active_leases': leases.get(host_id, 0), 'investigation_limit': allowed,
+            'at_investigation_limit': leases.get(host_id, 0) >= allowed,
             'oldest_pending_observation_at': oldest, 'next_retry_at': next_retry,
         })
     return {'generated_at': now, 'servers': servers, 'servers_with_backlog': total,
