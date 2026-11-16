@@ -2406,6 +2406,48 @@ admission/spend controls still apply when they run. This delivers the
 "selected" part of explicit Re-triage only. Fleet-wide selection across pages
 and cache-hit filters remain open.
 
+Worker checkpoint #932 keeps the bulk Re-triage selection across pages and the
+**Show** filter. Each Investigations view (the fleet view, or one server's view)
+has its own in-memory selection, discarded on a session change, a successful
+submit or **Clear selection**. The bar reports how many selected items are on
+other pages or filters. It stays visible while a selection exists, even when the
+current page has nothing selectable. The selection stops at the endpoint's
+existing 50-item limit: further boxes are disabled with an explanation. A
+selected row that returns with a different revision, or that is no longer
+complete, is dropped and shown unchecked rather than resubmitted with a stale or
+swapped revision. Submission still uses `POST /api/investigations/retriage`
+with its all-or-nothing server-side checks. This is frontend-only, with no API,
+schema, admission, spend, pause, approval or authorization change. Selecting
+every matching row server-side without visiting its page, or more than 50 at
+once, remains open.
+
+Worker checkpoint #924 adds a cache-hit filter to the Investigations list. On the
+fleet and per-server Investigations pages, **Show → Cached known good** requests
+`GET /api/investigations?cached=true`. That returns only rows whose current state
+came from an exact known-good reuse, which are exactly the rows with the badge. A
+SQL `EXISTS` prefilter limits the scan to completed rows that have a retained
+`known_good` assessment. Each chunk is then confirmed with the same
+current-state check the badge uses, and `offset`/`limit` count filtered rows. A
+later provider result, a re-triage request or changed state removes the row.
+Host read authorization, the inactive-server exclusion and role-limited reuse
+details are unchanged. The choice is kept per view, like the page offset,
+without a URL deep link. Changing it returns to page 1. The selection and bulk
+Re-triage controls work on the filtered rows. There is no schema, admission,
+spend, pause or authorization change, and filtering makes no provider call.
+Fleet-wide selection across pages remains open.
+
+Worker checkpoint #958 gives that filter its own address:
+`#investigations/cached` on the fleet page and
+`#servers/<id>/investigations/cached` on one server's tab. The address decides
+the filter, so a bookmark, a shared link, a reload and Back/Forward all
+reproduce it, and the bare Investigations address always shows every
+investigation. This replaces the in-memory choice described above: leaving and
+returning to the bare address no longer restores the filter. Changing the
+filter returns to page 1 and keeps keyboard focus on the control. The link back
+from an assessment page returns to the filtered list when the visitor came from
+it. This is frontend-only, with no API, schema, admission, spend, pause,
+approval, role or authorization change. The page offset still has no address.
+
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
 when the newest retained assessment for the row's exact current state
@@ -2856,6 +2898,45 @@ lifecycle, role and response authorization are unchanged.
 
 **Compatibility:** API clients that save expanding controls must preview first
 and resend the save with the returned confirmation.
+
+### Per-server automatic AI plan status — worker checkpoint #922
+
+The scan-policy toggle for automatic AI plans always said "at most ten plan
+requests per hour across the fleet". `incidents.auto_plan_tick` and the manual
+plan route enforce that allowance only in `legacy` control mode. In every other
+mode the shared AI start gates pace plans. Administrators also could not see why
+no plan was requested, or how many incidents still waited for one.
+
+The admin-only `GET /api/hosts/{id}/security/auto-plan-status` now reports:
+- **State:** `off`, `ai_disabled`, `not_configured`, `paused`, `held`
+  (server-change hold), `inactive` (disabled or deleted server) or `ready`, in
+  the order the tick's checks apply.
+- **Awaiting:** this server's open incidents still owed their one automatic
+  attempt, with the oldest one's update time. The count uses
+  `incidents.awaiting_auto_plan`, which the tick now shares, and excludes YARA
+  incidents in SQL with `incidents.automatic_candidate_sql` (the SQL form of the
+  tick's `automatic_candidate`; a missing engine is not YARA). Old YARA rows
+  therefore cannot fill the bounded read and hide owed incidents. At most 500
+  candidate rows are read. A larger backlog reports a lower bound with
+  `awaiting_truncated`.
+- **Occupancy:** whether a security or startup plan job is queued or running on
+  the server (that blocks the next plan), and the latest automatic attempt's job
+  state and time.
+- **Pacing:** in `legacy` mode, the fleet allowance used/remaining and when it
+  next frees, using the same sliding window as Settings → AI. Other modes report
+  no plan-specific hourly cap.
+
+The Security tab shows this under the toggle, and the help text now names the
+pacing for each mode. A failed load or an unknown state says the status is
+unavailable and never implies a plan will start.
+
+- **Unchanged:** the payload holds fixed codes, counts, job states and timestamps
+  only: no incident evidence, paths, plan text, job output or key material. It
+  sends no provider request and writes nothing. Tick behavior, admission,
+  schema, roles and response authorization are unchanged, and plans remain
+  manual-only.
+- **Limitations:** this is a point-in-time read for one server. A fleet-wide
+  plan queue view and startup-change plans (never automatic) are not covered.
 
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
@@ -3490,6 +3571,70 @@ Remaining for requirement E:
 - alerts and incidents, false-positive recovery, and real-target and
   benign-lookalike acceptance drills.
 
+### Persisted fleet malware response policy — worker checkpoint #898
+
+Status: **bounded slice; requirement E remains planned/incomplete.** Administrators
+can view and save one fleet-wide policy for the #682 contract in Settings →
+Malware response. Nothing evaluates it at runtime: no detector, executor,
+provider call or response authorization was added or changed.
+
+- `app/malware_policy.py` stores the policy in the `Setting` row
+  `malware-response-policy`. There is no schema change.
+  - `GET /api/settings/malware-response` (admin) returns the policy normalized by
+    `malware_response.normalize_policy`, an opaque revision digest, the contract
+    version, the action-effect texts, limits and `enforcement_available: false`.
+  - With no row, the policy is the contract default: `disabled` with empty scopes.
+- `PUT /api/settings/malware-response` (admin, CSRF) validates with the same
+  contract. A malformed policy returns 400 and writes nothing.
+- `enforce` is refused with 409 while no executor exists. A stored `enforce` row
+  is reported as invalid and treated as disabled, so a later executor cannot
+  inherit an enforcement choice nobody confirmed for live use.
+- A save is a compare-and-set on the revision under the cross-worker lock
+  `malware-response-policy`. A stale or concurrent save, or a held lock, returns
+  409. Each successful save writes exactly one audit entry. The entry names the
+  changed fields, any mode transition and the exclusion counts, never the
+  excluded paths or hashes.
+- A stored row that no longer validates is reported as `disabled` with
+  `stored_invalid: true` and a reason, and `malware_policy.current()` returns the
+  disabled default. Saving with the reported revision replaces it.
+- The Settings section shows the mode (Enforce visible but disabled, with an
+  explanation), per-class action scopes with their effect texts, the
+  unknown-malware opt-in, thresholds and exclusions. It keeps entries after a 409.
+
+Remaining for requirement E: per-server and group overrides, plus every item
+listed under #682 apart from this fleet-level storage and UI.
+
+### Per-server restrict-only malware response overrides — worker checkpoint #940
+
+Status: **bounded backend and UI slice; requirement E remains planned/incomplete.**
+An administrator can store one override per server in the `Setting` row
+`malware-response-server:<host_id>`. Nothing evaluates it at runtime.
+- **Restrict-only:** an override has a `mode_cap` (`inherit`, `monitor_only`
+  or `disabled`) and extra path/hash exclusions. The effective policy is the
+  fleet policy with its mode lowered to the cap and both sets of exclusions
+  combined. Action scopes, the unknown-malware opt-in and thresholds always
+  come from the fleet policy, so an override never adds authority.
+- **Fail closed:** a stored override that no longer validates resolves to
+  `disabled` for that server. Combined exclusions over the contract limit
+  resolve to the disabled default with a reported reason.
+- **API:** admin-only `GET/PUT /api/hosts/{id}/malware-response`. It returns the
+  override, revision, fleet policy and effective policy. A save is a
+  compare-and-set under the existing `malware-response-policy` lock and writes
+  one audit entry naming the cap change and exclusion counts, never the paths
+  or hashes. An unknown server returns 404.
+- **UI:** administrators see an "Automatic malware response for this server"
+  panel on the server's Security tab. It shows the fleet mode, the effective
+  mode and exclusion counts, offers only the restricting caps, explains invalid
+  stored state and keeps entries in the form after a refused or stale save.
+  `tests/ui_server_malware_override.cjs` covers save, refusal, stale saves,
+  escaping, load failure and 320/768/1440 px widths.
+- **Unchanged:** no executor, detector, provider call, schema change or response
+  authorization was added, and `enforce` stays unavailable.
+
+Remaining: group overrides,
+fleet-level visibility of overridden servers, and every runtime item under
+#682.
+
 ## Planned: comprehensive startup and scheduled-task awareness
 
 Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse
@@ -4044,6 +4189,32 @@ its commands are unchanged.
 No runtime code, schema, role or response-authorization change. Join-worker
 installer mode, remote-machine workers with shared secrets/state and the dedicated
 gcp-integration node remain open.
+
+### Same-host join-worker GCP installer mode — worker checkpoint #943
+
+`install-gcp.sh --mode worker [--workers N]` (1–16, default 1) joins worker replicas
+on the same Docker host to a controller installed with `--mode controller` in the
+same checkout.
+- **Refusals before writing:** a fresh checkout, complete or legacy installations, a
+  different project or zone, `--public-url` and `--credential-dir`. A controller
+  using WIF without `compose.worker.gcp-auth.json` is also refused.
+- **Shared state:** the controller's `app-data` volume name and effective
+  `DATABASE_URL` come from `./gcp-compose.sh config`. The volume must exist.
+- **`.env.worker`:** a new file (mode 0600) records `<controller project>-workers`,
+  the volume and the single-quoted literal `DATABASE_URL`. An existing file is kept,
+  but it must name a different project and render the same volume and database as
+  the controller.
+- **Run:** it builds only `worker`, runs the gcloud checks in one-off worker
+  containers (token discarded) and runs `up -d --wait --scale worker=N` in the worker
+  project. `.env`, `.env.gcp` and the controller project are never modified, stopped
+  or recreated.
+- **Wrapper:** `gcp-compose.sh --workers` selects the worker project and files.
+- **Validation:** mock-Docker tests and a real `docker compose config` render of the
+  recorded worker files.
+
+No runtime code, schema, role or response-authorization change. Remote-machine
+workers with provisioned keys, SSH identities and locking state, non-GCP installer
+modes, the dedicated gcp-integration node and multi-host acceptance remain open.
 
 ### Deployment files and runtime roles
 
@@ -8267,6 +8438,32 @@ program is complete. Coordinator integration with ready pooled-discovery and
 configurable-connection work must preserve this decoded-response ceiling, followed
 by exact-head SQLite/MySQL, browser, Compose, transport and CodeQL acceptance.
 
+### authorized_keys options contract — worker checkpoint #895 (roadmap F)
+
+The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` as metadata only. Nothing said which keys carry a forced `command=`, which restrictions apply, or whether sshd would accept the line at all.
+
+- **Change:** a new pure module, `app/authorized_keys.py`, follows sshd(8) *AUTHORIZED_KEYS FILE FORMAT* and OpenSSH option parsing.
+  - **Line structure:** the key type is tried first, otherwise the options token runs to the first unquoted whitespace, as `sshkey_advance_past_options` does.
+  - **Options:** comma separated and case-insensitive, with `\"` handled as in `opt_dequote`. Options apply in order, so `restrict` followed by `pty` re-enables a pty. The FIDO flags accept both spellings (`touch-required`/`no-touch-required`, `verify-required`/`no-verify-required`) and the last one wins; `tunnel="any"` is case-insensitive and numeric tunnel IDs stop at OpenSSH's `SSH_TUNID_MAX` (2^31 − 3).
+  - **Rejected lines:** sshd refuses lines with an unknown option, a missing quote, a duplicate `command`/`principals`, or a malformed `expiry-time`, `tunnel` or `environment`. Such lines are `invalid` with the reason.
+  - **Identity:** each key is bound by its `SHA256:` fingerprint. The embedded type must match the declared type, and raw key material is never returned.
+  - **Forced command:** reported verbatim, with `command_runs_via: account_shell_-c`. No argv is guessed.
+  - **Line precedence:** a later line for the same key is `shadowed` only by an earlier `accepted` line. As in sshd, `expired` lines never shadow a later line. If the earlier line has `from=`, an uncertain expiry (`expiry_timezone_unknown`/`expiry_unevaluated`) or unvalidated `permitopen`/`permitlisten` values (which make sshd skip the line when malformed), the later line is `conditional` with a `precedence_depends_on_*` gap. `cert-authority` lines only match certificates, so they track precedence separately from plain-key lines for the same key.
+  - **Expiry:** `expiry-time` is evaluated against a supplied observation time, and the earliest value wins.
+- **Gaps, never reported as covered:**
+  - unreadable, oversized or truncated files;
+  - an unknown key type;
+  - `environment=`, which depends on `PermitUserEnvironment`;
+  - `permitopen`/`permitlisten` values, whose host:port syntax is not validated (`forwarding_spec_unvalidated`);
+  - a local-time expiry within the ±14-hour zone range of the observation, or an expiry with no observation time;
+  - the file, line, option, value and comment caps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. Nothing is executed or authorized.
+- **Validation:** `tests/test_authorized_keys.py` covers the contract, including regression cases for unvalidated forwarding specs on an earlier line, negatable FIDO flags and the `tunnel` bound. The 52 focused tests passed on the exact handed-off worker head and are included in this integration. They include a real `cryptography`-generated OpenSSH Ed25519 key.
+- **Remaining:**
+  - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
+  - `permitopen`/`permitlisten` syntax validation, which is a gap today;
+  - provenance, AI classification and UI.
+
 ## Ordered file assessment and visibility (#626)
 
 ### Automatic retained file trust (#636)
@@ -8646,6 +8843,26 @@ would run before the asynchronous polls refresh `last_seen` and would flag every
 server. An already-active event stays active across a leader change, without a
 new revision, until telemetry resumes.
 
+### Configurable telemetry-loss threshold — worker checkpoint #948
+
+Closes the open item from checkpoint #765: the in-app `telemetry-lost` notice no longer has a fixed 15-minute threshold.
+
+- **Setting:** Settings → Patch policy adds **Telemetry-loss notice after · minutes**, with whole minutes from 5 to 1440 and a default of 15.
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `telemetry_lost_minutes`. Out-of-range or non-integer values return 422, and older clients that omit the field keep the stored value.
+  - A change appends `telemetry-loss notification threshold changed from A to B minutes` to the existing admin-only settings audit row.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 15 (`operations.telemetry_lost_minutes`).
+  - The value lives in the existing `config` setting, so there is no schema change. The legacy `PUT /api/settings` neither sets nor resets it.
+- **Producer:** `operations.collect_alerts` uses the configured threshold for both the silence check and the coordinator-observation guard. A new leader therefore waits a full configured threshold before publishing.
+  - The fixed reason text names the configured minutes. At 15 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of still-qualifying active events once.
+  - Raising the threshold above a server's current silence resolves its active notice through the existing operational resolution path. The notice reopens if the silence later exceeds the new threshold.
+- **Unchanged:** the 120-second `stale` SMTP/webhook alert, the outbox, roles, CSRF, the admin-only audience and response authorization. The notice remains attention-only.
+- **Validation:**
+  - `tests/test_telemetry_lost_threshold.py`: 7 tests, all failing on main `0842ba4` and passing after. They cover the default text, invalid stored values, a shorter threshold, resolution after a raise and reopening, the observation guard, API validation and omission, and audit.
+  - The existing telemetry-loss tests in `tests/test_operational_notifications.py` pass unchanged.
+  - `tests/ui_settings_telemetry.cjs` fails on main and passes after. It covers the settings-finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** deployment-type endpoint-agent readiness and alerting (#737) remain open.
+
 ### Agent event-spool attention notifications — worker checkpoint #108
 
 This adds a roadmap J health/coverage producer and closes the alerting gap left open in #108. Each time the controller ingests a fresh telemetry snapshot from an enabled server, it publishes one admin-only in-app event per server (`agent-spool` / `spool-health`) in either case:
@@ -8844,3 +9061,16 @@ Roadmap A requires AI activity to show the blocked reason and next eligible star
 - **Unchanged:** the API, schema, roles, admission, reservations and response authorization. Viewers are still routed away from `#ai-logs` and never request the snapshot. Per-server AI tabs do not show the card, because the snapshot is fleet-wide.
 - **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.
+
+
+### Never-scanned legacy scan policies in coverage notifications — worker checkpoint #883
+
+The first #841 limitation: a policy saved before `enabled_since` existed stayed silent forever while its server had never had a `security-scan` attempt, unless an administrator happened to re-save it.
+
+- **Change:** for an enabled policy without a valid `enabled_since` on an active, non-enrolling server with no `security-scan` attempt, the coverage producer records the first tick that saw that state under its own server-managed key, `security-scan-legacy-since:<host>` (`{"first_seen": <epoch>}`, whole microseconds). Classification treats that time as `enabled_since`, so the server becomes `overdue` after the interval plus the one-hour grace period, with the #816 payload, revisions and resolution.
+- **Conservative:** the marker is never earlier than the first observation, so a legacy policy notifies no sooner than a freshly saved one would. An invalid or future marker restarts at the current tick.
+- **No policy rewrite:** the administrator's `security-policy:<host>` row is never written by the producer, so a concurrent policy save cannot be lost. The marker prefix does not start with `security-policy:`, which the scheduler and the coverage page enumerate.
+- **Cleanup:** the marker is deleted once the policy carries its own `enabled_since`, is disabled or removed, the server gets a scan attempt, or the server is disabled, deleted or re-enrolling.
+- **Unchanged:** policies with `enabled_since`, the scheduler, `security_coverage.assessment`, the schema, roles and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `dff91c4` and pass after the change; a behavior-only check (legacy never-scanned policy publishes `overdue` after the interval plus grace) publishes nothing on main. The related SQLite coverage, notification, security, incident, operations and scheduling selection passes (580 passed, 2 skipped).
+- **Remaining:** the window before a legacy policy notifies starts at the upgrade's first coordinator tick, not at its true enablement time, which is unknown. YARA schedules and a configurable grace period remain out of scope.

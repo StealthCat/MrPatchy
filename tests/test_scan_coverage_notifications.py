@@ -344,3 +344,106 @@ def test_classify_never_scanned_uses_enabled_since_and_ignores_invalid_values():
     for invalid in (None, 'old', True, float('nan'), float('-inf'), now + HOUR, [now - limit - 1]):
         assert coverage.classify(None, None, {'interval_hours': 24, 'enabled_since': invalid}, now) is None
     assert coverage.classify(None, None, {'interval_hours': 24}, now) is None  # legacy policy
+
+
+def legacy_marker():
+    with Session() as s:
+        row = s.get(Setting, coverage.LEGACY_PREFIX + HOST)
+        return dict(row.value) if row else None
+
+
+def test_never_scanned_legacy_policy_publishes_overdue_from_first_observation(admin):
+    seed(interval=1)  # enabled legacy policy saved before enabled_since existed; never scanned
+    stored = policy_value()
+    first = time.time()
+    collect(first)
+    marker = legacy_marker()
+    assert marker is not None and first - 1 <= marker['first_seen'] <= first
+    assert policy_value() == stored  # the administrator's policy row is never rewritten
+    limit = HOUR + coverage.GRACE_SECONDS
+    collect(first + limit - 60)
+    assert items(admin) == []  # no earlier than a freshly saved policy would notify
+    assert legacy_marker() == marker  # later ticks keep the first observation
+    collect(first + limit + 60)
+    [item] = items(admin)
+    assert item['reason'] == coverage.MESSAGES['overdue'] and item['lifecycle'] == 'active'
+    assert item['severity'] == 'medium' and item['deep_link'] == '#servers/' + HOST + '/security'
+    with Session() as s:
+        assert s.scalar(select(func.count()).select_from(Job).where(Job.action == 'security-scan')) == 0
+    scan('first')
+    collect()
+    [item] = items(admin)
+    assert item['lifecycle'] == 'resolved' and item['revision'] == 2
+    assert legacy_marker() is None  # a scan attempt retires the marker
+
+
+def test_legacy_marker_is_removed_when_policy_is_saved_disabled_or_server_leaves(admin):
+    seed(interval=1)
+    collect()
+    assert legacy_marker() is not None
+    saved = put_policy(admin)  # re-saving records the policy's own enabled_since
+    collect()
+    assert legacy_marker() is None
+    collect(saved['enabled_since'] + HOUR + coverage.GRACE_SECONDS - 60)
+    assert items(admin) == []  # the saved clock, not the earlier marker, now applies
+
+    seed(interval=1)  # legacy again
+    collect()
+    assert legacy_marker() is not None
+    seed(enabled=False, interval=1)
+    collect()
+    assert legacy_marker() is None
+
+    seed(interval=1)
+    collect()
+    with Session() as s:
+        s.get(Host, HOST).state = 'enrolling'
+        s.commit()
+    collect()
+    assert legacy_marker() is None
+
+
+def test_invalid_or_future_legacy_marker_restarts_at_now(admin):
+    seed(interval=1)
+    now = time.time()
+    for invalid in ('old', True, now + 10 * HOUR, None):
+        with Session() as s:
+            s.merge(Setting(key=coverage.LEGACY_PREFIX + HOST, value={'first_seen': invalid}))
+            s.commit()
+        collect(now)
+        assert now - 1 <= legacy_marker()['first_seen'] <= now
+        collect(now + HOUR + coverage.GRACE_SECONDS - 60)
+        assert items(admin) == []
+
+
+# ``math.floor(now * 1_000_000)`` rounds this product up to the next microsecond, after ``now`` (#942).
+ROUNDS_UP_NOW = 1794764579.7443979
+
+
+def test_whole_microseconds_never_exceeds_the_input():
+    import math
+    import random
+
+    assert math.floor(ROUNDS_UP_NOW * 1_000_000) / 1_000_000 > ROUNDS_UP_NOW  # the old truncation
+    assert coverage.whole_microseconds(ROUNDS_UP_NOW) == 1794764579.744397
+    rng = random.Random(942)
+    for value in [ROUNDS_UP_NOW, 0.0, 1.0, 1794764579.0] + [rng.uniform(1.7e9, 2.1e9) for _ in range(20000)]:
+        truncated = coverage.whole_microseconds(value)
+        assert truncated <= value and value - truncated < 1.000001e-6
+        assert truncated == round(truncated, 6) and int(repr(truncated).replace('.', '')) < 2 ** 53
+
+
+def test_legacy_marker_at_a_round_up_instant_is_not_after_now(admin):
+    seed(interval=1)
+    collect(ROUNDS_UP_NOW)
+    assert legacy_marker()['first_seen'] == 1794764579.744397 <= ROUNDS_UP_NOW
+
+
+def test_policy_save_at_a_round_up_instant_records_enabled_since_not_after_now(admin, monkeypatch):
+    seed(enabled=False)
+    from app import main
+
+    monkeypatch.setattr(main.time, 'time', lambda: ROUNDS_UP_NOW)
+    since = put_policy(admin)['enabled_since']
+    monkeypatch.undo()
+    assert since == policy_value()['enabled_since'] == 1794764579.744397 <= ROUNDS_UP_NOW
