@@ -54,7 +54,10 @@ def seed(*,cap):
 class Clock:
     """A controllable wall clock shared by the worker, retry, backoff and budget code."""
     def __init__(self,monkeypatch):
-        self.real=time.time;self.shift=0.0
+        self.real=time.time;now=self.real()
+        # Start at 01:00 UTC so retry/backoff advances never cross the fixture
+        # cap's daily reset unless a test advances to it explicitly.
+        self.shift=(now//86400*86400+3600)-now
         monkeypatch.setattr(time,'time',self.now)
     def now(self):
         return self.real()+self.shift
