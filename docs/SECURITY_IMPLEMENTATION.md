@@ -2815,6 +2815,31 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### Unknown pricing and usage under a daily cap — worker checkpoint #994
+
+Milestone 4 acceptance for **unknown pricing/usage**.
+`tests/test_ai_budget_unknown_usage_acceptance.py` drives the real
+`ai.investigate()` → `ai.request()` path in `daily_cap` and `rate_and_daily`.
+- **Unpriceable responses:** 12 shapes are covered. They include missing,
+  malformed or inconsistent usage, an unpriced or invalid returned model, a
+  missing or unpriced tier, missing cache-write or cached-input counts, and
+  400/500 replies without usage. Each leaves its ledger row `uncertain` with the
+  full reservation counted. The call receipt and run cost report `unavailable`,
+  never `$0`.
+- **Later admission:** once the cap leaves room for one more reservation only if
+  the unknown charge were free, the next call is refused before rate admission or
+  transmission. It returns a policy wait with a retry time. A priced reply with
+  the same reservation settles to its estimate and the same later call proceeds.
+- **Request-side pricing:** an unpriced saved model, tool fees, an unbounded
+  output, an unpriced tier or cache TTL, or an expired catalog refuses capped
+  admission before sending. No ledger row or rate admission is created.
+- **Uncapped modes:** `rate` and `unthrottled` create no ledger row for unknown
+  usage and do not block later calls. The receipt still reports `unavailable`.
+- **Evidence:** 44 tests. Treating unknown usage as settled at zero fails 24 of
+  them, and quoting an unpriceable request at zero fails 12.
+- **Unchanged:** no runtime change; no defect was found. Other milestone 4 items
+  and measured throughput remain open.
+
 ### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
 
 Installations still on `legacy` control mode now see their hidden hourly
