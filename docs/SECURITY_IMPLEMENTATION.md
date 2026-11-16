@@ -3791,7 +3791,8 @@ entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
   scalars and tagged children override; untagged items append.
   Inside a block a bare word is an untagged item (`{ /tmp/x; }`), as in apt
   2.8.3. `#clear`/`#include` inside a block or with more than one argument are
-  syntax errors, and `#clear A::;` clears nothing.
+  syntax errors, and `#clear A::;` clears nothing. A same-line `/* */` comment
+  joins the text around it (`ev/*x*/il` is `evil`), as in apt 2.8.3.
 - **Reported options:** `command` (Update/DPkg Invoke lists and
   `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
   (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
@@ -3799,7 +3800,8 @@ entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
   line. `Binary::<program>::` copies carry that scope. A scalar on a hook list
   node is reported inert because APT never runs it.
 - **Fail closed:** syntax errors (including a quoted value left open at the end
-  of a line), unfollowed `#include`, unreadable or oversized files, directory
+  of a line, a quoted string touching other text and `*/` directly followed by
+  `/`, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
   overrides, over-cap input and uncollected files make APT behavior
   `undetermined`. Hooks parsed before an error stay visible. The unobservable
   `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.

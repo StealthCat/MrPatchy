@@ -33,8 +33,8 @@ inert, because APT never runs it.
 It performs no I/O, never sources, includes or runs anything and never
 authorizes a response action. Fail-closed rules:
 
-- A syntax error (including a quoted value left open at the end of a line,
-  which this contract does not interpret) makes APT's behavior
+- A syntax error (including a quoted value left open at the end of a line or
+  a quoted string touching other text, which this contract does not interpret) makes APT's behavior
   ``undetermined``: APT refuses to run with an unparsable file. Statements
   before the error are still applied so their hooks stay visible.
 - ``#include`` targets are never followed and become gaps, as do unreadable
@@ -141,6 +141,10 @@ def _strip_comments(text: str) -> tuple[list[tuple[int, str]], _Syntax | None]:
                 if raw.startswith('*/', i):
                     in_block = False
                     i += 2
+                    if raw.startswith('/', i):
+                        # APT 2.8.3 drops or rejects the rest of the line when ``*/`` is
+                        # directly followed by ``/`` (``a/*c*//*d*/b``); not interpreted here.
+                        return out, _Syntax(number, 'A /* */ comment is directly followed by a slash.')
                 else:
                     i += 1
                 continue
@@ -150,9 +154,10 @@ def _strip_comments(text: str) -> tuple[list[tuple[int, str]], _Syntax | None]:
                 if raw.startswith('//', i):
                     break
                 if raw.startswith('/*', i):
+                    # APT deletes the comment without leaving a separator, so text on both
+                    # sides of a same-line comment joins into one word (``ev/*x*/il`` is ``evil``).
                     in_block = True
                     i += 2
-                    kept.append(' ')
                     continue
                 if c == '#' and not (raw.startswith('#clear', i) or raw.startswith('#include', i)):
                     break
@@ -185,6 +190,12 @@ def _tokens(text: str) -> tuple[list[tuple[int, str, str]], _Syntax | None]:
                     return tokens, _Syntax(number, 'Unexpected text.')
                 break
             pos = match.end()
+            quoted = bool(match.group(1))
+            if (quoted or match.group(4)) and pos < len(line) and (
+                    line[pos] == '"' or (quoted and line[pos] not in ' \t\r\f\v{};')):
+                # APT joins a word and an adjacent quoted string into one word (``x"a"`` is
+                # ``xa``, ``#clear"A"`` is not a directive). This contract does not interpret that.
+                return tokens, _Syntax(number, 'A quoted string touches other text.')
             if match.group(1):
                 tokens.append((number, 'str', match.group(2)))
             elif match.group(3):

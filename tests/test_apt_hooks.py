@@ -233,3 +233,47 @@ def test_directives_apt_rejects_are_syntax_errors(text):
     result = resolve(part('10a', text))
     assert result['apt_behavior'] == 'undetermined'
     assert 'syntax_error' in codes(result)
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('DPkg::Post-Invoke { ev/*x*/il; };', [('DPkg::Post-Invoke', 'evil')]),
+    ('DPkg::Post-/*c*/Invoke { "a"; };', [('DPkg::Post-Invoke', 'a')]),
+    # A comment that spans lines still separates: the line break is a separator in APT too.
+    ('DPkg::Post-Invoke { ev/*x\ny*/il; };', [('DPkg::Post-Invoke', 'il')]),
+    ('DPkg::Post-Invoke { "a" /*c*/ ; /* d */ "b"; };', [('DPkg::Post-Invoke', 'a'), ('DPkg::Post-Invoke', 'b')]),
+])
+def test_same_line_block_comment_joins_the_text_around_it(text, expected):
+    # apt-config 2.8.3 deletes a /* */ comment without leaving a space.
+    result = resolve(part('10a', text))
+    assert commands(result) == expected
+    assert result['apt_behavior'] == 'determined'
+
+
+def test_block_comment_inside_a_tagged_word_sets_no_hook():
+    # apt-config 2.8.3 reads ``DPkg::Post-Invoke::tef;`` and sets an empty-named root option; nothing runs.
+    result = resolve(part('10a', 'DPkg::Post-Invoke::te/*c*/f;'))
+    assert commands(result) == []
+
+
+@pytest.mark.parametrize('text', [
+    'DPkg::Post-Invoke::"b c";',
+    'DPkg::Post-Invoke {"a";};\n#clear"DPkg::Post-Invoke";',
+    'DPkg::Post-Invoke { x"a"; };',
+    'DPkg::Post-Invoke { "a"x; };',
+    'DPkg::Post-Invoke { "a"/*c*/x; };',
+    'DPkg::Post-Invoke "a""b";',
+    # apt-config 2.8.3 rejects the first two and drops the item in the third.
+    'DPkg::Post-Invoke { a/*c*//*d*/b; };',
+    'DPkg::Post-Invoke { a/*c*//b; };',
+    'DPkg::Post-Invoke { /*c*//*d*/a; };',
+])
+def test_text_this_contract_does_not_interpret_fails_closed(text):
+    # APT joins a word and a touching quote into one word (``x"a"`` runs ``xa``; ``#clear"A"`` clears nothing).
+    result = resolve(part('10a', text))
+    assert result['apt_behavior'] == 'undetermined'
+    assert 'syntax_error' in codes(result)
+
+
+def test_hooks_before_a_touching_quote_stay_visible():
+    result = resolve(part('10a', 'DPkg::Post-Invoke {"a";};\n#clear"DPkg::Post-Invoke";'))
+    assert commands(result) == [('DPkg::Post-Invoke', 'a')]
