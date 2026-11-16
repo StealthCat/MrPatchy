@@ -3921,6 +3921,256 @@ exactly one class with its basis, verification strength (`authenticated`,
 vendor artifacts from targets; persistence; UI; AI classification; response actions.
 No schema, API, auth or response-authorization change.
 
+### Kernel-module configuration contract — worker checkpoint #952
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/kernel_modules.py` is a pure, versioned contract for the catalog's
+`modprobe` and `modules_load` mechanisms. It parses supplied text and performs
+no I/O.
+
+- **Effective files.** Only `*.conf` files are read. A name in a higher-priority
+  directory (`/etc`, `/run`, `/usr/local/lib`, `/usr/lib`, `/lib`) replaces the
+  same name in a lower one, and the remaining files are processed in name order.
+  Every supplied file is reported as effective, overridden, masked, ignored or
+  unreadable, with its reason.
+- **modprobe.d directives.** `install`, `remove`, `alias`, `blacklist`,
+  `options`, `softdep` and `weakdep` are parsed with line-start `#` comments,
+  backslash continuations and `-`/`_` equivalence. Deprecated `include`/`config`
+  lines and unknown or malformed lines are reported with file and line.
+- **Commands.** Each `install`/`remove` entry carries its module pattern, bounded
+  command text, full-command SHA-256, source and processing order. `/bin/true`
+  and `/bin/false` are labelled `disable`. Later entries for an already defined
+  pattern are marked shadowed. `commands_for()` returns both the first matching
+  entry and, when it differs, the first exact-name entry, because libkmod
+  chooses between them by where it found the module.
+- **Boot requests.** `modules-load.d` files and Debian's `/etc/modules`
+  (including the `modules.conf` link to it) list one module per line. Extra
+  tokens are reported and not interpreted.
+- **Boot-time command chains.** `boot_commands()` lists the `install` commands
+  each boot-requested module could run. It follows configuration aliases and
+  `softdep` pre/post modules with depth, chain and step limits, records how each
+  command was reached and flags blacklisted modules without dropping them. Only
+  the first matching `softdep` entry is used, and an alias target is not looked
+  up as an alias again. A pattern containing a backslash escape is a blocking
+  gap.
+- **Conditions instead of guesses.** The kernel's module tables are not
+  observed, so a command whose execution depends on them is listed and counted
+  with `conditions`, never dropped or reported as shadowed. An empty list means
+  the command runs whatever the tables hold.
+  - `module_in_kernel_tables`: a wildcard `install` entry, or anything reached
+    through a name the configuration does not define, runs only if that module
+    exists in the kernel tables.
+  - `module_not_in_kernel_tables`: an exact-name entry after an earlier
+    wildcard match runs only if the module is absent from the kernel tables.
+    Both entries are listed.
+  - `softdep_target_unresolved`: a module whose `softdep` names only modules
+    the configuration does not define runs its own command unless one of them
+    is in the kernel tables.
+  A module's own command is listed as ignored only when the configuration
+  itself defines one of its soft dependencies (an alias or an exact-name
+  `install`/`remove` entry). The result's `conditional` field counts the
+  chains that carry a condition.
+- **Checked against libkmod.** The resolver was compared with libkmod 31's
+  dry-run probe (what `modprobe -n -v` prints) on generated configurations,
+  with an empty module tree and with a populated `modules.dep.bin`. Blacklist
+  handling and backslash patterns were excluded from that comparison.
+- **Fail closed.** Unreadable files, unfollowed symlinks (other than `/dev/null`
+  masks), invalid UTF-8, NUL bytes and over-limit input mark the result
+  incomplete. An unreadable winning file still shadows lower-priority files.
+  Every result names what it cannot observe: the kernel command line, the
+  kernel's alias and dependency tables, the initramfs copy and tool overrides.
+  `origin` is always `not_assessed` and no result is a safety verdict.
+
+**Not covered:** agent collection of these files' text, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
+### Effective APT configuration hooks — worker checkpoint #950
+
+Contract-only; roadmap F remains incomplete. `app/apt_hooks.py` resolves the
+effective command-executing APT options from captured `/etc/apt/apt.conf.d`
+entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
+
+- **Files:** APT `Dir::Etc::Parts` rules decide which files are read: hidden and
+  non-regular entries are skipped; a name needs no extension or `.conf` and only
+  `[A-Za-z0-9_.:-]`; default `Dir::Ignore-Files-Silently` patterns are silent.
+  Files are read in byte order and `apt.conf` last. Ignored files are listed.
+- **Syntax:** `//`, `/* */` and `#` comments, scalar and unquoted values, nested
+  blocks, list items, `#clear` and `#include`; keys are case-insensitive. Later
+  scalars and tagged children override; untagged items append.
+  Inside a block a bare word is an untagged item (`{ /tmp/x; }`), as in apt
+  2.8.3. `#clear`/`#include` inside a block or with more than one argument are
+  syntax errors, and `#clear A::;` clears nothing. A same-line `/* */` comment
+  joins the text around it (`ev/*x*/il` is `evil`), as in apt 2.8.3.
+  Only space, tab, CR and LF separate words; a no-break space or other Unicode
+  space is part of a word. `#clear` empties an option in place, so a tag set
+  again keeps its position. `#x-apt-configure-index` is not a comment.
+- **Reported options:** `command` (Update/DPkg Invoke lists and
+  `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
+  (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
+  `path_override` (`DPkg::Path`) and `dpkg_options`, each with source file and
+  line. `Binary::<program>::` copies carry that scope. A scalar on a hook list
+  node is reported inert because APT never runs it.
+- **Fail closed:** syntax errors (including a quoted value left open at the end
+  of a line, a quoted string touching other text and `*/` directly followed by
+  `/`, a NUL, vertical tab or form feed, and `#x-apt-configure-index` with an
+  argument, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
+  overrides (setting or clearing `RootDir`, `Dir`, `Dir::Etc`, `Dir::Etc::Main`
+  or `Dir::Etc::Parts`, since APT locates `apt.conf` after reading the parts
+  directory), over-cap input and uncollected files make APT behavior
+  `undetermined`. Hooks parsed before an error stay visible. The unobservable
+  `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog `entries_parsed` wiring,
+  inventory/UI, provenance and AI classification, and DNF/YUM plugin configuration.
+
+### dpkg configuration commands — worker checkpoint #970
+
+Contract-only; roadmap F remains incomplete. `app/dpkg_hooks.py` lists the
+command-executing and check-changing options in captured `/etc/dpkg/dpkg.cfg.d`
+entries and `/etc/dpkg/dpkg.cfg`. It performs no I/O and runs nothing. It
+complements the APT hook contract above: these options act one level lower, on
+every dpkg run, whichever front end starts it.
+
+- **Files:** a `dpkg.cfg.d` name is read when it does not start with `.` and
+  consists of `[A-Za-z0-9_-]`. Files are read in byte order and `dpkg.cfg`
+  after them. A dangling link is skipped; ignored names are listed.
+- **Syntax:** trailing whitespace is dropped; empty lines and lines starting
+  with `#` are skipped; leading whitespace is an error. The name is the leading
+  run of `[A-Za-z0-9-]`; the next character ends it, one following `=` and
+  leading whitespace are skipped, and a value starting with a quote must end
+  with the same quote. `force-<things>`, `refuse-<things>` and
+  `no-force-<things>` need no separate value.
+- **Reported options:** `commands` (`pre-invoke`, `post-invoke` and
+  `status-logger`, each run through `sh -c`; every occurrence runs, invoke
+  hooks in the order read and status loggers side by side),
+  `relocations` (`root`, `admindir`, `instdir`; every occurrence, dpkg uses the
+  last) and `behavior_changes` (`force`/`refuse` items, `no-debsig`,
+  `ignore-depends`, `no-act`, `no-triggers`, path filters), each with source
+  file and line. Other recognized options are only counted.
+- **Fail closed:** dpkg refuses to run on an unknown option, a missing or
+  unexpected value, unbalanced quotes, an unknown force item, an invalid
+  validated value or an action option; each is a `config_error` gap. A line
+  over dpkg's 1022-byte buffer, a NUL byte, a non-ASCII character directly
+  after the name, a non-regular entry, an unreadable, oversized or uncollected
+  file and over-cap input are gaps too. Any of these makes the result
+  `undetermined`; other commands stay visible. The invoking user's
+  `~/.dpkg.cfg`, per-run options and environment, and the locale collation
+  dpkg sorts the directory with are always disclosed as unobserved or assumed.
+  The option table is dpkg 1.22.6's. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog location and
+  `entries_parsed` wiring, inventory/UI, provenance and AI classification,
+  other dpkg versions' option tables, and DNF/YUM/RPM plugin configuration.
+
+
+### Dynamic-loader configuration contract — worker checkpoint #960
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/dynamic_loader.py` is a pure, versioned contract for the catalog's
+`loader_preload` and `loader_config` mechanisms. It parses supplied content and
+performs no I/O.
+
+- **Preload entries.** `resolve_preload()` lists the libraries
+  `/etc/ld.so.preload` makes the loader add to every dynamically linked
+  process, including set-user-ID programs. Entries are separated only by a
+  space, tab, newline or colon. Each entry carries its line, order, SHA-256,
+  whether it is a path or a bare library name, any `$ORIGIN`/`$LIB`/`$PLATFORM`
+  token, whether it repeats an earlier entry and whether its bytes are valid
+  UTF-8.
+- **Comments that still load.** glibc removes a `#` comment to the end of its
+  line, but looks for the next `#` inside a window that shrinks with each
+  comment it finds. A `#` outside that window is not a comment, and the words
+  after it are loaded. The contract repeats that search and marks every entry
+  that follows a `#` on its line as `after_comment_marker`, so a library that
+  looks commented out is listed, not hidden.
+- **Search directories.** `resolve_search_paths()` reads `/etc/ld.so.conf` the
+  way `ldconfig` does: `#` ends a line, `hwcap` lines are ignored and every
+  other line is one directory with trailing whitespace removed and then
+  trailing slashes removed, once each, as `ldconfig` does. `/lib /` is the
+  directory `/lib` followed by a space and is reported as such, not as `/lib`.
+  Spaces, colons and commas do not separate directories. Each directory carries
+  its source file, line, order and whether it is absolute or repeated.
+- **Includes.** `include` patterns are resolved relative to the including
+  file, matched in byte order and followed into nested files. Hidden names
+  match only a pattern that starts with a dot. Every supplied file is reported
+  as parsed, absent, a directory, unreadable or not included.
+- **Fail closed.** Unreadable files, unfollowed symlinks, invalid UTF-8, NUL
+  bytes, over-limit input, include loops and budget overruns mark the result
+  incomplete. An `include` pattern the contract does not interpret (`[`, a
+  backslash, `.`/`..` components, a wildcard before the last component, or `?`
+  against a non-ASCII name), or one that points into a directory whose listing
+  was not supplied, is a gap and never an empty match. A directory line holding
+  `=` is reported with both the current and the older-glibc reading and marks
+  the result incomplete.
+- **Checked against glibc.** Both resolvers were compared with glibc 2.39 on
+  generated inputs: the loader's own preload attempts for `ld.so.preload`, and
+  `ldconfig -N -X -v -r <root>` for `ld.so.conf`. Inputs with a blocking gap
+  were excluded from the `ld.so.conf` comparison.
+- **Not observed.** The built `/etc/ld.so.cache`, ldconfig's built-in
+  directories, whether a directory or library exists, the collation locale,
+  environment variables, RPATH/RUNPATH and other C libraries are named in
+  every result. `origin` is always `not_assessed` and no result is a safety
+  verdict.
+
+**Not covered:** agent collection of these files' content, catalog
+`entries_parsed` wiring, persistence, baselines and alerts, UI, provenance and
+AI classification. No schema, API, auth or response-authorization change.
+
+### NetworkManager dispatcher script contract — worker checkpoint #962
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/nm_dispatcher.py` is a pure, versioned contract for the NetworkManager
+part of the catalog's `event_hooks` mechanism. It takes supplied file metadata,
+performs no I/O and never reads a script's contents.
+
+- **Source.** The rules follow `nm-dispatcher.c` as read in NetworkManager
+  1.36.6, 1.46.0, 1.52.0, 1.54.3 and 1.58.1. The functions are byte-identical
+  in the four releases from 1.46.0, and 1.36.6 agrees with them except that it
+  has no device handlers. A version above 1.58 gets a non-blocking gap.
+- **Scanned directories.** `/usr/lib/NetworkManager/dispatcher.d` and
+  `/etc/NetworkManager/dispatcher.d`, with `pre-up.d` (pre-up, vpn-pre-up) and
+  `pre-down.d` (pre-down, vpn-pre-down). The top directory serves every other
+  event. Each result lists its runnable scripts per event group in byte order of
+  their names, which is the order NetworkManager runs them.
+- **Name filter.** A leading dot, the `~`, `.rpmsave`, `.rpmorig`, `.rpmnew` and
+  `.swp` suffixes and a trailing `.dpkg-*` are not considered.
+- **Override and mask.** An `/etc` name replaces the same `/usr/lib` name before
+  any file check. A usable `/etc` script overrides it. An unusable `/etc` entry
+  (a `/dev/null` link, an empty file, a directory, a dangling link or a rejected
+  file) masks it, and neither runs.
+- **File checks.** A script must be a non-empty regular file owned by uid 0,
+  not writable by group or other, not set-UID and executable by its owner.
+  Symlinks are followed. Each file is reported as `runs`, `overridden`,
+  `masked`, `ignored`, `rejected` or `unresolved` with a fixed reason.
+- **No-wait.** A script that is a symlink into a directory whose resolved path
+  ends in `/no-wait.d` is marked as not blocking later scripts. Without the
+  resolved directory the decision uses the link text and says so in a
+  non-blocking gap. Files inside `no-wait.d` do not run from there.
+- **Device handlers.** From 1.46, `device/<name>` runs only for a generic
+  connection that names it, so handlers are listed separately with that
+  condition. `/etc` is tried first and `/usr/lib` is used when the `/etc` file
+  is unusable; there is no masking. The dispatcher applies no name filter,
+  but NetworkManager rejects a connection whose handler name starts with a dot
+  or has a character other than letters, digits, `-`, `_` and `.`, so a file
+  with such a name is reported as `ignored` with the reason that no connection
+  can name it. Upstream NEWS lists device handlers as new in 1.46, so on 1.36
+  to 1.44 they are reported as unsupported. On a 1.45 development snapshot,
+  which was not read, they are unresolved with a blocking gap.
+- **Fail closed.** The caller states for every scanned directory whether it was
+  listed, absent or unreadable, and supplies the NetworkManager version.
+  A directory or version that was not observed, a version older than 1.36,
+  missing or malformed metadata, an unobserved symlink target, duplicate paths
+  and over-limit input mark the result incomplete. When an `/etc` entry is
+  unresolved, the same-named `/usr/lib` script is unresolved too. Every result
+  names what it cannot observe: script contents, whether NetworkManager and its
+  dispatcher service run, which events occur and non-default build directories.
+  `origin` is always `not_assessed` and no result is a safety verdict.
+
+**Not covered:** a comparison against a running `nm-dispatcher`, agent
+collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
+
 ### Individual queued at jobs — worker checkpoint #831
 
 The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
