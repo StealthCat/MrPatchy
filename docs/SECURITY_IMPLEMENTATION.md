@@ -3793,6 +3793,9 @@ entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
   2.8.3. `#clear`/`#include` inside a block or with more than one argument are
   syntax errors, and `#clear A::;` clears nothing. A same-line `/* */` comment
   joins the text around it (`ev/*x*/il` is `evil`), as in apt 2.8.3.
+  Only space, tab, CR and LF separate words; a no-break space or other Unicode
+  space is part of a word. `#clear` empties an option in place, so a tag set
+  again keeps its position. `#x-apt-configure-index` is not a comment.
 - **Reported options:** `command` (Update/DPkg Invoke lists and
   `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
   (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
@@ -3801,7 +3804,8 @@ entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
   node is reported inert because APT never runs it.
 - **Fail closed:** syntax errors (including a quoted value left open at the end
   of a line, a quoted string touching other text and `*/` directly followed by
-  `/`, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
+  `/`, a NUL, vertical tab or form feed, and `#x-apt-configure-index` with an
+  argument, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
   overrides (setting or clearing `RootDir`, `Dir`, `Dir::Etc`, `Dir::Etc::Main`
   or `Dir::Etc::Parts`, since APT locates `apt.conf` after reading the parts
   directory), over-cap input and uncollected files make APT behavior

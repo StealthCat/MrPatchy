@@ -26,7 +26,7 @@ Syntax follows APT's configuration parser: ``//``, ``/* */`` and ``#`` comments,
 ``A::B "value";`` and unquoted values, nested ``A { B "v"; };`` blocks, list
 items (``A { "x"; };`` and ``A:: "x";``), ``#clear`` and ``#include``. Keys are
 case-insensitive. A later scalar or tagged child overrides an earlier one, an
-untagged item appends, and ``#clear`` removes the subtree. Hook lists execute
+untagged item appends, and ``#clear`` empties the option and its subtree in place. Hook lists execute
 only their child items; a scalar set on the list node itself is reported as
 inert, because APT never runs it.
 
@@ -114,6 +114,12 @@ class _Node:
         return node
 
 
+# ``#`` starts a comment unless it starts one of these words. APT 2.8.3 also keeps
+# ``#x-apt-configure-index``, so text after it on the same line is still read. This contract
+# does not interpret that directive: with an argument it is a syntax error here, which fails closed.
+_DIRECTIVES = ('#clear', '#include', '#x-apt-configure-index')
+
+
 def _gap(code: str, detail: str, **extra: Any) -> dict[str, Any]:
     return {'code': code, 'detail': detail, **extra}
 
@@ -135,6 +141,11 @@ def _strip_comments(text: str) -> tuple[list[tuple[int, str]], _Syntax | None]:
     out: list[tuple[int, str]] = []
     in_block = False
     for number, raw in enumerate(text.split('\n'), 1):
+        if any(c in raw for c in '\x00\v\f'):
+            # APT 2.8.3 cuts the line at a NUL byte and can reject the file. It also rejects a
+            # vertical tab or form feed left in front of a comment (``X "1";\v// c``) while
+            # accepting one elsewhere. None of that is interpreted here.
+            return out, _Syntax(number, 'The line contains a NUL, vertical-tab or form-feed character.')
         kept: list[str] = []
         quote = False
         i = 0
@@ -162,7 +173,7 @@ def _strip_comments(text: str) -> tuple[list[tuple[int, str]], _Syntax | None]:
                     in_block = True
                     i += 2
                     continue
-                if c == '#' and not (raw.startswith('#clear', i) or raw.startswith('#include', i)):
+                if c == '#' and not raw.startswith(_DIRECTIVES, i):
                     break
             kept.append(c)
             i += 1
@@ -174,7 +185,11 @@ def _strip_comments(text: str) -> tuple[list[tuple[int, str]], _Syntax | None]:
     return out, None
 
 
-_TOKEN = re.compile(r'\s*(?:(")([^"]*)"|([{};])|([^\s{};"]+))')
+# APT separates words only at the C locale's whitespace. A no-break space, U+0085, the
+# U+001C-U+001F separators or any other Unicode space is part of a word, so ``\s`` and a bare
+# ``str.strip()`` must not be used here. Vertical tab and form feed never reach the tokenizer.
+_SPACE = ' \t\n\r'
+_TOKEN = re.compile(r'[ \t\n\r]*(?:(")([^"]*)"|([{};])|([^ \t\n\r{};"]+))')
 
 
 def _tokens(text: str) -> tuple[list[tuple[int, str, str]], _Syntax | None]:
@@ -189,13 +204,13 @@ def _tokens(text: str) -> tuple[list[tuple[int, str, str]], _Syntax | None]:
         while pos < len(line):
             match = _TOKEN.match(line, pos)
             if not match or match.end() == pos:
-                if line[pos:].strip():
+                if line[pos:].strip(_SPACE):
                     return tokens, _Syntax(number, 'Unexpected text.')
                 break
             pos = match.end()
             quoted = bool(match.group(1))
             if (quoted or match.group(4)) and pos < len(line) and (
-                    line[pos] == '"' or (quoted and line[pos] not in ' \t\r\f\v{};')):
+                    line[pos] == '"' or (quoted and line[pos] not in _SPACE + '{};')):
                 # APT joins a word and an adjacent quoted string into one word (``x"a"`` is
                 # ``xa``, ``#clear"A"`` is not a directive). This contract does not interpret that.
                 return tokens, _Syntax(number, 'A quoted string touches other text.')
@@ -316,8 +331,13 @@ def _apply(root: _Node, statement: dict[str, Any], source: tuple[str, int]) -> N
             node = node.child(tag, False)
             if node is None:
                 return
-        folded = path[-1].lower()
-        node.children = [c for c in node.children if c.tag is None or c.tag.lower() != folded]
+        target = node.child(path[-1], False)
+        if target is not None:
+            # APT empties the option but keeps it in place, so a later assignment to the same
+            # tag runs at the option's original position in the list.
+            target.value = None
+            target.source = None
+            target.children = []
         return
     node = root
     for tag in path[:-1]:

@@ -324,3 +324,65 @@ def test_text_this_contract_does_not_interpret_fails_closed(text):
 def test_hooks_before_a_touching_quote_stay_visible():
     result = resolve(part('10a', 'DPkg::Post-Invoke {"a";};\n#clear"DPkg::Post-Invoke";'))
     assert commands(result) == [('DPkg::Post-Invoke', 'a')]
+
+
+@pytest.mark.parametrize('text,before', [
+    # apt-config 2.8.3 runs ``evil`` in the first two and rejects the third file.
+    ('#x-apt-configure-index; DPkg::Post-Invoke:: "evil";', []),
+    ('DPkg::Post-Invoke:: "a";\n#x-apt-configure-index "/nonexistent"; DPkg::Post-Invoke:: "evil";', ['a']),
+    ('DPkg::Post-Invoke:: "a";\n#x-apt-configure-indexZ "v";', ['a']),
+    ('DPkg::Post-Invoke { #x-apt-configure-index; "evil"; };', []),
+])
+def test_configure_index_directive_is_not_a_comment_and_fails_closed(text, before):
+    # APT keeps reading a line after ``#x-apt-configure-index``; treating it as a comment hid ``evil``.
+    result = resolve(part('10a', text))
+    assert result['apt_behavior'] == 'undetermined'
+    assert 'syntax_error' in codes(result)
+    assert [v for _, v in commands(result)] == before
+
+
+def test_other_hash_words_are_still_comments():
+    result = resolve(part('10a', '#X-APT-CONFIGURE-INDEX; DPkg::Post-Invoke:: "no";\n# x DPkg::Post-Invoke:: "no";\n'
+                                 'DPkg::Post-Invoke:: "yes";'))
+    assert commands(result) == [('DPkg::Post-Invoke', 'yes')]
+    assert result['apt_behavior'] == 'determined'
+
+
+@pytest.mark.parametrize('space', ['\u00a0', '\u0085', '\u2003', '\u3000', '\x1c', '\x1f'])
+def test_only_c_locale_whitespace_separates_words(space):
+    # apt-config 2.8.3 runs the single command ``/bin/a<space>b``; ``\\s`` used to report ``b``.
+    result = resolve(part('10a', 'DPkg::Post-Invoke { /bin/a%sb; };' % space))
+    assert commands(result) == [('DPkg::Post-Invoke', '/bin/a%sb' % space)]
+    assert result['apt_behavior'] == 'determined'
+    # A quoted string touching such a character is joined by APT, which this contract does not interpret.
+    result = resolve(part('10a', 'DPkg::Post-Invoke::%s"/bin/x";' % space))
+    assert commands(result) == []
+    assert result['apt_behavior'] == 'undetermined'
+
+
+@pytest.mark.parametrize('space', ['\t', '\r', ' '])
+def test_c_locale_whitespace_still_separates_words(space):
+    result = resolve(part('10a', 'DPkg::Post-Invoke%s{%s/bin/a%sb;%s};' % ((space,) * 4)))
+    assert [(h['tag'], h['value']) for h in result['hooks']] == [('/bin/a', 'b')]
+    assert result['apt_behavior'] == 'determined'
+
+
+def test_clear_keeps_a_tagged_item_in_its_place():
+    # apt-config 2.8.3 lists T first: #clear empties the option without removing it.
+    result = resolve(part('10a', 'DPkg::Post-Invoke::T "a";\nDPkg::Post-Invoke:: "b";\n#clear DPkg::Post-Invoke::T;\n'
+                                 'DPkg::Post-Invoke:: "d";\nDPkg::Post-Invoke::t "c";'))
+    assert [v for _, v in commands(result)] == ['c', 'b', 'd']
+    assert result['apt_behavior'] == 'determined'
+    result = resolve(part('10a', 'DPkg::Post-Invoke::T "a";\nDPkg::Post-Invoke::k "b";\n#clear DPkg::Post-Invoke::T;'))
+    assert commands(result) == [('DPkg::Post-Invoke', 'b')]
+    result = resolve(part('10a', 'DPkg::Post-Invoke { "a"; T "t"; };\n#clear DPkg::Post-Invoke;\nDPkg::Post-Invoke:: "c";'))
+    assert commands(result) == [('DPkg::Post-Invoke', 'c')]
+
+
+@pytest.mark.parametrize('line', ['DPkg::Post-Invoke:: "b\x00c";', 'X "1";\v// c', 'X "1";\f# c', 'X "1";\v/* c */'])
+def test_nul_vertical_tab_and_form_feed_fail_closed_and_keep_earlier_hooks(line):
+    # apt-config 2.8.3 rejects each of these files ("Extra junk after value").
+    result = resolve(part('10a', 'DPkg::Post-Invoke:: "a";\n' + line + '\nDPkg::Post-Invoke:: "d";'))
+    assert result['apt_behavior'] == 'undetermined'
+    assert 'syntax_error' in codes(result)
+    assert [v for _, v in commands(result)] == ['a']
