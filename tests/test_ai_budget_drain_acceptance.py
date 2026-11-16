@@ -167,20 +167,21 @@ def test_another_worker_takes_queued_work_and_resume_restores_admission(admin,mo
         assert len(provider.sent)==2 and all(first for _,first in provider.sent)
 
 
-def test_drain_requested_before_admission_completes_reserves_nothing(admin,monkeypatch,ssh):
-    """A drain that lands while admission is running wins: the lease's own admission check
-    refuses it before any reservation or provider call."""
+def test_drain_not_yet_observed_by_heartbeat_still_blocks_admission(admin,monkeypatch,ssh):
+    """Admission reads the drain control record itself. It does not wait for the
+    worker's next heartbeat to report ``draining``. A drain that commits while an
+    admission transaction is already open may let that one admission proceed. That
+    work then finishes like any other in-flight work."""
     seed(subjects=1)
     provider=Provider(hold=None);monkeypatch.setattr(ai.transport,'post',provider)
     with worker_registry.Registration() as node:
-        owner=(node.id,node.boot);real=ai_claims.owner_valid
-        def owner_valid(s,value,admitting=False):
-            if admitting and value==owner and not getattr(owner_valid,'drained',False):
-                owner_valid.drained=True;drain(node)
-            return real(s,value,admitting)
-        monkeypatch.setattr(ai_claims,'owner_valid',owner_valid)
+        owner=(node.id,node.boot)
+        drain(node)
+        assert reported(node)=='reporting' and not node.draining
+        assert ai_claims.acquire(owner) is None
         worker.investigate_one(owner)
-        assert owner_valid.drained and provider.sent==[]
+        assert provider.sent==[]
         with Session() as s:
             assert not ledger(s) and not list(s.scalars(select(ai_claims.Claim)))
+            assert not list(s.scalars(select(ai_runs.AIRun)))
             assert s.get(Behavior,'subject-0').verdict=='pending'

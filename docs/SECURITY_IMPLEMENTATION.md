@@ -2811,8 +2811,14 @@ same `request_control` path as Activity → Workers.
   with its own reservation.
 - **Resume.** After **Resume** and the next heartbeat, the same worker admits
   capped work again with a separate reservation.
-- **Drain during admission.** A drain that lands during admission is refused at
-  the lease's own admission check, before any reservation or call.
+- **Drain not yet observed by the heartbeat.** Admission reads the drain control
+  record itself, so a committed drain blocks the next claim before the worker's
+  heartbeat reports `draining`. No reservation or call is made.
+- **Race with an open admission.** A drain that commits while an admission
+  transaction is already open may not be visible to it. On MySQL's
+  REPEATABLE READ snapshot this is observable. That one admission then proceeds,
+  and the work finishes and settles like any other in-flight work. Drain is
+  cooperative. It does not cancel admitted work.
 
 Mutation checks: removing the drain check from admitting `owner_valid` makes all
 five tests fail. Treating a draining worker's lease as invalid makes the three
