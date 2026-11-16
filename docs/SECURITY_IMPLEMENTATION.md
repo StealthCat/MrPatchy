@@ -4033,6 +4033,7 @@ every dpkg run, whichever front end starts it.
   `entries_parsed` wiring, inventory/UI, provenance and AI classification,
   other dpkg versions' option tables, and DNF/YUM/RPM plugin configuration.
 
+
 ### Dynamic-loader configuration contract — worker checkpoint #960
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -4085,6 +4086,62 @@ performs no I/O.
 **Not covered:** agent collection of these files' content, catalog
 `entries_parsed` wiring, persistence, baselines and alerts, UI, provenance and
 AI classification. No schema, API, auth or response-authorization change.
+
+### NetworkManager dispatcher script contract — worker checkpoint #962
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/nm_dispatcher.py` is a pure, versioned contract for the NetworkManager
+part of the catalog's `event_hooks` mechanism. It takes supplied file metadata,
+performs no I/O and never reads a script's contents.
+
+- **Source.** The rules follow `nm-dispatcher.c` as read in NetworkManager
+  1.36.6, 1.46.0, 1.52.0, 1.54.3 and 1.58.1. The functions are byte-identical
+  in the four releases from 1.46.0, and 1.36.6 agrees with them except that it
+  has no device handlers. A version above 1.58 gets a non-blocking gap.
+- **Scanned directories.** `/usr/lib/NetworkManager/dispatcher.d` and
+  `/etc/NetworkManager/dispatcher.d`, with `pre-up.d` (pre-up, vpn-pre-up) and
+  `pre-down.d` (pre-down, vpn-pre-down). The top directory serves every other
+  event. Each result lists its runnable scripts per event group in byte order of
+  their names, which is the order NetworkManager runs them.
+- **Name filter.** A leading dot, the `~`, `.rpmsave`, `.rpmorig`, `.rpmnew` and
+  `.swp` suffixes and a trailing `.dpkg-*` are not considered.
+- **Override and mask.** An `/etc` name replaces the same `/usr/lib` name before
+  any file check. A usable `/etc` script overrides it. An unusable `/etc` entry
+  (a `/dev/null` link, an empty file, a directory, a dangling link or a rejected
+  file) masks it, and neither runs.
+- **File checks.** A script must be a non-empty regular file owned by uid 0,
+  not writable by group or other, not set-UID and executable by its owner.
+  Symlinks are followed. Each file is reported as `runs`, `overridden`,
+  `masked`, `ignored`, `rejected` or `unresolved` with a fixed reason.
+- **No-wait.** A script that is a symlink into a directory whose resolved path
+  ends in `/no-wait.d` is marked as not blocking later scripts. Without the
+  resolved directory the decision uses the link text and says so in a
+  non-blocking gap. Files inside `no-wait.d` do not run from there.
+- **Device handlers.** From 1.46, `device/<name>` runs only for a generic
+  connection that names it, so handlers are listed separately with that
+  condition. `/etc` is tried first and `/usr/lib` is used when the `/etc` file
+  is unusable; there is no masking. The dispatcher applies no name filter,
+  but NetworkManager rejects a connection whose handler name starts with a dot
+  or has a character other than letters, digits, `-`, `_` and `.`, so a file
+  with such a name is reported as `ignored` with the reason that no connection
+  can name it. Upstream NEWS lists device handlers as new in 1.46, so on 1.36
+  to 1.44 they are reported as unsupported. On a 1.45 development snapshot,
+  which was not read, they are unresolved with a blocking gap.
+- **Fail closed.** The caller states for every scanned directory whether it was
+  listed, absent or unreadable, and supplies the NetworkManager version.
+  A directory or version that was not observed, a version older than 1.36,
+  missing or malformed metadata, an unobserved symlink target, duplicate paths
+  and over-limit input mark the result incomplete. When an `/etc` entry is
+  unresolved, the same-named `/usr/lib` script is unresolved too. Every result
+  names what it cannot observe: script contents, whether NetworkManager and its
+  dispatcher service run, which events occur and non-default build directories.
+  `origin` is always `not_assessed` and no result is a safety verdict.
+
+**Not covered:** a comparison against a running `nm-dispatcher`, agent
+collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
 
 ### Individual queued at jobs — worker checkpoint #831
 
