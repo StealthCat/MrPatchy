@@ -329,3 +329,15 @@ def test_alias_names_do_not_trip_the_loop_check_and_conditional_routes_do_not_hi
     result = _boot(text, 'a-b')[1]
     assert ('/bin/c1', []) in _listed(result)
     assert [c['command'] for c in result['ignored']] == ['/bin/c0']
+
+
+def test_two_candidate_commands_cannot_exceed_the_chain_limit():
+    # One single-command request first, so the pairs that follow straddle the limit.
+    text = 'install x /bin/x\ninstall m* /bin/wild\n' + ''.join(
+        f'install m{i} /bin/exact{i}\n' for i in range(km.MAX_CHAINS))
+    modprobe = km.resolve_modprobe([f('/etc/modprobe.d/w.conf', text)])
+    load = km.resolve_modules_load([f('/etc/modules-load.d/w.conf',
+                                      'x\n' + ''.join(f'm{i}\n' for i in range(km.MAX_CHAINS)))])
+    result = km.boot_commands(modprobe, load)
+    assert len(result['chains']) == km.MAX_CHAINS and result['conditional'] == km.MAX_CHAINS - 1
+    assert codes(result) == ['too_many_chains'] and result['complete'] is False

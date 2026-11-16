@@ -560,6 +560,10 @@ def boot_commands(modprobe: Any, modules_load: Any) -> dict[str, Any]:
                 if key in listed:
                     continue
                 listed.add(key)
+                if not suppressed and len(chains) >= MAX_CHAINS:
+                    if not any(g['code'] == 'too_many_chains' for g in gaps):
+                        _gap(gaps, 'too_many_chains', detail=f'Only the first {MAX_CHAINS} chains are listed.')
+                    continue
                 (ignored if suppressed else chains).append({
                     'boot_module': request['module'],
                     'requested_by': {'path': request['path'], 'line': request.get('line')},
