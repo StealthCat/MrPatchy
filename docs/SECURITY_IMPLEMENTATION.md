@@ -2815,6 +2815,16 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### Daily cap reset across DST days and midnight — worker checkpoint #984
+
+Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one UTC day and one timezone change. `tests/test_ai_budget_reset_acceptance.py` adds acceptance evidence only; no runtime behavior changes.
+
+- **Window arithmetic:** around every clock change from 2026-01 to 2027-06 in zones with ordinary DST, a 30-minute step, a 45-minute offset and changes at local midnight, plus fixed-offset controls. Each window contains its instant, consecutive windows share one boundary, and the retained history recovers the start from the stored reset.
+- **Short and long days:** on 23-hour, 23.5-hour, 24.5-hour and 25-hour budget days, an exhausted cap refuses the call through the real reservation path with a deferral that ends exactly at the reset. The same call is admitted at the reset instant into the next local day. Refused attempts leave no ledger row.
+- **Call in flight at the reset:** a call reserved before the reset and unanswered after it keeps its ledger row but uses none of the new window's headroom. A late receipt settles it under the window that admitted it, and the retained spend history lists it there.
+- **tz database revisions:** the zones that change at local midnight revise their rules often. Those cases locate their days from the installed tz database and skip when it has none; the long-standing zones must always produce both.
+- **Remaining in milestone 4:** multi-process and multi-worker admission races at the reset, failover, lease loss and drain, settings changes during admission, and before/after production performance.
+
 ### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
 
 Installations still on `legacy` control mode now see their hidden hourly
