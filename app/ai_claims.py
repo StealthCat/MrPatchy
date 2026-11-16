@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from decimal import Decimal
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
@@ -184,6 +185,16 @@ def acquire(owner=None):
                     if cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
                         try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
                         except ai.AIError:return None
+                        # A subject whose own conservative reservation exceeds the
+                        # whole cap can never be admitted, even after a reset.
+                        # Block it with an explained reason instead of leaving it at
+                        # the head of the queue, where it would stall every host
+                        # (#1003). Nothing is reserved or sent; ordinary exhaustion
+                        # below still defers the whole fleet until the reset.
+                        quote=ai_pricing.reservation(payload)
+                        cap=Decimal(str(cfg['ai_daily_cap_usd']))
+                        if quote['ok'] and quote['amount_usd']>cap:
+                            ai_retry.over_cap(s,row,signature,quote['amount_usd'],cap);s.commit();return None
                         if ai_budget.waiting(s,now,payload):return None
                     row.attempted=now;ai_retry.begin(s,row,signature,now)
                     run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
