@@ -2805,6 +2805,31 @@ Amounts remain local public-price estimates for comparison with provider billing
 records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
 and the wider roadmap A acceptance remain planned.
 
+### Stale and replayed triage results under a daily cap — milestone 4 checkpoint #1005
+
+`tests/test_ai_budget_stale_result_acceptance.py` drives the real
+`worker.investigate_one` path in `daily_cap` mode, with fixtures only for the
+provider transport and SSH. While the provider call is in flight, a fixture
+changes the subject's evidence, approves the subject through the administrator
+API, rotates the AI key, or takes over the lease (re-claimed by another token,
+or expired). In every case the late answer is rejected: no verdict, assessment,
+known-good publication or verdict notification is written, and the run records
+that no stale result was accepted. The sent call's ledger row is still settled
+at its receipt and counted against the cap; it is never released.
+
+A taken-over lease is left untouched for its new owner. An approved subject is
+never sent again. A subject whose evidence or key changed waits the existing
+one-hour interrupted-attempt interval before another paid call, so a subject
+whose evidence keeps changing cannot re-bill in a loop. The next call is bound to the new evidence, carries its own
+reservation, and only its answer is accepted. An unchanged subject is accepted
+with one settled charge (control).
+
+Each of four lease-check mutations in `app/ai_claims.py` fails at least one test:
+no evidence/approval revision check, no configuration check, no token check, and
+releasing another owner's claim on exit. No runtime change was needed. SQLite only;
+MySQL-native runs, contention/fairness and measured performance remain open in
+milestone 4.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
