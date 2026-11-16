@@ -2878,10 +2878,14 @@ path, replacing only the provider transport and the SSH call with fixtures:
 - **Lease lost during follow-up evidence collection.** The second-stage call is never
   reserved or sent. The first call settles and stays counted, and no assessment is
   accepted.
+- **Lease lost after follow-up evidence is stored.** The provider gate's pre-send
+  lease recheck refuses the second-stage call. Only the first call is reserved and
+  sent; it settles and stays counted, and no assessment is accepted. Removing that
+  recheck from `ai_policy` makes this test fail.
 
 No defect found and no runtime change. One observation: when the owning worker
-detects its own lost lease before any successor reconciles it, the run is recorded
-as `error`, not `interrupted`. Its message still says no stale result was accepted
+detects its own lost lease during follow-up collection, before any successor
+reconciles it, the run is recorded as `error`, not `interrupted`, and the test pins `error`. Its message still says no stale result was accepted
 and that a sent call may still be billable. From code reading, not tested here: process death between `reserve` and
 `mark_sent` leaves a `reserved` row counted until its window closes. That is
 conservative, because no transmission happened. Multi-process admission,

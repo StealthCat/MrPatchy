@@ -15,7 +15,17 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app import ai, ai_assessments, ai_budget, ai_claims, ai_pricing, ai_retry, ai_runs, worker
+from app import (
+    ai,
+    ai_assessments,
+    ai_budget,
+    ai_claims,
+    ai_policy,
+    ai_pricing,
+    ai_retry,
+    ai_runs,
+    worker,
+)
 from app.db import Behavior, Host, Session, Setting
 from app.security import seal
 
@@ -182,9 +192,30 @@ def test_lease_lost_during_followup_collection_never_sends_the_second_call(admin
         assert [row.status for row in rows]==['settled']
         assert Decimal(ai_budget.status(s)['counted_usd'])==rows[0].actual_usd
         run=s.scalars(select(ai_runs.AIRun)).one()
-        # The owner records its own lost lease as a failed run (no successor has reconciled
-        # it yet); either way the run discloses that the sent call may still be billable.
-        assert run.state in ('error','interrupted') and 'billable' in run.message and rows[0].run_id==run.id
+        # The owner detects its own lost lease and records the run as failed (no successor
+        # has reconciled it yet); the run discloses that the sent call may still be billable.
+        assert run.state=='error' and 'billable' in run.message and rows[0].run_id==run.id
         assert not list(s.scalars(select(ai_assessments.Assessment)))
         assert s.get(Behavior,SUBJECT).verdict!='low'
         assert not list(s.scalars(select(ai_claims.Claim)))
+
+
+def test_lease_lost_after_evidence_persistence_never_sends_the_second_call(admin,monkeypatch,ssh):
+    """The lease is lost after follow-up evidence is stored but before the second call
+    is sent. Only the provider gate's pre-send lease recheck can stop that call."""
+    seed(cap=first_quote()*4)
+    provider=Provider(followup=True);monkeypatch.setattr(ai.transport,'post',provider)
+    real=ai_policy.require
+    def require(identifiers):
+        if len(provider.sent)==1:expire_lease()
+        return real(identifiers)
+    monkeypatch.setattr(ai_policy,'require',require)
+    worker.investigate_one()
+    assert [first for _,first in provider.sent]==[True] and len(ssh)==1
+    with Session() as s:
+        rows=ledger(s)
+        assert [row.status for row in rows]==['settled']
+        assert Decimal(ai_budget.status(s)['counted_usd'])==rows[0].actual_usd
+        run=s.scalars(select(ai_runs.AIRun)).one();assert run.state in ('error','interrupted')
+        assert not list(s.scalars(select(ai_assessments.Assessment)))
+        assert s.get(Behavior,SUBJECT).verdict!='low'
