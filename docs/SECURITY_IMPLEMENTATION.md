@@ -3945,7 +3945,9 @@ each service, the ordered modules it loads, with:
   lines. Debian and Ubuntu look up a relative include only in `/etc/pam.d`;
   upstream also uses the vendor directories. The caller states the family.
 - **`other`.** Types the service file leaves empty are listed as using the
-  `other` service.
+  `other` service. A `substack` line holds its type even when the named file
+  yields nothing. libpam reads `other` for every service, so a blocking gap
+  in `other` is a gap for every service.
 - **Executed commands.** A `pam_exec.so` entry reports its options, its `type=`
   filter, `seteuid`, `expose_authtok` and the command argv. Modules named by
   absolute path are flagged. Values are bounded and carry a SHA-256 of the full

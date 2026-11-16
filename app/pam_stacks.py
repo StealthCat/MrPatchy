@@ -18,7 +18,8 @@ compiler annotations), Debian's ``031_pam_include`` patch for 1.5.3 and
   inside brackets. A backslash as the last non-blank character joins the next
   line.
 - Fields are separated by spaces and tabs. A field starting with ``[`` runs to
-  the first ``]`` (``\\]`` is a literal ``]``) and may contain spaces.
+  the first ``]`` (``\\]`` is a literal ``]``) and may contain spaces. Without
+  a closing ``]`` it runs to the end of the line and keeps the line's newline.
 - The line is ``type control module [arguments]``. Type and control keywords
   are case-insensitive, and a leading ``-`` on the type only silences load
   errors. A missing or unknown type, a missing control or a missing module
@@ -30,6 +31,8 @@ compiler annotations), Debian's ``031_pam_include`` patch for 1.5.3 and
   takes the place of the type and keeps every type the current file was read
   for. A name starting with ``/`` is used as a path.
 - Types for which the service file yields no entry use the ``other`` service.
+  A ``substack`` line counts as an entry of its type even when the file it
+  names yields nothing. libpam reads ``other`` for every service.
 - ``pam_exec.so`` reads options until the first argument that starts with
   ``/`` or is not an option; the rest is the command, run as root unless
   ``seteuid`` changes the effective user.
@@ -39,7 +42,8 @@ Fail-closed rules:
 - An include target that was not captured, an include loop, nesting deeper
   than libpam allows, a continued line that never ends, a line near libpam's
   1024-byte buffer and control characters (including a carriage return) are
-  blocking gaps for every service that reaches them. The contract never
+  blocking gaps for every service that reaches them. A blocking gap in
+  ``other`` is a gap for every service. The contract never
   returns a silently shorter stack.
 - Unreadable files, invalid UTF-8, NUL bytes and over-limit input are blocking
   gaps. An unreadable file still shadows the same name in a lower-priority
@@ -121,7 +125,8 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
     """Return ``(first physical line number, assembled text)`` as ``_pam_assemble_line`` builds them."""
     out: list[tuple[int, str]] = []
     pending, start = '', None
-    for number, raw in enumerate(text.split('\n'), 1):
+    physical = text.split('\n')
+    for number, raw in enumerate(physical, 1):
         if len(raw.encode('utf-8')) > MAX_LINE:
             raise _Unusable('line_too_long', number)
         body = raw.lstrip(' \t')
@@ -135,7 +140,9 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
             if stripped.endswith('\\'):
                 pending, done = pending + stripped[:-1] + ' ', False
             else:
-                pending, done = pending + raw, True
+                # fgets keeps the newline, and a ``[`` field with no closing ``]``
+                # runs to the end of the buffer, so the module receives it.
+                pending, done = pending + raw + ('\n' if number < len(physical) else ''), True
         if len(pending.encode('utf-8')) > MAX_LINE:
             raise _Unusable('line_too_long', first)
         if done:
@@ -286,7 +293,7 @@ class _Resolver:
         return self.service_file(name) if '/' not in name else None
 
     def walk(self, path: str, requested: str | None, level: int, chain: list[dict[str, Any]],
-             entries: list[dict[str, Any]], gaps: list[dict[str, Any]]) -> None:
+             entries: list[dict[str, Any]], gaps: list[dict[str, Any]], held: set[str]) -> None:
         try:
             lines = self.lines(path)
         except _Unusable as error:
@@ -322,6 +329,10 @@ class _Resolver:
             if include is not None:
                 name = tokens[index] if len(tokens) > index else None
                 deeper = level + (include == 'substack')
+                if include == 'substack':
+                    # libpam installs a substack marker for this type before it reads
+                    # the file, so the type no longer falls back to ``other``.
+                    held.add(entry_type or 'auth')
                 if name is None:
                     _gap(gaps, 'include_name_missing', path, number)
                     continue
@@ -334,7 +345,7 @@ class _Resolver:
                     _gap(gaps, 'include_loop', path, number)
                 else:
                     step = {'path': path, 'line': number, 'kind': include, 'target': target}
-                    self.walk(target, entry_type, deeper, chain + [step], entries, gaps)
+                    self.walk(target, entry_type, deeper, chain + [step], entries, gaps, held)
                 continue
             module = tokens[index] if len(tokens) > index else None
             if module is None:
@@ -382,20 +393,23 @@ def evaluate(files: Any, family: str, version: str, vendor_dir: str | None = Non
     resolver = _Resolver(records, family, dirs)
     names = sorted({posixpath.basename(path) for path in records if posixpath.dirname(path) in dirs})
 
-    def stack(name: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    def stack(name: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], set[str]]:
         path = resolver.service_file(name)
         entries: list[dict[str, Any]] = []
         found: list[dict[str, Any]] = []
-        resolver.walk(path, None, 0, [], entries, found)
-        return path, entries, found
+        held: set[str] = set()
+        resolver.walk(path, None, 0, [], entries, found, held)
+        return path, entries, found, held
 
     other = stack(DEFAULT_SERVICE) if DEFAULT_SERVICE in names else None
     services = []
     for name in names:
-        path, entries, found = stack(name)
-        present = {entry['type'] for entry in entries}
+        path, entries, found, held = stack(name)
+        present = {entry['type'] for entry in entries} | held
         fallback = [kind for kind in TYPES if kind not in present] if name != DEFAULT_SERVICE else []
-        if fallback and other is not None:
+        # libpam reads ``other`` for every service, and a file it cannot parse
+        # fails pam_start even when no type falls back to it.
+        if name != DEFAULT_SERVICE and other is not None:
             for item in other[2]:
                 _gap(found, item['code'], item['path'], item['line'])
         services.append({

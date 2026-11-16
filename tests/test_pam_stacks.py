@@ -260,3 +260,39 @@ def test_result_names_what_is_unobserved_and_is_deterministic():
     assert result == run(list(reversed(files))) and result['contract_version'] == 1
     assert any('pam.conf' in item for item in result['unobserved'])
     assert [s['service'] for s in result['services']] == ['other', 'sshd']
+
+
+def test_a_substack_keeps_its_type_from_falling_back_to_other():
+    # libpam 1.5.3 installs the substack marker before reading the file.
+    files = [f('sshd', 'auth required pam_unix.so\nsession substack empty\naccount include empty\n'),
+             f('empty', ''), f('other', 'session optional pam_exec.so /bin/x\naccount required pam_deny.so\n')]
+    sshd = service(run(files), 'sshd')
+    assert sshd['complete'] and sshd['uses_other_for'] == ['account', 'password']
+    nested = [f('sshd', '@include mid\n'), f('mid', 'bogus substack empty\n'), f('empty', '')]
+    assert service(run(nested), 'sshd')['uses_other_for'] == ['account', 'password', 'session']
+
+
+def test_a_gap_in_other_blocks_every_service_even_without_fallback():
+    # pam_start fails for every service when libpam cannot parse other.
+    full = ''.join(f'{kind} required pam_unix.so\n' for kind in pam_stacks.TYPES)
+    result = run([f('sshd', full), f('other', 'session required pam_deny.so \\')])
+    sshd = service(result, 'sshd')
+    assert sshd['uses_other_for'] == [] and not sshd['complete']
+    assert codes(sshd) == ['continuation_at_eof'] and sshd['gaps'][0]['path'] == '/etc/pam.d/other'
+
+
+def test_an_unclosed_bracket_field_keeps_the_newline_libpam_passes_on():
+    # Compiled libpam 1.5.3 hands the module "zz\n" here; without a final newline, or after a "#", just "zz".
+    args = lambda text: service(run([f('sshd', text)]), 'sshd')['entries'][0]['args']
+    assert args('auth required pam_exec.so /bin/x [zz\n') == ['/bin/x', 'zz\n']
+    assert args('auth required pam_exec.so /bin/x [zz') == ['/bin/x', 'zz']
+    assert args('auth required pam_exec.so /bin/x [zz# c\n') == ['/bin/x', 'zz']
+    assert args('auth required pam_exec.so /bin/x [zz \\\n\nsession optional pam_x.so\n') == [
+        '/bin/x', 'zz  session optional pam_x.so\n']
+    assert args('auth required pam_exec.so /bin/x [a\\]\n') == ['/bin/x', 'a]\n']
+    assert pam_stacks.logical_lines('a \\\nb\nc') == [(1, 'a  b\n'), (3, 'c')]
+
+
+def test_closed_brackets_next_to_other_text_still_parse():
+    entry = service(run([f('sshd', 'auth required pam_x.so [a]b [] a[b a]b [[n]\n')]), 'sshd')['entries'][0]
+    assert entry['args'] == ['a', 'b', '', 'a[b', 'a]b', '[n']
