@@ -4143,6 +4143,46 @@ collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
 schema, API, auth or response-authorization change.
 
 
+### logrotate scripts and command directives — worker checkpoint #980
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/logrotate_hooks.py` is a pure contract over captured observations of
+`/etc/logrotate.conf` and the files and directories it includes. logrotate
+normally runs as root from a daily timer or cron job, so its scripts are
+scheduled root commands that the catalog previously listed as metadata only.
+
+- **Scripts.** `prerotate`, `postrotate`, `firstaction`, `lastaction` and
+  `preremove` blocks are returned with their text, the log patterns of their
+  section, the effective `sharedscripts` state, file and line. A script outside
+  a section is listed with scope `global`, because logrotate uses it as the
+  default of later sections.
+- **Directives.** `compresscmd`, `uncompresscmd`, `su` and `shred` are returned
+  with global or section scope.
+- **Effective files.** `include` of a file or directory is followed. Directory
+  entries are read in byte order, hidden names included. Names matching
+  logrotate 3.21.0's built-in taboo list, empty files, non-regular entries and
+  dangling links are reported as ignored with a reason.
+- **Fail closed.** The result is `undetermined` on an unknown directive, a
+  script outside a section (still listed) or without `endscript`, an
+  unterminated section or
+  quote, a script body with a line that starts with a script keyword, a changed taboo list, an `include` inside a section, an include that
+  was not collected, is relative, loops or nests too deeply, an unreadable or
+  oversized file, and over-cap input. Later content is still parsed. After a
+  `tabooext` or `taboopat` directive no name is treated as taboo, and the
+  target of an `include` inside a section is parsed, because logrotate reads
+  it.
+- **Upper bound.** The listed scripts are everything the configuration can
+  run, not what a given run does. logrotate skips a section on a bad value or
+  a duplicate log file, stops reading a file on a bad top-level value, and
+  runs a script only when a matching log is rotated. This is always disclosed.
+
+Compared with compiled logrotate 3.21.0 (`logrotate -d -f`) on generated
+configuration trees; the counts are in the pull request for #980.
+
+**Not covered:** agent collection of these files, persistence, UI and AI
+classification; directive value validation; `tabooext`/`taboopat` evaluation;
+which logs exist; other logrotate versions. No schema, API or UI change.
+
 ### Individual queued at jobs — worker checkpoint #831
 
 The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
