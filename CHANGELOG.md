@@ -1,3 +1,7 @@
+## 1.75.3 — 2026-11-16
+
+1. [PR #957](https://github.com/StealthCat/MrPatchy/pull/957): Fix the known-good summary browser test race by awaiting mocked identity responses, asserting after the viewer render, and restoring an administrator render before the next test. Compatibility: no application, UI or runtime behavior change. Limits: this test-only change does not establish a fix for the separate investigation-history link timeout seen on #955.
+
 ## 1.75.2 — 2026-11-16
 
 1. [PR #955](https://github.com/StealthCat/MrPatchy/pull/955): Give the serial SQLite suite its own 60-minute step limit within a 75-minute CI job, leaving 15 minutes for the Docker, Caddy and Compose smoke checks; report the 25 slowest tests and update the measured-runtime comment. Compatibility: no application behavior or compatibility change. Limits: a hung test job can occupy a runner for up to 75 minutes (was 45); the suite remains serial and unsharded.
