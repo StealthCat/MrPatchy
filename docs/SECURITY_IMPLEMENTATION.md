@@ -3969,7 +3969,8 @@ performs no I/O.
   process, including set-user-ID programs. Entries are separated only by a
   space, tab, newline or colon. Each entry carries its line, order, SHA-256,
   whether it is a path or a bare library name, any `$ORIGIN`/`$LIB`/`$PLATFORM`
-  token and whether it repeats an earlier entry.
+  token, whether it repeats an earlier entry and whether its bytes are valid
+  UTF-8.
 - **Comments that still load.** glibc removes a `#` comment to the end of its
   line, but looks for the next `#` inside a window that shrinks with each
   comment it finds. A `#` outside that window is not a comment, and the words

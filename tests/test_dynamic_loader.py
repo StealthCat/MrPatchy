@@ -57,6 +57,14 @@ def test_preload_later_comments_outside_glibc_window_are_loaded_and_marked():
                                                                                  '/nx/hid']
 
 
+def test_preload_entry_cut_inside_a_multibyte_character_is_flagged():
+    # Native glibc 2.39 preloads an entry starting with the stray byte 0xa9 for this input.
+    result = preload(b'/nx/\xc3\xa9\rnxlib.so\x0b# c\n\n;"## c,nxlib.so /nx/\xc3\xa9\n\n/nx/b.so/nx/b.so')
+    assert names(result) == ['/nx/\u00e9\rnxlib.so\x0b', ';"', '\ufffd', '/nx/b.so/nx/b.so']
+    assert [e['valid_utf8'] for e in result['entries']] == [True, True, False, True]
+    assert result['entries'][2]['entry_sha256'] == dl._sha(b'\xa9')
+
+
 def test_preload_entry_fields():
     result = preload('libfoo.so $ORIGIN/x.so /opt/${LIB}/y.so /p/$PLATFORMX rel/z.so libfoo.so\n')
     by_name = {e['entry']: e for e in result['entries'][:5]}

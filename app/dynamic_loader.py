@@ -225,6 +225,11 @@ def resolve_preload(file: Any) -> dict[str, Any]:
         start = match.start()
         line_start = data.rfind(b'\n', 0, start) + 1
         name = raw.decode('utf-8', 'replace')
+        try:
+            raw.decode('utf-8')
+            valid = True
+        except UnicodeDecodeError:
+            valid = False  # comment removal can cut a multi-byte character
         order = len(entries)
         entry: dict[str, Any] = {
             'entry': name[:MAX_FIELD], 'entry_truncated': len(name) > MAX_FIELD, 'entry_sha256': _sha(raw),
@@ -233,7 +238,7 @@ def resolve_preload(file: Any) -> dict[str, Any]:
             'dynamic_tokens': sorted({a or b for a, b in _DST.findall(name)}),
             # The words a reader would take for a comment, but which the loader loads.
             'after_comment_marker': b'#' in data[line_start:match.end()],
-            'control_characters': bool(_CONTROL.search(name)),
+            'control_characters': bool(_CONTROL.search(name)), 'valid_utf8': valid,
             'duplicate_of': first.get(name)}
         first.setdefault(name, order)
         entries.append(entry)
