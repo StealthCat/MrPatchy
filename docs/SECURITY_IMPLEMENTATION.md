@@ -2831,6 +2831,38 @@ counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
 
+### Two-call follow-up reservations under a daily cap — worker checkpoint #988
+
+`tests/test_ai_budget_followup_acceptance.py` covers the milestone 4 item
+"two-call reservations". It drives `worker.investigate_one` with disposable
+provider and SSH fixtures, and checks the shared ledger:
+
+- **Both calls fit:** the follow-up call reserves its own, larger amount, and
+  each ledger row is sent and reconciled to its own call receipt. The window's
+  counted spend is the sum of the two settled amounts.
+- **Cap exhausted between calls:** the first call stays counted, and SSH evidence
+  is collected once. The follow-up reservation is refused before transport, so no
+  second request, assessment or `low` verdict is produced and no ledger row is
+  written. The run and the retry are deferred to the cap reset, and the attempt
+  counter is not consumed.
+- **Next window:** the retry is not claimed before the reset. After it, the
+  investigation completes and only its new calls count in the new window. The
+  retry's single call carries the follow-up evidence persisted before the
+  deferral, so no second SSH collection happens.
+- **Concurrency:** four two-stage investigations with all four follow-up
+  reservations released together, under a cap for five reservations. Exactly one
+  follow-up is admitted, counted spend never exceeds the cap, every provider
+  request has one counted ledger row, and the other three are deferred.
+
+No runtime change was needed. A fixture mutation that skips the follow-up
+reservation fails all four tests. Turning the cap refusal into a transient error
+fails the deferral tests. Removing the `ai-shared-budget` lock fails the
+concurrency test only when the read-to-write window is widened. The single-call
+lock race stays covered by `test_daily_cap_reservation_is_atomic_and_reports_reset`.
+MySQL runs through the CI shards. Other milestone 4 items, such as multi-process
+admission, lease loss, settings changes during admission and before/after
+performance, remain open.
+
 ### Preview and confirm AI admission/spend changes before save — worker checkpoint #871
 
 `app/ai_control_preview.py` compares stored and proposed AI admission controls
