@@ -1,3 +1,7 @@
+## 1.75.7 — 2026-11-16
+
+1. [PR #951](https://github.com/StealthCat/MrPatchy/pull/951): Add a pure APT configuration contract that resolves recognized command hooks and binary/path overrides from captured `apt.conf.d` and `apt.conf` inputs, applying APT file and option semantics with explicit fail-closed gaps. Compatibility: none; the module has no caller. Limits: includes are not followed, `APT_CONFIG` and unrecognized execution options remain unobserved, and collection, persistence, UI, provenance and classification are not included; roadmap F remains incomplete.
+
 ## 1.75.6 — 2026-11-16
 
 1. [PR #961](https://github.com/StealthCat/MrPatchy/pull/961): Add a pure contract for captured `/etc/ld.so.preload` entries and `/etc/ld.so.conf` directories/includes, including glibc comment-window behavior, with explicit gaps for unobserved or unsupported inputs. Compatibility: none; the new module has no caller. Limits: compared with glibc 2.39, selected include patterns and older releases remain gaps; no collection, persistence, UI, provenance or classification. Roadmap F remains incomplete.
