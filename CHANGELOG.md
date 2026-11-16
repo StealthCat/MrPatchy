@@ -1,3 +1,19 @@
+## 1.75.4 — 2026-11-16
+
+1. [PR #959](https://github.com/StealthCat/MrPatchy/pull/959): Give the Investigations “Cached known good” filter bookmarkable fleet and per-server addresses (`#investigations/cached` and `#servers/<id>/investigations/cached`) that restore the filter on reload and Back/Forward, while the bare address shows all investigations. Compatibility: the cached choice no longer persists at the bare address; use the filtered address to restore it. No API, schema, role or response-authorization change. Limits: page offset has no address; the per-server assessment back-link and phone-width focus visibility were not separately browser-verified.
+
+## 1.75.3 — 2026-11-16
+
+1. [PR #957](https://github.com/StealthCat/MrPatchy/pull/957): Fix the known-good summary browser test race by awaiting mocked identity responses, asserting after the viewer render, and restoring an administrator render before the next test. Compatibility: no application, UI or runtime behavior change. Limits: this test-only change does not establish a fix for the separate investigation-history link timeout seen on #955.
+
+## 1.75.2 — 2026-11-16
+
+1. [PR #955](https://github.com/StealthCat/MrPatchy/pull/955): Give the serial SQLite suite its own 60-minute step limit within a 75-minute CI job, leaving 15 minutes for the Docker, Caddy and Compose smoke checks; report the 25 slowest tests and update the measured-runtime comment. Compatibility: no application behavior or compatibility change. Limits: a hung test job can occupy a runner for up to 75 minutes (was 45); the suite remains serial and unsharded.
+
+## 1.75.1 — 2026-11-15
+
+1. [PR #954](https://github.com/StealthCat/MrPatchy/pull/954): Add a bounded, pure parser and resolver for captured `modprobe.d`, `modules-load.d` and `/etc/modules` text, including effective-file precedence and potential boot-time install commands. It performs no I/O, runs no commands and authorizes nothing. Compatibility: no schema, API, UI, agent or runtime behavior change; no existing module is modified. Limits: file collection, catalog wiring, persistence, UI and runtime coverage remain out of scope; kernel aliases/dependencies, command-line settings and initramfs copies are unobserved, and requirement F remains incomplete.
+
 ## 1.75.0 — 2026-11-15
 
 1. [PR #941](https://github.com/StealthCat/MrPatchy/pull/941): Add per-server restrict-only malware automatic-response overrides through Server → Security and admin API. An override can cap a server at Monitor only or Disabled and add path/hash exclusions; it never expands the fleet policy or authorizes response actions. It is recorded and audited but not enforced because no containment executor exists. Compatibility: additive setting rows and API, with no schema change; fleet policy API behavior is unchanged. Limits: group overrides and fleet listing remain open, and requirement E and other #682 runtime items remain incomplete.
