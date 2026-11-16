@@ -123,9 +123,13 @@ To run the controller and separately scaled workers on the same Docker host, use
 role-specific GCP overlays `compose.controller.gcp.yaml` and `compose.worker.gcp.yaml`
 with `compose.controller.yaml` and `compose.worker.yaml`, not `compose.gcp.yaml`.
 See "Google Cloud IAP runtime with the role files" in
-[COMPOSE_CONFIGURATION.md](COMPOSE_CONFIGURATION.md). That arrangement currently
-supports an attached service account only; WIF credential mounts stay on the
-complete installation.
+[COMPOSE_CONFIGURATION.md](COMPOSE_CONFIGURATION.md). `./install-gcp.sh --mode
+controller` installs only the controller. `./install-gcp.sh --mode worker
+[--workers N]` then joins `N` worker replicas on the same Docker host. It reuses the
+controller's recorded project, zone, identity (including the worker-only WIF
+overlay), data volume and database. It writes a private `.env.worker` and never
+changes the controller. Use `./gcp-compose.sh --workers` for later worker
+operations. Workers on another machine are not supported yet.
 
 If an older installer fails at `mrpatchy-app-run-...` with
 `failed to set up container networking: Address already in use`, update to the

@@ -2406,6 +2406,21 @@ admission/spend controls still apply when they run. This delivers the
 "selected" part of explicit Re-triage only. Fleet-wide selection across pages
 and cache-hit filters remain open.
 
+Worker checkpoint #932 keeps the bulk Re-triage selection across pages and the
+**Show** filter. Each Investigations view (the fleet view, or one server's view)
+has its own in-memory selection, discarded on a session change, a successful
+submit or **Clear selection**. The bar reports how many selected items are on
+other pages or filters. It stays visible while a selection exists, even when the
+current page has nothing selectable. The selection stops at the endpoint's
+existing 50-item limit: further boxes are disabled with an explanation. A
+selected row that returns with a different revision, or that is no longer
+complete, is dropped and shown unchecked rather than resubmitted with a stale or
+swapped revision. Submission still uses `POST /api/investigations/retriage`
+with its all-or-nothing server-side checks. This is frontend-only, with no API,
+schema, admission, spend, pause, approval or authorization change. Selecting
+every matching row server-side without visiting its page, or more than 50 at
+once, remains open.
+
 Worker checkpoint #924 adds a cache-hit filter to the Investigations list. On the
 fleet and per-server Investigations pages, **Show → Cached known good** requests
 `GET /api/investigations?cached=true`. That returns only rows whose current state
@@ -2420,6 +2435,18 @@ without a URL deep link. Changing it returns to page 1. The selection and bulk
 Re-triage controls work on the filtered rows. There is no schema, admission,
 spend, pause or authorization change, and filtering makes no provider call.
 Fleet-wide selection across pages remains open.
+
+Worker checkpoint #958 gives that filter its own address:
+`#investigations/cached` on the fleet page and
+`#servers/<id>/investigations/cached` on one server's tab. The address decides
+the filter, so a bookmark, a shared link, a reload and Back/Forward all
+reproduce it, and the bare Investigations address always shows every
+investigation. This replaces the in-memory choice described above: leaving and
+returning to the bare address no longer restores the filter. Changing the
+filter returns to page 1 and keeps keyboard focus on the control. The link back
+from an assessment page returns to the filtered list when the visitor came from
+it. This is frontend-only, with no API, schema, admission, spend, pause,
+approval, role or authorization change. The page offset still has no address.
 
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
@@ -3563,6 +3590,37 @@ provider call or response authorization was added or changed.
 Remaining for requirement E: per-server and group overrides, plus every item
 listed under #682 apart from this fleet-level storage and UI.
 
+### Per-server restrict-only malware response overrides — worker checkpoint #940
+
+Status: **bounded backend and UI slice; requirement E remains planned/incomplete.**
+An administrator can store one override per server in the `Setting` row
+`malware-response-server:<host_id>`. Nothing evaluates it at runtime.
+- **Restrict-only:** an override has a `mode_cap` (`inherit`, `monitor_only`
+  or `disabled`) and extra path/hash exclusions. The effective policy is the
+  fleet policy with its mode lowered to the cap and both sets of exclusions
+  combined. Action scopes, the unknown-malware opt-in and thresholds always
+  come from the fleet policy, so an override never adds authority.
+- **Fail closed:** a stored override that no longer validates resolves to
+  `disabled` for that server. Combined exclusions over the contract limit
+  resolve to the disabled default with a reported reason.
+- **API:** admin-only `GET/PUT /api/hosts/{id}/malware-response`. It returns the
+  override, revision, fleet policy and effective policy. A save is a
+  compare-and-set under the existing `malware-response-policy` lock and writes
+  one audit entry naming the cap change and exclusion counts, never the paths
+  or hashes. An unknown server returns 404.
+- **UI:** administrators see an "Automatic malware response for this server"
+  panel on the server's Security tab. It shows the fleet mode, the effective
+  mode and exclusion counts, offers only the restricting caps, explains invalid
+  stored state and keeps entries in the form after a refused or stale save.
+  `tests/ui_server_malware_override.cjs` covers save, refusal, stale saves,
+  escaping, load failure and 320/768/1440 px widths.
+- **Unchanged:** no executor, detector, provider call, schema change or response
+  authorization was added, and `enforce` stays unavailable.
+
+Remaining: group overrides,
+fleet-level visibility of overridden servers, and every runtime item under
+#682.
+
 ## Planned: comprehensive startup and scheduled-task awareness
 
 Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse
@@ -4117,6 +4175,32 @@ its commands are unchanged.
 No runtime code, schema, role or response-authorization change. Join-worker
 installer mode, remote-machine workers with shared secrets/state and the dedicated
 gcp-integration node remain open.
+
+### Same-host join-worker GCP installer mode — worker checkpoint #943
+
+`install-gcp.sh --mode worker [--workers N]` (1–16, default 1) joins worker replicas
+on the same Docker host to a controller installed with `--mode controller` in the
+same checkout.
+- **Refusals before writing:** a fresh checkout, complete or legacy installations, a
+  different project or zone, `--public-url` and `--credential-dir`. A controller
+  using WIF without `compose.worker.gcp-auth.json` is also refused.
+- **Shared state:** the controller's `app-data` volume name and effective
+  `DATABASE_URL` come from `./gcp-compose.sh config`. The volume must exist.
+- **`.env.worker`:** a new file (mode 0600) records `<controller project>-workers`,
+  the volume and the single-quoted literal `DATABASE_URL`. An existing file is kept,
+  but it must name a different project and render the same volume and database as
+  the controller.
+- **Run:** it builds only `worker`, runs the gcloud checks in one-off worker
+  containers (token discarded) and runs `up -d --wait --scale worker=N` in the worker
+  project. `.env`, `.env.gcp` and the controller project are never modified, stopped
+  or recreated.
+- **Wrapper:** `gcp-compose.sh --workers` selects the worker project and files.
+- **Validation:** mock-Docker tests and a real `docker compose config` render of the
+  recorded worker files.
+
+No runtime code, schema, role or response-authorization change. Remote-machine
+workers with provisioned keys, SSH identities and locking state, non-GCP installer
+modes, the dedicated gcp-integration node and multi-host acceptance remain open.
 
 ### Deployment files and runtime roles
 
@@ -8744,6 +8828,26 @@ threshold. Without this, the first tick after a controller or coordinator outage
 would run before the asynchronous polls refresh `last_seen` and would flag every
 server. An already-active event stays active across a leader change, without a
 new revision, until telemetry resumes.
+
+### Configurable telemetry-loss threshold — worker checkpoint #948
+
+Closes the open item from checkpoint #765: the in-app `telemetry-lost` notice no longer has a fixed 15-minute threshold.
+
+- **Setting:** Settings → Patch policy adds **Telemetry-loss notice after · minutes**, with whole minutes from 5 to 1440 and a default of 15.
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `telemetry_lost_minutes`. Out-of-range or non-integer values return 422, and older clients that omit the field keep the stored value.
+  - A change appends `telemetry-loss notification threshold changed from A to B minutes` to the existing admin-only settings audit row.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 15 (`operations.telemetry_lost_minutes`).
+  - The value lives in the existing `config` setting, so there is no schema change. The legacy `PUT /api/settings` neither sets nor resets it.
+- **Producer:** `operations.collect_alerts` uses the configured threshold for both the silence check and the coordinator-observation guard. A new leader therefore waits a full configured threshold before publishing.
+  - The fixed reason text names the configured minutes. At 15 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of still-qualifying active events once.
+  - Raising the threshold above a server's current silence resolves its active notice through the existing operational resolution path. The notice reopens if the silence later exceeds the new threshold.
+- **Unchanged:** the 120-second `stale` SMTP/webhook alert, the outbox, roles, CSRF, the admin-only audience and response authorization. The notice remains attention-only.
+- **Validation:**
+  - `tests/test_telemetry_lost_threshold.py`: 7 tests, all failing on main `0842ba4` and passing after. They cover the default text, invalid stored values, a shorter threshold, resolution after a raise and reopening, the observation guard, API validation and omission, and audit.
+  - The existing telemetry-loss tests in `tests/test_operational_notifications.py` pass unchanged.
+  - `tests/ui_settings_telemetry.cjs` fails on main and passes after. It covers the settings-finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** deployment-type endpoint-agent readiness and alerting (#737) remain open.
 
 ### Agent event-spool attention notifications — worker checkpoint #108
 

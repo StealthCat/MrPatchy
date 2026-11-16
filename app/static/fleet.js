@@ -24,18 +24,35 @@ async function requestInvestigationRetriage(id){
 
 const RETRIAGE_COMPLETE=['low','medium','high','unknown'];
 function retriageEligible(row){return RETRIAGE_COMPLETE.includes(row.verdict)&&/^[a-f0-9]{64}$/.test(row.revision||'');}
-function retriageCheckbox(row){return `<label class="check retriage-select"><input type="checkbox" data-retriage-select data-id="${esc(row.id)}" data-revision="${esc(row.revision)}" data-approved="${row.approved?'true':'false'}" data-executable="${esc(row.evidence?.executable||row.id)}" data-host="${esc(row.host_id)}">Select for Re-triage</label>`;}
-function bulkRetriageBar(){return `<div class="actions retriage-bulk" data-admin><button type="button" id="bulk-retriage" disabled aria-describedby="bulk-retriage-help">Re-triage selected (<span id="bulk-retriage-count">0</span>)</button><button type="button" id="bulk-retriage-clear" disabled>Clear selection</button><span class="help" id="bulk-retriage-help">Select completed investigations on this page to request fresh AI triage for all of them at once.</span></div>`;}
-function bindBulkRetriage(root){
+// The endpoint accepts at most 50 items, so a selection kept across pages stops there.
+const RETRIAGE_SELECTION_LIMIT=50;
+const retriageSelections=new Map();
+// One selection per Investigations view (fleet or one server), discarded when the session changes.
+function retriageSelection(key){let entry=retriageSelections.get(key);if(!entry||entry.session!==sessionRevision){entry={session:sessionRevision,items:new Map()};retriageSelections.set(key,entry);}return entry.items;}
+// A returning row whose revision or verdict changed is no longer the state the administrator selected.
+function reconcileRetriageSelection(key,rows){const items=retriageSelection(key);for(const row of rows){const item=items.get(row.id);if(item&&(!retriageEligible(row)||item.expected_revision!==row.revision))items.delete(row.id);}return items;}
+function retriageCheckbox(row,selection=new Map()){return `<label class="check retriage-select"><input type="checkbox" data-retriage-select data-id="${esc(row.id)}" data-revision="${esc(row.revision)}" data-approved="${row.approved?'true':'false'}" data-executable="${esc(row.evidence?.executable||row.id)}" data-host="${esc(row.host_id)}"${selection.has(row.id)?' checked':''}>Select for Re-triage</label>`;}
+function bulkRetriageBar(){return `<div class="actions retriage-bulk" data-admin><button type="button" id="bulk-retriage" disabled aria-describedby="bulk-retriage-help bulk-retriage-scope">Re-triage selected (<span id="bulk-retriage-count">0</span>)</button><button type="button" id="bulk-retriage-clear" disabled>Clear selection</button><span class="help" id="bulk-retriage-help">Select completed investigations to request fresh AI triage for all of them at once. The selection is kept across pages and filters in this view, up to ${RETRIAGE_SELECTION_LIMIT}.</span><span class="help" id="bulk-retriage-scope" role="status"></span></div>`;}
+function bindBulkRetriage(root,key='fleet'){
  const button=root.querySelector('#bulk-retriage');if(!button)return;
- const clear=root.querySelector('#bulk-retriage-clear'),boxes=()=>[...root.querySelectorAll('[data-retriage-select]')];
- const sync=()=>{const count=boxes().filter(box=>box.checked).length;root.querySelector('#bulk-retriage-count').textContent=count;button.disabled=!count;clear.disabled=!count;};
- boxes().forEach(box=>{box.onchange=sync;});
- clear.onclick=()=>{boxes().forEach(box=>{box.checked=false;});sync();};
- button.onclick=()=>requestBulkRetriage(boxes().filter(box=>box.checked).map(box=>({id:box.dataset.id,expected_revision:box.dataset.revision,approved:box.dataset.approved==='true',executable:box.dataset.executable,host_id:box.dataset.host})));
+ const items=retriageSelection(key);
+ const clear=root.querySelector('#bulk-retriage-clear'),scope=root.querySelector('#bulk-retriage-scope'),boxes=()=>[...root.querySelectorAll('[data-retriage-select]')];
+ const sync=()=>{
+  const count=items.size,visible=new Set(boxes().map(box=>box.dataset.id)),elsewhere=[...items.keys()].filter(id=>!visible.has(id)).length,full=count>=RETRIAGE_SELECTION_LIMIT;
+  root.querySelector('#bulk-retriage-count').textContent=count;button.disabled=!count;clear.disabled=!count;
+  boxes().forEach(box=>{box.disabled=full&&!box.checked;});
+  scope.textContent=[elsewhere?`${elsewhere} selected on other pages or filters.`:'',full?`Selection limit reached: at most ${RETRIAGE_SELECTION_LIMIT} investigations can be re-triaged at once.`:''].filter(Boolean).join(' ');
+ };
+ boxes().forEach(box=>{box.onchange=()=>{
+  if(box.checked){if(items.size>=RETRIAGE_SELECTION_LIMIT&&!items.has(box.dataset.id))box.checked=false;else items.set(box.dataset.id,{id:box.dataset.id,expected_revision:box.dataset.revision,approved:box.dataset.approved==='true',executable:box.dataset.executable,host_id:box.dataset.host});}
+  else items.delete(box.dataset.id);
+  sync();
+ };});
+ clear.onclick=()=>{items.clear();boxes().forEach(box=>{box.checked=false;});sync();};
+ button.onclick=()=>requestBulkRetriage([...items.values()],()=>items.clear());
  sync();
 }
-function requestBulkRetriage(selected){
+function requestBulkRetriage(selected,onQueued=()=>{}){
  if(!selected.length)return;
  const view=renderRevision,session=sessionRevision,approved=selected.filter(item=>item.approved).length;
  const list=selected.slice(0,10).map(item=>`<li><strong class="assessment-artifact">${esc(item.executable)}</strong> · ${esc(hostName(item.host_id))}${item.approved?' · approved':''}</li>`).join('')+(selected.length>10?`<li>and ${selected.length-10} more</li>`:'');
@@ -47,6 +64,7 @@ function requestBulkRetriage(selected){
   try{
    const values=new FormData(form);
    const result=await api('/investigations/retriage','POST',{items:selected.map(({id,expected_revision})=>({id,expected_revision})),reason:values.get('reason'),withdraw_approval:values.has('withdraw')});
+   onQueued();
    if(!active())return;$('#modal').close();toast(result.detail);await render();
   }catch(error){if(active())toast(error.message);}finally{if(active())button.disabled=false;}
  };
@@ -93,7 +111,7 @@ async function investigationAssessmentPage(revision,context,base){
  if(!isAdmin()){root.innerHTML=PatchyUI.error('Administrator access required','Assessment history contains retained evidence.');return;}
  const raw=location.hash.slice((base+'/item/').length).split('/');let id,record;
  try{id=decodeURIComponent(raw[0]||'');record=decodeURIComponent(raw[2]||'');}catch{id='';}
- const back=`<a class="button" href="${base}">← Investigations</a>`;
+ const back=`<a class="button" href="${base}${investigationFilterContext.get(context?.hostId||'fleet')==='cached'?'/cached':''}">← Investigations</a>`;
  if(!id||id.length>64||id.includes('/')||raw[1]!=='history'||record.length>36){root.innerHTML=PatchyUI.error('Invalid assessment link','Return to investigations and select a saved assessment.',back);return;}
  const historyBase=base+'/item/'+encodeURIComponent(id)+'/history';
  const scope=context?'&host_id='+encodeURIComponent(context.hostId):'';
