@@ -1716,6 +1716,17 @@ def investigation_status(user=Depends(viewer_user)):
             return ai_runs.status(s)
         return ai_runs.viewer_status(s)
 
+@app.get('/api/investigation-status/servers')
+def investigation_status_servers(user=Depends(admin_user)):
+    """Per-server process-triage queue breakdown (#975). Read-only.
+
+    Server IDs/names, counts, limits and timestamps only; shared AI start
+    gates, worker capacity and pause still decide when an investigation starts.
+    """
+    from . import triage_queue_servers
+    with Session() as s:
+        return triage_queue_servers.status(s)
+
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
     if kind not in ('inventory','observations'): raise HTTPException(400,'Invalid history kind')
