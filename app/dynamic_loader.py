@@ -21,8 +21,12 @@ compared with glibc 2.39):
 - ``ld.so.conf``: ``#`` ends a line anywhere. ``include`` followed by a space
   or tab takes glob patterns, relative to the including file's directory, and
   reads the matches in sorted order. ``hwcap`` lines are ignored. Any other
-  line names one directory: the whole line, with trailing whitespace and
-  slashes removed. Spaces, colons and commas do not separate directories.
+  line names one directory: the whole line, with trailing whitespace removed
+  and then trailing slashes removed, once each and in that order. ``/lib /``
+  is therefore the directory ``/lib`` followed by a space, not ``/lib``.
+  Spaces, colons and commas do not separate directories.
+- An ``include`` wildcard pattern that ends in a slash selects directories
+  only, so no file is read through it.
 - ``include`` is lower-case only; ``INCLUDE /x`` is a directory named
   ``INCLUDE /x``. A missing file or a pattern with no match is skipped
   silently.
@@ -307,13 +311,15 @@ def resolve_search_paths(files: Any, listed_directories: Any = DEFAULT_LISTED) -
         if parent not in listed:
             _gap(gaps, 'include_directory_not_listed', path, line, f'The listing of {parent[:256]} was not supplied.')
             return None
+        only_directories = pattern.endswith('/')  # glob: a wildcard pattern ending in "/" selects directories only
         regex = _component_regex(parts[-1])
         hidden_ok = parts[-1].startswith('.')
         found = []
         for candidate, (_, item) in by_path.items():
             name = posixpath.basename(candidate)
             if (posixpath.dirname(candidate) != parent or item.get('type', 'file') == 'absent'
-                    or (name.startswith('.') and not hidden_ok)):
+                    or (name.startswith('.') and not hidden_ok)
+                    or (only_directories and item.get('type', 'file') != 'directory')):
                 continue
             by_character = bool(regex.fullmatch(name))
             by_byte = bool(regex.fullmatch(name.encode('utf-8', 'surrogatepass').decode('latin-1')))
@@ -378,7 +384,8 @@ def resolve_search_paths(files: Any, listed_directories: Any = DEFAULT_LISTED) -
             if line[:5].lower() == 'hwcap' and line[5:6] in (' ', '\t'):
                 ignored.append({'file': path, 'line': number, 'reason': 'hwcap_directive'})
                 continue
-            directory = line.rstrip(_C_SPACE + '/')
+            # ldconfig removes trailing whitespace and then trailing slashes, once each: "/lib /" stays "/lib ".
+            directory = line.rstrip(_C_SPACE).rstrip('/')
             if not directory:
                 ignored.append({'file': path, 'line': number, 'reason': 'empty_after_trimming'})
                 continue
@@ -396,7 +403,7 @@ def resolve_search_paths(files: Any, listed_directories: Any = DEFAULT_LISTED) -
                                      'duplicate_of': first.get(directory), 'legacy_path': None}
             if '=' in directory:
                 # Older glibc cut the line at "=" and read the rest as a library type.
-                entry['legacy_path'] = directory.split('=', 1)[0].rstrip(_C_SPACE + '/')
+                entry['legacy_path'] = directory.split('=', 1)[0].rstrip(_C_SPACE).rstrip('/')
                 _gap(gaps, 'equals_sign_version_dependent', path, number,
                      'Older glibc releases read the text before "=" as the directory.')
             first.setdefault(directory, order)

@@ -3978,7 +3978,9 @@ performs no I/O.
   looks commented out is listed, not hidden.
 - **Search directories.** `resolve_search_paths()` reads `/etc/ld.so.conf` the
   way `ldconfig` does: `#` ends a line, `hwcap` lines are ignored and every
-  other line is one directory with trailing whitespace and slashes removed.
+  other line is one directory with trailing whitespace removed and then
+  trailing slashes removed, once each, as `ldconfig` does. `/lib /` is the
+  directory `/lib` followed by a space and is reported as such, not as `/lib`.
   Spaces, colons and commas do not separate directories. Each directory carries
   its source file, line, order and whether it is absolute or repeated.
 - **Includes.** `include` patterns are resolved relative to the including

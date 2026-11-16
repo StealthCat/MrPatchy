@@ -115,6 +115,37 @@ def test_conf_directory_lines_match_ldconfig():
     assert {u['code'] for u in result['unobserved']} >= {'built_cache', 'built_in_directories', 'directory_state'}
 
 
+def test_conf_trailing_whitespace_is_removed_before_trailing_slashes_and_only_once():
+    # Native ldconfig (glibc 2.39) scans the directory shown for each line; a space left in front of the
+    # removed slashes stays part of the name, so a look-alike of a system directory is not shown as that directory.
+    cases = [('/lib /', '/lib '), ('/lib / ', '/lib '), ('/lib //  ', '/lib '), ('/lib/ /', '/lib/ '),
+             ('/lib\t/', '/lib\t'), ('/d /sub/ /', '/d /sub/ '), ('/lib/ ', '/lib'), ('/lib// \t', '/lib'),
+             ('/lib/ # c', '/lib'), ('/ /', '/ ')]
+    for line, expected in cases:
+        result = dl.resolve_search_paths([f('/etc/ld.so.conf', line + '\n')])
+        assert paths(result) == [expected], line
+        assert result['complete'] is True
+    for line in ('/', '// ', ' / \t'):
+        result = dl.resolve_search_paths([f('/etc/ld.so.conf', line + '\n')])
+        assert paths(result) == [] and result['ignored_lines'][0]['reason'] == 'empty_after_trimming'
+    legacy = dl.resolve_search_paths([f('/etc/ld.so.conf', '/lib /=libc6 /\n')])
+    assert paths(legacy) == ['/lib /=libc6 '] and legacy['directories'][0]['legacy_path'] == '/lib '
+
+
+def test_conf_wildcard_include_ending_in_a_slash_selects_directories_only():
+    # Native ldconfig (glibc 2.39): "include /etc/c.d/*.conf/" reads no file, "include /etc/c.d/x.conf/" reads x.conf.
+    files = [f('/etc/c.d/x.conf', '/from-x\n'), f('/etc/c.d/d.conf', None, type='directory')]
+    for pattern, expected, matched in (
+            ('/etc/c.d/*.conf/', [], ['/etc/c.d/d.conf']), ('/etc/c.d/x.con?/', [], []),
+            ('/etc/c.d/*.conf//', [], ['/etc/c.d/d.conf']), ('c.d/*/', [], ['/etc/c.d/d.conf']),
+            ('/etc/c.d/*.conf', ['/from-x'], ['/etc/c.d/d.conf', '/etc/c.d/x.conf']),
+            ('/etc/c.d/x.conf/', ['/from-x'], ['/etc/c.d/x.conf'])):
+        result = dl.resolve_search_paths([f('/etc/ld.so.conf', f'include {pattern}\n/after\n'), *files], ('/etc/c.d',))
+        assert paths(result) == expected + ['/after'], pattern
+        assert result['includes'][0]['matches'] == matched, pattern
+        assert result['complete'] is True
+
+
 def test_conf_includes_are_relative_sorted_nested_and_skip_hidden_names():
     result = dl.resolve_search_paths([
         f('/etc/ld.so.conf', '/first\ninclude ld.so.conf.d/*.conf\ninclude\t/etc/sub/z.conf   /etc/sub/none.conf\n'
