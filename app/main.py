@@ -1313,6 +1313,11 @@ def ai_spend_history_csv(days:int=30,timezone:str|None=None,user=Depends(admin_u
         'Cache-Control':'no-store','X-MrPatchy-Spend-History-Truncated':'true' if result['truncated'] else 'false',
         'X-MrPatchy-Spend-History-Max-Windows':str(result['max_windows'])})
 
+@app.get('/api/settings/ai-spend-by-purpose')
+def ai_spend_by_purpose(user=Depends(admin_user)):
+    from . import ai_budget
+    with Session() as s:return ai_budget.by_purpose(s)
+
 @app.get('/api/settings/ai-control-status')
 def ai_control_status(user=Depends(admin_user)):
     from . import ai_control_status

@@ -2790,6 +2790,33 @@ Amounts remain local public-price estimates for comparison with provider billing
 records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
 and the wider roadmap A acceptance remain planned.
 
+### Current-window spend by activity — worker checkpoint #982
+
+Settings → AI → *Current window spend by activity* shows which AI activity the
+daily spend cap is currently counting. The admin-only
+`GET /api/settings/ai-spend-by-purpose` groups exactly the ledger rows capped
+admission counts (the current window, plus a window a timezone change left
+open) by the purpose of the linked AI run: process triage, update importance
+scoring, incident/startup response plans, release configuration reviews and
+connection tests. The groups sum to the counted total in the budget status.
+- **Attribution:** the purpose comes from retained AI run history. A call whose
+  run was pruned, or that had no run, is reported as *Not attributed*. A stored
+  purpose outside the fixed list is reported as *Other*. Nothing is dropped or
+  guessed, and an unrecognized ledger status still counts its ceiling.
+- **Bounded:** one grouped SQL aggregate with at most seven result rows. No
+  ledger or run row is loaded.
+- **Payload:** fixed activity codes, call counts and USD amounts only. No model
+  ID, subject, host, run/call identifier, pricing source or evidence.
+- **Uncapped modes:** the endpoint reports that no cap applies and returns no
+  groups.
+- **Unchanged:** admission, reservations, reconciliation, the shared budget
+  lock, schema, roles and response authorization. The read writes nothing and
+  sends no provider request.
+- **Limitations:** this is a point-in-time read of the current window only.
+  Per-activity history for earlier windows, per-server attribution and
+  per-activity caps are not provided. Amounts remain local public-price
+  estimates, not provider invoices. The wider roadmap A acceptance remains open.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
