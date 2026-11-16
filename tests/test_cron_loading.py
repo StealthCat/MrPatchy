@@ -51,7 +51,7 @@ def test_cronie_allows_dotted_names(name):
     assert cron_loading.assess(entry('/etc/cron.d/' + name), 'rpm')['state'] == 'eligible'
 
 
-@pytest.mark.parametrize('name', ['.hidden', 'job~', 'job.rpmsave', 'job.rpmorig', 'job.rpmnew'])
+@pytest.mark.parametrize('name', ['.hidden', '#job', 'job~', 'job.rpmsave', 'job.rpmorig', 'job.rpmnew', 'j' * 255])
 def test_cronie_ignored_names(name):
     result = cron_loading.assess(entry('/etc/cron.d/' + name), 'rpm')
     assert result['state'] == 'skipped' and codes(result) == ['cronie_name']
@@ -136,3 +136,17 @@ def test_page_reports_loading_without_changing_receipt(seeded, monkeypatch):
     data = seeded.get('/api/hosts/one/security/startup-inventory').json()
     assert {row['cron_loading']['state'] for row in data['items'] if 'cron_loading' in row} == {'unknown'}
     assert data['cron']['skipped_files'] == 0
+
+
+def test_cronie_allows_names_just_below_name_max():
+    assert cron_loading.assess(entry('/etc/cron.d/' + 'j' * 254), 'rpm')['state'] == 'eligible'
+
+
+def test_debian_hash_name_is_rejected_by_name_rule():
+    assert codes(cron_loading.assess(entry('/etc/cron.d/#job'), 'debian')) == ['debian_name']
+
+
+def test_limitation_states_implementation_is_assumed():
+    for text in ('which cron implementation is installed is not detected', 'apt hosts are assessed as Debian cron',
+                 'cron -l', 'hard-link counts'):
+        assert text in cron_loading.LIMITATION

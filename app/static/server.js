@@ -682,7 +682,7 @@ function browseStartupFiles(hostId,current){
 function startupCronLoading(row){
  const loading=row.cron_loading;if(!loading||!['eligible','skipped','unknown'].includes(loading.state))return '';
  const reasons=Array.isArray(loading.reasons)?loading.reasons.map(reason=>`<li>${esc(reason&&reason.detail)}</li>`).join(''):'';
- if(loading.state==='skipped')return `<div class="notice warning startup-cron-loading" role="note"><strong>Cron would skip this file</strong> under the default ${loading.family==='rpm'?'cronie':'Debian cron'} rules, so its jobs are not expected to run.<ul>${reasons}</ul></div>`;
+ if(loading.state==='skipped')return `<div class="notice warning startup-cron-loading" role="note"><strong>Cron would skip this file</strong> under the default ${loading.family==='rpm'?'cronie':'Debian cron'} rules, so its jobs are not expected to run if this host runs that daemon with default options. The installed cron implementation is not detected.<ul>${reasons}</ul></div>`;
  if(loading.state==='unknown')return `<p class="help startup-cron-loading">Cron loading: not assessed.${reasons?`</p><ul class="help">${reasons}</ul>`:'</p>'}`;
  return `<p class="help startup-cron-loading">Cron loading: no default ${loading.family==='rpm'?'cronie':'Debian cron'} name, owner or mode rule rejects this file. Whether the cron daemon runs is not evaluated.</p>`;
 }

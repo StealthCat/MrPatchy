@@ -8,13 +8,18 @@ no I/O and never executes anything. The rules are the distribution defaults:
   ``/etc/cron.d`` must be owned by root and must not be group- or other-writable,
   and ``/etc/cron.d`` file names must consist only of letters, digits, ``_`` and
   ``-`` (the run-parts naming convention, so no dots).
-* cronie (RPM family): ``/etc/cron.d`` names starting with ``.``, ending with
-  ``~`` or with ``.rpmsave``/``.rpmorig``/``.rpmnew`` are ignored; a system
+* cronie (RPM family): ``/etc/cron.d`` names starting with ``.`` or ``#``,
+  ending with ``~`` or with ``.rpmsave``/``.rpmorig``/``.rpmnew``, or of
+  ``NAME_MAX`` (255) bytes or more are ignored; a system
   crontab must be owned by root ("WRONG FILE OWNER") and satisfy
   ``(mode & 07533) == 0400`` ("BAD FILE MODE").
 
-``eligible`` only means no default rule rejects the file. Daemon options (for
-example cronie ``-p``), patched daemons and whether cron runs are not evaluated.
+``eligible`` only means no default rule rejects the file. The installed cron
+implementation is not detected: apt hosts are assessed as Debian cron and RPM
+hosts as cronie, so an apt host running cronie is assessed with the wrong rules.
+Daemon options (for example cronie ``-p`` or Debian ``cron -l``), patched
+daemons, the hard-link count (Debian cron skips files with more than one link)
+and whether cron runs are not evaluated.
 A symlink's target owner/mode is not recorded, so symlinks are ``unknown``.
 """
 from __future__ import annotations
@@ -26,19 +31,22 @@ SYSTEM_FILE = '/etc/crontab'
 SYSTEM_DIR = '/etc/cron.d'
 _DEBIAN_NAME = re.compile(r'[A-Za-z0-9_-]+')
 _CRONIE_SUFFIXES = ('~', '.rpmsave', '.rpmorig', '.rpmnew')
+_NAME_MAX = 255
 
 REASONS = {
     'unknown_family': 'Package family is not recognised, so no cron loading rules are applied.',
     'symlink_target_not_recorded': 'Symlink target owner and mode are not recorded, so loading cannot be assessed.',
     'not_regular_file': 'Only regular files are assessed.',
     'debian_name': 'Debian cron ignores /etc/cron.d names containing characters other than letters, digits, _ and - (including dots).',
-    'cronie_name': 'cronie ignores /etc/cron.d names starting with "." or ending with "~", ".rpmsave", ".rpmorig" or ".rpmnew".',
+    'cronie_name': 'cronie ignores /etc/cron.d names starting with "." or "#", ending with "~", ".rpmsave", ".rpmorig" or ".rpmnew", or of 255 bytes or more.',
     'not_root_owned': 'Cron ignores system crontab files that are not owned by root.',
     'group_or_other_writable': 'Debian cron ignores system crontab files that are group- or other-writable.',
     'cronie_mode': 'cronie rejects system crontab files unless the owner can read them and no execute, group/other write, setuid, setgid or sticky bit is set.',
 }
-LIMITATION = ('Distribution default rules only: daemon options such as cronie -p, patched daemons and '
-              'whether the cron daemon runs are not evaluated.')
+LIMITATION = ('Distribution default rules only: which cron implementation is installed is not detected '
+              '(apt hosts are assessed as Debian cron and RPM hosts as cronie), and daemon options such as '
+              'cronie -p or Debian cron -l, patched daemons, hard-link counts and whether the cron daemon '
+              'runs are not evaluated.')
 
 
 def family_of(inventory: Any) -> str | None:
@@ -79,7 +87,8 @@ def assess(entry: Any, family: Any) -> dict[str, Any] | None:
         if mode & 0o022:
             reasons.append('group_or_other_writable')
     else:
-        if name is not None and (name.startswith('.') or name.endswith(_CRONIE_SUFFIXES)):
+        if name is not None and (name.startswith(('.', '#')) or name.endswith(_CRONIE_SUFFIXES)
+                                 or len(name.encode('utf-8', 'surrogateescape')) >= _NAME_MAX):
             reasons.append('cronie_name')
         if uid != 0:
             reasons.append('not_root_owned')
