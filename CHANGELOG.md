@@ -1,3 +1,7 @@
+## 1.75.6 — 2026-11-16
+
+1. [PR #961](https://github.com/StealthCat/MrPatchy/pull/961): Add a pure contract for captured `/etc/ld.so.preload` entries and `/etc/ld.so.conf` directories/includes, including glibc comment-window behavior, with explicit gaps for unobserved or unsupported inputs. Compatibility: none; the new module has no caller. Limits: compared with glibc 2.39, selected include patterns and older releases remain gaps; no collection, persistence, UI, provenance or classification. Roadmap F remains incomplete.
+
 ## 1.75.5 — 2026-11-16
 
 1. [PR #965](https://github.com/StealthCat/MrPatchy/pull/965): Restore the kernel-module configuration contract section in `docs/SECURITY_IMPLEMENTATION.md`, which the v1.75.4 integration merge omitted. Compatibility: documentation only; no application, runtime, API, schema, UI or authorization change. Limit: the broader startup-awareness requirement remains incomplete.

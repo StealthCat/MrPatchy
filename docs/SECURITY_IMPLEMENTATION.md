@@ -3957,6 +3957,59 @@ no I/O.
 `entries_parsed` wiring, persistence, UI, provenance and AI classification. No
 schema, API, auth or response-authorization change.
 
+### Dynamic-loader configuration contract — worker checkpoint #960
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/dynamic_loader.py` is a pure, versioned contract for the catalog's
+`loader_preload` and `loader_config` mechanisms. It parses supplied content and
+performs no I/O.
+
+- **Preload entries.** `resolve_preload()` lists the libraries
+  `/etc/ld.so.preload` makes the loader add to every dynamically linked
+  process, including set-user-ID programs. Entries are separated only by a
+  space, tab, newline or colon. Each entry carries its line, order, SHA-256,
+  whether it is a path or a bare library name, any `$ORIGIN`/`$LIB`/`$PLATFORM`
+  token, whether it repeats an earlier entry and whether its bytes are valid
+  UTF-8.
+- **Comments that still load.** glibc removes a `#` comment to the end of its
+  line, but looks for the next `#` inside a window that shrinks with each
+  comment it finds. A `#` outside that window is not a comment, and the words
+  after it are loaded. The contract repeats that search and marks every entry
+  that follows a `#` on its line as `after_comment_marker`, so a library that
+  looks commented out is listed, not hidden.
+- **Search directories.** `resolve_search_paths()` reads `/etc/ld.so.conf` the
+  way `ldconfig` does: `#` ends a line, `hwcap` lines are ignored and every
+  other line is one directory with trailing whitespace removed and then
+  trailing slashes removed, once each, as `ldconfig` does. `/lib /` is the
+  directory `/lib` followed by a space and is reported as such, not as `/lib`.
+  Spaces, colons and commas do not separate directories. Each directory carries
+  its source file, line, order and whether it is absolute or repeated.
+- **Includes.** `include` patterns are resolved relative to the including
+  file, matched in byte order and followed into nested files. Hidden names
+  match only a pattern that starts with a dot. Every supplied file is reported
+  as parsed, absent, a directory, unreadable or not included.
+- **Fail closed.** Unreadable files, unfollowed symlinks, invalid UTF-8, NUL
+  bytes, over-limit input, include loops and budget overruns mark the result
+  incomplete. An `include` pattern the contract does not interpret (`[`, a
+  backslash, `.`/`..` components, a wildcard before the last component, or `?`
+  against a non-ASCII name), or one that points into a directory whose listing
+  was not supplied, is a gap and never an empty match. A directory line holding
+  `=` is reported with both the current and the older-glibc reading and marks
+  the result incomplete.
+- **Checked against glibc.** Both resolvers were compared with glibc 2.39 on
+  generated inputs: the loader's own preload attempts for `ld.so.preload`, and
+  `ldconfig -N -X -v -r <root>` for `ld.so.conf`. Inputs with a blocking gap
+  were excluded from the `ld.so.conf` comparison.
+- **Not observed.** The built `/etc/ld.so.cache`, ldconfig's built-in
+  directories, whether a directory or library exists, the collation locale,
+  environment variables, RPATH/RUNPATH and other C libraries are named in
+  every result. `origin` is always `not_assessed` and no result is a safety
+  verdict.
+
+**Not covered:** agent collection of these files' content, catalog
+`entries_parsed` wiring, persistence, baselines and alerts, UI, provenance and
+AI classification. No schema, API, auth or response-authorization change.
+
 ### Individual queued at jobs — worker checkpoint #831
 
 The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
