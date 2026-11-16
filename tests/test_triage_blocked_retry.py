@@ -125,7 +125,7 @@ def test_nothing_blocked_or_ai_disabled_retries_nothing_and_writes_no_audit(bloc
 
 
 def test_batches_are_bounded_and_report_the_remainder(blocked, monkeypatch):
-    monkeypatch.setattr(triage_block_notifications.retry_candidates, '__defaults__', (1, None))
+    monkeypatch.setattr(triage_block_notifications.retry_candidates, '__defaults__', (1, None, None))
     first = blocked.post(RETRY).json()
     assert first['retried'] == 1 and first['remaining'] == 1 and '1 still blocked' in first['detail']
     second = blocked.post(RETRY).json()
@@ -147,4 +147,67 @@ def test_retry_requires_an_administrator(blocked, role):
     blocked.post('/api/logout')
     login_as(blocked, 'reader-' + role, role)
     assert blocked.post(RETRY).status_code == 403
+    assert blocked_now() == 2
+
+
+# Per-server retry from a server's Investigations tab (#946).
+HOST_RETRY = '/api/hosts/{}/investigations/blocked/retry'
+HOST_COUNT = '/api/hosts/{}/investigations/blocked'
+
+
+def test_host_count_is_scoped_to_one_server(blocked):
+    assert blocked.get(HOST_COUNT.format('one')).json() == {'blocked': 1}
+    assert blocked.get(HOST_COUNT.format('two')).json() == {'blocked': 1}
+    assert blocked.get(HOST_COUNT.format('missing')).status_code == 404
+    with Session() as s:
+        row = s.get(Setting, 'config')
+        row.value = {**row.value, 'ai_enabled': False}
+        s.commit()
+    assert blocked.get(HOST_COUNT.format('one')).json() == {'blocked': 0}
+
+
+def test_host_retry_requeues_only_that_server_without_a_provider_call(blocked, monkeypatch):
+    calls = []
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: calls.append(1) or rejected_key())
+    reply = blocked.post(HOST_RETRY.format('one'))
+    assert reply.status_code == 200, reply.text
+    body = reply.json()
+    assert body['retried'] == 1 and body['remaining'] == 0 and '1 blocked investigation queued' in body['detail']
+    assert calls == []
+    assert states() == {'one': ('pending', None), 'two': ('error', 'blocked')}
+    assert blocked_now() == 1
+    assert blocked.get(HOST_COUNT.format('one')).json() == {'blocked': 0}
+    with Session() as s:
+        entries = list(s.scalars(select(Audit).where(Audit.action == ACTION)))
+        assert len(entries) == 1 and entries[0].detail.endswith('re-queued 1 blocked investigation(s) on one')
+
+
+def test_host_retry_of_a_paused_server_retries_nothing(blocked):
+    with Session() as s:
+        s.merge(Setting(key='server-ai:one', value={'paused': True}))
+        s.commit()
+    body = blocked.post(HOST_RETRY.format('one')).json()
+    assert body['retried'] == 0 and body['remaining'] == 0
+    assert states() == {'one': ('error', 'blocked'), 'two': ('error', 'blocked')}
+    with Session() as s:
+        assert s.scalar(select(Audit).where(Audit.action == ACTION)) is None
+
+
+def test_host_retry_rejects_unknown_servers_and_honours_the_triage_lock(blocked):
+    assert blocked.post(HOST_RETRY.format('missing')).status_code == 404
+    lock = worker.Lock('ai-triage')
+    assert lock.acquire(False)
+    try:
+        assert blocked.post(HOST_RETRY.format('one')).status_code == 409
+    finally:
+        lock.release()
+    assert blocked_now() == 2
+
+
+@pytest.mark.parametrize('role', ['viewer', 'operator'])
+def test_host_routes_require_an_administrator(blocked, role):
+    blocked.post('/api/logout')
+    login_as(blocked, 'reader-' + role, role)
+    assert blocked.get(HOST_COUNT.format('one')).status_code == 403
+    assert blocked.post(HOST_RETRY.format('one')).status_code == 403
     assert blocked_now() == 2

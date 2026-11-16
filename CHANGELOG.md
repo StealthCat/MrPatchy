@@ -1,3 +1,19 @@
+## 1.75.13 — 2026-11-16
+
+1. [PR #978](https://github.com/StealthCat/MrPatchy/pull/978): Give fleet and per-server investigation lists URL-addressed pagination, including the cached filter; page navigation, reloads and Back/Forward restore the selected page. Page 1 keeps existing addresses. Compatibility: frontend-only; no API, schema, role or authorization change. Limits: other paged lists still have no page address.
+
+## 1.75.12 — 2026-11-16
+
+1. [PR #947](https://github.com/StealthCat/MrPatchy/pull/947): Add administrator count and retry controls for investigations blocked on one server. The host-scoped action uses the existing retry locks, lifecycle checks, 200-row bound and audit; the fleet action stays unchanged. Compatibility: additive API and server-tab UI; no provider call, schema or response-authorization change. Limits: blocked advisory-plan work is not included.
+
+## 1.75.11 — 2026-11-16
+
+1. [PR #971](https://github.com/StealthCat/MrPatchy/pull/971): Add an I/O-free dpkg configuration contract that reports command hooks, relocations, behavior-changing options, source locations and fail-closed coverage gaps. Compatibility: no runtime behavior changes; the parser is not wired to a collector or UI. Limits: the option table follows dpkg 1.22.6, and per-user/per-run configuration remains unobserved.
+
+## 1.75.10 — 2026-11-16
+
+1. [PR #973](https://github.com/StealthCat/MrPatchy/pull/973): Extend MySQL CI shard timeouts from 30 to 45 minutes so slow, still-passing shards can finish. Compatibility: CI only; no application, schema, API or UI change. Limits: 45 minutes is based on observed runtimes and unusually slow runners may still exceed it; the shard matrix and test behavior are unchanged.
+
 ## 1.75.9 — 2026-11-16
 
 1. [PR #969](https://github.com/StealthCat/MrPatchy/pull/969): Reverify the bundled OpenAI catalog’s listed model rates, snapshot aliases, service tiers and cache rates, then extend its verification window through December 16, 2026 UTC. Compatibility: no schema or spend-policy changes; stored receipts retain their recorded rates and catalog version. Limits: estimates remain limited to listed models and tiers and exclude tool charges, taxes, credits and negotiated account adjustments; capped installations need a refreshed build before November 26, and admission still fails closed at the new expiry.

@@ -2478,6 +2478,34 @@ plus one bounded read for administrator source links. Lookup, publication,
 revocation, approval, budget, pause, role, response and schema are unchanged.
 Matched production acceptance remains open.
 
+### Retry blocked process investigations — worker checkpoint #934
+
+Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
+
+- **Change:** the admin-only, CSRF-protected `POST /api/investigations/blocked/retry` re-queues the rows the notification counts: unapproved `pending`/`error` behaviors on active, unpaused servers whose retry state is blocked under the current configuration signature.
+  - Each row gets single-item retry semantics: the retry state is cleared, `attempted=0`, the verdict becomes `pending`, and the analysis records that an administrator requested the retry.
+  - It runs under the existing `ai-triage` lock (non-blocking, 409 when busy) and ordered per-host `queue` activity locks. Rows are re-read and re-checked against the predicate after the locks are taken.
+  - Each request handles at most 200 rows. The response reports the rows retried and those still blocked.
+  - A non-empty retry writes one audit row. AI disabled, or nothing eligible, retries nothing and writes no audit row.
+- **Excluded:** rows with a live claim or an active provider Retry-After are left blocked, as single retry refuses them. So are paused, disabled or deleted servers, approved rows, and rows already eligible because the configuration changed.
+- **UI:** for administrators, fleet Investigations shows **Retry blocked investigations** under the queue notice only when `/api/investigation-status` reports an integer `blocked > 0`. It names the count, says no provider request is sent now, and refreshes the view after it runs. Operators and viewers never see it.
+- **No bypass:** the action sends no provider request. AI enablement, pause, lifecycle, data sharing and shared rate/daily-cap admission and reservations still apply when the scheduler runs each item. A repeat failure blocks again and resurfaces the notification.
+- **Unchanged:** schema, admission, reservations, roles of existing routes, response authorization and SMTP/webhook alerts.
+- **Validation:** `tests/test_triage_blocked_retry.py` (11 of 14 fail on main `68887ce`; all pass after) covers scope, exclusions, batching, lock refusal, roles, audit and notification resolve/resurface. `tests/ui_retry_blocked_investigations.cjs` fails on main and passes after. It covers visibility, the action, a partial batch, malformed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** per-server Investigations tabs do not offer the action, because the status count is fleet-wide. Blocked advisory-plan work is still not covered.
+
+#### Per-server blocked retry — worker checkpoint #946
+
+- **Change:** `blocked_count` and `retry_candidates` take an optional `host_id` that narrows the #934 predicate. Omitted, the fleet behavior is unchanged.
+  - Admin-only `GET /api/hosts/{id}/investigations/blocked` returns `{blocked}` for one server, or 0 while AI is disabled.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/investigations/blocked/retry` re-queues only that server's candidates. It shares the fleet route's implementation: the `ai-triage` lock (409 when busy), the `queue` activity lock, the post-lock re-check, the 200-row batch and one audit row naming the server.
+  - Unknown servers return 404. A paused or inactive server retries nothing.
+- **No bypass:** no provider request is sent, and there are no schema, admission, reservation or response-authorization changes.
+- **Validation:** six host-scope tests in `tests/test_triage_blocked_retry.py` fail on main `0842ba4` and pass after. They cover scope isolation, AI disabled, pause, 404, the lock, roles and audit. The existing fleet tests still pass.
+- **UI:** Server → Investigations shows **Retry blocked investigations** to administrators only, while the server is enabled and its count is above 0. It calls the host route and refreshes the tab afterwards. A failed count read hides the action; operators never request the count.
+- **UI validation:** `tests/ui_host_retry_blocked_investigations.cjs` fails on main and passes after. It covers the host-only endpoint (never the fleet route), the refresh, a partial batch, singular wording, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** blocked advisory-plan work is still not covered.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
@@ -4009,6 +4037,45 @@ entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
   `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.
 - **Still open:** collector content capture, catalog `entries_parsed` wiring,
   inventory/UI, provenance and AI classification, and DNF/YUM plugin configuration.
+
+### dpkg configuration commands — worker checkpoint #970
+
+Contract-only; roadmap F remains incomplete. `app/dpkg_hooks.py` lists the
+command-executing and check-changing options in captured `/etc/dpkg/dpkg.cfg.d`
+entries and `/etc/dpkg/dpkg.cfg`. It performs no I/O and runs nothing. It
+complements the APT hook contract above: these options act one level lower, on
+every dpkg run, whichever front end starts it.
+
+- **Files:** a `dpkg.cfg.d` name is read when it does not start with `.` and
+  consists of `[A-Za-z0-9_-]`. Files are read in byte order and `dpkg.cfg`
+  after them. A dangling link is skipped; ignored names are listed.
+- **Syntax:** trailing whitespace is dropped; empty lines and lines starting
+  with `#` are skipped; leading whitespace is an error. The name is the leading
+  run of `[A-Za-z0-9-]`; the next character ends it, one following `=` and
+  leading whitespace are skipped, and a value starting with a quote must end
+  with the same quote. `force-<things>`, `refuse-<things>` and
+  `no-force-<things>` need no separate value.
+- **Reported options:** `commands` (`pre-invoke`, `post-invoke` and
+  `status-logger`, each run through `sh -c`; every occurrence runs, invoke
+  hooks in the order read and status loggers side by side),
+  `relocations` (`root`, `admindir`, `instdir`; every occurrence, dpkg uses the
+  last) and `behavior_changes` (`force`/`refuse` items, `no-debsig`,
+  `ignore-depends`, `no-act`, `no-triggers`, path filters), each with source
+  file and line. Other recognized options are only counted.
+- **Fail closed:** dpkg refuses to run on an unknown option, a missing or
+  unexpected value, unbalanced quotes, an unknown force item, an invalid
+  validated value or an action option; each is a `config_error` gap. A line
+  over dpkg's 1022-byte buffer, a NUL byte, a non-ASCII character directly
+  after the name, a non-regular entry, an unreadable, oversized or uncollected
+  file and over-cap input are gaps too. Any of these makes the result
+  `undetermined`; other commands stay visible. The invoking user's
+  `~/.dpkg.cfg`, per-run options and environment, and the locale collation
+  dpkg sorts the directory with are always disclosed as unobserved or assumed.
+  The option table is dpkg 1.22.6's. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog location and
+  `entries_parsed` wiring, inventory/UI, provenance and AI classification,
+  other dpkg versions' option tables, and DNF/YUM/RPM plugin configuration.
+
 
 ### Dynamic-loader configuration contract — worker checkpoint #960
 
