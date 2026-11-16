@@ -38,22 +38,27 @@ def _blocked(signature, now):
                 ~ai_retry.eligible(signature, now))
 
 
-def blocked_count(session, now):
+def blocked_count(session, now, host_id=None):
     """Count pending, unpaused, active-server behaviors blocked under the current configuration.
 
     Uses the same blocked predicate as ``ai_runs.status()``: rows blocked under an
-    earlier configuration are eligible again and are not counted.
+    earlier configuration are eligible again and are not counted. ``host_id``
+    narrows the count to one server (#946); omitted, it is fleet-wide.
     """
     signature = ai_retry.configuration(session)
-    return session.scalar(select(func.count()).select_from(Behavior).join(
-        ai_retry.TriageRetry, ai_retry.TriageRetry.subject == Behavior.id).where(_blocked(signature, now))), signature
+    query = select(func.count()).select_from(Behavior).join(
+        ai_retry.TriageRetry, ai_retry.TriageRetry.subject == Behavior.id).where(_blocked(signature, now))
+    if host_id is not None:
+        query = query.where(Behavior.host_id == host_id)
+    return session.scalar(query), signature
 
 
-def retry_candidates(session, now, limit=RETRY_LIMIT, ids=None):
+def retry_candidates(session, now, limit=RETRY_LIMIT, ids=None, host_id=None):
     """Return ``(id, host_id)`` pairs an administrator retry may re-queue now (#934).
 
     The notification predicate, minus rows with a live triage claim or an active
-    provider Retry-After, which single-item retry also refuses. Read-only.
+    provider Retry-After, which single-item retry also refuses. ``host_id``
+    restricts candidates to one server (#946). Read-only.
     """
     from .ai_claims import Claim
     signature = ai_retry.configuration(session)
@@ -63,6 +68,8 @@ def retry_candidates(session, now, limit=RETRY_LIMIT, ids=None):
         _blocked(signature, now), TR.provider_until <= now, ~running).order_by(Behavior.id).limit(limit)
     if ids is not None:
         query = query.where(Behavior.id.in_(ids))
+    if host_id is not None:
+        query = query.where(Behavior.host_id == host_id)
     return list(session.execute(query))
 
 
