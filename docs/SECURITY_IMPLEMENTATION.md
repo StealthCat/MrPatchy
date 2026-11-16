@@ -9080,6 +9080,34 @@ and response authorization continue to apply. This is an admission database
 read improvement. Native integration and end-to-end performance acceptance
 for the faster-AI program remain open.
 
+### Provider rate limits and bounded retries under a daily cap — worker checkpoint #996
+
+Roadmap A milestone 4 acceptance slice for "provider limits, bounded retries". These
+tests and this documentation make no runtime change. `tests/test_ai_budget_provider_limits_acceptance.py`
+drives `worker.investigate_one` with only the provider transport and SSH replaced by
+fixtures. It covers these cases under the daily spend cap:
+
+- A provider 429 `rate_limit_exceeded` with `Retry-After` keeps that attempt's full
+  reservation counted as `uncertain`, because no usage is returned. It sets the shared
+  provider floor and defers the subject. While the floor is active, neither the
+  deferred subject nor a fresh queued subject is claimed, reserved, sent or recorded.
+  A direct `ai.request` is refused before reservation. Once the floor lifts, both
+  subjects settle fresh reservations and the shared backoff clears.
+- Repeated transient 503s stop at `ai_retry.MAX_ATTEMPTS`. Every sent attempt stays
+  counted. After the limit, no automatic attempt is reserved or sent, and an explicit
+  retry re-admits the subject with a fresh reservation.
+- Non-transient provider billing limits (`project_spend_limit_exceeded`,
+  `insufficient_quota`) block the subject without a shared floor or automatic retry,
+  and the attempt stays counted.
+- When the counted rate-limited attempt leaves no cap headroom, provider eligibility
+  alone admits nothing. The retry waits for the cap reset and is then admitted in the
+  new window.
+
+Provider 429/5xx responses without usage are conservatively counted at their full
+reservation. This is a local estimate, not a statement about provider invoicing.
+Multi-process admission, stale/replayed results and before/after performance remain
+open milestone 4 items.
+
 ### Bounded exact-known-good provenance reads — worker checkpoint #582
 
 The strict exact-known-good lookup now derives every eligible policy candidate before
