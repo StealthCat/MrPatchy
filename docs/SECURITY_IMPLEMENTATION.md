@@ -2789,6 +2789,38 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Worker drain and resume under a daily spend cap — milestone 4 acceptance #1008
+
+`tests/test_ai_budget_drain_acceptance.py` covers the drain part of milestone 4
+with a cap in place. The tests use registered workers (`worker_registry.Registration`)
+in `daily_cap` mode and drive the real `worker.investigate_one` path. Only the
+provider transport and the SSH call are fixtures. Drain and resume go through the
+same `request_control` path as Activity → Workers.
+
+- **Drain while a call is in flight.** The drain is requested while the first call,
+  or the follow-up of an admitted two-call investigation, is held open. The
+  investigation still finishes with every check, including its follow-up SSH
+  evidence and second call. Its result is accepted and each sent call settles in
+  the shared ledger, with nothing left reserved or uncertain.
+- **No new admission while draining.** The draining worker claims, reserves and
+  sends nothing for the other queued subject: no lease, ledger row, run or provider
+  call. That subject stays `pending`, with no retry or blocked state.
+- **Reported state.** The heartbeat reports `draining` while AI work is active,
+  then `drained`.
+- **Another worker takes the queue.** A reporting worker admits the queued subject
+  with its own reservation.
+- **Resume.** After **Resume** and the next heartbeat, the same worker admits
+  capped work again with a separate reservation.
+- **Drain during admission.** A drain that lands during admission is refused at
+  the lease's own admission check, before any reservation or call.
+
+Mutation checks: removing the drain check from admitting `owner_valid` makes all
+five tests fail. Treating a draining worker's lease as invalid makes the three
+in-flight cases fail. No defect was found and runtime code is unchanged. CI runs
+the file on SQLite and on the MySQL shards. Draining a worker inside a
+separate-machine deployment is still covered only by the planned roadmap G
+remote-worker acceptance.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
