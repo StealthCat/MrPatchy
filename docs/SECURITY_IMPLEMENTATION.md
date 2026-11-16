@@ -4208,7 +4208,8 @@ scheduled root commands that the catalog previously listed as metadata only.
   taboo: logrotate's match does not let `*` cover a leading period, so
   `.cache~` and `.x.bak` are read. One `=` may separate a directive from its
   value, so `include=/path` is followed. One `=` directly after a flag is
-  skipped, so `compress=include /path` is followed too.
+  skipped, so `compress=include /path` is followed too. Whole `#` lines
+  between log patterns and the opening brace are comments, as in logrotate.
 - **Fail closed.** The result is `undetermined` on an unknown directive, a
   script outside a section (still listed) or without `endscript`, an
   unterminated section or
@@ -4217,7 +4218,9 @@ scheduled root commands that the catalog previously listed as metadata only.
   oversized file, and over-cap input. Input that logrotate rejects is
   undetermined as well: a keyword not followed by a blank or `=`, an
   `endscript` followed by anything but a blank or line end (logrotate still
-  ends the script there, and so does the contract), an `endscript` on the
+  ends the script there and skips that one character, and so does the
+  contract), an `su` value logrotate rejects (`su=root root`, `su = root
+  root` or more than a user and a group), an `endscript` on the
   script keyword's line (logrotate keeps the rest of the file as the script
   text and still reads the following lines as directives; both are listed), a
   closing brace in log patterns before an opening brace or log patterns with
