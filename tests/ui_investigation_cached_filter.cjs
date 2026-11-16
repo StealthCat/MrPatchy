@@ -83,8 +83,17 @@ module.exports=async(page,capture)=>{
   assert.doesNotMatch(seen.at(-1),/cached=/);
   await page.locator('#investigation-filter').selectOption('cached');
   await page.getByText('No cached known-good verdicts',{exact:true}).waitFor();
-  await page.locator('#investigation-filter').selectOption('all');
+  // A change made from further down the page keeps the focused control in view,
+  // although navigating to the new address scrolls to the top first.
+  await page.setViewportSize({width:1440,height:400});
+  await page.locator('#investigation-filter').evaluate(node=>node.scrollIntoView({block:'center'}));
+  assert.ok(await page.evaluate(()=>scrollY>0),'the filter starts below the first screen');
+  await page.locator('#investigation-filter').selectOption('all');await at('#investigations');
   await page.getByText('/usr/bin/tool-1',{exact:true}).waitFor();
+  await page.locator('#ai-control-gates:not([aria-busy])').waitFor();
+  const box=await page.locator('#investigation-filter').evaluate(node=>{const r=node.getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:innerHeight,focused:document.activeElement===node};});
+  assert.ok(box.focused,'focus returns to the filter');
+  assert.ok(box.top>=0&&box.bottom<=box.height,'the focused filter is inside the viewport: '+JSON.stringify(box));
  }finally{
   await page.setViewportSize({width:1440,height:1000});
   await page.unroute('**/api/investigations?*',rows);
