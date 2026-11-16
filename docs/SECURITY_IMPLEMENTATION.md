@@ -4192,7 +4192,8 @@ scheduled root commands that the catalog previously listed as metadata only.
   dangling links are reported as ignored with a reason. A hidden name is never
   taboo: logrotate's match does not let `*` cover a leading period, so
   `.cache~` and `.x.bak` are read. One `=` may separate a directive from its
-  value, so `include=/path` is followed.
+  value, so `include=/path` is followed. One `=` directly after a flag is
+  skipped, so `compress=include /path` is followed too.
 - **Fail closed.** The result is `undetermined` on an unknown directive, a
   script outside a section (still listed) or without `endscript`, an
   unterminated section or
@@ -4201,7 +4202,11 @@ scheduled root commands that the catalog previously listed as metadata only.
   oversized file, and over-cap input. Input that logrotate rejects is
   undetermined as well: a keyword not followed by a blank or `=`, an
   `endscript` followed by anything but a blank or line end (logrotate still
-  ends the script there, and so does the contract), a top-level
+  ends the script there, and so does the contract), an `endscript` on the
+  script keyword's line (logrotate keeps the rest of the file as the script
+  text and still reads the following lines as directives; both are listed), a
+  closing brace in log patterns before an opening brace or log patterns with
+  no opening brace (the following lines are parsed, not taken as patterns), a top-level
   line that starts with neither a keyword nor a file name, a brace inside a
   directive value, and a carriage return, vertical tab or form feed. Such a
   line is skipped, not read as a log section, so it cannot swallow a later

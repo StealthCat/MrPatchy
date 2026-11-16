@@ -287,3 +287,61 @@ def test_endscript_followed_by_a_non_letter_ends_the_script():
     # A following letter keeps the word going, so the line stays script text.
     result = lh.resolve(main('/a { postrotate\n endscriptX\n endscript\n}\n'))
     assert (result['logrotate_reading'], result['scripts'][0]['script']) == ('determined', '\n endscriptX\n')
+
+
+def test_endscript_on_the_script_keyword_line_ends_the_script():
+    # logrotate 3.21.0 skips the one character after the keyword and then finds endscript on the same
+    # line: compresscmd is a directive and the stray endscript is only reported. It also keeps the whole
+    # rest of the file as the script text.
+    includes = {'/etc/extra': {'type': 'file', 'content': '/x { postrotate\n echo x\n endscript\n}\n'}}
+    for head in ('postrotate endscript', 'postrotate\t \tendscript', 'postrotate=endscript',
+                 'postrotate endscript;'):
+        text = '/a {\n ' + head + '\n compresscmd /bin/evil\n endscript\n}\ninclude /etc/extra\n'
+        result = lh.resolve(main(text), includes)
+        assert result['logrotate_reading'] == 'undetermined', head
+        assert 'endscript_on_keyword_line' in codes(result), head
+        assert [(s['path'], s['script']) for s in result['scripts']] == [
+            (lh.MAIN_FILE, text[len('/a {\n postrotate'):]), ('/etc/extra', '\n echo x\n')], head
+        assert [(d['directive'], d['value']) for d in result['directives']] == [('compresscmd', '/bin/evil')], head
+    # The rest of the keyword line is parsed after endscript.
+    result = lh.resolve(main('/a {\n postrotate endscript compresscmd /bin/evil\n}\n'))
+    assert [(d['directive'], d['value']) for d in result['directives']] == [('compresscmd', '/bin/evil')]
+    # endscript later on the keyword line, or followed by a letter, is script text.
+    for head in ('postrotate echo a endscript', 'postrotate endscriptX'):
+        result = lh.resolve(main('/a {\n ' + head + '\n compresscmd /bin/x\n endscript\n}\n'))
+        assert (result['logrotate_reading'], result['directives']) == ('determined', []), head
+        assert result['scripts'][0]['script'] == head[len('postrotate'):] + '\n compresscmd /bin/x\n', head
+
+
+def test_equals_after_a_flag_keeps_the_rest_of_the_line():
+    # logrotate 3.21.0 reads "compress=include /path" as the flag followed by the include.
+    includes = {'/etc/extra': {'type': 'file', 'content': '/x { postrotate\n echo x\n endscript\n}\n'}}
+    result = lh.resolve(main('compress=include /etc/extra\n'), includes)
+    assert (result['logrotate_reading'], codes(result)) == ('determined', BASE_GAPS)
+    assert [s['path'] for s in result['scripts']] == ['/etc/extra']
+    result = lh.resolve(main('/a {\n compress=compresscmd /bin/evil\n sharedscripts=postrotate\n echo a\n endscript\n}\n'))
+    assert (result['logrotate_reading'], codes(result)) == ('determined', BASE_GAPS)
+    assert [(d['directive'], d['value']) for d in result['directives']] == [('compresscmd', '/bin/evil')]
+    assert [(s['script'], s['sharedscripts']) for s in result['scripts']] == [('\n echo a\n', True)]
+    # Only one "=" directly after the flag is accepted; logrotate rejects the other forms.
+    for text in ('compress==include /etc/extra\n', 'compress = include /etc/extra\n'):
+        result = lh.resolve(main(text), includes)
+        assert (result['logrotate_reading'], result['scripts']) == ('undetermined', []), text
+
+
+def test_closing_brace_in_log_patterns_does_not_swallow_later_lines():
+    # logrotate 3.21.0 reports "unexpected }" and stops reading the file. The include and the next
+    # section are still listed as an upper bound instead of being taken as log patterns.
+    includes = {'/etc/extra': {'type': 'file', 'content': '/x { postrotate\n echo x\n endscript\n}\n'}}
+    for head in ('/a }', '"/a" "}"', '/a # }'):
+        text = head + '\ninclude /etc/extra\n/b {\n postrotate\n  echo b\n endscript\n}\n'
+        result = lh.resolve(main(text), includes)
+        assert result['logrotate_reading'] == 'undetermined', head
+        assert 'brace_in_patterns' in codes(result), head
+        assert [(s['path'], s['patterns']) for s in result['scripts']] == [
+            ('/etc/extra', ['/x']), (lh.MAIN_FILE, ['/b'])], head
+    # The same holds when no opening brace follows at all.
+    result = lh.resolve(main('/a {\n} /b }\ninclude /etc/extra\ncompresscmd /bin/evil\n'), includes)
+    assert (result['logrotate_reading'], 'brace_in_patterns' in codes(result)) == ('undetermined', True)
+    assert [s['path'] for s in result['scripts']] == ['/etc/extra']
+    assert [(d['directive'], d['value']) for d in result['directives']] == [('compresscmd', '/bin/evil')]

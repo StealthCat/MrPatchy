@@ -29,7 +29,12 @@ binary:
 - A script starts directly after its keyword, on the same line, and ends before
   the first later line whose first word is ``endscript``. A word is a run of
   letters, so ``endscript;`` and ``endscript}`` end the script too. Parsing
-  continues after that word on the same line.
+  continues after that word on the same line. ``endscript`` as the first word
+  after the script keyword, on the same line, ends the script as well; logrotate
+  then keeps the whole rest of the file as that script's text and still reads
+  the following lines as directives, and both are listed.
+- One ``=`` directly after a flag such as ``compress`` is skipped and the rest
+  of the line is parsed (``compress=include /path``).
 - ``#`` starts a comment only where a directive could start.
 
 It performs no I/O, runs nothing and never authorizes a response action.
@@ -40,7 +45,9 @@ Fail-closed rules:
   script outside a section (still listed) or without ``endscript``, an
   ``include`` inside a
   section (its target is still parsed), a keyword not followed by a blank or
-  ``=``, an ``endscript`` followed by anything but a blank or a line end, a
+  ``=``, an ``endscript`` followed by anything but a blank or a line end or
+  placed on the script keyword's line, a closing brace in log patterns before
+  the opening brace (later lines are still parsed), a
   top-level line that starts with neither a keyword nor a file name, a
   brace inside a directive value, a carriage return, vertical tab or form feed
   (logrotate does not skip them as blanks), an unterminated section or quote, a script
@@ -104,6 +111,8 @@ _NESTED_SCRIPT = re.compile(r'\n[ \t\v\f\r]*(?:' + '|'.join(SCRIPT_KEYS) + r')(?
 _OTHER_SPACE = re.compile(r'[\r\v\f]')
 # logrotate takes the letters at the start of a line as its first word, so any non-letter ends it.
 _ENDSCRIPT = re.compile(r'^[ \t\v\f\r]*endscript(?![A-Za-z])', re.MULTILINE)
+# logrotate skips the one character after a script keyword and then looks for endscript on that line too.
+_ENDSCRIPT_ON_KEYWORD_LINE = re.compile(r'[ \t]*endscript(?![A-Za-z])')
 
 
 def _gap(code: str, detail: str, **extra: Any) -> dict[str, Any]:
@@ -250,7 +259,10 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                 continue
             if match is None:
                 if section is not None:
-                    rest_of_line()
+                    line = rest_of_line()
+                    if char in '/"\'' and '{' in line:
+                        # logrotate can read what follows the brace, so it is parsed too.
+                        pos = text.index('{', start) + 1
                     problem('unknown_directive', 'logrotate ignores or rejects this line.', start)
                     continue
                 if char not in '/"\'':
@@ -259,9 +271,17 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                     problem('unexpected_line_start', 'A top-level line starts with neither a keyword nor a log '
                             'file name; logrotate rejects and skips it.', start)
                     continue
+                # A rejected header is skipped as one line and the following lines are parsed as top-level
+                # lines instead of being taken as log patterns, so nothing logrotate still reads is hidden.
                 brace = text.find('{', pos)
+                closing = text.find('}', pos, len(text) if brace < 0 else brace)
+                if closing >= 0:
+                    rest_of_line()
+                    problem('brace_in_patterns', 'A closing brace appears in log patterns before an opening '
+                            'brace; logrotate rejects it and may stop reading the file.', start)
+                    continue
                 if brace < 0:
-                    pos = len(text)
+                    rest_of_line()
                     problem('unterminated_section', 'Log patterns are not followed by an opening brace.', start)
                     continue
                 patterns = split_patterns(text[pos:brace])
@@ -277,14 +297,26 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
             key = match.group()
             pos = match.end()
             if key in SCRIPT_KEYS:
-                end = _ENDSCRIPT.search(text, text.find('\n', pos) + 1 if '\n' in text[pos:] else len(text))
+                line_end = text.find('\n', pos)
+                line_end = len(text) if line_end < 0 else line_end
+                end = _ENDSCRIPT_ON_KEYWORD_LINE.match(text, pos + 1, line_end) if pos < line_end else None
+                on_keyword_line = end is not None
+                if end is None:
+                    end = _ENDSCRIPT.search(text, min(line_end + 1, len(text)))
                 if end is None:
                     # logrotate skips the section and reads on, so the rest is parsed as directives.
                     problem('script_without_endscript', 'logrotate rejects a script that has no endscript line.',
                             start, kind=key)
                     continue
-                body = text[pos:end.start()]
+                # With endscript on the keyword line logrotate 3.21.0 keeps the whole rest of the file as
+                # the script text, and still reads the following lines as directives.
+                body = text[pos:] if on_keyword_line else text[pos:end.start()]
                 pos = end.end()
+                if on_keyword_line:
+                    problem('endscript_on_keyword_line', 'endscript follows the script keyword on the same '
+                            'line; logrotate runs the rest of the file as the script text and also reads the '
+                            'next lines as directives.',
+                            start, kind=key)
                 if pos < len(text) and text[pos] not in _SPACE:
                     # logrotate 3.21.0 still ends the script here; what follows on the line is parsed.
                     problem('endscript_not_separated', 'endscript is followed by a character that is neither a '
@@ -314,6 +346,9 @@ def resolve(main: Any, includes: Any = None) -> dict[str, Any]:
                 problem('unexpected_endscript', 'endscript appears without a script.', start)
                 continue
             if key in FLAG_KEYS:
+                if pos < len(text) and text[pos] == '=':
+                    # logrotate skips the one character after a keyword and parses on: "compress=include /x".
+                    pos += 1
                 if key in ('sharedscripts', 'nosharedscripts'):
                     value = key == 'sharedscripts'
                     if section is None:
