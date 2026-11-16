@@ -2436,6 +2436,18 @@ Re-triage controls work on the filtered rows. There is no schema, admission,
 spend, pause or authorization change, and filtering makes no provider call.
 Fleet-wide selection across pages remains open.
 
+Worker checkpoint #958 gives that filter its own address:
+`#investigations/cached` on the fleet page and
+`#servers/<id>/investigations/cached` on one server's tab. The address decides
+the filter, so a bookmark, a shared link, a reload and Back/Forward all
+reproduce it, and the bare Investigations address always shows every
+investigation. This replaces the in-memory choice described above: leaving and
+returning to the bare address no longer restores the filter. Changing the
+filter returns to page 1 and keeps keyboard focus on the control. The link back
+from an assessment page returns to the filtered list when the visitor came from
+it. This is frontend-only, with no API, schema, admission, spend, pause,
+approval, role or authorization change. The page offset still has no address.
+
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
 when the newest retained assessment for the row's exact current state
