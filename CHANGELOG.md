@@ -1,3 +1,7 @@
+## 1.75.14 — 2026-11-17
+
+1. [PR #1002](https://github.com/StealthCat/MrPatchy/pull/1002): Fix a daily-spend-cap stall where one process with more than 64 KB of evidence stayed pending forever and stopped AI triage for every server; it is now marked as a blocked error, as in other modes, and other investigations continue (#1001). Add acceptance tests showing the cap does not change what is sent to the AI provider and that the update-scoring opt-in controls package sharing and spend (#1000). Compatibility: no schema, API or UI change; in `daily_cap` and `rate_and_daily` modes an oversized subject now shows a blocked `error` instead of an indefinite `pending`, and installations already stuck this way recover on the first claim pass after upgrade.
+
 ## 1.75.13 — 2026-11-16
 
 1. [PR #978](https://github.com/StealthCat/MrPatchy/pull/978): Give fleet and per-server investigation lists URL-addressed pagination, including the cached filter; page navigation, reloads and Back/Forward restore the selected page. Page 1 keeps existing addresses. Compatibility: frontend-only; no API, schema, role or authorization change. Limits: other paged lists still have no page address.
