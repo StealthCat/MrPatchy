@@ -134,7 +134,10 @@ def test_paused_server_takes_no_cap_headroom_and_runs_with_its_own_reservation_a
         with Session() as s:
             cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_daily_cap_usd':float(cap)};s.commit()
     with Session() as s:spent=Decimal(ai_budget.status(s)['counted_usd'])
-    set_cap(spent+first_quote()/2)
+    # Keep the cap at least one whole reservation so the subject is not blocked as
+    # over-cap (#1003); the spend already counted leaves no room for it today.
+    assert spent>0
+    set_cap(first_quote()+spent/2)
     assert set_pause(admin,'host-a',False).status_code==200
     assert ai_claims.acquire() is None
     worker.investigate_one();assert len(provider.sent)==1
