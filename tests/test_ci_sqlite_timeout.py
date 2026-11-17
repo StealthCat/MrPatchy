@@ -1,49 +1,87 @@
-"""Regression for #953: a passing SQLite suite must not be cancelled by the job timeout."""
+"""Regression for #953 and the sharded SQLite suite.
+
+The serial SQLite suite (28-42 minutes on one hosted runner) set the length of every
+CI run. It now runs as four shards like the MySQL job, and the Docker/Compose/Caddy
+checks that followed it run in their own `smoke` job. These tests keep every test
+running exactly once, keep each shard bounded with headroom, and keep the smoke
+checks in CI.
+"""
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Observed on hosted runners (2026-11-15): the pytest step took up to 41 m 55 s and the
-# setup and smoke steps around it about 4 minutes in total.
-OBSERVED_PYTEST_MINUTES = 42
-SMOKE_RESERVE_MINUTES = 10
+# Observed on hosted runners (2026-11-15): the serial pytest step took up to 41 m 55 s.
+# Four file-balanced shards should each take roughly a quarter of that; allow for an
+# uneven split and slow runners while still failing a hung shard.
+OBSERVED_SERIAL_PYTEST_MINUTES = 42
+SHARDS = [1, 2, 3, 4]
 
 
-def _tests_job():
-    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
-    return workflow["jobs"]["tests"]
+def _workflow():
+    return yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
 
 
-def _pytest_step_index(steps):
-    found = [i for i, s in enumerate(steps) if s.get("run", "").startswith("python -m pytest -q")]
-    assert len(found) == 1, "the tests job runs the whole SQLite suite in exactly one step"
-    return found[0]
+def _job(name):
+    return _workflow()["jobs"][name]
 
 
-def test_sqlite_suite_step_has_headroom_over_observed_runtime():
-    steps = _tests_job()["steps"]
-    step = steps[_pytest_step_index(steps)]
-    # A 45-minute pytest step must still complete; stay bounded so a hung suite fails.
-    assert 45 < OBSERVED_PYTEST_MINUTES + 10 <= step["timeout-minutes"] <= 90
+def _pytest_steps(steps):
+    return [s for s in steps if s.get("run", "").startswith("python -m pytest -q")]
 
 
-def test_job_timeout_reserves_time_for_smoke_steps_after_the_suite():
-    job = _tests_job()
-    steps = job["steps"]
-    index = _pytest_step_index(steps)
-    assert job["timeout-minutes"] >= steps[index]["timeout-minutes"] + SMOKE_RESERVE_MINUTES
-    assert job["timeout-minutes"] <= 120
-    # The reserve protects real work: the image build and Compose/Caddy checks still follow.
-    later = " ".join(s.get("run", "") for s in steps[index + 1:])
-    for needle in ("docker build -t mrpatchy:test .", "docker compose --env-file .env.ci up --build -d --wait",
-                   "tests/integration_proxy.py", "tests/integration_tls.py", "-k native_caddy"):
-        assert needle in later
+def test_sqlite_suite_is_sharded_like_mysql():
+    job = _job("tests")
+    assert job["strategy"]["fail-fast"] is False
+    assert job["strategy"]["matrix"]["shard"] == SHARDS
+    assert job["strategy"]["matrix"]["shard"] == _job("mysql")["strategy"]["matrix"]["shard"]
+    assert job["env"]["MRPATCHY_TEST_SHARD"] == "${{ matrix.shard }}/4"
+    # SQLite shards must not point at the MySQL service.
+    assert "TEST_DATABASE_URL" not in job["env"]
 
 
-def test_sqlite_suite_runs_every_test_serially_and_reports_slowest():
-    steps = _tests_job()["steps"]
-    step = steps[_pytest_step_index(steps)]
-    assert step["run"] == "python -m pytest -q --durations=25"
-    assert "MRPATCHY_TEST_SHARD" not in (_tests_job().get("env") or {})
+def test_each_shard_runs_its_files_and_reports_slowest():
+    steps = _job("tests")["steps"]
+    runs = _pytest_steps(steps)
+    assert len(runs) == 1, "each shard runs its share of the suite in exactly one step"
+    assert runs[0]["run"] == "python -m pytest -q --durations=25"
+
+
+def test_shard_timeouts_keep_headroom_but_stay_bounded():
+    job = _job("tests")
+    step = _pytest_steps(job["steps"])[0]
+    per_shard = OBSERVED_SERIAL_PYTEST_MINUTES / len(SHARDS)
+    # Twice an even share covers an uneven split or a slow runner.
+    assert 2 * per_shard <= step["timeout-minutes"] <= 45
+    assert job["timeout-minutes"] >= step["timeout-minutes"] + 5
+    assert job["timeout-minutes"] <= 60
+
+
+def test_restic_drills_still_run_in_sqlite_shards():
+    steps = _job("tests")["steps"]
+    assert any("restic" in s.get("run", "") and s.get("timeout-minutes", 99) <= 5 for s in steps)
+
+
+def test_smoke_checks_moved_out_of_the_shards_and_still_run():
+    tests_runs = " ".join(s.get("run", "") for s in _job("tests")["steps"])
+    assert "docker" not in tests_runs
+    smoke = _job("smoke")
+    assert smoke["timeout-minutes"] <= 30
+    assert "strategy" not in smoke, "the smoke checks run once, not per shard"
+    runs = " ".join(s.get("run", "") for s in smoke["steps"])
+    for needle in ("pip install -r requirements-dev.txt", "docker build -t mrpatchy:test .",
+                   "docker compose --env-file .env.ci up --build -d --wait",
+                   "tests/integration_proxy.py", "tests/integration_tls.py", "-k native_caddy",
+                   "docker compose --env-file .env.ci down -v"):
+        assert needle in runs
+    cleanup = [s for s in smoke["steps"] if s.get("name") == "Compose diagnostics and cleanup"]
+    assert cleanup and cleanup[0].get("if") == "always()"
+
+
+def test_main_runs_supersede_but_manual_runs_do_not():
+    group = _workflow()["concurrency"]["group"]
+    assert "format('pr-{0}', github.event.pull_request.number)" in group
+    assert "format('push-{0}', github.ref)" in group
+    assert group.rstrip("}").rstrip().endswith("github.run_id")
+    assert _workflow()["concurrency"]["cancel-in-progress"] is True
