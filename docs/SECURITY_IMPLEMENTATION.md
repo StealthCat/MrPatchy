@@ -2891,6 +2891,51 @@ paused-host claim filter, or dropping the claim-time budget gates.
 the budget gates run before the lookup. This is filed as P3 #1030, to follow #1002.
 MySQL-native runs happen in CI. Role isolation, revocation and pruning are covered
 elsewhere (#1027). Roadmap B acceptance remains open.
+### Triage claim contention and fairness under a daily cap — worker checkpoint #1012
+
+`tests/test_ai_claims_cap_contention_acceptance.py` covers the milestone 4 items
+"multi-thread/multi-process claims, supported multi-worker admission,
+contention/fairness" for triage under a daily cap. Each test runs real
+`worker.investigate_one()` claims against a cap with room for exactly K calls.
+The provider is a disposable fixture.
+
+- **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
+  each for a different subject. The suite checks:
+  - Exactly K ledger rows are written, and counted spend stays within the cap.
+  - No claim is left behind, and no subject is admitted twice.
+  - Every other subject was refused before a run started, or is deferred to the
+    window reset with no retry attempt used. None is blocked.
+  - A second round in the same window sends nothing more.
+- **Preflight bypassed:** the same holds when the claim-time budget preflight
+  admits everything. All ten workers claim work, and the authoritative
+  reservation alone holds the cap.
+- **`rate_and_daily`:** checked with room for one call, because the rate gate
+  also spaces admissions.
+- **Processes:** four fresh OS processes with two threads each share one cap.
+  They keep the same guarantees.
+- **Fairness:** one server holds the oldest and largest backlog, and the cap has
+  room for one call per server. Every waiting server receives a call before the
+  busy server receives a second. This holds across serial scheduler cycles and in
+  a concurrent burst whose worker count does not exceed the servers with work.
+  The busy server's remaining work stays queued.
+- **Host election:** with host turns tied, a server already under another
+  worker's live lease yields the last affordable call to an idle server, even
+  when it holds the oldest work. A server whose only eligible work is already
+  claimed does not win the election and leave the remaining cap unused.
+- **Mutations:** the suite fails when any of the following is removed:
+  - the shared budget lock in `reserve()` (a test hook holds each reservation
+    open between its spend read and insert, so every threaded variant overspends
+    without the lock)
+  - the durable host turn
+  - live-occupancy ordering in host election
+  - the claimed-subject exclusion in host election
+  - the "a policy wait does not consume an attempt" rule
+- **Limitation:** with more concurrent workers than servers that have work, a
+  busy server's second claim can reserve before another server's first. Spend
+  order then follows the race, and the waiting server is served in the next
+  window.
+
+No runtime behaviour changes. The rest of milestone 4 remains open.
 
 ### Finite implementation and acceptance milestones
 
