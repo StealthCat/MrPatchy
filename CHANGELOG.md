@@ -1,3 +1,7 @@
+## 1.75.20 — 2026-11-17
+
+1. [PR #890](https://github.com/StealthCat/MrPatchy/pull/890): Add a pure XDG autostart resolution contract that resolves user-over-system precedence, `Hidden`, GNOME-disabled and desktop- or GNOME-conditional entries, and extracts spec-conformant `Exec` argv; ambiguous quoting becomes an explicit coverage gap, never a guessed argv (#889). Compatibility: none; the module is new and nothing imports it yet. Limits: groundwork for login-autostart inventory, not yet wired into collection or the UI.
+
 ## 1.75.19 — 2026-11-17
 
 1. [PR #1026](https://github.com/StealthCat/MrPatchy/pull/1026): Retain fingerprinted serial/parallel AI triage benchmark records for cross-server and same-server workloads in `docs/benchmarks/ai-equivalence-c86141a/`, with comparator output and a regression test that refuses tampered or pre-fingerprint records (#1025). Compatibility: none; docs, benchmark records and tests only, with no runtime, schema, settings, admission or response-authority change.

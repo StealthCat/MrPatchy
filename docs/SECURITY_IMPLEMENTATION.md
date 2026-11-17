@@ -9482,7 +9482,6 @@ Roadmap A requires AI activity to show the blocked reason and next eligible star
 - **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.
 
-
 ### Never-scanned legacy scan policies in coverage notifications — worker checkpoint #883
 
 The first #841 limitation: a policy saved before `enabled_since` existed stayed silent forever while its server had never had a `security-scan` attempt, unless an administrator happened to re-save it.
@@ -9513,3 +9512,25 @@ Two re-enable paths published `overdue` straight away when the scheduler was hel
 - **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
 - **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
+
+### XDG autostart contract — worker checkpoint #889 (roadmap F)
+
+The startup catalog listed `/etc/xdg/autostart` and `~/.config/autostart` as metadata only. Nothing said which `.desktop` entry is effective for a name, whether it starts at login, or what it runs.
+
+- **Change:** a new pure module, `app/xdg_autostart.py`, follows the freedesktop Autostart and Desktop Entry specifications.
+  - **Precedence:** it resolves effective entries by file name across directories in precedence order. A user file shadows a system file and is reported as `overrides`/`overridden_by`.
+  - **Statuses:** each entry is classified `enabled`, `hidden`, `disabled`, `conditional`, `invalid` or `unknown`.
+    - `hidden`: `Hidden=true`, which also suppresses the shadowed system file.
+    - `disabled`: `X-GNOME-Autostart-enabled=false`.
+    - `conditional`: `OnlyShowIn`/`NotShowIn`/`TryExec`, or GNOME `AutostartCondition`. These depend on the session and are never guessed.
+  - **Exec:** the value is tokenized with the spec's quoting rules and expanded with autostart field codes into `argv`/`program`.
+- **Gaps, never reported as covered:**
+  - an uncollected higher-precedence directory (`precedence_uncertain`);
+  - unreadable or oversized files;
+  - malformed lines and duplicate keys;
+  - unbalanced `Exec` quoting (no argv is guessed) and unknown or embedded field codes;
+  - reserved characters outside double quotes in `Exec`, such as `'`, `\`, `|`, `;` or `$` (`exec_unquoted_reserved`). The spec leaves these undefined and GIO applies shell quoting to them, so no argv is guessed for `sh -c '…'`;
+  - invalid names, and the 512-entry, 64 KiB and 4096-character caps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. A `system` origin is not a verified package default.
+- **Validation:** `tests/test_xdg_autostart.py` has 17 tests. They cannot run on main, where the module does not exist, and they pass on the branch. Four review-follow-up regressions fail on the earlier head `78168b5`: `sh -c '…'`, an unquoted backslash, each reserved character, and `AutostartCondition`.
+- **Remaining:** collection wiring into the startup inventory, per-user directory enumeration, provenance and UI.
