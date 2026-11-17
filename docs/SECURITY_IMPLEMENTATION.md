@@ -2936,6 +2936,23 @@ The provider is a disposable fixture.
   window.
 
 No runtime behaviour changes. The rest of milestone 4 remains open.
+### Concurrent cap admissions racing settings saves — worker checkpoint #990
+
+`tests/test_ai_budget_settings_race_acceptance.py` covers the milestone 4 item
+"simultaneous budget admissions and settings changes". Eight threads keep
+reserving shared daily-cap spend while an administrator saves AI settings through
+`PUT /api/settings/ai` (with the expansion confirmation). The tests record, in lock
+order, the settings snapshot and counted spend that each reservation read inside
+the shared budget lock. Every reservation saw exactly the spend admitted before it,
+and every admission fitted the cap in its own snapshot. Every reservation that started
+after the save returned used the saved settings. The scenarios cover four changes.
+Lowering the cap never overspends. Raising it admits exactly up to the new cap.
+Switching to `rate` or `unthrottled` stops new ledger rows; when the cap is re-enabled,
+the earlier rows are still counted. A timezone change never re-grants the open window.
+A separate test shows that no settings save rewrites, releases or deletes ledger rows.
+Mutations that remove the shared lock from `reserve()` or reuse a stale settings
+snapshot fail the suite. The suite runs on SQLite locally and on MySQL in the hosted
+shards. No runtime behaviour changes, and the rest of milestone 4 remains open.
 
 ### Finite implementation and acceptance milestones
 
@@ -3079,6 +3096,71 @@ operator, lowering the connection test to viewer, and ignoring session generatio
 This is test coverage only, with no runtime change. Representative
 benign/suspicious/unknown outcomes and the before/after performance record remain
 open milestone 4 work.
+### Worker drain and resume under a daily spend cap — milestone 4 acceptance #1008
+
+`tests/test_ai_budget_drain_acceptance.py` covers the drain part of milestone 4
+with a cap in place. The tests use registered workers (`worker_registry.Registration`)
+in `daily_cap` mode and drive the real `worker.investigate_one` path. Only the
+provider transport and the SSH call are fixtures. Drain and resume go through the
+same `request_control` path as Activity → Workers.
+
+- **Drain while a call is in flight.** The drain is requested while the first call,
+  or the follow-up of an admitted two-call investigation, is held open. The
+  investigation still finishes with every check, including its follow-up SSH
+  evidence and second call. Its result is accepted and each sent call settles in
+  the shared ledger, with nothing left reserved or uncertain.
+- **No new admission while draining.** The draining worker claims, reserves and
+  sends nothing for the other queued subject: no lease, ledger row, run or provider
+  call. That subject stays `pending`, with no retry or blocked state.
+- **Reported state.** The heartbeat reports `draining` while AI work is active,
+  then `drained`.
+- **Another worker takes the queue.** A reporting worker admits the queued subject
+  with its own reservation.
+- **Resume.** After **Resume** and the next heartbeat, the same worker admits
+  capped work again with a separate reservation.
+- **Drain not yet observed by the heartbeat.** Admission reads the drain control
+  record itself, so a committed drain blocks the next claim before the worker's
+  heartbeat reports `draining`. No reservation or call is made.
+- **Race with an open admission.** A drain that commits while an admission
+  transaction is already open may not be visible to it. On MySQL's
+  REPEATABLE READ snapshot this is observable. That one admission then proceeds,
+  and the work finishes and settles like any other in-flight work. Drain is
+  cooperative. It does not cancel admitted work.
+
+Mutation checks: removing the drain check from admitting `owner_valid` makes all
+five tests fail. Treating a draining worker's lease as invalid makes the three
+in-flight cases fail. No defect was found and runtime code is unchanged. CI runs
+the file on SQLite and on the MySQL shards. Draining a worker inside a
+separate-machine deployment is still covered only by the planned roadmap G
+remote-worker acceptance.
+### Server AI pause and global AI disable under a daily cap — worker checkpoint #998
+
+`tests/test_ai_budget_pause_acceptance.py` covers part of milestone 4's
+disabled/paused/role/CSRF item. The tests drive the real claim → reservation →
+provider → reconciliation path and the real administrator pause route in
+`daily_cap` mode. Only the provider transport and SSH are fixtures.
+
+- A paused server's queued subject is not claimed, reserved or sent, and takes no
+  cap headroom: with room for one call, another server's subject is admitted.
+  After resume, the subject waits while today's cap has no room. It does not borrow
+  headroom, and when admitted it runs with its own fresh reservation.
+- A pause request made while that server's capped call is in flight returns 409.
+  The policy revision is unchanged, no pause is audited and the `sent` ledger row
+  stays counted. When the call finishes the same pause is accepted, and later
+  work on that server is not admitted.
+- Disabling AI globally between the first call and a requested follow-up stops the
+  second call at the provider gate. It is never reserved. The first call settles
+  and stays counted, the run is `deferred` with a policy-wait retry, and no
+  assessment is accepted. After re-enabling, the retry reserves and sends its own
+  call. That call carries the follow-up evidence collected before the disable.
+- Without CSRF, or as operator/viewer, the pause route is refused and the capped
+  ledger is unchanged.
+
+No runtime change was needed. During the policy wait the subject's verdict shows
+`error` with an "Investigation failed. Waiting for AI policy resume" analysis while
+its run is `deferred`. That wording predates this checkpoint and is unchanged
+here. MySQL-native runs, data-sharing controls, contention/fairness and measured
+performance remain open milestone-4 items.
 
 ### Retained spend history CSV download — worker checkpoint #874
 
@@ -3096,6 +3178,32 @@ Amounts remain local public-price estimates for comparison with provider billing
 records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
 and the wider roadmap A acceptance remain planned.
 
+### Stale and replayed triage results under a daily cap — milestone 4 checkpoint #1005
+
+`tests/test_ai_budget_stale_result_acceptance.py` drives the real
+`worker.investigate_one` path in `daily_cap` mode, with fixtures only for the
+provider transport and SSH. While the provider call is in flight, a fixture
+changes the subject's evidence, approves the subject through the administrator
+API, rotates the AI key, or takes over the lease (re-claimed by another token,
+or expired). In every case the late answer is rejected: no verdict, analysis or assessment
+is written (fleet known-good and notification rows are not separately asserted
+here), and the run records
+that no stale result was accepted. The sent call's ledger row is still settled
+at its receipt and counted against the cap; it is never released.
+
+A taken-over lease is left untouched for its new owner. An approved subject is
+never sent again. A subject whose evidence or key changed waits the existing
+one-hour interrupted-attempt interval before another paid call, so a subject
+whose evidence keeps changing cannot re-bill in a loop. The next call is bound to the new evidence, carries its own
+reservation, and only its answer is accepted. An unchanged subject is accepted
+with one settled charge (control).
+
+Each of four lease-check mutations in `app/ai_claims.py` fails at least one test:
+no evidence/approval revision check, no configuration check, no token check, and
+releasing another owner's claim on exit. No runtime change was needed. SQLite only;
+MySQL-native runs, contention/fairness and measured performance remain open in
+milestone 4.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
@@ -3105,6 +3213,31 @@ Other transport timeouts, interrupted workers and lost replies retain conservati
 charges when the provider outcome is unknown. The existing transient backoff still
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
+
+### Unknown pricing and usage under a daily cap — worker checkpoint #994
+
+Milestone 4 acceptance for **unknown pricing/usage**.
+`tests/test_ai_budget_unknown_usage_acceptance.py` drives the real
+`ai.investigate()` → `ai.request()` path in `daily_cap` and `rate_and_daily`.
+- **Unpriceable responses:** 12 shapes are covered. They include missing,
+  malformed or inconsistent usage, an unpriced or invalid returned model, a
+  missing or unpriced tier, missing cache-write or cached-input counts, and
+  400/500 replies without usage. Each leaves its ledger row `uncertain` with the
+  full reservation counted. The call receipt and run cost report `unavailable`,
+  never `$0`.
+- **Later admission:** once the cap leaves room for one more reservation only if
+  the unknown charge were free, the next call is refused before rate admission or
+  transmission. It returns a policy wait with a retry time. A priced reply with
+  the same reservation settles to its estimate and the same later call proceeds.
+- **Request-side pricing:** an unpriced saved model, tool fees, an unbounded
+  output, an unpriced tier or cache TTL, or an expired catalog refuses capped
+  admission before sending. No ledger row or rate admission is created.
+- **Uncapped modes:** `rate` and `unthrottled` create no ledger row for unknown
+  usage and do not block later calls. The receipt still reports `unavailable`.
+- **Evidence:** 44 tests. Treating unknown usage as settled at zero fails 24 of
+  them, and quoting an unpriceable request at zero fails 12.
+- **Unchanged:** no runtime change; no defect was found. Other milestone 4 items
+  and measured throughput remain open.
 
 ### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
 
@@ -3121,6 +3254,38 @@ to one purpose each and do not change the global `blockers`, `can_start_now` or
 counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
+
+### Two-call follow-up reservations under a daily cap — worker checkpoint #988
+
+`tests/test_ai_budget_followup_acceptance.py` covers the milestone 4 item
+"two-call reservations". It drives `worker.investigate_one` with disposable
+provider and SSH fixtures, and checks the shared ledger:
+
+- **Both calls fit:** the follow-up call reserves its own, larger amount, and
+  each ledger row is sent and reconciled to its own call receipt. The window's
+  counted spend is the sum of the two settled amounts.
+- **Cap exhausted between calls:** the first call stays counted, and SSH evidence
+  is collected once. The follow-up reservation is refused before transport, so no
+  second request, assessment or `low` verdict is produced and no ledger row is
+  written. The run and the retry are deferred to the cap reset, and the attempt
+  counter is not consumed.
+- **Next window:** the retry is not claimed before the reset. After it, the
+  investigation completes and only its new calls count in the new window. The
+  retry's single call carries the follow-up evidence persisted before the
+  deferral, so no second SSH collection happens.
+- **Concurrency:** four two-stage investigations with all four follow-up
+  reservations released together, under a cap for five reservations. Exactly one
+  follow-up is admitted, counted spend never exceeds the cap, every provider
+  request has one counted ledger row, and the other three are deferred.
+
+No runtime change was needed. A fixture mutation that skips the follow-up
+reservation fails all four tests. Turning the cap refusal into a transient error
+fails the deferral tests. Removing the `ai-shared-budget` lock fails the
+concurrency test only when the read-to-write window is widened. The single-call
+lock race stays covered by `test_daily_cap_reservation_is_atomic_and_reports_reset`.
+MySQL runs through the CI shards. Other milestone 4 items, such as multi-process
+admission, lease loss, settings changes during admission and before/after
+performance, remain open.
 
 ### Preview and confirm AI admission/spend changes before save — worker checkpoint #871
 
@@ -3148,6 +3313,39 @@ Admission, budget reservation, pause, lifecycle, role and response authorization
 behavior are unchanged. API clients that saved without previewing were accepted
 and audited at this checkpoint. #881 now refuses unconfirmed expansions.
 Automatic migration of legacy installations remains open.
+
+### Lost or crashed triage leases under a daily cap — worker checkpoint #992
+
+Milestone 4 acceptance for **lease loss/crash** combined with the shared daily cap.
+`tests/test_ai_budget_lease_acceptance.py` drives the real `worker.investigate_one`
+path, replacing only the provider transport and the SSH call with fixtures:
+
+- **Late result after lease loss.** A late response from a worker whose lease expired
+  mid-call is reconciled into that call's own ledger row and stays counted. No
+  assessment or verdict is accepted from it, and its run is `interrupted`. The
+  successor reserves and settles its own row, and its run is the only one that
+  produces the assessment.
+- **Hung worker at the cap.** When the cap has room only for the hung call's sent
+  reservation, a successor recovering the expired subject is not admitted. It
+  creates no run and no ledger row, sends nothing, and the subject stays `pending`
+  until the reset. When the hung call later fails with an unknown outcome, its row
+  becomes `uncertain` and stays counted. After the reset the subject is admitted
+  with a fresh reservation in the new window.
+- **Lease lost during follow-up evidence collection.** The second-stage call is never
+  reserved or sent. The first call settles and stays counted, and no assessment is
+  accepted.
+- **Lease lost after follow-up evidence is stored.** The provider gate's pre-send
+  lease recheck refuses the second-stage call. Only the first call is reserved and
+  sent; it settles and stays counted, and no assessment is accepted. Removing that
+  recheck from `ai_policy` makes this test fail.
+
+No defect found and no runtime change. One observation: when the owning worker
+detects its own lost lease during follow-up collection, before any successor
+reconciles it, the run is recorded as `error`, not `interrupted`, and the test pins `error`. Its message still says no stale result was accepted
+and that a sent call may still be billable. From code reading, not tested here: process death between `reserve` and
+`mark_sent` leaves a `reserved` row counted until its window closes. That is
+conservative, because no transmission happened. Multi-process admission,
+stale/replayed results and before/after performance remain open.
 
 ### Non-expanding legacy migration proposal — worker checkpoint #879 (fixes #878)
 
@@ -9414,6 +9612,34 @@ Provider locks, lease ownership checks, shared admission, budget accounting,
 and response authorization continue to apply. This is an admission database
 read improvement. Native integration and end-to-end performance acceptance
 for the faster-AI program remain open.
+
+### Provider rate limits and bounded retries under a daily cap — worker checkpoint #996
+
+Roadmap A milestone 4 acceptance slice for "provider limits, bounded retries". These
+tests and this documentation make no runtime change. `tests/test_ai_budget_provider_limits_acceptance.py`
+drives `worker.investigate_one` with only the provider transport and SSH replaced by
+fixtures. It covers these cases under the daily spend cap:
+
+- A provider 429 `rate_limit_exceeded` with `Retry-After` keeps that attempt's full
+  reservation counted as `uncertain`, because no usage is returned. It sets the shared
+  provider floor and defers the subject. While the floor is active, neither the
+  deferred subject nor a fresh queued subject is claimed, reserved, sent or recorded.
+  A direct `ai.request` is refused before reservation. Once the floor lifts, both
+  subjects settle fresh reservations and the shared backoff clears.
+- Repeated transient 503s stop at `ai_retry.MAX_ATTEMPTS`. Every sent attempt stays
+  counted. After the limit, no automatic attempt is reserved or sent, and an explicit
+  retry re-admits the subject with a fresh reservation.
+- Non-transient provider billing limits (`project_spend_limit_exceeded`,
+  `insufficient_quota`) block the subject without a shared floor or automatic retry,
+  and the attempt stays counted.
+- When the counted rate-limited attempt leaves no cap headroom, provider eligibility
+  alone admits nothing. The retry waits for the cap reset and is then admitted in the
+  new window.
+
+Provider 429/5xx responses without usage are conservatively counted at their full
+reservation. This is a local estimate, not a statement about provider invoicing.
+Multi-process admission, stale/replayed results and before/after performance remain
+open milestone 4 items.
 
 ### Bounded exact-known-good provenance reads — worker checkpoint #582
 
