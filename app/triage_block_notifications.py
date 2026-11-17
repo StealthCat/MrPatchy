@@ -25,20 +25,72 @@ MESSAGE = ('Process investigations are blocked by a non-transient AI provider fa
 RESOLVED = 'No process investigation remains blocked by the AI configuration that caused the earlier failure.'
 
 
-def blocked_count(session, now):
+RETRY_LIMIT = 200
+RETRY_ANALYSIS = 'Retry requested by an administrator; hourly limits still apply.'
+
+
+def _blocked(signature, now):
+    TR = ai_retry.TriageRetry
+    return and_(Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')),  # noqa: E712
+                Behavior.host_id.in_(host_lifecycle.active_ids()),
+                Behavior.host_id.not_in(ai_policy.paused_ids()),
+                or_(TR.state == 'blocked', and_(TR.state == 'interrupted', TR.attempts >= ai_retry.MAX_ATTEMPTS)),
+                ~ai_retry.eligible(signature, now))
+
+
+def blocked_count(session, now, host_id=None):
     """Count pending, unpaused, active-server behaviors blocked under the current configuration.
 
     Uses the same blocked predicate as ``ai_runs.status()``: rows blocked under an
-    earlier configuration are eligible again and are not counted.
+    earlier configuration are eligible again and are not counted. ``host_id``
+    narrows the count to one server (#946); omitted, it is fleet-wide.
     """
-    TR = ai_retry.TriageRetry
     signature = ai_retry.configuration(session)
-    blocked = and_(or_(TR.state == 'blocked', and_(TR.state == 'interrupted', TR.attempts >= ai_retry.MAX_ATTEMPTS)),
-                   ~ai_retry.eligible(signature, now))
-    return session.scalar(select(func.count()).select_from(Behavior).join(TR, TR.subject == Behavior.id).where(
-        Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')),  # noqa: E712
-        Behavior.host_id.in_(host_lifecycle.active_ids()),
-        Behavior.host_id.not_in(ai_policy.paused_ids()), blocked)), signature
+    query = select(func.count()).select_from(Behavior).join(
+        ai_retry.TriageRetry, ai_retry.TriageRetry.subject == Behavior.id).where(_blocked(signature, now))
+    if host_id is not None:
+        query = query.where(Behavior.host_id == host_id)
+    return session.scalar(query), signature
+
+
+def retry_candidates(session, now, limit=RETRY_LIMIT, ids=None, host_id=None):
+    """Return ``(id, host_id)`` pairs an administrator retry may re-queue now (#934).
+
+    The notification predicate, minus rows with a live triage claim or an active
+    provider Retry-After, which single-item retry also refuses. ``host_id``
+    restricts candidates to one server (#946). Read-only.
+    """
+    from .ai_claims import Claim
+    signature = ai_retry.configuration(session)
+    TR = ai_retry.TriageRetry
+    running = select(Claim.subject).where(Claim.subject == Behavior.id, Claim.expires > now).exists()
+    query = select(Behavior.id, Behavior.host_id).join(TR, TR.subject == Behavior.id).where(
+        _blocked(signature, now), TR.provider_until <= now, ~running).order_by(Behavior.id).limit(limit)
+    if ids is not None:
+        query = query.where(Behavior.id.in_(ids))
+    if host_id is not None:
+        query = query.where(Behavior.host_id == host_id)
+    return list(session.execute(query))
+
+
+def retry(session, ids, now):
+    """Re-queue the given candidates exactly like single-item retry. Returns the count.
+
+    The caller holds the ``ai-triage`` lock and the rows' ``queue`` activity
+    locks and has discarded any pre-lock read transaction. Each row is re-checked
+    against the current predicate, so a concurrent change is never overwritten.
+    No provider request is sent: the scheduler still applies enablement, pause,
+    lifecycle, data sharing and shared admission.
+    """
+    current = [row_id for row_id, _ in retry_candidates(session, now, limit=len(ids), ids=ids)] if ids else []
+    retried = 0
+    for row in session.scalars(select(Behavior).where(Behavior.id.in_(current))):
+        ai_retry.manual(session, row, now)
+        row.attempted = 0
+        row.verdict = 'pending'
+        row.analysis = RETRY_ANALYSIS
+        retried += 1
+    return retried
 
 
 def publish(session, cfg, now):

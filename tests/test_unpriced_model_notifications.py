@@ -6,7 +6,9 @@ from app.db import Session, Setting, config
 from app.identity import User
 from app.security import seal
 
-NOW = 1_794_441_600.0  # 2026-11-12T00:00:00Z, inside the bundled catalog's validity window.
+# One day into the bundled catalog's validity window. Derived, so a catalog refresh that moves
+# VERIFIED_AT forward (#966) cannot leave this clock before the window.
+NOW = float(ai_pricing.VERIFIED_AT + 86400)
 EXPIRED = ai_pricing.EXPIRES_AT + 60
 LINK = '#settings/ai'
 
