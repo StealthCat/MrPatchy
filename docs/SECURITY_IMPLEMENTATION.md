@@ -2448,6 +2448,21 @@ from an assessment page returns to the filtered list when the visitor came from
 it. This is frontend-only, with no API, schema, admission, spend, pause,
 approval, role or authorization change. The page offset still has no address.
 
+Worker checkpoint #974 gives the page its own address. Page 2 and later are
+`<view>/page/<n>`, where `<view>` is any of the four addresses above; page 1
+keeps the bare view address, so existing links are unchanged. **Next** and
+**Previous** change the address, so a reload, a bookmark, a shared link and
+Back/Forward reproduce the page. This replaces the in-memory page offset:
+opening the bare address always shows page 1, and Back returns to the page the
+visitor left. Changing the filter still returns to page 1. A malformed page
+address is replaced by the nearest valid one without a history entry. A page
+past the end of the list says so and links to the first page. The link back
+from an assessment page returns to the page and filter the visitor came from.
+The bulk Re-triage selection is still kept across pages. This is frontend-only,
+with no API, schema, admission, spend, pause, approval, role or authorization
+change. Other paged lists (Activity, History, AI activity) still have no page
+address.
+
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
 when the newest retained assessment for the row's exact current state
@@ -2462,6 +2477,82 @@ existing Assessment history pages. A page costs one projected assessment query,
 plus one bounded read for administrator source links. Lookup, publication,
 revocation, approval, budget, pause, role, response and schema are unchanged.
 Matched production acceptance remains open.
+
+### Cross-server exact hits and contextual misses — worker checkpoint #1035
+
+`tests/test_known_good_cross_server_acceptance.py` drives the real
+`worker.investigate_one()` path across several servers. Only the provider
+transport is a fixture.
+
+- **Exact hit:** server A's fresh low result publishes one active candidate. The
+  same artifact and behavior on server B, differing only in host, PID, start
+  ticks and ephemeral port, is reused with zero provider calls. B gets a
+  `known_good` assessment with a zero-call run and its own host observation.
+  Under a daily spend cap the hit adds no ledger reservation.
+- **Contextual misses:** each reaches the provider exactly once and publishes its
+  own distinct candidate, leaving A's entry untouched:
+  - the same path with a different SHA-256;
+  - the same hash with a different privileges manifest (account);
+  - the same hash with a different network-behavior manifest.
+- **No reuse:** a medium or unknown result publishes nothing, so the next
+  server still calls the provider. A revoked candidate is not reused and is
+  not reactivated.
+- **Concurrent first encounters:** two servers in flight at the provider at the
+  same time make one call each and publish one deduplicated candidate with
+  both observations. A third server then hits that candidate with zero calls.
+- **Mutation evidence:** each of these makes the named tests fail:
+  - ignoring the artifact and behavior components in the fingerprint (the 3
+    miss cases fail);
+  - adding observation fields to the fingerprint (4 hit tests fail);
+  - ignoring the active flag (the revocation test fails);
+  - a lookup that always misses (3 tests fail);
+  - never publishing (8 tests fail).
+- **Unchanged:** this adds tests only. Lookup, publication, revocation,
+  approval, admission, budget, pause, roles and response authorization are
+  unchanged. MySQL coverage comes from the native `mysql` CI shards, which run
+  the full suite.
+- **Remaining for requirement B:** script, interpreter, configuration and
+  provenance changes are covered at the fingerprint level in
+  `tests/test_known_good.py`, not through this worker path. Production hit
+  rates are not measured.
+
+### Retry blocked process investigations — worker checkpoint #934
+
+Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
+
+- **Change:** the admin-only, CSRF-protected `POST /api/investigations/blocked/retry` re-queues the rows the notification counts: unapproved `pending`/`error` behaviors on active, unpaused servers whose retry state is blocked under the current configuration signature.
+  - Each row gets single-item retry semantics: the retry state is cleared, `attempted=0`, the verdict becomes `pending`, and the analysis records that an administrator requested the retry.
+  - It runs under the existing `ai-triage` lock (non-blocking, 409 when busy) and ordered per-host `queue` activity locks. Rows are re-read and re-checked against the predicate after the locks are taken.
+  - Each request handles at most 200 rows. The response reports the rows retried and those still blocked.
+  - A non-empty retry writes one audit row. AI disabled, or nothing eligible, retries nothing and writes no audit row.
+- **Excluded:** rows with a live claim or an active provider Retry-After are left blocked, as single retry refuses them. So are paused, disabled or deleted servers, approved rows, and rows already eligible because the configuration changed.
+- **UI:** for administrators, fleet Investigations shows **Retry blocked investigations** under the queue notice only when `/api/investigation-status` reports an integer `blocked > 0`. It names the count, says no provider request is sent now, and refreshes the view after it runs. Operators and viewers never see it.
+- **No bypass:** the action sends no provider request. AI enablement, pause, lifecycle, data sharing and shared rate/daily-cap admission and reservations still apply when the scheduler runs each item. A repeat failure blocks again and resurfaces the notification.
+- **Unchanged:** schema, admission, reservations, roles of existing routes, response authorization and SMTP/webhook alerts.
+- **Validation:** `tests/test_triage_blocked_retry.py` (11 of 14 fail on main `68887ce`; all pass after) covers scope, exclusions, batching, lock refusal, roles, audit and notification resolve/resurface. `tests/ui_retry_blocked_investigations.cjs` fails on main and passes after. It covers visibility, the action, a partial batch, malformed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** per-server Investigations tabs do not offer the action, because the status count is fleet-wide. Blocked advisory-plan work is still not covered.
+
+#### Per-server blocked retry — worker checkpoint #946
+
+- **Change:** `blocked_count` and `retry_candidates` take an optional `host_id` that narrows the #934 predicate. Omitted, the fleet behavior is unchanged.
+  - Admin-only `GET /api/hosts/{id}/investigations/blocked` returns `{blocked}` for one server, or 0 while AI is disabled.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/investigations/blocked/retry` re-queues only that server's candidates. It shares the fleet route's implementation: the `ai-triage` lock (409 when busy), the `queue` activity lock, the post-lock re-check, the 200-row batch and one audit row naming the server.
+  - Unknown servers return 404. A paused or inactive server retries nothing.
+- **No bypass:** no provider request is sent, and there are no schema, admission, reservation or response-authorization changes.
+- **Validation:** six host-scope tests in `tests/test_triage_blocked_retry.py` fail on main `0842ba4` and pass after. They cover scope isolation, AI disabled, pause, 404, the lock, roles and audit. The existing fleet tests still pass.
+- **UI:** Server → Investigations shows **Retry blocked investigations** to administrators only, while the server is enabled and its count is above 0. It calls the host route and refreshes the tab afterwards. A failed count read hides the action; operators never request the count.
+- **UI validation:** `tests/ui_host_retry_blocked_investigations.cjs` fails on main and passes after. It covers the host-only endpoint (never the fleet route), the refresh, a partial batch, singular wording, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** blocked advisory-plan work is still not covered.
+
+#### Cause-specific blocked wording — worker checkpoint, fixes #1007
+
+- **Problem:** every non-transient block used one retry reason and one notification text, both blaming the API key, quota or model. Evidence over the 64 KB sharing limit is refused locally before any provider request, so following that advice could only lead to unnecessary key or model churn.
+- **Change:** `AIError` carries a `cause` used only for wording. The 64 KB refusal sets `evidence_size`; every other error keeps `provider`. `ai_retry.failed` gives an evidence-size block its own reason: nothing was sent, review the observation manually, and a key or model change does not help. Provider and configuration blocks keep the existing reason.
+- **Follow-up stage:** the target controls the size of the allowlisted follow-up evidence, so the same refusal can fire on the second request after the first-stage call was sent. The worker then sets `follow_up_evidence_size`, and the reason says the follow-up request was not sent but the first-stage request was and may be billed.
+- **Notification:** the `ai-triage`/`configuration-blocked` text is now cause-neutral. It points to each investigation's retry reason and separates configuration fixes from oversized evidence. The identity, revision key, severity, role and deep link are unchanged. The **Retry blocked investigations** help text says the same.
+- **Unchanged:** retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits an evidence-size block, which is then refused locally again), admission, reservations and authorization.
+- **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
+- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
 
 ### Throttling, daily cap and unthrottled operation
 
@@ -2689,6 +2780,32 @@ retry) and blocked (the #815 predicate).
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
+### Non-triage billable paths under one daily cap — worker checkpoint #1023
+
+`tests/test_ai_daily_cap_billable_paths.py` drives four non-triage paths through
+their real code into a `daily_cap` window with no safe room left: update scoring
+(`update_scores.run_one`), an AI security-plan job (`worker.execute`), release
+configuration review (`releases.ai_review`) and the administrator connection
+test (`POST /api/settings/ai-test`). Only the provider transport is a fixture,
+and the clock is pinned inside the bundled price catalog's validity.
+
+- In every path, nothing reaches the transport and no ledger row is written.
+- Scoring is deferred to the exact window reset, with a deferred run and zero
+  calls. It is not retried inside the spent window, and it completes after the
+  reset with one settled ledger row in the new window.
+- The security-plan job stays queued until the reset (`_ai_deferred`) rather
+  than failing, and then completes.
+- Release review raises a controlled wait whose eligibility is the reset.
+- The connection test is refused with the daily-cap reason.
+- With room for one scoring call, scoring sends it, and a security plan then
+  waits for the reset. The ledger holds only the one call that was sent.
+
+Three mutations are each caught: removing the cap check in `ai_budget.reserve`,
+dropping `policy_wait` from scoring deferral, and dropping plan deferral in the
+worker. This is acceptance coverage only, with no runtime change. CI runs it on
+SQLite and the MySQL shards. Startup plans share the same worker deferral branch
+as security plans, so they are covered through that branch, not separately.
+
 ### Unpriced saved model under a daily cap — worker checkpoint #735
 
 In `daily_cap` and `rate_and_daily` modes, capped admission must quote every
@@ -2720,6 +2837,123 @@ fails closed. Before this checkpoint nothing showed that in advance.
 - **Limitation:** a missing API key is still reported only by the existing
   `configuration` gate. Near-exhaustion of the cap remains undetected.
 
+### Data sharing under a daily cap — worker checkpoint #1000, fix #1001
+
+`tests/test_ai_budget_data_sharing_acceptance.py` covers the data-sharing part of
+milestone 4. It drives the real worker and update-scoring paths in capped modes,
+with only the provider transport and SSH as fixtures.
+
+- **Capping does not change what is shared.** A `daily_cap` investigation sends
+  byte-for-byte the same request as an unthrottled one: `store: false`, no
+  `process_identity`, connections truncated with an `omitted_connections` count,
+  and no host address or host key. The process identity is retained locally for
+  follow-up selection. The reservation is quoted from that same bounded request.
+- **Scoring opt-in.** With update scoring off, no package metadata is sent,
+  reserved or recorded, while investigations are still admitted under the cap.
+  With it on, the scoring batch reserves its own spend and carries only package
+  metadata: no address, host key, executable path, hash or process evidence.
+- **Evidence over the 64 KB limit (#1001, P1).** In `daily_cap` and
+  `rate_and_daily`, the claim-time quote refused such a subject and returned
+  without recording anything. The subject stayed `pending` at the head of the
+  queue, so no other subject in the fleet was ever claimed and nothing explained
+  why. `ai_claims.acquire()` now records the same outcome as an uncapped attempt:
+  verdict `error`, a `blocked` retry and the safe reason. Nothing is reserved or
+  sent, and later passes move on to other work. The regression test runs in
+  `daily_cap`, `rate_and_daily` and `unthrottled`.
+
+Mutations to stop stripping `process_identity`, stop truncating connections, or
+ignore the scoring opt-in are each caught. MySQL-native runs, contention/fairness
+and measured performance remain open milestone-4 items.
+
+### Known-good Re-triage under the shared AI controls — worker checkpoint #1029
+
+`tests/test_known_good_retriage_controls.py` covers roadmap B's requirement that an
+explicit administrator Re-triage "bypasses lookup but respects pause, data-sharing
+and shared budgets". It drives the real `worker.investigate_one()` path with an
+active exact-match candidate from one server and a pending `Refresh` on another.
+Only the provider transport is a fixture.
+
+- **Pause, global disable and an exhausted daily cap** (`daily_cap` and
+  `rate_and_daily`) each hold the Re-triage back. Nothing is sent or reserved, and
+  the worker does not fall back to the cached verdict. The `Refresh` request, the
+  `pending` verdict and the active candidate are all kept. After resume, enable or a
+  raised cap, exactly one reserved and settled provider call consumes the request.
+- **Data sharing:** the Re-triage sends byte-for-byte the input an ordinary
+  investigation of the same evidence sends: `store: false`, with no
+  `process_identity`, no known-good observation, and no host address or key. Its
+  reservation is quoted from that same request.
+- **Contrast:** without a Re-triage, the same subject reuses the candidate with zero
+  provider calls, zero ledger rows and a completed zero-call run.
+
+Each of these mutations is caught: ignoring the Re-triage bypass, dropping the
+paused-host claim filter, or dropping the claim-time budget gates.
+**Found:** with the cap exhausted, a free exact hit also waits for the reset, because
+the budget gates run before the lookup. This is filed as P3 #1030, to follow #1002.
+MySQL-native runs happen in CI. Role isolation, revocation and pruning are covered
+elsewhere (#1027). Roadmap B acceptance remains open.
+### Triage claim contention and fairness under a daily cap — worker checkpoint #1012
+
+`tests/test_ai_claims_cap_contention_acceptance.py` covers the milestone 4 items
+"multi-thread/multi-process claims, supported multi-worker admission,
+contention/fairness" for triage under a daily cap. Each test runs real
+`worker.investigate_one()` claims against a cap with room for exactly K calls.
+The provider is a disposable fixture.
+
+- **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
+  each for a different subject. The suite checks:
+  - Exactly K ledger rows are written, and counted spend stays within the cap.
+  - No claim is left behind, and no subject is admitted twice.
+  - Every other subject was refused before a run started, or is deferred to the
+    window reset with no retry attempt used. None is blocked.
+  - A second round in the same window sends nothing more.
+- **Preflight bypassed:** the same holds when the claim-time budget preflight
+  admits everything. All ten workers claim work, and the authoritative
+  reservation alone holds the cap.
+- **`rate_and_daily`:** checked with room for one call, because the rate gate
+  also spaces admissions.
+- **Processes:** four fresh OS processes with two threads each share one cap.
+  They keep the same guarantees.
+- **Fairness:** one server holds the oldest and largest backlog, and the cap has
+  room for one call per server. Every waiting server receives a call before the
+  busy server receives a second. This holds across serial scheduler cycles and in
+  a concurrent burst whose worker count does not exceed the servers with work.
+  The busy server's remaining work stays queued.
+- **Host election:** with host turns tied, a server already under another
+  worker's live lease yields the last affordable call to an idle server, even
+  when it holds the oldest work. A server whose only eligible work is already
+  claimed does not win the election and leave the remaining cap unused.
+- **Mutations:** the suite fails when any of the following is removed:
+  - the shared budget lock in `reserve()` (a test hook holds each reservation
+    open between its spend read and insert, so every threaded variant overspends
+    without the lock)
+  - the durable host turn
+  - live-occupancy ordering in host election
+  - the claimed-subject exclusion in host election
+  - the "a policy wait does not consume an attempt" rule
+- **Limitation:** with more concurrent workers than servers that have work, a
+  busy server's second claim can reserve before another server's first. Spend
+  order then follows the race, and the waiting server is served in the next
+  window.
+
+No runtime behaviour changes. The rest of milestone 4 remains open.
+### Concurrent cap admissions racing settings saves — worker checkpoint #990
+
+`tests/test_ai_budget_settings_race_acceptance.py` covers the milestone 4 item
+"simultaneous budget admissions and settings changes". Eight threads keep
+reserving shared daily-cap spend while an administrator saves AI settings through
+`PUT /api/settings/ai` (with the expansion confirmation). The tests record, in lock
+order, the settings snapshot and counted spend that each reservation read inside
+the shared budget lock. Every reservation saw exactly the spend admitted before it,
+and every admission fitted the cap in its own snapshot. Every reservation that started
+after the save returned used the saved settings. The scenarios cover four changes.
+Lowering the cap never overspends. Raising it admits exactly up to the new cap.
+Switching to `rate` or `unthrottled` stops new ledger rows; when the cap is re-enabled,
+the earlier rows are still counted. A timezone change never re-grants the open window.
+A separate test shows that no settings save rewrites, releases or deletes ledger rows.
+Mutations that remove the shared lock from `reserve()` or reuse a stale settings
+snapshot fail the suite. The suite runs on SQLite locally and on MySQL in the hosted
+shards. No runtime behaviour changes, and the rest of milestone 4 remains open.
+
 ### Finite implementation and acceptance milestones
 
 Initial triage preflight reuses the global settings and encrypted key already
@@ -2746,6 +2980,188 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Daily-cap deferral reason — bug fix checkpoint #1015 (P3)
+
+A triage subject refused by the authoritative `ai_budget.reserve()` because the
+daily spend cap had no safe reservation was stored with the reason "Waiting for
+shared AI rate eligibility". `ai_retry.failed()` picked that text whenever the
+refusal carried `retry_after`, and the cap refusal does. The cap refusal now marks
+itself with `budget_wait`, and the deferred reason reads "Waiting for the daily AI
+spend cap to reset; no provider request was sent.". Rate-throttle, provider-backoff
+and pause waits keep their existing reasons. Deferral state, attempt refund and next
+eligibility are unchanged. `tests/test_ai_retry_deferral_reason.py`: the two cap
+cases (`daily_cap`, `rate_and_daily`) fail on main `c86141a` and pass after; the three
+other-wait cases pass on both.
+
+### Rate throttle paces smoothly and defers without a charged attempt — worker checkpoint #1021
+
+`tests/test_ai_rate_throttle_acceptance.py` covers the milestone-4 checks for the
+**Rate throttle** mode. The tests drive the real worker path
+(`worker.investigate_one`: claim, admission, provider, acceptance), the
+administrator start-gates status route and the connection-test route in both
+`rate` and `rate_and_daily` modes. Only the provider transport, SSH and the wall
+clock are fixtures.
+
+- At 6 starts/hour, three eligible servers get one start per 600-second interval,
+  spread across servers. Repeated worker passes inside the interval send nothing.
+- Subjects waiting at the claim stay `pending`. They create no failed or deferred
+  run, no retry attempt and no spend reservation.
+- `GET /api/settings/ai-control-status` reports the `rate_throttle` blocker,
+  `can_start_now: false` and the exact next start. Both clear at refill.
+- After five idle hours, exactly one start is admitted. Idle time does not build
+  up a burst of saved-up hourly allowance.
+- Sometimes another billable caller takes the slot between the claim's read-only
+  gate and this subject's provider admission. The subject is then deferred
+  durably: the retry row is `deferred` with 0 attempts and `next_at` at the rate
+  slot, and the run is reclassified `deferred`. Nothing is sent. Under a daily cap
+  the pre-admission reservation is released, so no spend is counted. The subject
+  resumes after refill.
+- The administrator connection test and triage share one slot. Each waits for, or
+  is refused by, the other before transport.
+
+Mutation checks confirm these tests fail when idle time accumulates allowance, when
+a rate deferral is charged as a retry attempt, or when an unsent reservation is
+not released. This slice is tests and documentation only and adds no runtime
+change. The hosted MySQL shards run the same file. Measured before/after
+throughput and the full capability-equivalence record remain open milestone-4
+work.
+### Unthrottled mode keeps every non-pacing control — worker checkpoint #1018
+
+`tests/test_ai_unthrottled_acceptance.py` covers the milestone-4 check that
+Unthrottled removes only Mr Patchy's own pacing and spend cap. The tests drive the
+real claim → admission → provider → acceptance path and the real administrator
+pause route. Only the provider transport and SSH are fixtures.
+
+- With a stale one-per-hour rate, a one-cent cap and an unpriced model all saved,
+  three back-to-back starts are admitted. Nothing waits, no ledger row is written and
+  no pricing is needed. Controls on the same saved values show that `daily_cap`
+  refuses the unpriced model before sending and `rate` admits one start and then
+  waits. Switching back to Unthrottled releases the queued work.
+- The per-server investigation concurrency limit still applies. With limit 1, a
+  server with an in-flight call gets no second concurrent investigation, while
+  another server's work proceeds. With limit 2, the second one starts.
+- A provider 429 with `Retry-After` sets the shared provider floor. Fresh subjects
+  on other servers are not claimed, run or sent until it passes.
+- A paused server's subject is not claimed and opens no run. Global disable stops
+  every server. Re-enabling and resuming runs both with no pacing wait or reservation.
+
+Mutations that pace Unthrottled, or skip the concurrency limit, provider floor,
+pause or global disable at claim time when Unthrottled, are each caught. No runtime
+change was needed. Role/CSRF refusal of a switch to Unthrottled is covered by #1010,
+and bounded data sharing in Unthrottled mode by #1000. Worker-pool capacity
+limits across processes, MySQL-native runs and measured performance remain open
+milestone-4 items.
+### Benign, suspicious and unknown outcomes under a daily spend cap — milestone 4 checkpoint #1013
+
+`tests/test_ai_budget_verdict_outcome_acceptance.py` drives the real
+`worker.investigate_one` path in `daily_cap` mode, with fixtures only for the
+provider transport and SSH. For each verdict (`low`, `medium`, `high`, `unknown`)
+there is one provider call, one stored verdict and assessment, and one settled
+ledger row counted against the cap. The subject stays unapproved, and no job,
+incident or response plan is created. `medium` and `high` raise an advisory
+notification that says it authorizes no response; `low` and `unknown` raise none.
+Only a low-risk result passes the known-good `result_not_safe` gate. With a
+complete known-good context, a low verdict under the cap publishes an active fleet
+candidate from its one charged call, and an identical subject on a second server
+reuses it with no provider call, no new ledger charge and no approval. A completed
+verdict is not re-sent or re-billed on later passes. When the model requests checks
+for a verified subject, SSH evidence is collected once and the second call carries
+it; both calls are charged to the same run. A subject with an unverified identity
+or a missing checksum never triggers an SSH request, and the second call says so.
+An out-of-schema risk or an unsupported requested check is rejected with no
+verdict, assessment or notification, and the sent call still counts against the
+cap. Mutations caught: skipping the identity check, treating `unknown` as
+significant, accepting any risk, accepting any requested check, letting any risk
+pass the known-good gate, approving a subject on verdict save, skipping the
+follow-up call, making `known_good.publish` a no-op and disabling the cache lookup. This is SQLite test coverage only, with no runtime change.
+MySQL-native runs and the before/after performance record remain open milestone 4
+work.
+### Role and CSRF boundaries under a daily spend cap — milestone 4 checkpoint #1010
+
+`tests/test_ai_budget_role_csrf_acceptance.py` covers the role/CSRF part of
+milestone 4 for the shared spend controls. The requests have valid bodies that
+would expand spend or start billable work if accepted: switching to unthrottled,
+raising the daily cap, previewing an expansion, saving a key, a connection test,
+single and bulk re-triage, and clearing provider backoff. They are refused for
+operator and viewer sessions, and for administrator sessions with a missing, empty
+or wrong `X-CSRF-Token`. Each refusal leaves the stored controls, the key, audit
+action rows, the spend ledger, AI runs, queued re-triage and provider transmissions
+unchanged. Operators and viewers also cannot read spend history (JSON and CSV), AI
+control status or settings. When an administrator is demoted while signed in, the
+old session is revoked (401) before any change; signing in again gives an operator
+session, which is still refused. A positive control shows the same requests from an
+authorized administrator get past authentication and are answered on their merits.
+Mutations caught: removing the CSRF comparison, lowering the AI settings save to
+operator, lowering the connection test to viewer, and ignoring session generation.
+This is test coverage only, with no runtime change. Representative
+benign/suspicious/unknown outcomes and the before/after performance record remain
+open milestone 4 work.
+### Worker drain and resume under a daily spend cap — milestone 4 acceptance #1008
+
+`tests/test_ai_budget_drain_acceptance.py` covers the drain part of milestone 4
+with a cap in place. The tests use registered workers (`worker_registry.Registration`)
+in `daily_cap` mode and drive the real `worker.investigate_one` path. Only the
+provider transport and the SSH call are fixtures. Drain and resume go through the
+same `request_control` path as Activity → Workers.
+
+- **Drain while a call is in flight.** The drain is requested while the first call,
+  or the follow-up of an admitted two-call investigation, is held open. The
+  investigation still finishes with every check, including its follow-up SSH
+  evidence and second call. Its result is accepted and each sent call settles in
+  the shared ledger, with nothing left reserved or uncertain.
+- **No new admission while draining.** The draining worker claims, reserves and
+  sends nothing for the other queued subject: no lease, ledger row, run or provider
+  call. That subject stays `pending`, with no retry or blocked state.
+- **Reported state.** The heartbeat reports `draining` while AI work is active,
+  then `drained`.
+- **Another worker takes the queue.** A reporting worker admits the queued subject
+  with its own reservation.
+- **Resume.** After **Resume** and the next heartbeat, the same worker admits
+  capped work again with a separate reservation.
+- **Drain not yet observed by the heartbeat.** Admission reads the drain control
+  record itself, so a committed drain blocks the next claim before the worker's
+  heartbeat reports `draining`. No reservation or call is made.
+- **Race with an open admission.** A drain that commits while an admission
+  transaction is already open may not be visible to it. On MySQL's
+  REPEATABLE READ snapshot this is observable. That one admission then proceeds,
+  and the work finishes and settles like any other in-flight work. Drain is
+  cooperative. It does not cancel admitted work.
+
+Mutation checks: removing the drain check from admitting `owner_valid` makes all
+five tests fail. Treating a draining worker's lease as invalid makes the three
+in-flight cases fail. No defect was found and runtime code is unchanged. CI runs
+the file on SQLite and on the MySQL shards. Draining a worker inside a
+separate-machine deployment is still covered only by the planned roadmap G
+remote-worker acceptance.
+### Server AI pause and global AI disable under a daily cap — worker checkpoint #998
+
+`tests/test_ai_budget_pause_acceptance.py` covers part of milestone 4's
+disabled/paused/role/CSRF item. The tests drive the real claim → reservation →
+provider → reconciliation path and the real administrator pause route in
+`daily_cap` mode. Only the provider transport and SSH are fixtures.
+
+- A paused server's queued subject is not claimed, reserved or sent, and takes no
+  cap headroom: with room for one call, another server's subject is admitted.
+  After resume, the subject waits while today's cap has no room. It does not borrow
+  headroom, and when admitted it runs with its own fresh reservation.
+- A pause request made while that server's capped call is in flight returns 409.
+  The policy revision is unchanged, no pause is audited and the `sent` ledger row
+  stays counted. When the call finishes the same pause is accepted, and later
+  work on that server is not admitted.
+- Disabling AI globally between the first call and a requested follow-up stops the
+  second call at the provider gate. It is never reserved. The first call settles
+  and stays counted, the run is `deferred` with a policy-wait retry, and no
+  assessment is accepted. After re-enabling, the retry reserves and sends its own
+  call. That call carries the follow-up evidence collected before the disable.
+- Without CSRF, or as operator/viewer, the pause route is refused and the capped
+  ledger is unchanged.
+
+No runtime change was needed. During the policy wait the subject's verdict shows
+`error` with an "Investigation failed. Waiting for AI policy resume" analysis while
+its run is `deferred`. That wording predates this checkpoint and is unchanged
+here. MySQL-native runs, data-sharing controls, contention/fairness and measured
+performance remain open milestone-4 items.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
@@ -2762,6 +3178,32 @@ Amounts remain local public-price estimates for comparison with provider billing
 records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
 and the wider roadmap A acceptance remain planned.
 
+### Stale and replayed triage results under a daily cap — milestone 4 checkpoint #1005
+
+`tests/test_ai_budget_stale_result_acceptance.py` drives the real
+`worker.investigate_one` path in `daily_cap` mode, with fixtures only for the
+provider transport and SSH. While the provider call is in flight, a fixture
+changes the subject's evidence, approves the subject through the administrator
+API, rotates the AI key, or takes over the lease (re-claimed by another token,
+or expired). In every case the late answer is rejected: no verdict, analysis or assessment
+is written (fleet known-good and notification rows are not separately asserted
+here), and the run records
+that no stale result was accepted. The sent call's ledger row is still settled
+at its receipt and counted against the cap; it is never released.
+
+A taken-over lease is left untouched for its new owner. An approved subject is
+never sent again. A subject whose evidence or key changed waits the existing
+one-hour interrupted-attempt interval before another paid call, so a subject
+whose evidence keeps changing cannot re-bill in a loop. The next call is bound to the new evidence, carries its own
+reservation, and only its answer is accepted. An unchanged subject is accepted
+with one settled charge (control).
+
+Each of four lease-check mutations in `app/ai_claims.py` fails at least one test:
+no evidence/approval revision check, no configuration check, no token check, and
+releasing another owner's claim on exit. No runtime change was needed. SQLite only;
+MySQL-native runs, contention/fairness and measured performance remain open in
+milestone 4.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
@@ -2771,6 +3213,40 @@ Other transport timeouts, interrupted workers and lost replies retain conservati
 charges when the provider outcome is unknown. The existing transient backoff still
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
+
+### Unknown pricing and usage under a daily cap — worker checkpoint #994
+
+Milestone 4 acceptance for **unknown pricing/usage**.
+`tests/test_ai_budget_unknown_usage_acceptance.py` drives the real
+`ai.investigate()` → `ai.request()` path in `daily_cap` and `rate_and_daily`.
+- **Unpriceable responses:** 12 shapes are covered. They include missing,
+  malformed or inconsistent usage, an unpriced or invalid returned model, a
+  missing or unpriced tier, missing cache-write or cached-input counts, and
+  400/500 replies without usage. Each leaves its ledger row `uncertain` with the
+  full reservation counted. The call receipt and run cost report `unavailable`,
+  never `$0`.
+- **Later admission:** once the cap leaves room for one more reservation only if
+  the unknown charge were free, the next call is refused before rate admission or
+  transmission. It returns a policy wait with a retry time. A priced reply with
+  the same reservation settles to its estimate and the same later call proceeds.
+- **Request-side pricing:** an unpriced saved model, tool fees, an unbounded
+  output, an unpriced tier or cache TTL, or an expired catalog refuses capped
+  admission before sending. No ledger row or rate admission is created.
+- **Uncapped modes:** `rate` and `unthrottled` create no ledger row for unknown
+  usage and do not block later calls. The receipt still reports `unavailable`.
+- **Evidence:** 44 tests. Treating unknown usage as settled at zero fails 24 of
+  them, and quoting an unpriceable request at zero fails 12.
+- **Unchanged:** no runtime change; no defect was found. Other milestone 4 items
+  and measured throughput remain open.
+### Daily cap reset across DST days and midnight — worker checkpoint #984
+
+Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one UTC day and one timezone change. `tests/test_ai_budget_reset_acceptance.py` adds acceptance evidence only; no runtime behavior changes.
+
+- **Window arithmetic:** around every clock change from 2026-01 to 2027-06 in zones with ordinary DST, a 30-minute step, a 45-minute offset and changes at local midnight, plus fixed-offset controls. Each window contains its instant, consecutive windows share one boundary, and the retained history recovers the start from the stored reset.
+- **Short and long days:** on 23-hour, 23.5-hour, 24.5-hour and 25-hour budget days, an exhausted cap refuses the call through the real reservation path with a deferral that ends exactly at the reset. The same call is admitted at the reset instant into the next local day. Refused attempts leave no ledger row.
+- **Call in flight at the reset:** a call reserved before the reset and unanswered after it keeps its ledger row but uses none of the new window's headroom. A late receipt settles it under the window that admitted it, and the retained spend history lists it there.
+- **tz database revisions:** the zones that change at local midnight revise their rules often. Those cases locate their days from the installed tz database and skip when it has none; the long-standing zones must always produce both.
+- **Remaining in milestone 4:** multi-process and multi-worker admission races at the reset, failover, lease loss and drain, settings changes during admission, and before/after production performance.
 
 ### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
 
@@ -2787,6 +3263,38 @@ to one purpose each and do not change the global `blockers`, `can_start_now` or
 counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
+
+### Two-call follow-up reservations under a daily cap — worker checkpoint #988
+
+`tests/test_ai_budget_followup_acceptance.py` covers the milestone 4 item
+"two-call reservations". It drives `worker.investigate_one` with disposable
+provider and SSH fixtures, and checks the shared ledger:
+
+- **Both calls fit:** the follow-up call reserves its own, larger amount, and
+  each ledger row is sent and reconciled to its own call receipt. The window's
+  counted spend is the sum of the two settled amounts.
+- **Cap exhausted between calls:** the first call stays counted, and SSH evidence
+  is collected once. The follow-up reservation is refused before transport, so no
+  second request, assessment or `low` verdict is produced and no ledger row is
+  written. The run and the retry are deferred to the cap reset, and the attempt
+  counter is not consumed.
+- **Next window:** the retry is not claimed before the reset. After it, the
+  investigation completes and only its new calls count in the new window. The
+  retry's single call carries the follow-up evidence persisted before the
+  deferral, so no second SSH collection happens.
+- **Concurrency:** four two-stage investigations with all four follow-up
+  reservations released together, under a cap for five reservations. Exactly one
+  follow-up is admitted, counted spend never exceeds the cap, every provider
+  request has one counted ledger row, and the other three are deferred.
+
+No runtime change was needed. A fixture mutation that skips the follow-up
+reservation fails all four tests. Turning the cap refusal into a transient error
+fails the deferral tests. Removing the `ai-shared-budget` lock fails the
+concurrency test only when the read-to-write window is widened. The single-call
+lock race stays covered by `test_daily_cap_reservation_is_atomic_and_reports_reset`.
+MySQL runs through the CI shards. Other milestone 4 items, such as multi-process
+admission, lease loss, settings changes during admission and before/after
+performance, remain open.
 
 ### Preview and confirm AI admission/spend changes before save — worker checkpoint #871
 
@@ -2814,6 +3322,39 @@ Admission, budget reservation, pause, lifecycle, role and response authorization
 behavior are unchanged. API clients that saved without previewing were accepted
 and audited at this checkpoint. #881 now refuses unconfirmed expansions.
 Automatic migration of legacy installations remains open.
+
+### Lost or crashed triage leases under a daily cap — worker checkpoint #992
+
+Milestone 4 acceptance for **lease loss/crash** combined with the shared daily cap.
+`tests/test_ai_budget_lease_acceptance.py` drives the real `worker.investigate_one`
+path, replacing only the provider transport and the SSH call with fixtures:
+
+- **Late result after lease loss.** A late response from a worker whose lease expired
+  mid-call is reconciled into that call's own ledger row and stays counted. No
+  assessment or verdict is accepted from it, and its run is `interrupted`. The
+  successor reserves and settles its own row, and its run is the only one that
+  produces the assessment.
+- **Hung worker at the cap.** When the cap has room only for the hung call's sent
+  reservation, a successor recovering the expired subject is not admitted. It
+  creates no run and no ledger row, sends nothing, and the subject stays `pending`
+  until the reset. When the hung call later fails with an unknown outcome, its row
+  becomes `uncertain` and stays counted. After the reset the subject is admitted
+  with a fresh reservation in the new window.
+- **Lease lost during follow-up evidence collection.** The second-stage call is never
+  reserved or sent. The first call settles and stays counted, and no assessment is
+  accepted.
+- **Lease lost after follow-up evidence is stored.** The provider gate's pre-send
+  lease recheck refuses the second-stage call. Only the first call is reserved and
+  sent; it settles and stays counted, and no assessment is accepted. Removing that
+  recheck from `ai_policy` makes this test fail.
+
+No defect found and no runtime change. One observation: when the owning worker
+detects its own lost lease during follow-up collection, before any successor
+reconciles it, the run is recorded as `error`, not `interrupted`, and the test pins `error`. Its message still says no stale result was accepted
+and that a sent call may still be billable. From code reading, not tested here: process death between `reserve` and
+`mark_sent` leaves a `reserved` row counted until its window closes. That is
+conservative, because no transmission happened. Multi-process admission,
+stale/replayed results and before/after performance remain open.
 
 ### Non-expanding legacy migration proposal — worker checkpoint #879 (fixes #878)
 
@@ -3957,6 +4498,83 @@ no I/O.
 `entries_parsed` wiring, persistence, UI, provenance and AI classification. No
 schema, API, auth or response-authorization change.
 
+### Effective APT configuration hooks — worker checkpoint #950
+
+Contract-only; roadmap F remains incomplete. `app/apt_hooks.py` resolves the
+effective command-executing APT options from captured `/etc/apt/apt.conf.d`
+entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
+
+- **Files:** APT `Dir::Etc::Parts` rules decide which files are read: hidden and
+  non-regular entries are skipped; a name needs no extension or `.conf` and only
+  `[A-Za-z0-9_.:-]`; default `Dir::Ignore-Files-Silently` patterns are silent.
+  Files are read in byte order and `apt.conf` last. Ignored files are listed.
+- **Syntax:** `//`, `/* */` and `#` comments, scalar and unquoted values, nested
+  blocks, list items, `#clear` and `#include`; keys are case-insensitive. Later
+  scalars and tagged children override; untagged items append.
+  Inside a block a bare word is an untagged item (`{ /tmp/x; }`), as in apt
+  2.8.3. `#clear`/`#include` inside a block or with more than one argument are
+  syntax errors, and `#clear A::;` clears nothing. A same-line `/* */` comment
+  joins the text around it (`ev/*x*/il` is `evil`), as in apt 2.8.3.
+  Only space, tab, CR and LF separate words; a no-break space or other Unicode
+  space is part of a word. `#clear` empties an option in place, so a tag set
+  again keeps its position. `#x-apt-configure-index` is not a comment.
+- **Reported options:** `command` (Update/DPkg Invoke lists and
+  `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
+  (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
+  `path_override` (`DPkg::Path`) and `dpkg_options`, each with source file and
+  line. `Binary::<program>::` copies carry that scope. A scalar on a hook list
+  node is reported inert because APT never runs it.
+- **Fail closed:** syntax errors (including a quoted value left open at the end
+  of a line, a quoted string touching other text and `*/` directly followed by
+  `/`, a NUL, vertical tab or form feed, and `#x-apt-configure-index` with an
+  argument, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
+  overrides (setting or clearing `RootDir`, `Dir`, `Dir::Etc`, `Dir::Etc::Main`
+  or `Dir::Etc::Parts`, since APT locates `apt.conf` after reading the parts
+  directory), over-cap input and uncollected files make APT behavior
+  `undetermined`. Hooks parsed before an error stay visible. The unobservable
+  `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog `entries_parsed` wiring,
+  inventory/UI, provenance and AI classification, and DNF/YUM plugin configuration.
+
+### dpkg configuration commands — worker checkpoint #970
+
+Contract-only; roadmap F remains incomplete. `app/dpkg_hooks.py` lists the
+command-executing and check-changing options in captured `/etc/dpkg/dpkg.cfg.d`
+entries and `/etc/dpkg/dpkg.cfg`. It performs no I/O and runs nothing. It
+complements the APT hook contract above: these options act one level lower, on
+every dpkg run, whichever front end starts it.
+
+- **Files:** a `dpkg.cfg.d` name is read when it does not start with `.` and
+  consists of `[A-Za-z0-9_-]`. Files are read in byte order and `dpkg.cfg`
+  after them. A dangling link is skipped; ignored names are listed.
+- **Syntax:** trailing whitespace is dropped; empty lines and lines starting
+  with `#` are skipped; leading whitespace is an error. The name is the leading
+  run of `[A-Za-z0-9-]`; the next character ends it, one following `=` and
+  leading whitespace are skipped, and a value starting with a quote must end
+  with the same quote. `force-<things>`, `refuse-<things>` and
+  `no-force-<things>` need no separate value.
+- **Reported options:** `commands` (`pre-invoke`, `post-invoke` and
+  `status-logger`, each run through `sh -c`; every occurrence runs, invoke
+  hooks in the order read and status loggers side by side),
+  `relocations` (`root`, `admindir`, `instdir`; every occurrence, dpkg uses the
+  last) and `behavior_changes` (`force`/`refuse` items, `no-debsig`,
+  `ignore-depends`, `no-act`, `no-triggers`, path filters), each with source
+  file and line. Other recognized options are only counted.
+- **Fail closed:** dpkg refuses to run on an unknown option, a missing or
+  unexpected value, unbalanced quotes, an unknown force item, an invalid
+  validated value or an action option; each is a `config_error` gap. A line
+  over dpkg's 1022-byte buffer, a NUL byte, a non-ASCII character directly
+  after the name, a non-regular entry, an unreadable, oversized or uncollected
+  file and over-cap input are gaps too. Any of these makes the result
+  `undetermined`; other commands stay visible. The invoking user's
+  `~/.dpkg.cfg`, per-run options and environment, and the locale collation
+  dpkg sorts the directory with are always disclosed as unobserved or assumed.
+  The option table is dpkg 1.22.6's. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog location and
+  `entries_parsed` wiring, inventory/UI, provenance and AI classification,
+  other dpkg versions' option tables, and DNF/YUM/RPM plugin configuration.
+
+
 ### Dynamic-loader configuration contract — worker checkpoint #960
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -4010,6 +4628,222 @@ performs no I/O.
 `entries_parsed` wiring, persistence, baselines and alerts, UI, provenance and
 AI classification. No schema, API, auth or response-authorization change.
 
+### NetworkManager dispatcher script contract — worker checkpoint #962
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/nm_dispatcher.py` is a pure, versioned contract for the NetworkManager
+part of the catalog's `event_hooks` mechanism. It takes supplied file metadata,
+performs no I/O and never reads a script's contents.
+
+- **Source.** The rules follow `nm-dispatcher.c` as read in NetworkManager
+  1.36.6, 1.46.0, 1.52.0, 1.54.3 and 1.58.1. The functions are byte-identical
+  in the four releases from 1.46.0, and 1.36.6 agrees with them except that it
+  has no device handlers. A version above 1.58 gets a non-blocking gap.
+- **Scanned directories.** `/usr/lib/NetworkManager/dispatcher.d` and
+  `/etc/NetworkManager/dispatcher.d`, with `pre-up.d` (pre-up, vpn-pre-up) and
+  `pre-down.d` (pre-down, vpn-pre-down). The top directory serves every other
+  event. Each result lists its runnable scripts per event group in byte order of
+  their names, which is the order NetworkManager runs them.
+- **Name filter.** A leading dot, the `~`, `.rpmsave`, `.rpmorig`, `.rpmnew` and
+  `.swp` suffixes and a trailing `.dpkg-*` are not considered.
+- **Override and mask.** An `/etc` name replaces the same `/usr/lib` name before
+  any file check. A usable `/etc` script overrides it. An unusable `/etc` entry
+  (a `/dev/null` link, an empty file, a directory, a dangling link or a rejected
+  file) masks it, and neither runs.
+- **File checks.** A script must be a non-empty regular file owned by uid 0,
+  not writable by group or other, not set-UID and executable by its owner.
+  Symlinks are followed. Each file is reported as `runs`, `overridden`,
+  `masked`, `ignored`, `rejected` or `unresolved` with a fixed reason.
+- **No-wait.** A script that is a symlink into a directory whose resolved path
+  ends in `/no-wait.d` is marked as not blocking later scripts. Without the
+  resolved directory the decision uses the link text and says so in a
+  non-blocking gap. Files inside `no-wait.d` do not run from there.
+- **Device handlers.** From 1.46, `device/<name>` runs only for a generic
+  connection that names it, so handlers are listed separately with that
+  condition. `/etc` is tried first and `/usr/lib` is used when the `/etc` file
+  is unusable; there is no masking. The dispatcher applies no name filter,
+  but NetworkManager rejects a connection whose handler name starts with a dot
+  or has a character other than letters, digits, `-`, `_` and `.`, so a file
+  with such a name is reported as `ignored` with the reason that no connection
+  can name it. Upstream NEWS lists device handlers as new in 1.46, so on 1.36
+  to 1.44 they are reported as unsupported. On a 1.45 development snapshot,
+  which was not read, they are unresolved with a blocking gap.
+- **Fail closed.** The caller states for every scanned directory whether it was
+  listed, absent or unreadable, and supplies the NetworkManager version.
+  A directory or version that was not observed, a version older than 1.36,
+  missing or malformed metadata, an unobserved symlink target, duplicate paths
+  and over-limit input mark the result incomplete. When an `/etc` entry is
+  unresolved, the same-named `/usr/lib` script is unresolved too. Every result
+  names what it cannot observe: script contents, whether NetworkManager and its
+  dispatcher service run, which events occur and non-default build directories.
+  `origin` is always `not_assessed` and no result is a safety verdict.
+
+**Not covered:** a comparison against a running `nm-dispatcher`, agent
+collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
+### ifupdown interface hook contract — worker checkpoint #1052
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/ifupdown_hooks.py` is a pure, versioned contract for what classic ifupdown
+runs as root when interfaces go up or down. It takes captured text of
+`/etc/network/interfaces` and its includes, the directory listings that
+`source` globs and `source-directory` need, and entry metadata for
+`/etc/network/if-{pre-up,up,down,post-down}.d`. It performs no I/O and never
+reads a hook script's contents.
+
+- **Source.** The rules come from the ifupdown 0.8.35 (`config.c`,
+  `execute.c`, `main.c`) and debianutils 5.24 (`run-parts.c`) sources
+  downloaded from archive.ubuntu.com, not from recollection.
+- **Parsing.** Comments, `\` continuations (continued lines are appended
+  verbatim, even when they start with `#`), 79-byte word truncation,
+  `post-up`→`up` and `pre-down`→`down` aliases, and per-line hooks follow
+  `get_line`/`read_interfaces_defn`. `auto`, `allow-*`, `no-auto-down` and
+  `no-scripts` with arguments, `rename`, `source` and `source-dir*` end the
+  current stanza. A parse error rejects the whole configuration in the
+  top-level file (`config_state: rejected`, nothing runs). In an include it
+  keeps the definitions read so far, and the parent continues.
+- **Includes.** `source` patterns resolve against the including file's
+  directory. Last-component globs expand in byte order and skip dotfiles.
+  `source-directory` reads only `[A-Za-z0-9_-]+` names. A path already parsed
+  is skipped, missing results are skipped, and `wordexp` bad characters read
+  nothing. Shell expansion, quoting, several words and wildcards in directory
+  components are blocking gaps, as is nesting deeper than 32 files.
+- **Stanzas.** The Linux family/method tables are fixed. `inherits` copies the
+  first earlier match's options and hooks, then the stanza's own lines follow.
+  `lo` is always first in the `auto` class, as ifupdown adds it before
+  reading any file (unless `ifup --no-loopback`), so hooks on an explicit `lo`
+  stanza run at boot without an `auto lo` line. An implicit `lo inet loopback`
+  stanza is added only when no stanza uses `loopback`. Each stanza reports its hooks with file/line provenance, the
+  `-` ignore-status prefix, the `IF_*` variable names it exports, literal
+  activation classes and `no-scripts`/`no-auto-down` pattern matches.
+  `no-scripts` suppresses only the run-parts directories, not the hooks.
+  `mapping` `script` commands are listed separately.
+- **Order.** ifup runs `pre-up` hooks, `if-pre-up.d`, the method, `up` hooks
+  and then `if-up.d`. ifdown runs `if-down.d`, `down` hooks, the method,
+  `if-post-down.d` and then `post-down` hooks.
+- **run-parts.** `/bin/run-parts --exit-on-error` without `--lsbsysinit`
+  considers `^[a-zA-Z0-9_-]+$` names in byte order, because ifupdown never
+  calls `setlocale`. It follows symlinks and runs regular files with an execute
+  bit on a mount without `noexec`. A live test compares the name rule and the
+  order with the system `run-parts --list` when it runs as root.
+- **Fail closed.** An unobserved family, package installation, file, directory
+  or symlink target, an unreadable or truncated input, a malformed entry and
+  over-limit input are blocking gaps, and `complete` is false. An unobserved
+  `noexec` flag is a non-blocking gap, and the script is reported as running
+  so that nothing that may run is hidden. `origin` is always `not_assessed`,
+  and no result is a safety verdict.
+
+**Not covered:** a differential run against the ifup binary (running a
+downloaded binary was not permitted in the authoring session), agent collection
+of this metadata, ifupdown2/ifupdown-ng/netplan, catalog `entries_parsed`
+wiring, persistence, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
+### update-motd.d login script contract — worker checkpoint #1047
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/update_motd.py` is a pure, versioned contract for the `/etc/update-motd.d`
+part of the catalog's `login_hooks` mechanism. It takes supplied directory-entry
+metadata and `pam_motd` session lines, performs no I/O and never reads a
+script's contents.
+
+- **Source.** The rules were checked against Ubuntu 24.04 binaries, not
+  recalled. In libpam-modules 1.5.3, `pam_motd.so` runs `/usr/bin/env -i
+  PATH=… run-parts --lsbsysinit /etc/update-motd.d` into `/run/motd.dynamic`
+  unless the line has `noupdate`; the directory is fixed. debianutils 5.17
+  provides `run-parts`. Upstream Linux-PAM `pam_motd` (RPM families) runs no
+  scripts, so that family is `not_applicable`; any other or unobserved family
+  is a blocking gap.
+- **Name rule.** `--lsbsysinit` considers a name matching
+  `^_?([a-z0-9_.]+-)+[a-z0-9]+$` or `^[a-z0-9][a-z0-9_-]*$`, unless it matches
+  `^[a-z0-9-].*\.dpkg-(old|dist|new|tmp)$`. Upper case, `.sh` suffixes and
+  `README` are not run, but `50-x.ucf-dist`, `50-x.dpkg-bak` and the hidden
+  `.x.dpkg-old` are. The tests pin this rule and the order against `run-parts
+  --list` output for a seeded corpus, and a live test compares names, file
+  types and order with the real binary when it is available as root.
+- **File checks.** Symlinks are followed. A regular file runs as root when it
+  has any execute bit and is not on a `noexec` mount. Directories and
+  non-executable files are skipped. A failed `stat` (a dangling link) and any
+  other type are skipped with the error run-parts reports; later scripts still
+  run. An unobserved mount flag is a non-blocking gap, and the script is
+  reported as running so that nothing that may run is hidden.
+- **Order.** `env -i` clears the locale, so scripts run in byte order.
+- **Activation.** Each `pam_motd` line, with the caller-resolved `reached`
+  value, is listed per service. The state is `active` when a reached line
+  updates, `possible` when one only might be reached (with a gap), and
+  `inactive` when every line has `noupdate` or is not reached. Missing or
+  malformed PAM input is `unknown`, never `active`.
+- **Fail closed.** An unobserved, unreadable or truncated directory, malformed
+  or duplicate entries, missing metadata, an unobserved symlink target and
+  over-limit input are blocking gaps, and `complete` is false. Outside a
+  `listed` directory no script is reported as running. `origin` is always
+  `not_assessed` and no result is a safety verdict.
+
+**Not covered:** agent collection, PAM stack resolution (the PAM service-stack
+contract supplies `reached`), whether sshd uses PAM, AppArmor/SELinux, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
+
+### logrotate scripts and command directives — worker checkpoint #980
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/logrotate_hooks.py` is a pure contract over captured observations of
+`/etc/logrotate.conf` and the files and directories it includes. logrotate
+normally runs as root from a daily timer or cron job, so its scripts are
+scheduled root commands that the catalog previously listed as metadata only.
+
+- **Scripts.** `prerotate`, `postrotate`, `firstaction`, `lastaction` and
+  `preremove` blocks are returned with their text, the log patterns of their
+  section, the effective `sharedscripts` state, file and line. A script outside
+  a section is listed with scope `global`, because logrotate uses it as the
+  default of later sections.
+- **Directives.** `compresscmd`, `uncompresscmd`, `su` and `shred` are returned
+  with global or section scope.
+- **Effective files.** `include` of a file or directory is followed. Directory
+  entries are read in byte order, hidden names included. Names matching
+  logrotate 3.21.0's built-in taboo list, empty files, non-regular entries and
+  dangling links are reported as ignored with a reason. A hidden name is never
+  taboo: logrotate's match does not let `*` cover a leading period, so
+  `.cache~` and `.x.bak` are read. One `=` may separate a directive from its
+  value, so `include=/path` is followed. One `=` directly after a flag is
+  skipped, so `compress=include /path` is followed too. Whole `#` lines
+  between log patterns and the opening brace are comments, as in logrotate.
+- **Fail closed.** The result is `undetermined` on an unknown directive, a
+  script outside a section (still listed) or without `endscript`, an
+  unterminated section or
+  quote, a script body with a line that starts with a script keyword, a changed taboo list, an `include` inside a section, an include that
+  was not collected, is relative, loops or nests too deeply, an unreadable or
+  oversized file, and over-cap input. Input that logrotate rejects is
+  undetermined as well: a keyword not followed by a blank or `=`, an
+  `endscript` followed by anything but a blank or line end (logrotate still
+  ends the script there and skips that one character, and so does the
+  contract), an `su` value logrotate rejects (`su=root root`, `su = root
+  root` or more than a user and a group), an `endscript` on the
+  script keyword's line (logrotate keeps the rest of the file as the script
+  text and still reads the following lines as directives; both are listed), a
+  closing brace in log patterns before an opening brace or log patterns with
+  no opening brace (the following lines are parsed, not taken as patterns), a top-level
+  line that starts with neither a keyword nor a file name, a brace inside a
+  directive value, and a carriage return, vertical tab or form feed. Such a
+  line is skipped, not read as a log section, so it cannot swallow a later
+  `include`. Later content is still parsed. After a
+  `tabooext` or `taboopat` directive no name is treated as taboo, and the
+  target of an `include` inside a section is parsed, because logrotate reads
+  it.
+- **Upper bound.** The listed scripts are everything the configuration can
+  run, not what a given run does. logrotate skips a section on a bad value or
+  a duplicate log file, stops reading a file on a bad top-level value, and
+  runs a script only when a matching log is rotated. This is always disclosed.
+
+Compared with compiled logrotate 3.21.0 (`logrotate -d -f`) on generated
+configuration trees; the counts are in the pull request for #980.
+
+**Not covered:** agent collection of these files, persistence, UI and AI
+classification; directive value validation; `tabooext`/`taboopat` evaluation;
+which logs exist; other logrotate versions. No schema, API or UI change.
+
 ### Individual queued at jobs — worker checkpoint #831
 
 The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
@@ -4040,7 +4874,127 @@ comparable.
 - Referenced scripts are not inspected.
 - No AI classification is made.
 
+Worker checkpoint #848 adds `app/run_parts.py`, a pure, I/O-free contract that
+says whether `run-parts` would execute a stored entry under `/etc/cron.hourly`,
+`/etc/cron.daily`, `/etc/cron.weekly` or `/etc/cron.monthly`. It uses only
+receipt metadata the agent already collects (path, kind, uid and mode) plus the
+host's package family, and returns `eligible`, `skipped` or `unknown` with stable
+reason codes.
+- **Debian family (`debianutils` run-parts, default namespace):** names outside
+  `[A-Za-z0-9_-]+` are skipped, so `backup.sh` or `job.dpkg-old` never runs.
+  The module's results match `run-parts --test` on Ubuntu 24.04 for the same
+  names and modes.
+- **RPM family (cronie run-parts script):** hidden names and names ending in
+  `~`, `,`, `.rpmsave`, `.rpmorig`, `.rpmnew`, `.swp`, `.cfsaved` or `,v` are
+  skipped. The script expands file names unquoted. A name containing a space is
+  word-split and never runs as itself, so it is `skipped` (`rpm_word_split`). A
+  name containing `*`, `?` or `[` is re-expanded, and whether it runs depends on
+  sibling names, so it is `unknown` (`rpm_glob_expansion`). Both cases were
+  reproduced with cronie's loop in bash.
+- **Both:** run-parts runs as root, so any execute bit makes a regular file
+  executable. Nested entries are skipped. Symlinks are `unknown`, because their
+  targets' kind and mode are not recorded. An unknown family, or a missing or
+  malformed kind, uid, mode or path, fails closed to `unknown` or no assessment,
+  and nothing is guessed.
+- **Unchanged:** the agent, receipt, schema, API, UI, baselines, incident
+  evidence and AI payloads. The module is not yet wired into Startup → Files;
+  that follows #772 to avoid overlapping `startup_inventory.page` edits.
+- **Limits:**
+  - These are distribution default rules only.
+  - Invocation options such as `--lsbsysinit` are not evaluated.
+  - cronie `jobs.allow` and `jobs.deny` are not evaluated.
+  - Whether `/etc/crontab`, `0hourly` or anacron actually invokes the directory
+    is not evaluated, including Debian's anacron hand-off.
+  - Script contents are not evaluated.
+
 Remaining roadmap F work is tracked above.
+
+### /etc/profile.d login-shell contract — worker checkpoint #1049
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/profile_d.py` is a pure, versioned contract for the `/etc/profile.d` part of
+the catalog's `shell_system` mechanism. It takes supplied `/etc/profile` text and
+directory-entry metadata, performs no I/O and never reads a sourced file.
+
+- **Source.** The behavior was probed on Ubuntu 24.04 with base-files
+  `/etc/profile`, dash 0.5.12 and bash 5.2, as root and as `nobody`, not recalled.
+  A test compares the contract with real dash as both accounts when it runs as
+  root. Login shells source each `/etc/profile.d/*.sh` that passes the unquoted
+  `[ -r $i ]` test. The glob never matches a leading dot.
+- **Accounts.** The logging-in account sources the files. Root reads any
+  existing file, even with mode 0000. Other accounts use one access(2) class:
+  owner, group or other. The result is `sourced`, `not_readable` or
+  `depends_on_account`. Symlinks are judged by their target, and a dangling
+  link is skipped. A directory named `*.sh` is a non-fatal error.
+- **Hazards.** A name with whitespace or glob characters is word-split or
+  re-globbed by `$i`. For example, `a -o b.sh` can source another path. bash
+  may run the loop with extglob enabled (Ubuntu's `bash_completion.sh` sets
+  it), so `@(…)`, `+(…)` and `!(…)` groups count as glob characters too. Such a
+  name is `unknown` with a blocking gap. The loop is matched on `\n` line
+  endings only, as the shell reads it. A FIFO, socket or device is also
+  blocking.
+- **Order.** Order is bytewise, as in dash and the C locale. When bash's locale
+  collation could reorder the names (punctuation, case, or one stem a prefix of
+  another), the result carries a non-blocking `order_locale_dependent` gap.
+- **Activation.** `active` requires the default base-files loop exactly once. A
+  missing `/etc/profile` is `inactive`. A modified loop, an unreadable or
+  oversized profile, the RPM family (`not_modelled`) and an unobserved family
+  are blocking gaps.
+- **Fail closed.** Unobserved, unreadable or truncated listings, malformed or
+  duplicate entries, missing mode/uid/gid, an unobserved symlink target and
+  over-cap input are blocking (`complete: false`). Outside a `listed`
+  directory, no file is reported as sourced.
+
+Open: collection wiring, the RPM loop and `sh.local`, `/etc/bash.bashrc`,
+per-user dotfiles, supplementary groups and the login locale, persistence, UI,
+provenance and AI classification. No schema, API, auth or response-authorization
+change.
+### SSH login rc-hook contract — worker checkpoint #1045
+
+Status: **pure contract slice; requirement F remains planned/incomplete.**
+`app/ssh_rc.py` resolves which of `~/.ssh/rc` and `/etc/ssh/sshrc` sshd runs for
+each observed account. It also gives the command used to run it. The rules follow
+OpenSSH `session.c` `do_rc_files()`. Nothing calls it yet.
+
+- **Exclusive branches.** The user rc runs only when all of these hold:
+  - the session is not a subsystem;
+  - there is no `ForceCommand`;
+  - the authentication's options permit user rc;
+  - `PermitUserRC` is yes;
+  - `stat()` on the file succeeds.
+
+  sshd runs it as `<login shell> -c '/bin/sh <home>/.ssh/rc'`. Otherwise sshd runs
+  `/bin/sh /etc/ssh/sshrc` if it exists, including for sftp and other subsystem
+  sessions. Otherwise no hook runs, and sshd handles xauth itself.
+- **No fallback.** Once the user rc branch is taken, the system rc is skipped
+  even if the user rc cannot run its script. That happens when it is a
+  directory, or when the login shell is `nologin` or `false`. The result says
+  so (`script_runs: false`, `system_rc_skipped: true`). File modes do not
+  matter, because both scripts run through `/bin/sh`.
+- **Per-key options.** Accounts report `key_user_rc` as `permitted`, `denied`,
+  `mixed` or `unknown`. `no-user-rc` and `restrict` deny it, and `user-rc`
+  re-permits it. Password and other methods keep the permitted default. A mixed
+  account yields `depends_on_key` with each alternative.
+- **Fail closed.** Unknown settings or files are enumerated. They yield a result
+  only when every possibility agrees. Otherwise the result is `uncertain`, with
+  the possible outcomes and an `input_unknown` gap. These are also gaps:
+  - `ChrootDirectory`, set or unknown;
+  - a home or login shell path containing any character outside
+    `[A-Za-z0-9_./+,:@%=-]`, because sshd's `popen()` and the login shell parse
+    them as shell code (`$`, `;`, globs, quotes, whitespace and the rest);
+  - a file of unknown kind;
+  - a malformed, duplicate or over-cap account;
+  - a malformed observation.
+
+  `complete` is true only when there are no gaps.
+- **Unchanged:** no I/O, agent collection, schema, API, UI, AI call or response
+  authorization. `Match` blocks are accepted as per-account effective settings,
+  not evaluated.
+
+Remaining: collect the two files and the effective sshd settings per account,
+derive `key_user_rc` from the `authorized_keys` contract and, for certificate
+logins, the certificate's `permit-user-rc` extension, then persistence, UI and
+AI classification.
 
 ### PAM service-stack contract — worker checkpoint #967
 
@@ -8624,6 +9578,21 @@ The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` a
   - `permitopen`/`permitlisten` syntax validation, which is a gap today;
   - provenance, AI classification and UI.
 
+### authorized_keys permitopen/permitlisten validation — worker checkpoint #1041 (roadmap F)
+
+This closes the "`permitopen`/`permitlisten` syntax validation" item left by #895. `app/authorized_keys.py` now validates each value as OpenSSH `auth-options.c` `handle_permit()` does, using the same `hpdelim2()` and `a2port()` rules. The contract version moves to 2.
+
+- **Host:** a `permitlisten` value with no `:` gets an implicit `*:` listen host, so `permitlisten="8080"` is valid. The host ends at the first `:` or `/`, or just after the closing `]` when it starts with `[`. A missing `]`, text after `]`, or a host of 1025 (`NI_MAXHOST`) characters or more makes sshd refuse the line (`invalid_permission_host`).
+- **Port:** a missing or empty port, or port 0, makes sshd refuse the line (`invalid_permission_port`). Port `*` and decimal 1–65535 are valid, accepting `strtonum`'s leading whitespace and sign.
+- **Service-name ports:** any other port is resolved by `getservbyname(…, "tcp")` from the server's services database, which is not observed. Out-of-range numbers are included, because the lookup is tried for them too. These remain an explicit `forwarding_port_service_name` gap that lists the values, and never count as covered.
+- **Precedence:** a line with only valid values now shadows a later line for the same key. A refused line never shadows, so the later line is the `first` accepted one. Only a service-name gap keeps the later line `conditional` (`precedence_depends_on_forwarding_spec`).
+- **Compatibility:** the `forwarding_spec_unvalidated` gap kind is replaced by `forwarding_port_service_name`. Nothing consumes the contract yet, because it is not wired into collection.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. Nothing is executed or authorized.
+- **Validation:** `tests/test_authorized_keys.py` adds valid, refused and service-name cases. 33 cases fail on main `c86141a` and all 85 tests pass with the change.
+- **Remaining:**
+  - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
+  - provenance, AI classification and UI.
+
 ## Ordered file assessment and visibility (#626)
 
 ### Automatic retained file trust (#636)
@@ -8797,6 +9766,50 @@ workload equivalence. Production latency and full faster-triage acceptance
 remain open.
 
 
+### Retained fingerprinted serial/parallel benchmark records — worker checkpoint #1025
+
+Milestone 4 asks for recorded before/after performance and capability-equivalence
+results. The earlier retained reports (`ai-parallel-v1220.json`,
+`ai-persistence-delay.json` and `ai-transport-v1180.json`) predate the
+version-1 workload fingerprint, so the comparator refuses them. Regenerated
+records for main `c86141a` are kept in
+`docs/benchmarks/ai-equivalence-c86141a/`. They include each raw
+`tools/benchmark_ai.py` report, the `tools/compare_ai_benchmarks.py` output and a
+manifest of the exact commands and limits. Both workloads use 20 subjects, with
+every second subject requesting follow-up SSH evidence. The fixture delays are a
+25 ms loopback provider, 10 ms SSH and 5 ms receipt/usage persistence. Each pair
+compares concurrency 1 against concurrency 4.
+
+| Workload | Serial | Parallel (4) | Throughput |
+| --- | --- | --- | --- |
+| Cross-server (20 servers) | 2.052 s, 9.747/s | 1.119 s, 17.879/s | +83.4% |
+| Same server (4 supported slots) | 2.074 s, 9.641/s | 1.172 s, 17.060/s | +77.0% |
+
+Both pairs are accepted as capability-equivalent: identical workload fingerprints,
+30 provider calls, 3,000 input and 600 output tokens, 10 follow-up SSH evidence
+requests, all 20 subjects complete, none approved and no errors. The parallel runs
+actually overlapped four provider requests; the serial runs never overlapped any.
+Per-item latency rises under parallelism (cross-server run p50 122 → 211 ms,
+admission p50 11 → 34 ms) while total elapsed time falls. Three additional
+unretained repeats of each pair on the same checkout reproduced the same
+fingerprints, with serial throughput of 9.95–10.63/s and parallel throughput of
+18.06–20.85/s.
+
+`tests/test_ai_benchmark_records.py` re-runs the comparator over every retained
+pair and requires the output to equal the recorded comparison exactly. It also
+checks complete results, the full follow-up evidence count and real provider
+overlap. The test refuses a changed or missing fingerprint and a dropped
+follow-up call.
+
+These are loopback fixtures on a disposable SQLite database under shared local
+load. They are not production, TLS, live-provider or MySQL measurements. The
+reports do not record the AI control mode, and cost stays unavailable rather than
+zero. MySQL records (after #979), control-mode recording, production measurements
+and dashboard presentation remain open, so milestone 4 is still incomplete. This
+checkpoint changes no runtime, schema, admission, provider call or response
+authority.
+
+
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
 The server Overview now reports a read-only lifecycle assessment for reviewed
@@ -8960,6 +9973,34 @@ Provider locks, lease ownership checks, shared admission, budget accounting,
 and response authorization continue to apply. This is an admission database
 read improvement. Native integration and end-to-end performance acceptance
 for the faster-AI program remain open.
+
+### Provider rate limits and bounded retries under a daily cap — worker checkpoint #996
+
+Roadmap A milestone 4 acceptance slice for "provider limits, bounded retries". These
+tests and this documentation make no runtime change. `tests/test_ai_budget_provider_limits_acceptance.py`
+drives `worker.investigate_one` with only the provider transport and SSH replaced by
+fixtures. It covers these cases under the daily spend cap:
+
+- A provider 429 `rate_limit_exceeded` with `Retry-After` keeps that attempt's full
+  reservation counted as `uncertain`, because no usage is returned. It sets the shared
+  provider floor and defers the subject. While the floor is active, neither the
+  deferred subject nor a fresh queued subject is claimed, reserved, sent or recorded.
+  A direct `ai.request` is refused before reservation. Once the floor lifts, both
+  subjects settle fresh reservations and the shared backoff clears.
+- Repeated transient 503s stop at `ai_retry.MAX_ATTEMPTS`. Every sent attempt stays
+  counted. After the limit, no automatic attempt is reserved or sent, and an explicit
+  retry re-admits the subject with a fresh reservation.
+- Non-transient provider billing limits (`project_spend_limit_exceeded`,
+  `insufficient_quota`) block the subject without a shared floor or automatic retry,
+  and the attempt stays counted.
+- When the counted rate-limited attempt leaves no cap headroom, provider eligibility
+  alone admits nothing. The retry waits for the cap reset and is then admitted in the
+  new window.
+
+Provider 429/5xx responses without usage are conservatively counted at their full
+reservation. This is a local estimate, not a statement about provider invoicing.
+Multi-process admission, stale/replayed results and before/after performance remain
+open milestone 4 items.
 
 ### Bounded exact-known-good provenance reads — worker checkpoint #582
 
@@ -9191,7 +10232,7 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Validation:** three focused tests fail on the #840 head `3bbcf07` (main `480100d` plus #839) and pass after the change. The related incident, coverage, notification, route-role and lifecycle suites pass on SQLite.
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
-  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan. Fixed by worker checkpoint #1043 below.
 
 ### OS support-end advance warning — worker checkpoint #341 (roadmap J)
 
@@ -9222,7 +10263,6 @@ Roadmap A requires AI activity to show the blocked reason and next eligible star
 - **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.
 
-
 ### Never-scanned legacy scan policies in coverage notifications — worker checkpoint #883
 
 The first #841 limitation: a policy saved before `enabled_since` existed stayed silent forever while its server had never had a `security-scan` attempt, unless an administrator happened to re-save it.
@@ -9234,3 +10274,44 @@ The first #841 limitation: a policy saved before `enabled_since` existed stayed 
 - **Unchanged:** policies with `enabled_since`, the scheduler, `security_coverage.assessment`, the schema, roles and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `dff91c4` and pass after the change; a behavior-only check (legacy never-scanned policy publishes `overdue` after the interval plus grace) publishes nothing on main. The related SQLite coverage, notification, security, incident, operations and scheduling selection passes (580 passed, 2 skipped).
 - **Remaining:** the window before a legacy policy notifies starts at the upgrade's first coordinator tick, not at its true enablement time, which is unknown. YARA schedules and a configurable grace period remain out of scope.
+
+### Re-enabled scanning and returning servers in coverage notifications — worker checkpoint #1043
+
+Two re-enable paths published `overdue` straight away when the scheduler was held at that moment by a quarantine, a recovery-required operation, a full queue or a pending YARA or execution scan:
+
+- Re-enabling scheduled scanning on a server whose last scan was old. `enabled_since` was consulted only for never-scanned servers.
+- A disabled or re-enrolling server returning to the active set, either with an old last scan or never scanned with an old `enabled_since`. This was the #841 limitation.
+
+- **Change:** `classify` holds a scanned server's `overdue` while a valid `enabled_since` is within the interval plus the one-hour grace period. An invalid or missing clock keeps the #816 behavior.
+- **Resume marker:** the producer keeps a server-managed `security-scan-resumed:<host>` setting for servers with an enabled policy.
+  - It holds `{"inactive": true}` while the server is outside the active set.
+  - When the server is next seen active, it becomes `{"active_since": <epoch>}`, in whole microseconds.
+  - The later of that time and `enabled_since` starts the coverage clock.
+  - It is written only on these transitions. It is removed once the clock is older than the interval plus grace, when the policy is disabled or removed, or when the server is deleted.
+  - The prefix does not start with `security-policy:`, and the administrator's policy row is never written.
+- **No upgrade delay:** a server never seen inactive has no marker, so existing and continuously active servers keep the #816 schedule after upgrade.
+- **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
+- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
+
+### XDG autostart contract — worker checkpoint #889 (roadmap F)
+
+The startup catalog listed `/etc/xdg/autostart` and `~/.config/autostart` as metadata only. Nothing said which `.desktop` entry is effective for a name, whether it starts at login, or what it runs.
+
+- **Change:** a new pure module, `app/xdg_autostart.py`, follows the freedesktop Autostart and Desktop Entry specifications.
+  - **Precedence:** it resolves effective entries by file name across directories in precedence order. A user file shadows a system file and is reported as `overrides`/`overridden_by`.
+  - **Statuses:** each entry is classified `enabled`, `hidden`, `disabled`, `conditional`, `invalid` or `unknown`.
+    - `hidden`: `Hidden=true`, which also suppresses the shadowed system file.
+    - `disabled`: `X-GNOME-Autostart-enabled=false`.
+    - `conditional`: `OnlyShowIn`/`NotShowIn`/`TryExec`, or GNOME `AutostartCondition`. These depend on the session and are never guessed.
+  - **Exec:** the value is tokenized with the spec's quoting rules and expanded with autostart field codes into `argv`/`program`.
+- **Gaps, never reported as covered:**
+  - an uncollected higher-precedence directory (`precedence_uncertain`);
+  - unreadable or oversized files;
+  - malformed lines and duplicate keys;
+  - unbalanced `Exec` quoting (no argv is guessed) and unknown or embedded field codes;
+  - reserved characters outside double quotes in `Exec`, such as `'`, `\`, `|`, `;` or `$` (`exec_unquoted_reserved`). The spec leaves these undefined and GIO applies shell quoting to them, so no argv is guessed for `sh -c '…'`;
+  - invalid names, and the 512-entry, 64 KiB and 4096-character caps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. A `system` origin is not a verified package default.
+- **Validation:** `tests/test_xdg_autostart.py` has 17 tests. They cannot run on main, where the module does not exist, and they pass on the branch. Four review-follow-up regressions fail on the earlier head `78168b5`: `sh -c '…'`, an unquoted backslash, each reserved character, and `AutostartCondition`.
+- **Remaining:** collection wiring into the startup inventory, per-user directory enumeration, provenance and UI.

@@ -1,11 +1,13 @@
-"""Administrator notification while process triage is blocked on AI configuration.
+"""Administrator notification while process triage is blocked by non-transient failures.
 
-A non-transient provider failure (for example a rejected key, unavailable quota or
-an unsupported model) leaves each affected investigation ``blocked`` with no
-automatic retry until the model/key changes or an administrator retries it. This
-producer surfaces that state in the notification center. It reads state only: it
-never retries, unblocks, reserves spend or changes authorization, and it adds no
-SMTP/webhook alert.
+A non-transient failure leaves each affected investigation ``blocked`` with no
+automatic retry until the model/key changes or an administrator retries it. The
+cause may be the provider configuration (a rejected key, unavailable quota or an
+unsupported model) or a local refusal such as evidence over the 64 KB sharing
+limit, so the text stays cause-neutral and points to each investigation's own
+retry reason (#1007). This producer surfaces that state in the notification
+center. It reads state only: it never retries, unblocks, reserves spend or
+changes authorization, and it adds no SMTP/webhook alert.
 """
 import hashlib
 
@@ -17,12 +19,12 @@ from .db import Behavior
 IDENTITY = dict(source='ai-triage', kind='configuration-blocked',
                 subject_type='triage-configuration', subject_id='process-triage')
 LINK = '#investigations'
-MESSAGE = ('Process investigations are blocked by a non-transient AI provider failure under the current model '
-           'and API key, for example a rejected key, unavailable quota or an unsupported model. No automatic '
-           'retry is scheduled. Review the failure on Investigations, then correct the AI settings or explicitly '
-           'retry. Changing the saved model or key makes blocked investigations eligible again. New behavior is '
-           'not being triaged until then.')
-RESOLVED = 'No process investigation remains blocked by the AI configuration that caused the earlier failure.'
+MESSAGE = ('Process investigations are blocked by a non-transient failure, and no automatic retry is scheduled. '
+           'Review each one on Investigations: its retry reason names the cause. A rejected key, unavailable quota '
+           'or unsupported model is corrected in the AI settings, and changing the saved model or key makes those '
+           'investigations eligible again. Evidence too large to share needs manual review instead; a model or key '
+           'change does not help it. An administrator can also retry explicitly.')
+RESOLVED = 'No process investigation remains blocked by the earlier non-transient failure.'
 
 
 RETRY_LIMIT = 200
@@ -38,22 +40,27 @@ def _blocked(signature, now):
                 ~ai_retry.eligible(signature, now))
 
 
-def blocked_count(session, now):
+def blocked_count(session, now, host_id=None):
     """Count pending, unpaused, active-server behaviors blocked under the current configuration.
 
     Uses the same blocked predicate as ``ai_runs.status()``: rows blocked under an
-    earlier configuration are eligible again and are not counted.
+    earlier configuration are eligible again and are not counted. ``host_id``
+    narrows the count to one server (#946); omitted, it is fleet-wide.
     """
     signature = ai_retry.configuration(session)
-    return session.scalar(select(func.count()).select_from(Behavior).join(
-        ai_retry.TriageRetry, ai_retry.TriageRetry.subject == Behavior.id).where(_blocked(signature, now))), signature
+    query = select(func.count()).select_from(Behavior).join(
+        ai_retry.TriageRetry, ai_retry.TriageRetry.subject == Behavior.id).where(_blocked(signature, now))
+    if host_id is not None:
+        query = query.where(Behavior.host_id == host_id)
+    return session.scalar(query), signature
 
 
-def retry_candidates(session, now, limit=RETRY_LIMIT, ids=None):
+def retry_candidates(session, now, limit=RETRY_LIMIT, ids=None, host_id=None):
     """Return ``(id, host_id)`` pairs an administrator retry may re-queue now (#934).
 
     The notification predicate, minus rows with a live triage claim or an active
-    provider Retry-After, which single-item retry also refuses. Read-only.
+    provider Retry-After, which single-item retry also refuses. ``host_id``
+    restricts candidates to one server (#946). Read-only.
     """
     from .ai_claims import Claim
     signature = ai_retry.configuration(session)
@@ -63,6 +70,8 @@ def retry_candidates(session, now, limit=RETRY_LIMIT, ids=None):
         _blocked(signature, now), TR.provider_until <= now, ~running).order_by(Behavior.id).limit(limit)
     if ids is not None:
         query = query.where(Behavior.id.in_(ids))
+    if host_id is not None:
+        query = query.where(Behavior.host_id == host_id)
     return list(session.execute(query))
 
 
