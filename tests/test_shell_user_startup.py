@@ -1,6 +1,8 @@
 """Tests for the pure per-user shell startup contract (#1057)."""
 from __future__ import annotations
 
+import errno
+import json
 import os
 import pwd
 import shutil
@@ -80,6 +82,49 @@ def test_unreadable_or_directory_stops_the_bash_chain(obs, code):
     by = {rec['name']: rec for rec in result['files']}
     assert by['.profile']['reasons']['login']['code'] == 'not_reached'
     assert by['.profile']['runs_in'] == []
+
+
+@pytest.mark.parametrize('error', ['ELOOP', 'EACCES', 'ENOTDIR'])
+def test_unfollowable_symlink_stops_the_bash_chain(error):
+    # Regression (#1058 review): these used to be reported as dangling, so ~/.profile looked like it ran.
+    link = {'type': 'symlink', 'link_target': '.bash_profile', 'target_error': error}
+    result = run(files(bash_profile=link, profile=f(), bashrc=link, bash_logout=link))
+    assert login(result) == {'state': 'error', 'file': '~/.bash_profile', 'reason_code': 'chain_stopped_link_error',
+                             'reason': sus.REASONS['chain_stopped_link_error']}
+    by = {rec['name']: rec for rec in result['files']}
+    assert by['.profile']['reasons']['login']['code'] == 'not_reached' and by['.profile']['runs_in'] == []
+    assert by['.bash_profile']['target_error'] == error and 'dangling' not in by['.bash_profile']
+    for kind in ('interactive', 'ssh_command', 'logout'):
+        assert result['sessions'][kind]['state'] == 'error'
+        assert result['sessions'][kind]['reason_code'] == 'error_link_error'
+    assert result['complete'] is True
+
+
+@pytest.mark.parametrize('error', ['ELOOP', 'EACCES', 'ENOTDIR'])
+def test_dash_silently_skips_unfollowable_symlink_profile(error):
+    link = {'type': 'symlink', 'target_error': error}
+    result = run(files(profile=link), account=dict(USER_BASH, shell='/bin/sh'))
+    assert login(result)['state'] == 'skipped' and login(result)['reason_code'] == 'skipped_link_error'
+    assert result['complete'] is True
+
+
+def test_unrecognized_symlink_error_is_unknown_and_blocking():
+    result = run(files(bash_profile={'type': 'symlink', 'target_error': 'other'}, profile=f()))
+    assert login(result)['state'] == 'unknown' and login(result)['reason_code'] == 'link_error_unrecognized'
+    by = {rec['name']: rec for rec in result['files']}
+    assert by['.profile']['reasons']['login']['code'] == 'unresolved'
+    assert 'symlink_error_unrecognized' in codes(result) and result['complete'] is False
+
+
+@pytest.mark.parametrize('link', [
+    {'type': 'symlink', 'target_error': 'EIO'},
+    {'type': 'symlink', 'target_error': None},
+    {'type': 'symlink', 'target_error': 'ELOOP', 'target': f()},
+])
+def test_malformed_symlink_errors_are_blocking(link):
+    result = run(files(bash_profile=link, profile=f()))
+    assert login(result)['state'] == 'unknown'
+    assert 'input_malformed' in codes(result) and result['complete'] is False
 
 
 def test_root_reads_mode_0000():
@@ -214,6 +259,9 @@ def test_input_is_not_mutated_and_result_is_not_a_verdict():
 # --- Live comparison with the shells on this host ---------------------------------------------------------
 
 
+LINK_ERRNO = {errno.ELOOP: 'ELOOP', errno.EACCES: 'EACCES', errno.ENOTDIR: 'ENOTDIR'}
+
+
 def _observe(home: Path) -> dict:
     out = {}
     for name in sus.DOTFILES:
@@ -221,8 +269,9 @@ def _observe(home: Path) -> dict:
         if path.is_symlink():
             try:
                 st = path.stat()
-            except OSError:
-                out[name] = {'type': 'symlink', 'target': None}
+            except OSError as exc:
+                out[name] = ({'type': 'symlink', 'target': None} if exc.errno == errno.ENOENT
+                             else {'type': 'symlink', 'target_error': LINK_ERRNO.get(exc.errno, 'other')})
                 continue
             target = (f(st.st_mode & 0o7777, st.st_uid, st.st_gid) if path.is_file()
                       else {'type': 'directory' if path.is_dir() else 'other'})
@@ -254,7 +303,36 @@ SCENARIOS = {
     'profile_only': {'.profile': 0o644, '.bashrc': 0o644},
     'dir_profile': {'.bash_profile': 'dir', '.profile': 0o644},
     'dangling': {'.bash_profile': 'dangling', '.profile': 0o644},
+    'loop': {'.bash_profile': 'loop', '.profile': 0o644, '.bashrc': 'loop'},
+    'notdir': {'.bash_profile': 'notdir', '.profile': 0o644, '.bash_logout': 'notdir'},
+    'unsearchable': {'.bash_profile': 'unsearchable', '.profile': 0o644, '.bashrc': 'unsearchable'},
+    'sh_loop': {'.profile': 'loop'},
+    'sh_unsearchable': {'.profile': 'unsearchable'},
 }
+
+
+def _observe_as(home: Path, demote) -> dict:
+    """Observe the dotfiles with the account's credentials, as a collector must."""
+    if demote is None:
+        return _observe(home)
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - child process
+        status = 1
+        try:
+            os.close(read_fd)
+            demote()
+            with os.fdopen(write_fd, 'w') as out:
+                out.write(json.dumps(_observe(home)))
+            status = 0
+        finally:
+            os._exit(status)
+    os.close(write_fd)
+    with os.fdopen(read_fd) as src:
+        data = src.read()
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    return json.loads(data)
 
 
 @pytest.mark.skipif(not (shutil.which('bash') and shutil.which('dash') and hasattr(os, 'geteuid')
@@ -275,11 +353,21 @@ def test_live_shells_match_contract_as_root_and_nobody(scenario):
                 path.mkdir()
             elif mode == 'dangling':
                 path.symlink_to('/nonexistent-shellstart-target')
+            elif mode == 'loop':
+                path.symlink_to(name)
+            elif mode == 'notdir':
+                (home / 'plain').write_text('x\n')
+                path.symlink_to('plain/x')
+            elif mode == 'unsearchable':
+                locked = home / 'locked'
+                locked.mkdir(exist_ok=True)
+                (locked / name).write_text(f'echo "READ {name}"\n')
+                locked.chmod(0o000)  # root still searches it; nobody gets EACCES
+                path.symlink_to(f'locked/{name}')
             else:
                 path.write_text(f'echo "READ {name}"\n')
                 os.chown(path, 0, 0)
                 path.chmod(mode)
-        observed = _observe(home)
 
         def demote():
             os.setgid(nobody.pw_gid)
@@ -289,6 +377,7 @@ def test_live_shells_match_contract_as_root_and_nobody(scenario):
         accounts = [({'shell': '/bin/bash', 'uid': 0, 'gid': 0, 'groups': []}, None),
                     ({'shell': '/bin/bash', 'uid': nobody.pw_uid, 'gid': nobody.pw_gid, 'groups': []}, demote)]
         for account, pre in accounts:
+            observed = _observe_as(home, pre)
             result = run(observed, account=account)
             assert result['complete'] is True, result['gaps']
             sessions = result['sessions']

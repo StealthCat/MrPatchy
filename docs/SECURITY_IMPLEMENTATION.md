@@ -4283,16 +4283,22 @@ file runs at login, in an interactive non-login shell, for a non-interactive
   as root and as `nobody`, not recalled. Tests compare the contract with real
   bash and dash as both accounts when they run as root on a Debian host.
 - **Login chain.** A login bash tries the three files in order. Only a missing
-  name or a dangling symlink falls through. An unreadable file or a directory
-  prints an error and stops the chain, so a locked `~/.bash_login` hides
-  `~/.profile`. Root reads a mode 0000 file. A FIFO blocks the login and is a
-  blocking `special_file` gap.
+  name or a dangling (ENOENT) symlink falls through. An unreadable file or a
+  directory prints an error and stops the chain, so a locked `~/.bash_login`
+  hides `~/.profile`. A symlink that cannot be followed for another reason
+  (ELOOP loop, EACCES on an unsearchable directory, ENOTDIR) also stops the
+  chain with an error. Collectors report it as an explicit `target_error`
+  resolved with the account's own credentials (root searches a mode 0000
+  directory), and an unrecognized error is a blocking
+  `symlink_error_unrecognized` gap. Root reads a mode 0000 file. A FIFO blocks
+  the login and is a blocking `special_file` gap.
 - **`~/.bashrc`.** It runs in interactive non-login shells and, because Debian
   builds bash with `SSH_SOURCE_BASHRC`, in every non-interactive `ssh host
   command` (`SSH_CLIENT` set, `SHLVL` below 2). `~/.bash_logout` runs when a
   login bash exits through `exit`/`logout` or end of input.
 - **Other shells.** `sh`/`dash` (and an empty shell field) read only
-  `~/.profile` at login and silently skip an unreadable or directory one.
+  `~/.profile` at login and silently skip an unreadable, directory or
+  unfollowable-symlink one.
   `nologin` and `false` run nothing. Any other shell, and non-canonical shell
   paths, are a blocking `shell_not_modelled` gap.
 - **Accounts.** One access(2) class applies: owner, group (primary or supplied

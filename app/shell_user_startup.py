@@ -12,7 +12,12 @@ root and as ``nobody``, not recalled:
   in that order. Only a missing name (or a dangling symlink, ENOENT) falls
   through to the next. An unreadable file ("Permission denied") or a directory
   ("is a directory") prints an error and stops the chain, so later files are
-  not read. Root reads a mode 0000 file. A FIFO blocks the login.
+  not read. A symlink that cannot be followed for another reason also stops
+  the chain with an error: a loop (ELOOP, "Too many levels of symbolic
+  links"), a target behind a directory the account cannot search (EACCES,
+  "Permission denied") or a path through a non-directory (ENOTDIR, "Not a
+  directory"). Root reads a mode 0000 file and searches a mode 0000
+  directory. A FIFO blocks the login.
 * An interactive non-login bash reads ``~/.bashrc``.
 * Debian builds bash with ``SSH_SOURCE_BASHRC``. A non-interactive bash that
   sshd starts for ``ssh host command`` (``SSH_CLIENT`` set, ``SHLVL`` below 2)
@@ -20,7 +25,8 @@ root and as ``nobody``, not recalled:
 * A login bash runs ``~/.bash_logout`` when it exits through ``exit``/``logout``
   or end of input.
 * A login ``sh`` (dash, or bash invoked as ``sh``) reads only ``~/.profile``.
-  dash silently skips an unreadable or directory ``~/.profile``.
+  dash silently skips an unreadable, directory or unfollowable-symlink
+  ``~/.profile``.
 * ``nologin`` and ``false`` start no shell. Other shells are not modelled.
 
 It performs no I/O, never runs a command and never authorizes a response
@@ -40,6 +46,9 @@ BASH_LOGIN_CHAIN = ('.bash_profile', '.bash_login', '.profile')
 DOTFILES = ('.bash_profile', '.bash_login', '.profile', '.bashrc', '.bash_logout')
 SESSIONS = ('login', 'interactive', 'ssh_command', 'logout')
 FILE_TYPES = ('absent', 'file', 'directory', 'symlink', 'other')
+# Errors from following a symlink (stat/open as the account) other than ENOENT. ENOENT is
+# ``target: None`` (dangling). Anything else must be reported as ``other``.
+LINK_ERRORS = ('ELOOP', 'EACCES', 'ENOTDIR', 'other')
 HOME_STATES = ('listed', 'absent', 'unreadable')
 BASH_SHELLS = frozenset({'/bin/bash', '/usr/bin/bash', '/bin/rbash', '/usr/bin/rbash'})
 POSIX_SHELLS = frozenset({'/bin/sh', '/usr/bin/sh', '/bin/dash', '/usr/bin/dash'})
@@ -51,8 +60,8 @@ MAX_GAPS = 32
 BLOCKING = frozenset({
     'input_malformed', 'account_not_observed', 'family_not_observed', 'family_unsupported',
     'family_not_modelled', 'shell_not_modelled', 'home_not_observed', 'home_unreadable',
-    'file_not_observed', 'metadata_missing', 'symlink_target_unobserved', 'groups_not_observed',
-    'special_file', 'gaps_truncated',
+    'file_not_observed', 'metadata_missing', 'symlink_target_unobserved', 'symlink_error_unrecognized',
+    'groups_not_observed', 'special_file', 'gaps_truncated',
 })
 UNOBSERVED = (
     ('File contents are not read, so a file that sources another (Debian\'s ~/.profile sources ~/.bashrc for '
@@ -75,6 +84,14 @@ REASONS = {
                                'read.',
     'error_unreadable': 'bash cannot read this file and reports "Permission denied".',
     'error_directory': 'bash reports "is a directory" for this name.',
+    'chain_stopped_link_error': 'bash cannot follow this symlink (loop, unsearchable directory or path through '
+                                'a non-directory), reports an error and stops the login chain; later files are '
+                                'not read.',
+    'error_link_error': 'bash cannot follow this symlink (loop, unsearchable directory or path through a '
+                        'non-directory) and reports an error.',
+    'skipped_link_error': 'dash cannot follow this symlink and silently skips it.',
+    'link_error_unrecognized': 'Following this symlink failed with an error whose shell behavior is not '
+                               'modelled, so the outcome is not determined.',
     'skipped_unreadable': 'dash cannot read this file and silently skips it.',
     'skipped_directory': 'dash silently skips a directory with this name.',
     'not_used_by_shell': 'This shell does not read this file in this kind of session.',
@@ -174,6 +191,21 @@ def _observe(name: str, item: Any, gaps: list[dict[str, Any]]) -> dict[str, Any]
         link = item.get('link_target')
         if isinstance(link, str) and link and len(link) <= MAX_PATH and not _CONTROL.search(link):
             out['link_target'] = link
+        if 'target_error' in item:
+            error = item['target_error']
+            if error not in LINK_ERRORS or item.get('target') is not None:
+                _gap(gaps, 'input_malformed', name, 'A symlink error must be ELOOP, EACCES, ENOTDIR or other, '
+                                                    'with no followed target.')
+                out['kind'] = 'unresolved'
+                return out
+            out['target_error'] = error
+            if error == 'other':
+                _gap(gaps, 'symlink_error_unrecognized', name,
+                     'Following the symlink failed with an error whose shell behavior is not modelled.')
+                out['kind'] = 'unresolved_link'
+                return out
+            out['kind'] = 'link_error'
+            return out
         if 'target' not in item:
             _gap(gaps, 'symlink_target_unobserved', name, 'What the symlink resolves to was not supplied.')
             out['kind'] = 'unresolved'
@@ -204,6 +236,10 @@ def _single(name: str, obs: dict[str, Any], account: dict[str, Any], shell: str,
     kind = obs['kind']
     if kind == 'unresolved':
         return 'unknown', 'unresolved'
+    if kind == 'unresolved_link':
+        return 'unknown', 'link_error_unrecognized'
+    if kind == 'link_error':
+        return ('skipped', 'skipped_link_error') if shell == 'posix' else ('error', 'error_link_error')
     if kind == 'absent':
         return 'none', 'absent'
     if kind == 'other':
@@ -234,7 +270,8 @@ def _bash_login(obs: dict[str, dict[str, Any]], account: dict[str, Any],
             reasons[name] = 'absent'
             continue
         if state == 'error':
-            code = 'chain_stopped_directory' if code == 'error_directory' else 'chain_stopped_unreadable'
+            code = {'error_directory': 'chain_stopped_directory',
+                    'error_link_error': 'chain_stopped_link_error'}.get(code, 'chain_stopped_unreadable')
         reasons[name] = code
         session = {'state': state, 'file': f'~/{name}', 'reason_code': code}
     if session is None:
@@ -286,8 +323,11 @@ def evaluate(files: Any, *, account: Any = None, family: Any = None, home: Any =
     gids). ``home`` is ``{'state'}`` with ``listed``, ``absent`` or ``unreadable``. ``files`` maps each
     name in ``DOTFILES`` to an observation: ``{'type': 'absent'}``; ``{'type': 'file', 'mode', 'uid',
     'gid'}``; ``{'type': 'directory'}``; ``{'type': 'other'}`` for a FIFO, socket or device; or
-    ``{'type': 'symlink', 'target': <followed stat or None>, 'link_target'?}``. ``family`` is
-    ``debian`` or ``rpm``.
+    ``{'type': 'symlink', 'target': <followed stat or None>, 'link_target'?}``. ``target: None``
+    means following the link failed with ENOENT (dangling) and nothing else. Any other failure
+    is ``{'type': 'symlink', 'target_error': 'ELOOP' | 'EACCES' | 'ENOTDIR' | 'other'}``. Resolve
+    symlinks with the account's own credentials: EACCES on a directory along the path applies to
+    other accounts but not to root. ``family`` is ``debian`` or ``rpm``.
 
     ``sessions`` maps ``login``, ``interactive``, ``ssh_command`` and ``logout`` to ``{'state',
     'file', 'reason_code', 'reason'}``. ``state`` is ``reads``, ``none``, ``error`` (bash reports an
@@ -377,6 +417,8 @@ def evaluate(files: Any, *, account: Any = None, family: Any = None, home: Any =
             record['dangling'] = True
         if 'link_target' in obs[name]:
             record['link_target'] = obs[name]['link_target']
+        if 'target_error' in obs[name]:
+            record['target_error'] = obs[name]['target_error']
         result['files'].append(record)
     result['complete'] = not any(gap['code'] in BLOCKING for gap in gaps)
     return result
