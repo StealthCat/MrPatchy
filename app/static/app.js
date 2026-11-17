@@ -383,7 +383,7 @@ function bindInvestigationFilter(root,base){const select=root.querySelector('#in
 function retryBlockedInvestigations(status,hostId=null){
  const count=status?.blocked;
  if(!isAdmin()||!Number.isInteger(count)||count<1)return '';
- return `<div class="actions" id="retry-blocked-investigations"><button data-action="retry-blocked-investigations"${hostId?` data-host="${esc(hostId)}"`:''}>Retry blocked investigations</button><p class="help">${count} investigation${count===1?' is':'s are'} blocked${hostId?' on this server':''} after a non-transient AI provider failure. Retry after correcting the provider account, key or model. No provider request is sent now; AI pause, data sharing and shared rate and daily-cap admission still apply.</p></div>`;
+ return `<div class="actions" id="retry-blocked-investigations"><button data-action="retry-blocked-investigations"${hostId?` data-host="${esc(hostId)}"`:''}>Retry blocked investigations</button><p class="help">${count} investigation${count===1?' is':'s are'} blocked${hostId?' on this server':''} after a non-transient failure. Each investigation\'s retry reason names the cause. Retry after correcting the provider account, key or model when that is the cause; evidence too large to share fails again and needs manual review. No provider request is sent now; AI pause, data sharing and shared rate and daily-cap admission still apply.</p></div>`;
 }
 // Page 2 and later have their own address (#974): <view>[/cached]/page/<n>. Page 1 keeps the bare
 // view address, so reloads, Back/Forward and shared links reproduce the page as well as the filter.
