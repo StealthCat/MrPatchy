@@ -2827,6 +2827,19 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Daily-cap deferral reason — bug fix checkpoint #1015 (P3)
+
+A triage subject refused by the authoritative `ai_budget.reserve()` because the
+daily spend cap had no safe reservation was stored with the reason "Waiting for
+shared AI rate eligibility". `ai_retry.failed()` picked that text whenever the
+refusal carried `retry_after`, and the cap refusal does. The cap refusal now marks
+itself with `budget_wait`, and the deferred reason reads "Waiting for the daily AI
+spend cap to reset; no provider request was sent.". Rate-throttle, provider-backoff
+and pause waits keep their existing reasons. Deferral state, attempt refund and next
+eligibility are unchanged. `tests/test_ai_retry_deferral_reason.py`: the two cap
+cases (`daily_cap`, `rate_and_daily`) fail on main `c86141a` and pass after; the three
+other-wait cases pass on both.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
