@@ -2763,6 +2763,34 @@ fails closed. Before this checkpoint nothing showed that in advance.
 - **Limitation:** a missing API key is still reported only by the existing
   `configuration` gate. Near-exhaustion of the cap remains undetected.
 
+### Data sharing under a daily cap — worker checkpoint #1000, fix #1001
+
+`tests/test_ai_budget_data_sharing_acceptance.py` covers the data-sharing part of
+milestone 4. It drives the real worker and update-scoring paths in capped modes,
+with only the provider transport and SSH as fixtures.
+
+- **Capping does not change what is shared.** A `daily_cap` investigation sends
+  byte-for-byte the same request as an unthrottled one: `store: false`, no
+  `process_identity`, connections truncated with an `omitted_connections` count,
+  and no host address or host key. The process identity is retained locally for
+  follow-up selection. The reservation is quoted from that same bounded request.
+- **Scoring opt-in.** With update scoring off, no package metadata is sent,
+  reserved or recorded, while investigations are still admitted under the cap.
+  With it on, the scoring batch reserves its own spend and carries only package
+  metadata: no address, host key, executable path, hash or process evidence.
+- **Evidence over the 64 KB limit (#1001, P1).** In `daily_cap` and
+  `rate_and_daily`, the claim-time quote refused such a subject and returned
+  without recording anything. The subject stayed `pending` at the head of the
+  queue, so no other subject in the fleet was ever claimed and nothing explained
+  why. `ai_claims.acquire()` now records the same outcome as an uncapped attempt:
+  verdict `error`, a `blocked` retry and the safe reason. Nothing is reserved or
+  sent, and later passes move on to other work. The regression test runs in
+  `daily_cap`, `rate_and_daily` and `unthrottled`.
+
+Mutations to stop stripping `process_identity`, stop truncating connections, or
+ignore the scoring opt-in are each caught. MySQL-native runs, contention/fairness
+and measured performance remain open milestone-4 items.
+
 ### Triage claim contention and fairness under a daily cap — worker checkpoint #1012
 
 `tests/test_ai_claims_cap_contention_acceptance.py` covers the milestone 4 items
