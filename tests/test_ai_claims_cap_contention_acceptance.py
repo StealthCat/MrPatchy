@@ -49,13 +49,19 @@ def widened(monkeypatch):
     read made by ``reserve`` is delayed; preflight and status reads are unchanged.
     """
     real = ai_budget._state
+    delayed = []
 
     def state(*args, **kwargs):
         value = real(*args, **kwargs)
         if sys._getframe(1).f_code is ai_budget.reserve.__code__:
+            delayed.append(1)
             time.sleep(0.05)
         return value
     monkeypatch.setattr(ai_budget, '_state', state)
+    yield
+    # If reserve is wrapped or its spend read moves into a helper, the frame check above
+    # stops matching and the lock test would silently fall back to relying on timing.
+    assert delayed, 'widened never delayed a reserve() spend read; update the frame check'
 
 
 def evidence(name):
