@@ -4799,12 +4799,13 @@ This is a contract increment only. The startup-awareness requirement is still in
 - **Entry rules.**
   - Hidden and backup names are skipped: a leading `.`, a trailing `~`, `lost+found`, `aquota.*`, and the `.dpkg-*`, `.rpm*`, `.ucf-*`, `.swp`, `.bak`, `.old` and `.new` suffixes.
   - Symlinks are followed. An entry that cannot be resolved is skipped.
-  - An empty file or a character device is a mask and is skipped.
+  - An entry that is not a regular file, symlink or unknown type (for example a device node placed directly in the directory) is dropped before any stat.
+  - An empty file, or a symlink to a character device such as `/dev/null`, is a mask and is skipped.
   - Anything that is not a regular file is skipped, and so is a file with no execute bit.
   - Every remaining file runs as root. systemd checks neither ownership nor writability, so a runnable hook owned by a non-root user or writable by group or other is reported as an observation, not a skip.
 - **Invocation.** Hooks are started in byte order of their names and then run in parallel. Exit codes are ignored, and the build default timeout is 90 s.
   - Sleep hooks get `pre`/`post` and `suspend`, `hibernate`, `hybrid-sleep` or `suspend-then-hibernate`, with `SYSTEMD_SLEEP_ACTION` set.
-  - Shutdown hooks get `halt`, `poweroff`, `reboot` or `kexec`, after services have stopped and most mounts are gone.
+  - Shutdown hooks get `halt`, `poweroff`, `reboot` or `kexec`, after services have stopped and most mounts are gone. A system manager running in a container passes `exit` when it exits (`systemctl exit`).
 - **Fail closed.** The following are blocking gaps, and they set `complete` to false:
   - an unobserved, unreadable, truncated or contradictory directory;
   - malformed or duplicate entries;

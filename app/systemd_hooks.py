@@ -26,8 +26,11 @@ rule below:
   ``swp``, ``bak``, ``old`` or ``new``.
 * Each entry is stat-ed with symlinks followed. An entry that cannot be resolved
   is skipped.
-* An empty regular file or a character device such as ``/dev/null`` is a mask
-  and is skipped.
+* Directory entries that are not regular files, symlinks or of unknown type
+  (for example a character device placed directly in the directory) are
+  dropped before any stat.
+* An empty regular file, or a symlink to a character device such as
+  ``/dev/null``, is a mask and is skipped.
 * Anything that is not a regular file is skipped.
 * A regular file with no execute bit (``mode & 0111``) is skipped.
 * Ownership and write permissions are **not** checked. A hook owned by a
@@ -41,8 +44,9 @@ rule below:
     ``suspend-then-hibernate``). ``SYSTEMD_SLEEP_ACTION`` names the specific
     step being performed.
   * Shutdown hooks are called with ``halt``, ``poweroff``, ``reboot`` or
-    ``kexec``. They run after services have stopped and most file systems have
-    been unmounted.
+    ``kexec``, or with ``exit`` when a system manager running in a container
+    exits (``systemctl exit``). They run after services have stopped and most
+    file systems have been unmounted.
 
 The contract performs no I/O, never runs a command and never authorizes a
 response action. Missing or malformed metadata, an unobserved directory or
@@ -73,10 +77,11 @@ MECHANISMS = {
     },
     'shutdown': {
         'subdir': 'system-shutdown', 'program': 'systemd-shutdown',
-        'invocations': (('halt',), ('poweroff',), ('reboot',), ('kexec',)),
+        'invocations': (('halt',), ('poweroff',), ('reboot',), ('kexec',), ('exit',)),
         'environment': (),
         'when': 'Shortly before the final halt, power-off, reboot or kexec, after services have stopped and most '
-                'file systems have been unmounted.',
+                'file systems have been unmounted. The exit argument is used only when a system manager running '
+                'in a container exits.',
     },
 }
 UNSCANNED_DIRS = (
@@ -116,8 +121,8 @@ REASONS = {
                         'editor backup suffix such as .dpkg-old, .rpmnew, .bak or .swp).',
     'unresolvable': 'The entry cannot be resolved (for example a dangling symlink), so systemd skips it.',
     'mask_empty': 'An empty file is a mask, so systemd skips it.',
-    'mask_char_device': 'A character device such as /dev/null is a mask, so systemd skips it.',
-    'not_regular': 'Only regular files are run; directories and other file types are skipped.',
+    'mask_char_device': 'A symlink to a character device such as /dev/null is a mask, so systemd skips it.',
+    'not_regular': 'Only regular files are run; directories, device nodes and other file types are skipped.',
     'not_executable': 'The file has no execute bit, so systemd skips it.',
     'unresolved': 'Required metadata was not supplied, so the outcome is not determined.',
 }
@@ -226,6 +231,10 @@ def _assess(entry: dict[str, Any], path: str, gaps: list[dict[str, Any]]) -> tup
         if entry['target'] is None:
             return 'unresolvable', None
         stat = entry['target']
+    elif entry['type'] != 'file':
+        # dirent_is_file_with_suffix() drops entries that are not DT_REG, DT_LNK or DT_UNKNOWN
+        # before any stat, so a device node placed directly in the directory is never a mask.
+        return 'not_regular', entry
     else:
         stat = entry
     if stat['type'] == 'char_device':

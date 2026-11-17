@@ -59,7 +59,7 @@ def test_runnable_hooks_with_arguments_order_and_root_execution():
     assert sleep['environment'] == ['SYSTEMD_SLEEP_ACTION']
     shutdown = result['mechanisms']['shutdown']
     assert shutdown['directory'] == SHUTDOWN_DIR
-    assert shutdown['invocations'] == [['halt'], ['poweroff'], ['reboot'], ['kexec']]
+    assert shutdown['invocations'] == [['halt'], ['poweroff'], ['reboot'], ['kexec'], ['exit']]
     assert [hook['path'] for hook in shutdown['hooks']] == [f'{SHUTDOWN_DIR}/mdadm.shutdown']
 
 
@@ -107,7 +107,7 @@ def test_masks_non_regular_and_non_executable_entries_are_skipped():
     ))
     entries = by_name(result)
     assert entries['empty']['reason_code'] == 'mask_empty'
-    assert entries['null']['reason_code'] == 'mask_char_device'
+    assert entries['null']['reason_code'] == 'not_regular'
     assert entries['null-link']['reason_code'] == 'mask_char_device'
     assert entries['subdir']['reason_code'] == 'not_regular'
     assert entries['fifo']['reason_code'] == 'not_regular'
