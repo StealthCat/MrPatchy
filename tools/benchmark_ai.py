@@ -47,6 +47,9 @@ def main():
     parser.add_argument('--persistence-delay-ms', type=int, default=0)
     parser.add_argument('--ssh-delay-ms', type=int, default=10,
                         help='simulated latency of a follow-up SSH evidence request (default: 10)')
+    parser.add_argument('--control-mode', choices=('legacy', 'unthrottled'), default='legacy',
+                        help='AI control mode stored for the fixture: legacy (separate rolling-hour limits, '
+                             'the pre-flag behavior) or unthrottled (no Mr Patchy pacing or spend cap) (default: legacy)')
     parser.add_argument('--queue-age-seconds', type=int, default=2,
                         help='synthetic age of queued observations without a real wait (default: 2)')
     parser.add_argument('--retained-history-rows', type=int, default=0,
@@ -79,7 +82,7 @@ def main():
             if name.lower().endswith('_proxy'):os.environ.pop(name)
         from sqlalchemy import insert
         from app import ai, ai_policy, worker, ai_runs
-        from app.db import init, Session, Host, Setting, Behavior, engine
+        from app.db import init, Session, Host, Setting, Behavior, engine, config
         from app.security import seal
         single_server_slots = ai_policy.MAX_CONCURRENCY if args.same_server else None
         if single_server_slots is not None and args.concurrency > single_server_slots:
@@ -153,7 +156,8 @@ def main():
             expected_hosts = {subject: f'fixture-host-{0 if args.same_server else index}'
                               for index, subject in enumerate(subjects)}
             with Session() as s:
-                s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model','ai_hourly_limit':100}))
+                s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model','ai_hourly_limit':100,
+                                                  'ai_control_mode':args.control_mode}))
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
                 for host_id in dict.fromkeys(expected_hosts.values()):
                     s.add(Host(id=host_id,name='Fixture only',address='192.0.2.1',fingerprint=''))
@@ -200,6 +204,9 @@ def main():
                 receipts = ai_runs.call_receipts(s, [run.id for run in runs])
                 assert all(len(receipts[run.id]) == run.calls for run in runs)
                 costs = [ai_runs.cost_summary(run, receipts[run.id]) for run in runs]
+                # Report the mode the application actually applied, not only the flag.
+                control_mode = config(s)['ai_control_mode']
+                assert control_mode == args.control_mode, control_mode
             persisted_timings={}
             with Session() as s:
                 for event in s.query(ai_runs.AIEvent).filter(ai_runs.AIEvent.stage.like('timing_%')):
@@ -217,6 +224,7 @@ def main():
                 'retained_history_rows':retained_history_rows,'connections':len(connections),
                 'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
+                'ai_control_mode':control_mode,
                 'stages':{k:summary(v) for k,v in samples.items()},
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
                 'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'completed_subjects':completed_subjects,'approved_subjects':approved_subjects,

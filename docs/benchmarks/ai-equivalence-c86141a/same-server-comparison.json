@@ -1,5 +1,7 @@
 {
   "baseline": {
+    "ai_control_mode": "legacy",
+    "ai_control_mode_source": "legacy implicit default",
     "concurrency": 1,
     "cost_status": "unavailable: synthetic model/usage, no paid API calls",
     "execution": "serial",
@@ -17,6 +19,8 @@
     "ssh_delay_source": "report"
   },
   "candidate": {
+    "ai_control_mode": "legacy",
+    "ai_control_mode_source": "legacy implicit default",
     "concurrency": 4,
     "cost_status": "unavailable: synthetic model/usage, no paid API calls",
     "execution": "parallel",
@@ -219,6 +223,7 @@
   },
   "fixture_only": true,
   "interpretation": {
+    "control_mode": "Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.",
     "cost": "Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.",
     "latency": "Negative elapsed/stage deltas indicate lower fixture latency.",
     "scope": "Disposable loopback fixture only; this comparison does not establish production performance.",
