@@ -82,6 +82,8 @@ UNOBSERVED = (
     'Which accounts have login shells, their supplementary groups and the login locale are not observed.',
     'POSIX ACLs, security modules and the search permission of /etc/profile.d for non-root accounts are not '
     'assessed.',
+    'bash shell options that earlier sourced files set (extglob, nocaseglob, failglob and others) are not observed; '
+    'names that any glob option could expand are reported as unknown instead.',
 )
 NOT_A_VERDICT = 'File metadata only. This is not a safety verdict and origin is not assessed.'
 
