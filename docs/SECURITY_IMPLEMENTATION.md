@@ -4849,6 +4849,52 @@ Open: collection wiring, the RPM loop and `sh.local`, `/etc/bash.bashrc`,
 per-user dotfiles, supplementary groups and the login locale, persistence, UI,
 provenance and AI classification. No schema, API, auth or response-authorization
 change.
+### SSH login rc-hook contract — worker checkpoint #1045
+
+Status: **pure contract slice; requirement F remains planned/incomplete.**
+`app/ssh_rc.py` resolves which of `~/.ssh/rc` and `/etc/ssh/sshrc` sshd runs for
+each observed account. It also gives the command used to run it. The rules follow
+OpenSSH `session.c` `do_rc_files()`. Nothing calls it yet.
+
+- **Exclusive branches.** The user rc runs only when all of these hold:
+  - the session is not a subsystem;
+  - there is no `ForceCommand`;
+  - the authentication's options permit user rc;
+  - `PermitUserRC` is yes;
+  - `stat()` on the file succeeds.
+
+  sshd runs it as `<login shell> -c '/bin/sh <home>/.ssh/rc'`. Otherwise sshd runs
+  `/bin/sh /etc/ssh/sshrc` if it exists, including for sftp and other subsystem
+  sessions. Otherwise no hook runs, and sshd handles xauth itself.
+- **No fallback.** Once the user rc branch is taken, the system rc is skipped
+  even if the user rc cannot run its script. That happens when it is a
+  directory, or when the login shell is `nologin` or `false`. The result says
+  so (`script_runs: false`, `system_rc_skipped: true`). File modes do not
+  matter, because both scripts run through `/bin/sh`.
+- **Per-key options.** Accounts report `key_user_rc` as `permitted`, `denied`,
+  `mixed` or `unknown`. `no-user-rc` and `restrict` deny it, and `user-rc`
+  re-permits it. Password and other methods keep the permitted default. A mixed
+  account yields `depends_on_key` with each alternative.
+- **Fail closed.** Unknown settings or files are enumerated. They yield a result
+  only when every possibility agrees. Otherwise the result is `uncertain`, with
+  the possible outcomes and an `input_unknown` gap. These are also gaps:
+  - `ChrootDirectory`, set or unknown;
+  - a home or login shell path containing any character outside
+    `[A-Za-z0-9_./+,:@%=-]`, because sshd's `popen()` and the login shell parse
+    them as shell code (`$`, `;`, globs, quotes, whitespace and the rest);
+  - a file of unknown kind;
+  - a malformed, duplicate or over-cap account;
+  - a malformed observation.
+
+  `complete` is true only when there are no gaps.
+- **Unchanged:** no I/O, agent collection, schema, API, UI, AI call or response
+  authorization. `Match` blocks are accepted as per-account effective settings,
+  not evaluated.
+
+Remaining: collect the two files and the effective sshd settings per account,
+derive `key_user_rc` from the `authorized_keys` contract and, for certificate
+logins, the certificate's `permit-user-rc` extension, then persistence, UI and
+AI classification.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
