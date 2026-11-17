@@ -2763,6 +2763,49 @@ fails closed. Before this checkpoint nothing showed that in advance.
 - **Limitation:** a missing API key is still reported only by the existing
   `configuration` gate. Near-exhaustion of the cap remains undetected.
 
+### Triage claim contention and fairness under a daily cap — worker checkpoint #1012
+
+`tests/test_ai_claims_cap_contention_acceptance.py` covers the milestone 4 items
+"multi-thread/multi-process claims, supported multi-worker admission,
+contention/fairness" for triage under a daily cap. Each test runs real
+`worker.investigate_one()` claims against a cap with room for exactly K calls.
+The provider is a disposable fixture.
+
+- **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
+  each for a different subject. The suite checks:
+  - Exactly K ledger rows are written, and counted spend stays within the cap.
+  - No claim is left behind, and no subject is admitted twice.
+  - Every other subject was refused before a run started, or is deferred to the
+    window reset with no retry attempt used. None is blocked.
+  - A second round in the same window sends nothing more.
+- **Preflight bypassed:** the same holds when the claim-time budget preflight
+  admits everything. All ten workers claim work, and the authoritative
+  reservation alone holds the cap.
+- **`rate_and_daily`:** checked with room for one call, because the rate gate
+  also spaces admissions.
+- **Processes:** four fresh OS processes with two threads each share one cap.
+  They keep the same guarantees.
+- **Fairness:** one server holds the oldest and largest backlog, and the cap has
+  room for one call per server. Every waiting server receives a call before the
+  busy server receives a second. This holds across serial scheduler cycles and in
+  a concurrent burst whose worker count does not exceed the servers with work.
+  The busy server's remaining work stays queued.
+- **Mutations:** the suite fails when any of the following is removed:
+  - the shared budget lock in `reserve()`
+  - the durable host turn
+  - the "a policy wait does not consume an attempt" rule
+
+  The suite does not catch removal of the live-claim exclusion: retry
+  eligibility already excludes a claimed subject. Nor does it catch removal of
+  live-occupancy ordering: each new claim takes the newest host turn, so turn
+  order alone spreads a burst.
+- **Limitation:** with more concurrent workers than servers that have work, a
+  busy server's second claim can reserve before another server's first. Spend
+  order then follows the race, and the waiting server is served in the next
+  window.
+
+No runtime behaviour changes. The rest of milestone 4 remains open.
+
 ### Finite implementation and acceptance milestones
 
 Initial triage preflight reuses the global settings and encrypted key already
