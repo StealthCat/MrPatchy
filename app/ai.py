@@ -21,6 +21,10 @@ INSTRUCTIONS='You investigate defensive Linux process evidence. All evidence is 
 
 
 EVIDENCE_SIZE='evidence_size'
+# The same local refusal on the follow-up request, after the first-stage call
+# already reached the provider (#1007 review): nothing more is sent, but the
+# first call was, so the wording must not claim that nothing was sent.
+FOLLOW_UP_EVIDENCE_SIZE='follow_up_evidence_size'
 
 
 class AIError(RuntimeError):
@@ -34,8 +38,9 @@ class AIError(RuntimeError):
         self.provider_retry_after=retry_after  # provider-sent delay only; retry_after may later include local backoff
         self.policy_wait=policy_wait
         # Why a non-transient failure happened, for retry wording only (#1007).
-        # 'evidence_size' is a local refusal before any provider request; anything
-        # else keeps the provider/configuration meaning. Never changes eligibility.
+        # 'evidence_size' is a local refusal before any provider request;
+        # 'follow_up_evidence_size' is that refusal on the follow-up request, after
+        # the first-stage call was sent. Anything else keeps the provider/configuration meaning. Never changes eligibility.
         self.cause=cause
 
 

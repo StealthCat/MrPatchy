@@ -140,3 +140,35 @@ def test_evidence_size_error_is_the_only_local_cause():
         ai.investigation_payload(BIG, 'fixture-model')
     assert error.value.cause == ai.EVIDENCE_SIZE and not error.value.transient and not error.value.policy_wait
     assert ai.AIError('provider').cause == 'provider'
+
+
+class FollowUpProvider(Provider):
+    """First stage asks for package evidence; a second call must never happen."""
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        request = httpx.Request('POST', ai.URL)
+        data = {'risk': 'unknown', 'explanation': 'Need package', 'recommended_checks': 'Package',
+                'requested_checks': ['package']}
+        usage = {'input_tokens': 10, 'output_tokens': 10, 'total_tokens': 20}
+        return httpx.Response(200, request=request, json={
+            'model': kwargs['json']['model'], 'status': 'completed', 'usage': usage,
+            'output': [{'content': [{'type': 'output_text', 'text': json.dumps(data)}]}]})
+
+
+def test_oversized_follow_up_evidence_says_the_first_call_was_sent(admin, monkeypatch):
+    """#1007 review: the target controls the follow-up reply size, so the 64 KB refusal
+    can fire after the first paid call. It must not claim that nothing was sent."""
+    configure()
+    add('host-follow', SMALL)
+    big = {'identity_verified': True, 'sha256': 'b' * 64, 'package': 'p' * (ai.INVESTIGATION_BYTES + 1000)}
+    monkeypatch.setattr(worker.ssh, 'call', lambda host, request, **kwargs: big)
+    provider = FollowUpProvider()
+    monkeypatch.setattr(ai.transport, 'post', provider)
+    worker.investigate_one()
+    assert provider.calls == 1
+    (state, reason, next_at), analysis = retry('subject-host-follow')
+    assert state == 'blocked' and next_at == 0
+    assert reason == ai_retry.FOLLOW_UP_EVIDENCE_SIZE_BLOCKED_REASON
+    assert 'nothing was sent' not in reason and 'first-stage request was sent' in reason
+    assert 'does not help' in reason and 'correct API configuration' not in reason
+    assert '64 KB' in analysis
