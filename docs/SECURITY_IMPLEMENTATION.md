@@ -4269,6 +4269,46 @@ comparable.
 
 Remaining roadmap F work is tracked above.
 
+### Per-user shell startup files contract — worker checkpoint #1057
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/shell_user_startup.py` is a pure, versioned contract for the catalog's
+`shell_user` mechanism. It takes one account's passwd shell, uid/gid (with
+optional supplementary groups) and supplied metadata for `~/.bash_profile`,
+`~/.bash_login`, `~/.profile`, `~/.bashrc` and `~/.bash_logout`. It says which
+file runs at login, in an interactive non-login shell, for a non-interactive
+`ssh host command` and at logout. It performs no I/O and never reads a file.
+
+- **Source.** The behavior was probed on Ubuntu 24.04 (bash 5.2.21, dash 0.5.12)
+  as root and as `nobody`, not recalled. Tests compare the contract with real
+  bash and dash as both accounts when they run as root on a Debian host.
+- **Login chain.** A login bash tries the three files in order. Only a missing
+  name or a dangling symlink falls through. An unreadable file or a directory
+  prints an error and stops the chain, so a locked `~/.bash_login` hides
+  `~/.profile`. Root reads a mode 0000 file. A FIFO blocks the login and is a
+  blocking `special_file` gap.
+- **`~/.bashrc`.** It runs in interactive non-login shells and, because Debian
+  builds bash with `SSH_SOURCE_BASHRC`, in every non-interactive `ssh host
+  command` (`SSH_CLIENT` set, `SHLVL` below 2). `~/.bash_logout` runs when a
+  login bash exits through `exit`/`logout` or end of input.
+- **Other shells.** `sh`/`dash` (and an empty shell field) read only
+  `~/.profile` at login and silently skip an unreadable or directory one.
+  `nologin` and `false` run nothing. Any other shell, and non-canonical shell
+  paths, are a blocking `shell_not_modelled` gap.
+- **Accounts.** One access(2) class applies: owner, group (primary or supplied
+  supplementary gid) or other. When readability depends on unsupplied groups,
+  the result is `unknown` with a blocking gap, and later chain files are
+  `unresolved`.
+- **Fail closed.** An unobserved account, family, home or dotfile; malformed or
+  unexpected input; an unreadable home; the RPM family (`not_modelled`); and an
+  unobserved symlink target are blocking (`complete: false`). No session is
+  then reported as running a file.
+
+Open: collection wiring, file contents (Debian's `~/.profile` sources
+`~/.bashrc` for bash), `/etc/bash.bashrc`, the RPM family, home-directory search
+permission, persistence, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
