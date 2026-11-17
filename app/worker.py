@@ -833,8 +833,12 @@ def _assess_active_behavior(s,row,cfg,secret):
             s.commit();return
     _explain_known_good_miss(missed,cfg['ai_model'],policy_hashes)
     inputs=[]
-    def assess(evidence):
-        prepared=ai.investigation_input(evidence)
+    def assess(evidence,follow_up=False):
+        try:prepared=ai.investigation_input(evidence)
+        except ai.AIError as error:
+            # The first-stage call already went out, so say so (#1007 review).
+            if follow_up and error.cause==ai.EVIDENCE_SIZE:error.cause=ai.FOLLOW_UP_EVIDENCE_SIZE
+            raise
         inputs.append({'evidence':prepared,'policy':policy})
         return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
     result=assess(row.evidence)
@@ -868,7 +872,7 @@ def _assess_active_behavior(s,row,cfg,secret):
                     saved.evidence=updated
                 row.evidence=copy.deepcopy(saved.evidence)
             else:row.evidence=updated;s.commit()
-        result=assess(row.evidence)
+        result=assess(row.evidence,follow_up=True)
     with ai_runs.measure('result_persistence'):
         def save(write,saved):
             saved.verdict=result['risk'];saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
