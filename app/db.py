@@ -115,8 +115,9 @@ def config(s):
     item = s.get(Setting, 'config')
     values=item.value if item else {}
     result={**DEFAULTS,**values}
-    # Existing installations retain their separate rolling-hour limits until
-    # an administrator reviews and explicitly saves the shared migration.
+    # Existing installations that never chose a mode read as legacy. Startup
+    # moves them once to the non-expanding shared rate (ai_control_migration,
+    # #1039); an explicitly saved 'legacy' is kept.
     if item and 'ai_control_mode' not in values:
         result['ai_control_mode']='legacy'
         result['ai_rate_per_hour']=min(result['ai_hourly_limit'],result['ai_update_hourly_limit'])

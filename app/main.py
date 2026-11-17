@@ -36,6 +36,8 @@ async def lifespan(app):
     route_roles.inventory(app,ROLE_DEPENDENCIES)  # fail closed if any route declares no role
     with runtime_guard():
         init()
+        from .ai_control_migration import migrate_implicit_legacy
+        migrate_implicit_legacy()  # once, non-expanding, audited (#1039)
         from .worker_preflight import publish
         publish(APP_VERSION)
         with Session() as s:
