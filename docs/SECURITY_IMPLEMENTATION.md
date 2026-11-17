@@ -2478,6 +2478,44 @@ plus one bounded read for administrator source links. Lookup, publication,
 revocation, approval, budget, pause, role, response and schema are unchanged.
 Matched production acceptance remains open.
 
+### Cross-server exact hits and contextual misses — worker checkpoint #1035
+
+`tests/test_known_good_cross_server_acceptance.py` drives the real
+`worker.investigate_one()` path across several servers. Only the provider
+transport is a fixture.
+
+- **Exact hit:** server A's fresh low result publishes one active candidate. The
+  same artifact and behavior on server B, differing only in host, PID, start
+  ticks and ephemeral port, is reused with zero provider calls. B gets a
+  `known_good` assessment with a zero-call run and its own host observation.
+  Under a daily spend cap the hit adds no ledger reservation.
+- **Contextual misses:** each reaches the provider exactly once and publishes its
+  own distinct candidate, leaving A's entry untouched:
+  - the same path with a different SHA-256;
+  - the same hash with a different privileges manifest (account);
+  - the same hash with a different network-behavior manifest.
+- **No reuse:** a medium or unknown result publishes nothing, so the next
+  server still calls the provider. A revoked candidate is not reused and is
+  not reactivated.
+- **Concurrent first encounters:** two servers in flight at the provider at the
+  same time make one call each and publish one deduplicated candidate with
+  both observations. A third server then hits that candidate with zero calls.
+- **Mutation evidence:** each of these makes the named tests fail:
+  - ignoring the artifact and behavior components in the fingerprint (the 3
+    miss cases fail);
+  - adding observation fields to the fingerprint (4 hit tests fail);
+  - ignoring the active flag (the revocation test fails);
+  - a lookup that always misses (3 tests fail);
+  - never publishing (8 tests fail).
+- **Unchanged:** this adds tests only. Lookup, publication, revocation,
+  approval, admission, budget, pause, roles and response authorization are
+  unchanged. MySQL coverage comes from the native `mysql` CI shards, which run
+  the full suite.
+- **Remaining for requirement B:** script, interpreter, configuration and
+  provenance changes are covered at the fingerprint level in
+  `tests/test_known_good.py`, not through this worker path. Production hit
+  rates are not measured.
+
 ### Retry blocked process investigations — worker checkpoint #934
 
 Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
@@ -2742,6 +2780,32 @@ retry) and blocked (the #815 predicate).
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
+### Non-triage billable paths under one daily cap — worker checkpoint #1023
+
+`tests/test_ai_daily_cap_billable_paths.py` drives four non-triage paths through
+their real code into a `daily_cap` window with no safe room left: update scoring
+(`update_scores.run_one`), an AI security-plan job (`worker.execute`), release
+configuration review (`releases.ai_review`) and the administrator connection
+test (`POST /api/settings/ai-test`). Only the provider transport is a fixture,
+and the clock is pinned inside the bundled price catalog's validity.
+
+- In every path, nothing reaches the transport and no ledger row is written.
+- Scoring is deferred to the exact window reset, with a deferred run and zero
+  calls. It is not retried inside the spent window, and it completes after the
+  reset with one settled ledger row in the new window.
+- The security-plan job stays queued until the reset (`_ai_deferred`) rather
+  than failing, and then completes.
+- Release review raises a controlled wait whose eligibility is the reset.
+- The connection test is refused with the daily-cap reason.
+- With room for one scoring call, scoring sends it, and a security plan then
+  waits for the reset. The ledger holds only the one call that was sent.
+
+Three mutations are each caught: removing the cap check in `ai_budget.reserve`,
+dropping `policy_wait` from scoring deferral, and dropping plan deferral in the
+worker. This is acceptance coverage only, with no runtime change. CI runs it on
+SQLite and the MySQL shards. Startup plans share the same worker deferral branch
+as security plans, so they are covered through that branch, not separately.
+
 ### Unpriced saved model under a daily cap — worker checkpoint #735
 
 In `daily_cap` and `rate_and_daily` modes, capped admission must quote every
@@ -2801,6 +2865,78 @@ Mutations to stop stripping `process_identity`, stop truncating connections, or
 ignore the scoring opt-in are each caught. MySQL-native runs, contention/fairness
 and measured performance remain open milestone-4 items.
 
+### Known-good Re-triage under the shared AI controls — worker checkpoint #1029
+
+`tests/test_known_good_retriage_controls.py` covers roadmap B's requirement that an
+explicit administrator Re-triage "bypasses lookup but respects pause, data-sharing
+and shared budgets". It drives the real `worker.investigate_one()` path with an
+active exact-match candidate from one server and a pending `Refresh` on another.
+Only the provider transport is a fixture.
+
+- **Pause, global disable and an exhausted daily cap** (`daily_cap` and
+  `rate_and_daily`) each hold the Re-triage back. Nothing is sent or reserved, and
+  the worker does not fall back to the cached verdict. The `Refresh` request, the
+  `pending` verdict and the active candidate are all kept. After resume, enable or a
+  raised cap, exactly one reserved and settled provider call consumes the request.
+- **Data sharing:** the Re-triage sends byte-for-byte the input an ordinary
+  investigation of the same evidence sends: `store: false`, with no
+  `process_identity`, no known-good observation, and no host address or key. Its
+  reservation is quoted from that same request.
+- **Contrast:** without a Re-triage, the same subject reuses the candidate with zero
+  provider calls, zero ledger rows and a completed zero-call run.
+
+Each of these mutations is caught: ignoring the Re-triage bypass, dropping the
+paused-host claim filter, or dropping the claim-time budget gates.
+**Found:** with the cap exhausted, a free exact hit also waits for the reset, because
+the budget gates run before the lookup. This is filed as P3 #1030, to follow #1002.
+MySQL-native runs happen in CI. Role isolation, revocation and pruning are covered
+elsewhere (#1027). Roadmap B acceptance remains open.
+### Triage claim contention and fairness under a daily cap — worker checkpoint #1012
+
+`tests/test_ai_claims_cap_contention_acceptance.py` covers the milestone 4 items
+"multi-thread/multi-process claims, supported multi-worker admission,
+contention/fairness" for triage under a daily cap. Each test runs real
+`worker.investigate_one()` claims against a cap with room for exactly K calls.
+The provider is a disposable fixture.
+
+- **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
+  each for a different subject. The suite checks:
+  - Exactly K ledger rows are written, and counted spend stays within the cap.
+  - No claim is left behind, and no subject is admitted twice.
+  - Every other subject was refused before a run started, or is deferred to the
+    window reset with no retry attempt used. None is blocked.
+  - A second round in the same window sends nothing more.
+- **Preflight bypassed:** the same holds when the claim-time budget preflight
+  admits everything. All ten workers claim work, and the authoritative
+  reservation alone holds the cap.
+- **`rate_and_daily`:** checked with room for one call, because the rate gate
+  also spaces admissions.
+- **Processes:** four fresh OS processes with two threads each share one cap.
+  They keep the same guarantees.
+- **Fairness:** one server holds the oldest and largest backlog, and the cap has
+  room for one call per server. Every waiting server receives a call before the
+  busy server receives a second. This holds across serial scheduler cycles and in
+  a concurrent burst whose worker count does not exceed the servers with work.
+  The busy server's remaining work stays queued.
+- **Host election:** with host turns tied, a server already under another
+  worker's live lease yields the last affordable call to an idle server, even
+  when it holds the oldest work. A server whose only eligible work is already
+  claimed does not win the election and leave the remaining cap unused.
+- **Mutations:** the suite fails when any of the following is removed:
+  - the shared budget lock in `reserve()` (a test hook holds each reservation
+    open between its spend read and insert, so every threaded variant overspends
+    without the lock)
+  - the durable host turn
+  - live-occupancy ordering in host election
+  - the claimed-subject exclusion in host election
+  - the "a policy wait does not consume an attempt" rule
+- **Limitation:** with more concurrent workers than servers that have work, a
+  busy server's second claim can reserve before another server's first. Spend
+  order then follows the race, and the waiting server is served in the next
+  window.
+
+No runtime behaviour changes. The rest of milestone 4 remains open.
+
 ### Finite implementation and acceptance milestones
 
 Initial triage preflight reuses the global settings and encrypted key already
@@ -2839,6 +2975,110 @@ and pause waits keep their existing reasons. Deferral state, attempt refund and 
 eligibility are unchanged. `tests/test_ai_retry_deferral_reason.py`: the two cap
 cases (`daily_cap`, `rate_and_daily`) fail on main `c86141a` and pass after; the three
 other-wait cases pass on both.
+
+### Rate throttle paces smoothly and defers without a charged attempt — worker checkpoint #1021
+
+`tests/test_ai_rate_throttle_acceptance.py` covers the milestone-4 checks for the
+**Rate throttle** mode. The tests drive the real worker path
+(`worker.investigate_one`: claim, admission, provider, acceptance), the
+administrator start-gates status route and the connection-test route in both
+`rate` and `rate_and_daily` modes. Only the provider transport, SSH and the wall
+clock are fixtures.
+
+- At 6 starts/hour, three eligible servers get one start per 600-second interval,
+  spread across servers. Repeated worker passes inside the interval send nothing.
+- Subjects waiting at the claim stay `pending`. They create no failed or deferred
+  run, no retry attempt and no spend reservation.
+- `GET /api/settings/ai-control-status` reports the `rate_throttle` blocker,
+  `can_start_now: false` and the exact next start. Both clear at refill.
+- After five idle hours, exactly one start is admitted. Idle time does not build
+  up a burst of saved-up hourly allowance.
+- Sometimes another billable caller takes the slot between the claim's read-only
+  gate and this subject's provider admission. The subject is then deferred
+  durably: the retry row is `deferred` with 0 attempts and `next_at` at the rate
+  slot, and the run is reclassified `deferred`. Nothing is sent. Under a daily cap
+  the pre-admission reservation is released, so no spend is counted. The subject
+  resumes after refill.
+- The administrator connection test and triage share one slot. Each waits for, or
+  is refused by, the other before transport.
+
+Mutation checks confirm these tests fail when idle time accumulates allowance, when
+a rate deferral is charged as a retry attempt, or when an unsent reservation is
+not released. This slice is tests and documentation only and adds no runtime
+change. The hosted MySQL shards run the same file. Measured before/after
+throughput and the full capability-equivalence record remain open milestone-4
+work.
+### Unthrottled mode keeps every non-pacing control — worker checkpoint #1018
+
+`tests/test_ai_unthrottled_acceptance.py` covers the milestone-4 check that
+Unthrottled removes only Mr Patchy's own pacing and spend cap. The tests drive the
+real claim → admission → provider → acceptance path and the real administrator
+pause route. Only the provider transport and SSH are fixtures.
+
+- With a stale one-per-hour rate, a one-cent cap and an unpriced model all saved,
+  three back-to-back starts are admitted. Nothing waits, no ledger row is written and
+  no pricing is needed. Controls on the same saved values show that `daily_cap`
+  refuses the unpriced model before sending and `rate` admits one start and then
+  waits. Switching back to Unthrottled releases the queued work.
+- The per-server investigation concurrency limit still applies. With limit 1, a
+  server with an in-flight call gets no second concurrent investigation, while
+  another server's work proceeds. With limit 2, the second one starts.
+- A provider 429 with `Retry-After` sets the shared provider floor. Fresh subjects
+  on other servers are not claimed, run or sent until it passes.
+- A paused server's subject is not claimed and opens no run. Global disable stops
+  every server. Re-enabling and resuming runs both with no pacing wait or reservation.
+
+Mutations that pace Unthrottled, or skip the concurrency limit, provider floor,
+pause or global disable at claim time when Unthrottled, are each caught. No runtime
+change was needed. Role/CSRF refusal of a switch to Unthrottled is covered by #1010,
+and bounded data sharing in Unthrottled mode by #1000. Worker-pool capacity
+limits across processes, MySQL-native runs and measured performance remain open
+milestone-4 items.
+### Benign, suspicious and unknown outcomes under a daily spend cap — milestone 4 checkpoint #1013
+
+`tests/test_ai_budget_verdict_outcome_acceptance.py` drives the real
+`worker.investigate_one` path in `daily_cap` mode, with fixtures only for the
+provider transport and SSH. For each verdict (`low`, `medium`, `high`, `unknown`)
+there is one provider call, one stored verdict and assessment, and one settled
+ledger row counted against the cap. The subject stays unapproved, and no job,
+incident or response plan is created. `medium` and `high` raise an advisory
+notification that says it authorizes no response; `low` and `unknown` raise none.
+Only a low-risk result passes the known-good `result_not_safe` gate. With a
+complete known-good context, a low verdict under the cap publishes an active fleet
+candidate from its one charged call, and an identical subject on a second server
+reuses it with no provider call, no new ledger charge and no approval. A completed
+verdict is not re-sent or re-billed on later passes. When the model requests checks
+for a verified subject, SSH evidence is collected once and the second call carries
+it; both calls are charged to the same run. A subject with an unverified identity
+or a missing checksum never triggers an SSH request, and the second call says so.
+An out-of-schema risk or an unsupported requested check is rejected with no
+verdict, assessment or notification, and the sent call still counts against the
+cap. Mutations caught: skipping the identity check, treating `unknown` as
+significant, accepting any risk, accepting any requested check, letting any risk
+pass the known-good gate, approving a subject on verdict save, skipping the
+follow-up call, making `known_good.publish` a no-op and disabling the cache lookup. This is SQLite test coverage only, with no runtime change.
+MySQL-native runs and the before/after performance record remain open milestone 4
+work.
+### Role and CSRF boundaries under a daily spend cap — milestone 4 checkpoint #1010
+
+`tests/test_ai_budget_role_csrf_acceptance.py` covers the role/CSRF part of
+milestone 4 for the shared spend controls. The requests have valid bodies that
+would expand spend or start billable work if accepted: switching to unthrottled,
+raising the daily cap, previewing an expansion, saving a key, a connection test,
+single and bulk re-triage, and clearing provider backoff. They are refused for
+operator and viewer sessions, and for administrator sessions with a missing, empty
+or wrong `X-CSRF-Token`. Each refusal leaves the stored controls, the key, audit
+action rows, the spend ledger, AI runs, queued re-triage and provider transmissions
+unchanged. Operators and viewers also cannot read spend history (JSON and CSV), AI
+control status or settings. When an administrator is demoted while signed in, the
+old session is revoked (401) before any change; signing in again gives an operator
+session, which is still refused. A positive control shows the same requests from an
+authorized administrator get past authentication and are answered on their merits.
+Mutations caught: removing the CSRF comparison, lowering the AI settings save to
+operator, lowering the connection test to viewer, and ignoring session generation.
+This is test coverage only, with no runtime change. Representative
+benign/suspicious/unknown outcomes and the before/after performance record remain
+open milestone 4 work.
 
 ### Retained spend history CSV download — worker checkpoint #874
 
