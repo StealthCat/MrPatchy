@@ -4674,6 +4674,64 @@ collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
 `entries_parsed` wiring, persistence, UI, provenance and AI classification. No
 schema, API, auth or response-authorization change.
 
+### ifupdown interface hook contract — worker checkpoint #1052
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/ifupdown_hooks.py` is a pure, versioned contract for what classic ifupdown
+runs as root when interfaces go up or down. It takes captured text of
+`/etc/network/interfaces` and its includes, the directory listings that
+`source` globs and `source-directory` need, and entry metadata for
+`/etc/network/if-{pre-up,up,down,post-down}.d`. It performs no I/O and never
+reads a hook script's contents.
+
+- **Source.** The rules come from the ifupdown 0.8.35 (`config.c`,
+  `execute.c`, `main.c`) and debianutils 5.24 (`run-parts.c`) sources
+  downloaded from archive.ubuntu.com, not from recollection.
+- **Parsing.** Comments, `\` continuations (continued lines are appended
+  verbatim, even when they start with `#`), 79-byte word truncation,
+  `post-up`→`up` and `pre-down`→`down` aliases, and per-line hooks follow
+  `get_line`/`read_interfaces_defn`. `auto`, `allow-*`, `no-auto-down` and
+  `no-scripts` with arguments, `rename`, `source` and `source-dir*` end the
+  current stanza. A parse error rejects the whole configuration in the
+  top-level file (`config_state: rejected`, nothing runs). In an include it
+  keeps the definitions read so far, and the parent continues.
+- **Includes.** `source` patterns resolve against the including file's
+  directory. Last-component globs expand in byte order and skip dotfiles.
+  `source-directory` reads only `[A-Za-z0-9_-]+` names. A path already parsed
+  is skipped, missing results are skipped, and `wordexp` bad characters read
+  nothing. Shell expansion, quoting, several words and wildcards in directory
+  components are blocking gaps, as is nesting deeper than 32 files.
+- **Stanzas.** The Linux family/method tables are fixed. `inherits` copies the
+  first earlier match's options and hooks, then the stanza's own lines follow.
+  `lo` is always first in the `auto` class, as ifupdown adds it before
+  reading any file (unless `ifup --no-loopback`), so hooks on an explicit `lo`
+  stanza run at boot without an `auto lo` line. An implicit `lo inet loopback`
+  stanza is added only when no stanza uses `loopback`. Each stanza reports its hooks with file/line provenance, the
+  `-` ignore-status prefix, the `IF_*` variable names it exports, literal
+  activation classes and `no-scripts`/`no-auto-down` pattern matches.
+  `no-scripts` suppresses only the run-parts directories, not the hooks.
+  `mapping` `script` commands are listed separately.
+- **Order.** ifup runs `pre-up` hooks, `if-pre-up.d`, the method, `up` hooks
+  and then `if-up.d`. ifdown runs `if-down.d`, `down` hooks, the method,
+  `if-post-down.d` and then `post-down` hooks.
+- **run-parts.** `/bin/run-parts --exit-on-error` without `--lsbsysinit`
+  considers `^[a-zA-Z0-9_-]+$` names in byte order, because ifupdown never
+  calls `setlocale`. It follows symlinks and runs regular files with an execute
+  bit on a mount without `noexec`. A live test compares the name rule and the
+  order with the system `run-parts --list` when it runs as root.
+- **Fail closed.** An unobserved family, package installation, file, directory
+  or symlink target, an unreadable or truncated input, a malformed entry and
+  over-limit input are blocking gaps, and `complete` is false. An unobserved
+  `noexec` flag is a non-blocking gap, and the script is reported as running
+  so that nothing that may run is hidden. `origin` is always `not_assessed`,
+  and no result is a safety verdict.
+
+**Not covered:** a differential run against the ifup binary (running a
+downloaded binary was not permitted in the authoring session), agent collection
+of this metadata, ifupdown2/ifupdown-ng/netplan, catalog `entries_parsed`
+wiring, persistence, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
+
 
 ### Individual queued at jobs — worker checkpoint #831
 
