@@ -2936,6 +2936,23 @@ The provider is a disposable fixture.
   window.
 
 No runtime behaviour changes. The rest of milestone 4 remains open.
+### Concurrent cap admissions racing settings saves — worker checkpoint #990
+
+`tests/test_ai_budget_settings_race_acceptance.py` covers the milestone 4 item
+"simultaneous budget admissions and settings changes". Eight threads keep
+reserving shared daily-cap spend while an administrator saves AI settings through
+`PUT /api/settings/ai` (with the expansion confirmation). The tests record, in lock
+order, the settings snapshot and counted spend that each reservation read inside
+the shared budget lock. Every reservation saw exactly the spend admitted before it,
+and every admission fitted the cap in its own snapshot. Every reservation that started
+after the save returned used the saved settings. The scenarios cover four changes.
+Lowering the cap never overspends. Raising it admits exactly up to the new cap.
+Switching to `rate` or `unthrottled` stops new ledger rows; when the cap is re-enabled,
+the earlier rows are still counted. A timezone change never re-grants the open window.
+A separate test shows that no settings save rewrites, releases or deletes ledger rows.
+Mutations that remove the shared lock from `reserve()` or reuse a stale settings
+snapshot fail the suite. The suite runs on SQLite locally and on MySQL in the hosted
+shards. No runtime behaviour changes, and the rest of milestone 4 remains open.
 
 ### Finite implementation and acceptance milestones
 
