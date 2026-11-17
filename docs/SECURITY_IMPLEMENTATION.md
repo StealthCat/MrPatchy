@@ -4224,6 +4224,55 @@ collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
 schema, API, auth or response-authorization change.
 
 
+### Debian Xsession session-part contract — worker checkpoint #1054
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/xsession.py` is a pure, versioned contract for the X session part of the
+catalog's `login_hooks` mechanism. It takes supplied file metadata and option
+text, performs no I/O and never reads or sources a session part.
+
+- **Source.** The rules follow `/etc/X11/Xsession` and its `x11-common_*` parts
+  from x11-common `1:7.7+23ubuntu3`, and debianutils `run-parts` 5.17. The
+  run-parts rules were checked against the real binary.
+- **Session parts.** `run-parts --list /etc/X11/Xsession.d` lists names matching
+  `^[A-Za-z0-9_-]+$` in byte order, because run-parts never calls `setlocale`.
+  Symlinks are followed, and only regular files are listed. Directories,
+  devices (including a `/dev/null` link) and dangling links are skipped. No
+  executable bit is needed, because every listed part is sourced into each
+  user's X session as that user. Each sourced part is reported with its order
+  and SHA-256. Observations, never verdicts, flag a part that is not world-readable
+  (the session aborts for other accounts), not root-owned, group/other-writable
+  or a modified reference part.
+- **Options.** `has_option` reads `Xsession.options` followed by
+  `Xsession.options.d` files from `run-parts --list --regex '\.conf$'`,
+  concatenated with no separator. The last line starting `(no-)?<option>` at a
+  GNU grep word boundary decides. A non-ASCII character after the name is
+  locale-dependent and undetermined. Text with a backslash, which the shell
+  `echo` would interpret, also makes the options undetermined.
+- **User hooks.** `~/.xsessionrc` is reported as sourced, and `~/.xsession` /
+  `~/.Xsession` as run for the default session (when the display manager passes
+  no session program) with `allow-user-xsession`, only when the wrapper and the
+  `20`, `40` and `50` `x11-common` parts are present and byte-identical to the
+  reference. A missing reference part is `not_by_reference`, because other
+  parts are listed but not interpreted. A modified or unhashed part is
+  `undetermined`. A missing `/etc/X11/Xsession.d` aborts the session.
+- **Fail closed.** Each of the following is a blocking gap that marks the result
+  incomplete:
+  - an unobserved or unreadable directory;
+  - an unobserved options file, or option text that is missing, unreadable by
+    other accounts, binary, escaped or over-limit;
+  - an unobserved or non-reference `/etc/X11/Xsession` hash;
+  - malformed or missing metadata, duplicate paths, or over-limit input.
+
+  Every result names what it cannot observe: which display manager uses the
+  wrapper and which session it passes, other part contents, home directories,
+  directory permissions, and Wayland sessions. `origin` is always
+  `not_assessed`.
+
+**Not covered:** other x11-common or debianutils versions, agent collection of
+this metadata, catalog `entries_parsed` wiring, persistence, UI, provenance and
+AI classification. No schema, API, auth or response-authorization change.
+
 ### Individual queued at jobs — worker checkpoint #831
 
 The Debian-family `at` spool, `/var/spool/cron/atjobs`, is already inside the built-in
