@@ -3238,6 +3238,15 @@ Milestone 4 acceptance for **unknown pricing/usage**.
   them, and quoting an unpriceable request at zero fails 12.
 - **Unchanged:** no runtime change; no defect was found. Other milestone 4 items
   and measured throughput remain open.
+### Daily cap reset across DST days and midnight — worker checkpoint #984
+
+Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one UTC day and one timezone change. `tests/test_ai_budget_reset_acceptance.py` adds acceptance evidence only; no runtime behavior changes.
+
+- **Window arithmetic:** around every clock change from 2026-01 to 2027-06 in zones with ordinary DST, a 30-minute step, a 45-minute offset and changes at local midnight, plus fixed-offset controls. Each window contains its instant, consecutive windows share one boundary, and the retained history recovers the start from the stored reset.
+- **Short and long days:** on 23-hour, 23.5-hour, 24.5-hour and 25-hour budget days, an exhausted cap refuses the call through the real reservation path with a deferral that ends exactly at the reset. The same call is admitted at the reset instant into the next local day. Refused attempts leave no ledger row.
+- **Call in flight at the reset:** a call reserved before the reset and unanswered after it keeps its ledger row but uses none of the new window's headroom. A late receipt settles it under the window that admitted it, and the retained spend history lists it there.
+- **tz database revisions:** the zones that change at local midnight revise their rules often. Those cases locate their days from the installed tz database and skip when it has none; the long-standing zones must always produce both.
+- **Remaining in milestone 4:** multi-process and multi-worker admission races at the reset, failover, lease loss and drain, settings changes during admission, and before/after production performance.
 
 ### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
 
@@ -4674,6 +4683,166 @@ collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
 `entries_parsed` wiring, persistence, UI, provenance and AI classification. No
 schema, API, auth or response-authorization change.
 
+### ifupdown interface hook contract — worker checkpoint #1052
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/ifupdown_hooks.py` is a pure, versioned contract for what classic ifupdown
+runs as root when interfaces go up or down. It takes captured text of
+`/etc/network/interfaces` and its includes, the directory listings that
+`source` globs and `source-directory` need, and entry metadata for
+`/etc/network/if-{pre-up,up,down,post-down}.d`. It performs no I/O and never
+reads a hook script's contents.
+
+- **Source.** The rules come from the ifupdown 0.8.35 (`config.c`,
+  `execute.c`, `main.c`) and debianutils 5.24 (`run-parts.c`) sources
+  downloaded from archive.ubuntu.com, not from recollection.
+- **Parsing.** Comments, `\` continuations (continued lines are appended
+  verbatim, even when they start with `#`), 79-byte word truncation,
+  `post-up`→`up` and `pre-down`→`down` aliases, and per-line hooks follow
+  `get_line`/`read_interfaces_defn`. `auto`, `allow-*`, `no-auto-down` and
+  `no-scripts` with arguments, `rename`, `source` and `source-dir*` end the
+  current stanza. A parse error rejects the whole configuration in the
+  top-level file (`config_state: rejected`, nothing runs). In an include it
+  keeps the definitions read so far, and the parent continues.
+- **Includes.** `source` patterns resolve against the including file's
+  directory. Last-component globs expand in byte order and skip dotfiles.
+  `source-directory` reads only `[A-Za-z0-9_-]+` names. A path already parsed
+  is skipped, missing results are skipped, and `wordexp` bad characters read
+  nothing. Shell expansion, quoting, several words and wildcards in directory
+  components are blocking gaps, as is nesting deeper than 32 files.
+- **Stanzas.** The Linux family/method tables are fixed. `inherits` copies the
+  first earlier match's options and hooks, then the stanza's own lines follow.
+  `lo` is always first in the `auto` class, as ifupdown adds it before
+  reading any file (unless `ifup --no-loopback`), so hooks on an explicit `lo`
+  stanza run at boot without an `auto lo` line. An implicit `lo inet loopback`
+  stanza is added only when no stanza uses `loopback`. Each stanza reports its hooks with file/line provenance, the
+  `-` ignore-status prefix, the `IF_*` variable names it exports, literal
+  activation classes and `no-scripts`/`no-auto-down` pattern matches.
+  `no-scripts` suppresses only the run-parts directories, not the hooks.
+  `mapping` `script` commands are listed separately.
+- **Order.** ifup runs `pre-up` hooks, `if-pre-up.d`, the method, `up` hooks
+  and then `if-up.d`. ifdown runs `if-down.d`, `down` hooks, the method,
+  `if-post-down.d` and then `post-down` hooks.
+- **run-parts.** `/bin/run-parts --exit-on-error` without `--lsbsysinit`
+  considers `^[a-zA-Z0-9_-]+$` names in byte order, because ifupdown never
+  calls `setlocale`. It follows symlinks and runs regular files with an execute
+  bit on a mount without `noexec`. A live test compares the name rule and the
+  order with the system `run-parts --list` when it runs as root.
+- **Fail closed.** An unobserved family, package installation, file, directory
+  or symlink target, an unreadable or truncated input, a malformed entry and
+  over-limit input are blocking gaps, and `complete` is false. An unobserved
+  `noexec` flag is a non-blocking gap, and the script is reported as running
+  so that nothing that may run is hidden. `origin` is always `not_assessed`,
+  and no result is a safety verdict.
+
+**Not covered:** a differential run against the ifup binary (running a
+downloaded binary was not permitted in the authoring session), agent collection
+of this metadata, ifupdown2/ifupdown-ng/netplan, catalog `entries_parsed`
+wiring, persistence, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
+### update-motd.d login script contract — worker checkpoint #1047
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/update_motd.py` is a pure, versioned contract for the `/etc/update-motd.d`
+part of the catalog's `login_hooks` mechanism. It takes supplied directory-entry
+metadata and `pam_motd` session lines, performs no I/O and never reads a
+script's contents.
+
+- **Source.** The rules were checked against Ubuntu 24.04 binaries, not
+  recalled. In libpam-modules 1.5.3, `pam_motd.so` runs `/usr/bin/env -i
+  PATH=… run-parts --lsbsysinit /etc/update-motd.d` into `/run/motd.dynamic`
+  unless the line has `noupdate`; the directory is fixed. debianutils 5.17
+  provides `run-parts`. Upstream Linux-PAM `pam_motd` (RPM families) runs no
+  scripts, so that family is `not_applicable`; any other or unobserved family
+  is a blocking gap.
+- **Name rule.** `--lsbsysinit` considers a name matching
+  `^_?([a-z0-9_.]+-)+[a-z0-9]+$` or `^[a-z0-9][a-z0-9_-]*$`, unless it matches
+  `^[a-z0-9-].*\.dpkg-(old|dist|new|tmp)$`. Upper case, `.sh` suffixes and
+  `README` are not run, but `50-x.ucf-dist`, `50-x.dpkg-bak` and the hidden
+  `.x.dpkg-old` are. The tests pin this rule and the order against `run-parts
+  --list` output for a seeded corpus, and a live test compares names, file
+  types and order with the real binary when it is available as root.
+- **File checks.** Symlinks are followed. A regular file runs as root when it
+  has any execute bit and is not on a `noexec` mount. Directories and
+  non-executable files are skipped. A failed `stat` (a dangling link) and any
+  other type are skipped with the error run-parts reports; later scripts still
+  run. An unobserved mount flag is a non-blocking gap, and the script is
+  reported as running so that nothing that may run is hidden.
+- **Order.** `env -i` clears the locale, so scripts run in byte order.
+- **Activation.** Each `pam_motd` line, with the caller-resolved `reached`
+  value, is listed per service. The state is `active` when a reached line
+  updates, `possible` when one only might be reached (with a gap), and
+  `inactive` when every line has `noupdate` or is not reached. Missing or
+  malformed PAM input is `unknown`, never `active`.
+- **Fail closed.** An unobserved, unreadable or truncated directory, malformed
+  or duplicate entries, missing metadata, an unobserved symlink target and
+  over-limit input are blocking gaps, and `complete` is false. Outside a
+  `listed` directory no script is reported as running. `origin` is always
+  `not_assessed` and no result is a safety verdict.
+
+**Not covered:** agent collection, PAM stack resolution (the PAM service-stack
+contract supplies `reached`), whether sshd uses PAM, AppArmor/SELinux, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
+
+### logrotate scripts and command directives — worker checkpoint #980
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/logrotate_hooks.py` is a pure contract over captured observations of
+`/etc/logrotate.conf` and the files and directories it includes. logrotate
+normally runs as root from a daily timer or cron job, so its scripts are
+scheduled root commands that the catalog previously listed as metadata only.
+
+- **Scripts.** `prerotate`, `postrotate`, `firstaction`, `lastaction` and
+  `preremove` blocks are returned with their text, the log patterns of their
+  section, the effective `sharedscripts` state, file and line. A script outside
+  a section is listed with scope `global`, because logrotate uses it as the
+  default of later sections.
+- **Directives.** `compresscmd`, `uncompresscmd`, `su` and `shred` are returned
+  with global or section scope.
+- **Effective files.** `include` of a file or directory is followed. Directory
+  entries are read in byte order, hidden names included. Names matching
+  logrotate 3.21.0's built-in taboo list, empty files, non-regular entries and
+  dangling links are reported as ignored with a reason. A hidden name is never
+  taboo: logrotate's match does not let `*` cover a leading period, so
+  `.cache~` and `.x.bak` are read. One `=` may separate a directive from its
+  value, so `include=/path` is followed. One `=` directly after a flag is
+  skipped, so `compress=include /path` is followed too. Whole `#` lines
+  between log patterns and the opening brace are comments, as in logrotate.
+- **Fail closed.** The result is `undetermined` on an unknown directive, a
+  script outside a section (still listed) or without `endscript`, an
+  unterminated section or
+  quote, a script body with a line that starts with a script keyword, a changed taboo list, an `include` inside a section, an include that
+  was not collected, is relative, loops or nests too deeply, an unreadable or
+  oversized file, and over-cap input. Input that logrotate rejects is
+  undetermined as well: a keyword not followed by a blank or `=`, an
+  `endscript` followed by anything but a blank or line end (logrotate still
+  ends the script there and skips that one character, and so does the
+  contract), an `su` value logrotate rejects (`su=root root`, `su = root
+  root` or more than a user and a group), an `endscript` on the
+  script keyword's line (logrotate keeps the rest of the file as the script
+  text and still reads the following lines as directives; both are listed), a
+  closing brace in log patterns before an opening brace or log patterns with
+  no opening brace (the following lines are parsed, not taken as patterns), a top-level
+  line that starts with neither a keyword nor a file name, a brace inside a
+  directive value, and a carriage return, vertical tab or form feed. Such a
+  line is skipped, not read as a log section, so it cannot swallow a later
+  `include`. Later content is still parsed. After a
+  `tabooext` or `taboopat` directive no name is treated as taboo, and the
+  target of an `include` inside a section is parsed, because logrotate reads
+  it.
+- **Upper bound.** The listed scripts are everything the configuration can
+  run, not what a given run does. logrotate skips a section on a bad value or
+  a duplicate log file, stops reading a file on a bad top-level value, and
+  runs a script only when a matching log is rotated. This is always disclosed.
+
+Compared with compiled logrotate 3.21.0 (`logrotate -d -f`) on generated
+configuration trees; the counts are in the pull request for #980.
+
+**Not covered:** agent collection of these files, persistence, UI and AI
+classification; directive value validation; `tabooext`/`taboopat` evaluation;
+which logs exist; other logrotate versions. No schema, API or UI change.
 
 ### Individual queued at jobs — worker checkpoint #831
 
@@ -4705,7 +4874,127 @@ comparable.
 - Referenced scripts are not inspected.
 - No AI classification is made.
 
+Worker checkpoint #848 adds `app/run_parts.py`, a pure, I/O-free contract that
+says whether `run-parts` would execute a stored entry under `/etc/cron.hourly`,
+`/etc/cron.daily`, `/etc/cron.weekly` or `/etc/cron.monthly`. It uses only
+receipt metadata the agent already collects (path, kind, uid and mode) plus the
+host's package family, and returns `eligible`, `skipped` or `unknown` with stable
+reason codes.
+- **Debian family (`debianutils` run-parts, default namespace):** names outside
+  `[A-Za-z0-9_-]+` are skipped, so `backup.sh` or `job.dpkg-old` never runs.
+  The module's results match `run-parts --test` on Ubuntu 24.04 for the same
+  names and modes.
+- **RPM family (cronie run-parts script):** hidden names and names ending in
+  `~`, `,`, `.rpmsave`, `.rpmorig`, `.rpmnew`, `.swp`, `.cfsaved` or `,v` are
+  skipped. The script expands file names unquoted. A name containing a space is
+  word-split and never runs as itself, so it is `skipped` (`rpm_word_split`). A
+  name containing `*`, `?` or `[` is re-expanded, and whether it runs depends on
+  sibling names, so it is `unknown` (`rpm_glob_expansion`). Both cases were
+  reproduced with cronie's loop in bash.
+- **Both:** run-parts runs as root, so any execute bit makes a regular file
+  executable. Nested entries are skipped. Symlinks are `unknown`, because their
+  targets' kind and mode are not recorded. An unknown family, or a missing or
+  malformed kind, uid, mode or path, fails closed to `unknown` or no assessment,
+  and nothing is guessed.
+- **Unchanged:** the agent, receipt, schema, API, UI, baselines, incident
+  evidence and AI payloads. The module is not yet wired into Startup → Files;
+  that follows #772 to avoid overlapping `startup_inventory.page` edits.
+- **Limits:**
+  - These are distribution default rules only.
+  - Invocation options such as `--lsbsysinit` are not evaluated.
+  - cronie `jobs.allow` and `jobs.deny` are not evaluated.
+  - Whether `/etc/crontab`, `0hourly` or anacron actually invokes the directory
+    is not evaluated, including Debian's anacron hand-off.
+  - Script contents are not evaluated.
+
 Remaining roadmap F work is tracked above.
+
+### /etc/profile.d login-shell contract — worker checkpoint #1049
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/profile_d.py` is a pure, versioned contract for the `/etc/profile.d` part of
+the catalog's `shell_system` mechanism. It takes supplied `/etc/profile` text and
+directory-entry metadata, performs no I/O and never reads a sourced file.
+
+- **Source.** The behavior was probed on Ubuntu 24.04 with base-files
+  `/etc/profile`, dash 0.5.12 and bash 5.2, as root and as `nobody`, not recalled.
+  A test compares the contract with real dash as both accounts when it runs as
+  root. Login shells source each `/etc/profile.d/*.sh` that passes the unquoted
+  `[ -r $i ]` test. The glob never matches a leading dot.
+- **Accounts.** The logging-in account sources the files. Root reads any
+  existing file, even with mode 0000. Other accounts use one access(2) class:
+  owner, group or other. The result is `sourced`, `not_readable` or
+  `depends_on_account`. Symlinks are judged by their target, and a dangling
+  link is skipped. A directory named `*.sh` is a non-fatal error.
+- **Hazards.** A name with whitespace or glob characters is word-split or
+  re-globbed by `$i`. For example, `a -o b.sh` can source another path. bash
+  may run the loop with extglob enabled (Ubuntu's `bash_completion.sh` sets
+  it), so `@(…)`, `+(…)` and `!(…)` groups count as glob characters too. Such a
+  name is `unknown` with a blocking gap. The loop is matched on `\n` line
+  endings only, as the shell reads it. A FIFO, socket or device is also
+  blocking.
+- **Order.** Order is bytewise, as in dash and the C locale. When bash's locale
+  collation could reorder the names (punctuation, case, or one stem a prefix of
+  another), the result carries a non-blocking `order_locale_dependent` gap.
+- **Activation.** `active` requires the default base-files loop exactly once. A
+  missing `/etc/profile` is `inactive`. A modified loop, an unreadable or
+  oversized profile, the RPM family (`not_modelled`) and an unobserved family
+  are blocking gaps.
+- **Fail closed.** Unobserved, unreadable or truncated listings, malformed or
+  duplicate entries, missing mode/uid/gid, an unobserved symlink target and
+  over-cap input are blocking (`complete: false`). Outside a `listed`
+  directory, no file is reported as sourced.
+
+Open: collection wiring, the RPM loop and `sh.local`, `/etc/bash.bashrc`,
+per-user dotfiles, supplementary groups and the login locale, persistence, UI,
+provenance and AI classification. No schema, API, auth or response-authorization
+change.
+### SSH login rc-hook contract — worker checkpoint #1045
+
+Status: **pure contract slice; requirement F remains planned/incomplete.**
+`app/ssh_rc.py` resolves which of `~/.ssh/rc` and `/etc/ssh/sshrc` sshd runs for
+each observed account. It also gives the command used to run it. The rules follow
+OpenSSH `session.c` `do_rc_files()`. Nothing calls it yet.
+
+- **Exclusive branches.** The user rc runs only when all of these hold:
+  - the session is not a subsystem;
+  - there is no `ForceCommand`;
+  - the authentication's options permit user rc;
+  - `PermitUserRC` is yes;
+  - `stat()` on the file succeeds.
+
+  sshd runs it as `<login shell> -c '/bin/sh <home>/.ssh/rc'`. Otherwise sshd runs
+  `/bin/sh /etc/ssh/sshrc` if it exists, including for sftp and other subsystem
+  sessions. Otherwise no hook runs, and sshd handles xauth itself.
+- **No fallback.** Once the user rc branch is taken, the system rc is skipped
+  even if the user rc cannot run its script. That happens when it is a
+  directory, or when the login shell is `nologin` or `false`. The result says
+  so (`script_runs: false`, `system_rc_skipped: true`). File modes do not
+  matter, because both scripts run through `/bin/sh`.
+- **Per-key options.** Accounts report `key_user_rc` as `permitted`, `denied`,
+  `mixed` or `unknown`. `no-user-rc` and `restrict` deny it, and `user-rc`
+  re-permits it. Password and other methods keep the permitted default. A mixed
+  account yields `depends_on_key` with each alternative.
+- **Fail closed.** Unknown settings or files are enumerated. They yield a result
+  only when every possibility agrees. Otherwise the result is `uncertain`, with
+  the possible outcomes and an `input_unknown` gap. These are also gaps:
+  - `ChrootDirectory`, set or unknown;
+  - a home or login shell path containing any character outside
+    `[A-Za-z0-9_./+,:@%=-]`, because sshd's `popen()` and the login shell parse
+    them as shell code (`$`, `;`, globs, quotes, whitespace and the rest);
+  - a file of unknown kind;
+  - a malformed, duplicate or over-cap account;
+  - a malformed observation.
+
+  `complete` is true only when there are no gaps.
+- **Unchanged:** no I/O, agent collection, schema, API, UI, AI call or response
+  authorization. `Match` blocks are accepted as per-account effective settings,
+  not evaluated.
+
+Remaining: collect the two files and the effective sshd settings per account,
+derive `key_user_rc` from the `authorized_keys` contract and, for certificate
+logins, the certificate's `permit-user-rc` extension, then persistence, UI and
+AI classification.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -9230,6 +9519,21 @@ The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` a
 - **Remaining:**
   - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
   - `permitopen`/`permitlisten` syntax validation, which is a gap today;
+  - provenance, AI classification and UI.
+
+### authorized_keys permitopen/permitlisten validation — worker checkpoint #1041 (roadmap F)
+
+This closes the "`permitopen`/`permitlisten` syntax validation" item left by #895. `app/authorized_keys.py` now validates each value as OpenSSH `auth-options.c` `handle_permit()` does, using the same `hpdelim2()` and `a2port()` rules. The contract version moves to 2.
+
+- **Host:** a `permitlisten` value with no `:` gets an implicit `*:` listen host, so `permitlisten="8080"` is valid. The host ends at the first `:` or `/`, or just after the closing `]` when it starts with `[`. A missing `]`, text after `]`, or a host of 1025 (`NI_MAXHOST`) characters or more makes sshd refuse the line (`invalid_permission_host`).
+- **Port:** a missing or empty port, or port 0, makes sshd refuse the line (`invalid_permission_port`). Port `*` and decimal 1–65535 are valid, accepting `strtonum`'s leading whitespace and sign.
+- **Service-name ports:** any other port is resolved by `getservbyname(…, "tcp")` from the server's services database, which is not observed. Out-of-range numbers are included, because the lookup is tried for them too. These remain an explicit `forwarding_port_service_name` gap that lists the values, and never count as covered.
+- **Precedence:** a line with only valid values now shadows a later line for the same key. A refused line never shadows, so the later line is the `first` accepted one. Only a service-name gap keeps the later line `conditional` (`precedence_depends_on_forwarding_spec`).
+- **Compatibility:** the `forwarding_spec_unvalidated` gap kind is replaced by `forwarding_port_service_name`. Nothing consumes the contract yet, because it is not wired into collection.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. Nothing is executed or authorized.
+- **Validation:** `tests/test_authorized_keys.py` adds valid, refused and service-name cases. 33 cases fail on main `c86141a` and all 85 tests pass with the change.
+- **Remaining:**
+  - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
   - provenance, AI classification and UI.
 
 ## Ordered file assessment and visibility (#626)
