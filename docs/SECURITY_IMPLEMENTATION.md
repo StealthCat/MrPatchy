@@ -2839,6 +2839,33 @@ Mutations to stop stripping `process_identity`, stop truncating connections, or
 ignore the scoring opt-in are each caught. MySQL-native runs, contention/fairness
 and measured performance remain open milestone-4 items.
 
+### Known-good Re-triage under the shared AI controls — worker checkpoint #1029
+
+`tests/test_known_good_retriage_controls.py` covers roadmap B's requirement that an
+explicit administrator Re-triage "bypasses lookup but respects pause, data-sharing
+and shared budgets". It drives the real `worker.investigate_one()` path with an
+active exact-match candidate from one server and a pending `Refresh` on another.
+Only the provider transport is a fixture.
+
+- **Pause, global disable and an exhausted daily cap** (`daily_cap` and
+  `rate_and_daily`) each hold the Re-triage back. Nothing is sent or reserved, and
+  the worker does not fall back to the cached verdict. The `Refresh` request, the
+  `pending` verdict and the active candidate are all kept. After resume, enable or a
+  raised cap, exactly one reserved and settled provider call consumes the request.
+- **Data sharing:** the Re-triage sends byte-for-byte the input an ordinary
+  investigation of the same evidence sends: `store: false`, with no
+  `process_identity`, no known-good observation, and no host address or key. Its
+  reservation is quoted from that same request.
+- **Contrast:** without a Re-triage, the same subject reuses the candidate with zero
+  provider calls, zero ledger rows and a completed zero-call run.
+
+Each of these mutations is caught: ignoring the Re-triage bypass, dropping the
+paused-host claim filter, or dropping the claim-time budget gates.
+**Found:** with the cap exhausted, a free exact hit also waits for the reset, because
+the budget gates run before the lookup. This is filed as P3 #1030, to follow #1002.
+MySQL-native runs happen in CI. Role isolation, revocation and pruning are covered
+elsewhere (#1027). Roadmap B acceptance remains open.
+
 ### Finite implementation and acceptance milestones
 
 Initial triage preflight reuses the global settings and encrypted key already
