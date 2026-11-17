@@ -3297,6 +3297,25 @@ def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id)
         return auto_plan_status.status(s,host_id)
 
+@app.get('/api/hosts/{host_id}/security/auto-plan-failed')
+def security_auto_plan_failed(host_id:str,user=Depends(admin_user)):
+    """Count this server's incidents whose one automatic AI plan attempt failed (#1036). Read-only."""
+    from . import auto_plan_retry
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'failed':auto_plan_retry.failed_count(s,host_id)}
+
+@app.post('/api/hosts/{host_id}/security/auto-plan-failed/retry')
+def security_auto_plan_failed_retry(host_id:str,user=Depends(admin_user)):
+    """Release failed automatic plan attempts so the automatic tick retries them (#1036). Sends nothing now."""
+    from . import auto_plan_retry
+    with worker.Lock('security-plan-queue'):
+        with Session() as s:
+            host_or_404(s,host_id)
+            result=auto_plan_retry.release(s,host_id,user['username'])
+            s.commit()
+            return result
+
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False

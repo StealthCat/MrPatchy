@@ -2575,6 +2575,20 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
 - **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
 
+#### Retry failed automatic AI plans — worker checkpoint #1036
+
+Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
+
+- **Change:** `app/auto_plan_retry.py` counts a server's open, non-YARA, unplanned incidents whose only unreleased automatic attempts for their current scan are `failed`. Attempts the worker skipped because the evidence changed are not counted.
+  - Admin-only `GET /api/hosts/{id}/security/auto-plan-failed` returns `{failed}`. Unknown servers return 404.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and marks up to 200 incidents' failed `security-plan` jobs with `retry_released` (plus who and when). It returns `{released, remaining}` and writes one audit row when anything was released. A disabled or deleted server releases nothing.
+  - `incidents.awaiting_auto_plan` ignores released attempts, so the ordinary `auto_plan_tick` plans the incident again.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The tick still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. A new failure blocks the incident again until another release. The failed job's state and output are kept.
+- **UI:** the Security tab's scheduled-scanning card shows **Retry failed automatic plans** to administrators only, when the count is above 0. It says to fix the cause first, that no provider request is sent now, and that the gates still apply; it refreshes the status afterwards. Operators cannot open the Security tab, so they never request the count.
+- **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
+- **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
