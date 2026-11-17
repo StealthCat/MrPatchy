@@ -102,6 +102,24 @@ def failed(s,row,error,now):
     return retry
 
 
+def over_cap(s,row,signature,quote,cap):
+    """Block a subject whose conservative reservation alone exceeds the daily cap.
+
+    No attempt is counted because nothing was reserved or sent. The row keeps the
+    current model/key signature, so the existing blocked count, notification and
+    administrator retry apply, and a model or key change makes it eligible again.
+    """
+    retry=s.get(TriageRetry,row.id)
+    if not retry:
+        retry=TriageRetry(subject=row.id,configuration=signature,attempts=0);s.add(retry)
+    if retry.configuration!=signature:retry.attempts=0
+    retry.configuration=signature;retry.state='blocked';retry.next_at=0
+    retry.reason=(f'The daily spend cap (${cap:.4f}) is smaller than this investigation\'s conservative '
+        f'reservation (${quote:.4f}), so it can never be admitted. Nothing was reserved or sent. Raise the '
+        'cap or change the model, then explicitly retry. Other investigations continue.')
+    return retry
+
+
 def clear(s,row):
     retry=s.get(TriageRetry,row.id)
     if retry:s.delete(retry)
