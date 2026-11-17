@@ -10,6 +10,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
 
@@ -37,6 +38,24 @@ def fixed_quote(real):
 @pytest.fixture
 def priced(monkeypatch):
     monkeypatch.setattr(ai_pricing, 'reservation', fixed_quote(ai_pricing.reservation))
+
+
+@pytest.fixture
+def widened(monkeypatch):
+    """Hold each authoritative reservation open between its spend read and its insert.
+
+    Without this, the read-then-commit window inside ``ai_budget.reserve`` is too short for
+    threads to interleave, so removing the shared budget lock would go unnoticed. Only the
+    read made by ``reserve`` is delayed; preflight and status reads are unchanged.
+    """
+    real = ai_budget._state
+
+    def state(*args, **kwargs):
+        value = real(*args, **kwargs)
+        if sys._getframe(1).f_code is ai_budget.reserve.__code__:
+            time.sleep(0.05)
+        return value
+    monkeypatch.setattr(ai_budget, '_state', state)
 
 
 def evidence(name):
@@ -125,7 +144,7 @@ def subjects_for(run_ids):
         return [s.get(ai_runs.AIRun, run_id).subject for run_id in run_ids]
 
 
-@pytest.mark.usefixtures('priced')
+@pytest.mark.usefixtures('priced', 'widened')
 # In rate_and_daily the rate gate also spaces admissions, so only a cap with room for one
 # call isolates cap contention there; daily_cap alone exercises several concurrent calls.
 @pytest.mark.parametrize('mode,calls', [('daily_cap', 1), ('daily_cap', 3), ('rate_and_daily', 1)])
@@ -230,10 +249,11 @@ def test_busy_server_cannot_spend_the_cap_ahead_of_waiting_servers_across_cycles
     assert len(waiting) == 4
 
 
-@pytest.mark.usefixtures('priced')
+@pytest.mark.usefixtures('priced', 'widened')
 def test_busy_server_cannot_spend_the_cap_ahead_of_waiting_servers_in_a_burst(admin, monkeypatch):
-    # The worker count does not exceed the servers with eligible work, so live-occupancy
-    # balancing gives each concurrent claim a different server.
+    # The worker count does not exceed the servers with eligible work. Each claim records
+    # its server's turn under the admission lock before the next claim is elected, so the
+    # least-recent-turn order gives each concurrent claim a different server.
     seed({'host-busy': 5, 'host-a': 1, 'host-b': 1}, 3)
     sent, guard, overlap = [], threading.Lock(), threading.Event()
     monkeypatch.setattr(ai.transport, 'post', overlapping_post(sent, guard, overlap))
@@ -256,3 +276,49 @@ def test_busy_server_cannot_spend_the_cap_ahead_of_waiting_servers_in_a_burst(ad
     state = outcome()
     assert len(state['ledger']) == 3
     assert len([b for b in state['behaviors'].values() if b.host_id == 'host-busy' and b.verdict != 'low']) == 4
+
+
+def live_claim(host_id, subject):
+    """A different worker's unexpired lease, as if it were mid-investigation."""
+    now = time.time()
+    with Session() as s:
+        run = ai_runs.AIRun(id='run-' + subject, purpose='triage', model=MODEL, host_id=host_id, subject=subject)
+        s.add(run)
+        s.add(ai_claims.Claim(subject=subject, host_id=host_id, token='other-token', worker_id='process-other',
+                              boot_id='other-boot', run_id=run.id, revision='', configuration='', created=now,
+                              renewed=now, expires=now + ai_claims.LEASE_SECONDS))
+        s.commit()
+
+
+@pytest.mark.usefixtures('priced')
+def test_a_server_already_under_investigation_yields_the_cap_to_an_idle_server(admin, monkeypatch):
+    # No server has had a turn, so turns tie. host-busy holds the oldest work, so oldest-first
+    # alone would elect it again; only live-occupancy balancing gives the last call to host-idle.
+    seed({'host-busy': 3, 'host-idle': 1}, 1)
+    live_claim('host-busy', 'host-busy-0')
+    served = []
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: served.append(ai_runs.active.get()) or result())
+    worker.investigate_one()
+    with Session() as s:
+        assert [s.get(ai_runs.AIRun, run_id).host_id for run_id in served] == ['host-idle']
+        assert s.get(Behavior, 'host-idle-0').verdict == 'low'
+        assert [row.reservation_usd for row in s.scalars(select(ai_budget.BudgetEntry))] == [CALL]
+        # The other worker's live lease is untouched.
+        assert s.get(ai_claims.Claim, 'host-busy-0').token == 'other-token'
+
+
+@pytest.mark.usefixtures('priced')
+def test_a_server_whose_only_work_is_claimed_does_not_win_the_election(admin, monkeypatch):
+    # host-claimed holds the oldest work, but all of it is already under another worker's
+    # live lease. Its other turn-free eligible peer must be elected rather than a host whose
+    # election would find nothing to claim and leave the remaining cap unused.
+    seed({'host-claimed': 1, 'host-open': 1}, 1)
+    live_claim('host-claimed', 'host-claimed-0')
+    # Same occupancy for both servers: the open one also has a live lease on unrelated work.
+    live_claim('host-open', 'unrelated-subject')
+    served = []
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: served.append(ai_runs.active.get()) or result())
+    worker.investigate_one()
+    with Session() as s:
+        assert [s.get(ai_runs.AIRun, run_id).host_id for run_id in served] == ['host-open']
+        assert s.get(Behavior, 'host-open-0').verdict == 'low'
