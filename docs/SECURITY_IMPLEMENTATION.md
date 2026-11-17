@@ -2963,6 +2963,32 @@ not released. This slice is tests and documentation only and adds no runtime
 change. The hosted MySQL shards run the same file. Measured before/after
 throughput and the full capability-equivalence record remain open milestone-4
 work.
+### Unthrottled mode keeps every non-pacing control — worker checkpoint #1018
+
+`tests/test_ai_unthrottled_acceptance.py` covers the milestone-4 check that
+Unthrottled removes only Mr Patchy's own pacing and spend cap. The tests drive the
+real claim → admission → provider → acceptance path and the real administrator
+pause route. Only the provider transport and SSH are fixtures.
+
+- With a stale one-per-hour rate, a one-cent cap and an unpriced model all saved,
+  three back-to-back starts are admitted. Nothing waits, no ledger row is written and
+  no pricing is needed. Controls on the same saved values show that `daily_cap`
+  refuses the unpriced model before sending and `rate` admits one start and then
+  waits. Switching back to Unthrottled releases the queued work.
+- The per-server investigation concurrency limit still applies. With limit 1, a
+  server with an in-flight call gets no second concurrent investigation, while
+  another server's work proceeds. With limit 2, the second one starts.
+- A provider 429 with `Retry-After` sets the shared provider floor. Fresh subjects
+  on other servers are not claimed, run or sent until it passes.
+- A paused server's subject is not claimed and opens no run. Global disable stops
+  every server. Re-enabling and resuming runs both with no pacing wait or reservation.
+
+Mutations that pace Unthrottled, or skip the concurrency limit, provider floor,
+pause or global disable at claim time when Unthrottled, are each caught. No runtime
+change was needed. Role/CSRF refusal of a switch to Unthrottled is covered by #1010,
+and bounded data sharing in Unthrottled mode by #1000. Worker-pool capacity
+limits across processes, MySQL-native runs and measured performance remain open
+milestone-4 items.
 
 ### Retained spend history CSV download — worker checkpoint #874
 
