@@ -2789,6 +2789,39 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Rate throttle paces smoothly and defers without a charged attempt — worker checkpoint #1021
+
+`tests/test_ai_rate_throttle_acceptance.py` covers the milestone-4 checks for the
+**Rate throttle** mode. The tests drive the real worker path
+(`worker.investigate_one`: claim, admission, provider, acceptance), the
+administrator start-gates status route and the connection-test route in both
+`rate` and `rate_and_daily` modes. Only the provider transport, SSH and the wall
+clock are fixtures.
+
+- At 6 starts/hour, three eligible servers get one start per 600-second interval,
+  spread across servers. Repeated worker passes inside the interval send nothing.
+- Subjects waiting at the claim stay `pending`. They create no failed or deferred
+  run, no retry attempt and no spend reservation.
+- `GET /api/settings/ai-control-status` reports the `rate_throttle` blocker,
+  `can_start_now: false` and the exact next start. Both clear at refill.
+- After five idle hours, exactly one start is admitted. Idle time does not build
+  up a burst of saved-up hourly allowance.
+- Sometimes another billable caller takes the slot between the claim's read-only
+  gate and this subject's provider admission. The subject is then deferred
+  durably: the retry row is `deferred` with 0 attempts and `next_at` at the rate
+  slot, and the run is reclassified `deferred`. Nothing is sent. Under a daily cap
+  the pre-admission reservation is released, so no spend is counted. The subject
+  resumes after refill.
+- The administrator connection test and triage share one slot. Each waits for, or
+  is refused by, the other before transport.
+
+Mutation checks confirm these tests fail when idle time accumulates allowance, when
+a rate deferral is charged as a retry attempt, or when an unsent reservation is
+not released. This slice is tests and documentation only and adds no runtime
+change. The hosted MySQL shards run the same file. Measured before/after
+throughput and the full capability-equivalence record remain open milestone-4
+work.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
