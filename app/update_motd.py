@@ -158,8 +158,7 @@ def _assess(entry: dict[str, Any], dir_noexec: bool | None, gaps: list[dict[str,
     if noexec:
         return 'noexec_mount'
     if noexec is None:
-        _gap(gaps, 'mount_flags_not_observed', entry['name'],
-             'Whether the file is on a noexec mount was not observed; it is reported as running.')
+        entry['mount_unobserved'] = True
     return 'runs'
 
 
@@ -196,9 +195,11 @@ def _directory(directory: Any, entries_supplied: bool, gaps: list[dict[str, Any]
         return None, None
     state = directory.get('state') if isinstance(directory, dict) else None
     noexec = directory.get('noexec') if isinstance(directory, dict) else None
-    complete = directory.get('complete', True) if isinstance(directory, dict) else None
+    # A listing must say whether it finished: an omitted flag is malformed, never complete.
+    complete = directory.get('complete') if isinstance(directory, dict) else None
     if state not in DIRECTORY_STATES or (noexec is not None and not isinstance(noexec, bool)) \
-            or not isinstance(complete, bool):
+            or (state == 'listed' and not isinstance(complete, bool)) \
+            or (complete is not None and not isinstance(complete, bool)):
         _gap(gaps, 'input_malformed', detail='The directory observation is malformed.')
         return None, None
     if state == 'unreadable':
@@ -269,6 +270,11 @@ def evaluate(entries: Any, *, family: Any = None, directory: Any = None, pam_mot
     ``family`` is ``debian`` or ``rpm``. ``pam_motd`` lists ``{'service', 'args', 'reached'}``
     for every ``pam_motd`` session line, with ``reached`` ``yes``, ``no`` or ``unknown`` as
     resolved from the PAM stack by the caller.
+
+    ``scripts`` and each entry's ``runs`` status describe what ``run-parts`` would execute *if*
+    pam_motd invokes it; they do not depend on ``activation``. Consumers must read
+    ``activation['state']`` (``active``, ``possible``, ``inactive``, ``not_applicable`` or ``unknown``) to know
+    whether a login actually triggers them on this host.
     """
     gaps: list[dict[str, Any]] = []
     result: dict[str, Any] = {
@@ -289,6 +295,7 @@ def evaluate(entries: Any, *, family: Any = None, directory: Any = None, pam_mot
     seen: set[str] = set()
     records = []
     runnable = []
+    mount_unobserved: list[str] = []
     for item in entries:
         entry = _normalize(item, gaps)
         if entry is None:
@@ -313,10 +320,19 @@ def evaluate(entries: Any, *, family: Any = None, directory: Any = None, pam_mot
         records.append(record)
         if status == 'runs':
             runnable.append(record)
+            if entry.get('mount_unobserved'):
+                mount_unobserved.append(name)
     if state != 'listed':
         for record in runnable:
             record.update(status='unresolved', reason_code='unresolved', reason=REASONS['unresolved'])
         runnable = []
+    elif mount_unobserved:
+        # One gap for the whole listing, so many scripts cannot exhaust the gap budget on their own.
+        shown = ', '.join(sorted(mount_unobserved, key=_sort_key)[:5])
+        more = f' and {len(mount_unobserved) - 5} more' if len(mount_unobserved) > 5 else ''
+        _gap(gaps, 'mount_flags_not_observed',
+             detail=f'Whether {len(mount_unobserved)} runnable file(s) ({shown}{more}) are on a noexec mount '
+                    'was not observed; they are reported as running.')
     for index, record in enumerate(sorted(runnable, key=lambda rec: _sort_key(rec['name']))):
         record['order'] = index
         script = {'order': index, 'name': record['name'], 'path': record['path']}

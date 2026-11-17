@@ -146,8 +146,17 @@ def test_noexec_mount_stops_scripts_and_unknown_mount_is_a_gap():
     unknown = run([f('10-a'), link('20-b', {'type': 'file', 'mode': 0o755})],
                   directory={'state': 'listed', 'complete': True})
     assert scripts(unknown) == ['10-a', '20-b']
-    assert codes(unknown) == ['mount_flags_not_observed', 'mount_flags_not_observed']
+    assert codes(unknown) == ['mount_flags_not_observed']  # one gap for the listing, naming both
+    assert '10-a' in unknown['gaps'][0]['detail'] and '20-b' in unknown['gaps'][0]['detail']
     assert unknown['complete'] is True  # reported as running: never under-reports what may run
+
+
+def test_many_scripts_on_unobserved_mounts_do_not_exhaust_the_gap_budget():
+    entries = [f(f'{index:03d}-script') for index in range(200)]
+    result = run(entries, directory={'state': 'listed', 'complete': True})
+    assert len(scripts(result)) == 200
+    assert codes(result) == ['mount_flags_not_observed'] and 'and 195 more' in result['gaps'][0]['detail']
+    assert result['complete'] is True
 
 
 @pytest.mark.parametrize('pam, state', [
@@ -205,6 +214,9 @@ def test_malformed_invocation_beside_a_reached_one_still_reports_active_but_inco
     ({'state': 'listed', 'complete': False}, 'listing_incomplete'),
     ({'state': 'gone'}, 'input_malformed'),
     ({'state': 'listed', 'noexec': 'no'}, 'input_malformed'),
+    ({'state': 'listed', 'noexec': False}, 'input_malformed'),  # completeness not stated: not complete
+    ({'state': 'listed', 'complete': 'yes', 'noexec': False}, 'input_malformed'),
+    ({'state': 'unreadable', 'complete': 1}, 'input_malformed'),
 ])
 def test_unobserved_directory_fails_closed(directory, code):
     result = run([f('00-header')], directory=directory)
