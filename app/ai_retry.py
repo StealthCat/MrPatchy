@@ -14,6 +14,11 @@ from . import ai_provider_backoff
 from .db import Base, Behavior, Setting, config
 
 MAX_ATTEMPTS=5
+PROVIDER_BLOCKED_REASON='Review the failure and correct API configuration or explicitly retry. No automatic retry is scheduled.'
+# A local refusal is not a key, quota or model problem (#1007): say so, so an
+# administrator does not rotate the key or change the model to clear it.
+EVIDENCE_SIZE_BLOCKED_REASON=('This observation\'s evidence is larger than Mr Patchy shares with the AI provider, so '
+    'nothing was sent. Review it manually. Changing the API key or model does not help. No automatic retry is scheduled.')
 
 
 class TriageRetry(Base):
@@ -60,7 +65,9 @@ def failed(s,row,error,now):
     from .ai import AIError
     retry=s.get(TriageRetry,row.id)
     retry.state='blocked';retry.next_at=0
-    retry.reason='Review the failure and correct API configuration or explicitly retry. No automatic retry is scheduled.'
+    retry.reason=PROVIDER_BLOCKED_REASON
+    if isinstance(error,AIError) and getattr(error,'cause',None)=='evidence_size':
+        retry.reason=EVIDENCE_SIZE_BLOCKED_REASON
     if isinstance(error,AIError) and error.policy_wait:
         retry.attempts=max(0,retry.attempts-1)
         retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
