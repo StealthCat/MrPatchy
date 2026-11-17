@@ -1,0 +1,21 @@
+{
+  "fixture_only": true,
+  "recorded_at_utc": "2026-11-17T06:05:00Z",
+  "base_commit": "c86141a157256755e0b4c2c0372b5fc99e572bf4",
+  "database": "sqlite (disposable, created by tools/benchmark_ai.py)",
+  "python": "3.13",
+  "compare_command": "python tools/compare_ai_benchmarks.py <workload>-serial.json <workload>-parallel.json",
+  "workloads": {
+    "cross-server": {
+      "description": "20 subjects on 20 fixture servers; every second subject requests follow-up SSH evidence (two-stage).",
+      "serial": "python tools/benchmark_ai.py --runs 20 --provider-delay-ms 25 --ssh-delay-ms 10 --persistence-delay-ms 5 --concurrency 1",
+      "parallel": "python tools/benchmark_ai.py --runs 20 --provider-delay-ms 25 --ssh-delay-ms 10 --persistence-delay-ms 5 --concurrency 4"
+    },
+    "same-server": {
+      "description": "20 distinct subjects on one fixture server using its supported investigation slots; every second subject is two-stage.",
+      "serial": "python tools/benchmark_ai.py --runs 20 --provider-delay-ms 25 --ssh-delay-ms 10 --persistence-delay-ms 5 --same-server --concurrency 1",
+      "parallel": "python tools/benchmark_ai.py --runs 20 --provider-delay-ms 25 --ssh-delay-ms 10 --persistence-delay-ms 5 --same-server --concurrency 4"
+    }
+  },
+  "limits": "Loopback provider, synthetic SSH evidence and synthetic persistence delays on a disposable SQLite database under shared local load. These records establish capability equivalence and fixture-relative throughput only; they are not a production, TLS, live-provider or MySQL benchmark, and they do not record the AI control mode. Cost is unavailable (synthetic usage), never zero."
+}
