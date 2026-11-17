@@ -1,3 +1,7 @@
+## 1.75.19 — 2026-11-17
+
+1. [PR #1026](https://github.com/StealthCat/MrPatchy/pull/1026): Retain fingerprinted serial/parallel AI triage benchmark records for cross-server and same-server workloads in `docs/benchmarks/ai-equivalence-c86141a/`, with comparator output and a regression test that refuses tampered or pre-fingerprint records (#1025). Compatibility: none; docs, benchmark records and tests only, with no runtime, schema, settings, admission or response-authority change.
+
 ## 1.75.18 — 2026-11-17
 
 1. [PR #1017](https://github.com/StealthCat/MrPatchy/pull/1017): A process investigation deferred by the daily AI spend cap now says it is waiting for the cap to reset in both `daily_cap` and `rate_and_daily` modes, instead of saying it is waiting for the rate throttle (#1015). Rate-throttle, pause and provider-backoff waits keep their existing reasons, and scheduling is unchanged. Compatibility: no schema, API or setting change; existing `ai_triage_retries` rows keep their stored reason until their next deferral.
