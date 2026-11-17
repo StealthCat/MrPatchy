@@ -2812,8 +2812,9 @@ and the wider roadmap A acceptance remain planned.
 provider transport and SSH. While the provider call is in flight, a fixture
 changes the subject's evidence, approves the subject through the administrator
 API, rotates the AI key, or takes over the lease (re-claimed by another token,
-or expired). In every case the late answer is rejected: no verdict, assessment,
-known-good publication or verdict notification is written, and the run records
+or expired). In every case the late answer is rejected: no verdict, analysis or assessment
+is written (fleet known-good and notification rows are not separately asserted
+here), and the run records
 that no stale result was accepted. The sent call's ledger row is still settled
 at its receipt and counted against the cap; it is never released.
 
