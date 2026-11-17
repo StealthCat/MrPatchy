@@ -50,16 +50,27 @@ module.exports=async(page,capture)=>{
     release();await response;
     assert.equal(await panel.count(),0);
     const before=calls;
-    const identity=async route=>{const response=await route.fetch();route.fulfill({response,json:{...await response.json(),role:'viewer'}});};
+    // #956: the page is already on Overview here, so its heading proves nothing about the viewer render.
+    // Wait for the render that consumed the mocked identity, and leave only after an administrator render.
+    let pending=0,idle=()=>{};
+    const identity=async route=>{
+      pending++;
+      try{const response=await route.fetch();await route.fulfill({response,json:{...await response.json(),role:'viewer'}});}
+      finally{if(!--pending)idle();}
+    };
+    const role=name=>page.waitForFunction(expected=>document.body.dataset.role===expected&&location.hash==='#overview',name);
     await page.route('**/api/identity',identity);
     try{
-      await page.goto(new URL('/#ai-logs',page.url()).href);
+      await Promise.all([page.waitForResponse('**/api/identity'),page.goto(new URL('/#ai-logs',page.url()).href)]);
+      await role('viewer');
       await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
       assert.equal(await page.getByRole('region',{name:'Fleet known-good cache',exact:true}).count(),0);
       assert.equal(calls,before,'viewers must not request the known-good summary');
     }finally{
       await page.unroute('**/api/identity',identity);
+      if(pending)await new Promise(resolve=>idle=resolve);
       await page.goto(new URL('/#overview',page.url()).href);
+      await page.reload();await role('admin');
       await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
     }
   }finally{

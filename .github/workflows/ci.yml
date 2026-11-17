@@ -98,9 +98,11 @@ jobs:
 
   tests:
     runs-on: ubuntu-24.04
-    # The full SQLite suite can take 28 minutes; leave time for the Docker/TLS
-    # smoke checks that follow instead of cancelling a successful test run.
-    timeout-minutes: 45
+    # The full SQLite suite took 28 to 42 minutes on hosted runners in November 2026
+    # (#953) and grows with the test count. The pytest step has its own 60-minute
+    # bound, so the job keeps 15 minutes for the Docker/TLS smoke checks that follow
+    # (about 3 minutes) instead of cancelling them after a successful test run.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
@@ -116,7 +118,10 @@ jobs:
           bash .github/scripts/configure-ci-apt.sh
           sudo apt-get update && sudo apt-get install -y --no-install-recommends restic
       - run: pip install -r requirements-dev.txt
-      - run: python -m pytest -q
+      # --durations keeps the slowest tests in the log so suite growth stays visible.
+      - name: SQLite test suite
+        timeout-minutes: 60
+        run: python -m pytest -q --durations=25
       - run: docker build -t mrpatchy:test .
       - name: Native Caddy dual-issuer adapter checks
         run: |
@@ -150,9 +155,10 @@ jobs:
 
   mysql:
     runs-on: ubuntu-24.04
-    # Shards have taken 12-19 minutes overall and swing by several minutes on runner
-    # variance alone, so 20 minutes cancelled passing runs mid-progress (#666).
-    timeout-minutes: 30
+    # Shards usually take 12-19 minutes, but a slow runner has taken over 30: a
+    # passing shard was cancelled at 98% progress under the former 30-minute limit
+    # (#972), as 20 minutes had done before (#666).
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

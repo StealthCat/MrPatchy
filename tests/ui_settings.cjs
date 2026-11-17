@@ -114,7 +114,7 @@ module.exports=async(page,capture)=>{
  assert.equal(await page.locator('[name=ai_daily_cap_usd]').inputValue(),'10');
  assert.match(await page.locator('#ai-settings-form').textContent(),/remaining \$10(?:\s|$)/);
  await page.getByText('No transmitted AI calls await reconciliation.',{exact:true}).waitFor();
- assert.match(await page.locator('#ai-settings-form').textContent(),/Price catalog current.*2026-10-26.*expires/s);
+ assert.match(await page.locator('#ai-settings-form').textContent(),/Price catalog current.*2026-11-16.*expires/s);
  await page.locator('[name=ai_control_mode]').selectOption('rate_and_daily');
  await page.locator('[name=ai_daily_cap_usd]').fill('12.50');
  await page.locator('[name=ai_budget_timezone]').fill('America/New_York');
