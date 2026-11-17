@@ -17,15 +17,15 @@ MAX_STAGE_MS = MAX_ELAPSED_SECONDS * 1000
 MAX_QUEUE_AGE_SECONDS = 86_400
 LEGACY_QUEUE_AGE_SECONDS = 2
 MAX_SINGLE_SERVER_SLOTS = 4
-# AI control modes the fixture can measure without pacing or pricing changing
-# the workload. Reports from before --control-mode ran in the implicit legacy mode.
-CONTROL_MODES = ('legacy', 'unthrottled')
-LEGACY_CONTROL_MODE = 'legacy'
 REPORT_ROUNDING_RADIUS = Decimal('0.0005')
 STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
     'queue_age', 'receipt_persistence', 'usage_persistence',
 )
+# AI control modes the fixture can measure without pacing or pricing changing
+# the workload. Reports from before --control-mode ran in the implicit legacy mode.
+CONTROL_MODES = ('legacy', 'unthrottled')
+LEGACY_CONTROL_MODE = 'legacy'
 
 
 class ComparisonError(ValueError):
