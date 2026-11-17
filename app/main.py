@@ -3502,6 +3502,12 @@ def malware_policy_read(user=Depends(admin_user)):
     from . import malware_policy
     with Session() as s:return malware_policy.state(s)
 
+@app.get('/api/settings/malware-response/overrides')
+def malware_policy_overrides(user=Depends(admin_user)):
+    """Read-only fleet list of restrict-only server overrides (#1033); counts only, never paths or hashes."""
+    from . import malware_policy
+    with Session() as s:return malware_policy.overrides(s)
+
 @app.put('/api/settings/malware-response')
 def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):
     # Stores policy only: no detector, executor, provider call or response authorization runs here.
