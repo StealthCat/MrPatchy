@@ -2790,15 +2790,18 @@ The provider is a disposable fixture.
   busy server receives a second. This holds across serial scheduler cycles and in
   a concurrent burst whose worker count does not exceed the servers with work.
   The busy server's remaining work stays queued.
+- **Host election:** with host turns tied, a server already under another
+  worker's live lease yields the last affordable call to an idle server, even
+  when it holds the oldest work. A server whose only eligible work is already
+  claimed does not win the election and leave the remaining cap unused.
 - **Mutations:** the suite fails when any of the following is removed:
-  - the shared budget lock in `reserve()`
+  - the shared budget lock in `reserve()` (a test hook holds each reservation
+    open between its spend read and insert, so every threaded variant overspends
+    without the lock)
   - the durable host turn
+  - live-occupancy ordering in host election
+  - the claimed-subject exclusion in host election
   - the "a policy wait does not consume an attempt" rule
-
-  The suite does not catch removal of the live-claim exclusion: retry
-  eligibility already excludes a claimed subject. Nor does it catch removal of
-  live-occupancy ordering: each new claim takes the newest host turn, so turn
-  order alone spreads a burst.
 - **Limitation:** with more concurrent workers than servers that have work, a
   busy server's second claim can reserve before another server's first. Spend
   order then follows the race, and the waiting server is served in the next
