@@ -9740,7 +9740,7 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
   - Entries are sourced in byte order. `dhclient` passes the script no locale, so the C locale applies.
   - Only regular files are sourced, after following symlinks. Directories, special files, and dangling or looping symlinks are skipped.
   - Mode, owner and the executable bit do not matter.
-- **Gaps, never reported as covered:** an unobserved `/etc/dhcp` or hook directory, an unreadable directory, an unobserved symlink target, malformed or duplicate input, the 1024-entry cap, an isc-dhcp-client version outside the 4.4 series, and a non-Debian family. A `dhclient-script` whose SHA-256 is missing or differs from the reference is a non-blocking `script_not_reference` gap.
+- **Gaps, never reported as covered:** an unobserved `/etc/dhcp` or hook directory, an unreadable directory, an unobserved symlink target, malformed or duplicate input, file metadata for a hook directory that contradicts its directory observation, the 1024-entry cap, an isc-dhcp-client version outside the 4.4 series, and a non-Debian family. A `dhclient-script` whose SHA-256 is missing or differs from the reference is a non-blocking `script_not_reference` gap.
 - **Unobserved, stated in every result:**
   - hook contents (a sourced hook can change variables or `exit` and stop later hooks);
   - whether dhclient is the DHCP client in use;
@@ -9748,5 +9748,5 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
   - error paths that exit without exit hooks;
   - RPM-family hook locations.
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
-- **Validation:** `tests/test_dhclient_hooks.py` has 15 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
+- **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.

@@ -283,6 +283,13 @@ def evaluate(files: Any, *, directories: Any = None, version: Any = None, family
                 record = _record(entry, status, reason, phase=phase)
                 if status == 'sourced':
                     listed[phase].append((name.encode('ascii'), record))
+        elif path in HOOK_DIRS:
+            effective, state = entry['effective'], states.get(path)
+            if (state == 'listed' and effective not in ('directory', None)) or (
+                    state == 'absent' and effective == 'directory'):
+                _gap(gaps, 'input_malformed', path,
+                     'The file metadata for this hook directory contradicts its directory observation.')
+            record = _record(entry, 'ignored', 'not_a_hook_location')
         elif any(path.startswith(directory + '/') for directory in HOOK_DIRS):
             record = _record(entry, 'ignored', 'nested_entry')
         else:

@@ -152,6 +152,21 @@ def test_fail_closed_inputs():
     assert 'too_many_files' in codes(result) and len(hooks(result, 'exit')) == dh.MAX_FILES
 
 
+def test_hook_directory_metadata_must_agree_with_its_directory_observation():
+    for item in (f(ENTER_D), f(ENTER_D, 'other'), link(ENTER_D, 'file'), link(ENTER_D, None)):
+        result = run([item, f(f'{ENTER_D}/a')])
+        assert 'input_malformed' in codes(result) and result['complete'] is False
+    dirs = [{'path': dh.CONF_DIR, 'state': 'listed'}, {'path': ENTER_D, 'state': 'absent'},
+            {'path': EXIT_D, 'state': 'listed'}]
+    result = run([f(ENTER_D, 'directory')], directories=dirs)
+    assert 'input_malformed' in codes(result) and result['complete'] is False
+    for item in (f(ENTER_D, 'directory'), link(ENTER_D, 'directory')):
+        result = run([item, f(f'{ENTER_D}/a')])
+        assert result['complete'] is True and hooks(result, 'enter') == [(f'{ENTER_D}/a', 'directory')]
+    result = run([f(ENTER_D)], directories=dirs)  # a regular file there is "absent" to [ -d ]
+    assert result['complete'] is True
+
+
 def test_gaps_are_bounded():
     result = run([link(f'{EXIT_D}/h{i}', ...) for i in range(200)])
     assert len(result['gaps']) == dh.MAX_GAPS and result['gaps'][-1]['code'] == 'gaps_truncated'
