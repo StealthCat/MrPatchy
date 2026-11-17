@@ -184,7 +184,17 @@ def acquire(owner=None):
                     if host is not None and not host_lifecycle.active(host):return None
                     if cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
                         try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
-                        except ai.AIError:return None
+                        except ai.AIError as error:
+                            # This subject's own evidence cannot be shared (for
+                            # example over the 64 KB limit). Record the outcome an
+                            # uncapped attempt records instead of leaving it at the
+                            # head of the queue, where it would stall every host.
+                            # Nothing is reserved or sent.
+                            ai_retry.begin(s,row,signature,now)
+                            retry=ai_retry.failed(s,row,error,now)
+                            row.verdict='error';row.attempted=now
+                            row.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(error)
+                            s.commit();return None
                         # A subject whose own conservative reservation exceeds the
                         # whole cap can never be admitted, even after a reset.
                         # Block it with an explained reason instead of leaving it at
