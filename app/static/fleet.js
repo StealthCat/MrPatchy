@@ -351,6 +351,51 @@ function bindKnownGoodSummary(root,revision){
    button.textContent='Retry cache summary';
   }finally{if(active())button.disabled=false;}
  };
+ bindKnownGoodCandidates(panel,revision);
+}
+// On-demand fleet list of known-good candidates. Rows show provenance metadata
+// only and link to the origin assessment, where Revoke and Linked servers live.
+function bindKnownGoodCandidates(panel,revision){
+ const section=document.createElement('section');
+ section.className='known-good-candidates';
+ section.setAttribute('aria-labelledby','known-good-candidates-title');
+ section.innerHTML='<h3 id="known-good-candidates-title">Candidates</h3><p class="help">Each candidate is one exact verified context. Listing grants no approval and authorizes no response. Open the origin assessment to review linked servers or revoke a candidate.</p><div class="known-good-candidate-controls"><label>Show<select name="known-good-state"><option value="active">Active</option><option value="revoked">Revoked</option><option value="all">All</option></select></label><button type="button" data-known-good-candidates="load">Load candidates</button></div><p class="help" role="status" aria-live="polite"></p><div class="known-good-candidate-table"></div><div class="actions" hidden><button type="button" data-known-good-candidates="previous">Previous candidates</button><button type="button" data-known-good-candidates="next">Next candidates</button></div>';
+ panel.append(section);
+ const select=section.querySelector('select'),load=section.querySelector('[data-known-good-candidates=load]'),status=section.querySelector('[role=status]'),table=section.querySelector('.known-good-candidate-table'),pager=section.querySelector('.actions'),previous=section.querySelector('[data-known-good-candidates=previous]'),next=section.querySelector('[data-known-good-candidates=next]');
+ const count=v=>Number.isSafeInteger(v)&&v>=0?v.toLocaleString():'Unavailable';
+ const fingerprint=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v)?v:'';
+ let offset=0,ticket=0;
+ const active=()=>section.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
+ const row=item=>{
+  const value=item&&typeof item==='object'?item:{},origin=value.origin&&typeof value.origin==='object'?value.origin:{};
+  const print=fingerprint(value.fingerprint),name=origin.host_name||origin.host_id||'Unknown server';
+  const link=value.origin_subject&&value.origin_assessment_id?`<a class="button" href="#investigations/item/${encodeURIComponent(value.origin_subject)}/history/${encodeURIComponent(value.origin_assessment_id)}">Origin assessment</a>`:'<span class="help">Origin assessment not retained</span>';
+  const state=value.active===true?badge('active'):`${badge('revoked')}<small>${date(value.revoked_at)} · ${esc(value.revoked_by||'unknown')}</small>${value.revoked_reason?`<small class="known-good-reason">${esc(value.revoked_reason)}</small>`:''}`;
+  return `<tr><td><code class="known-good-fingerprint">${esc(print||'Invalid fingerprint')}</code><small>v${esc(value.version)} · ${esc(value.model||'model not recorded')}</small></td><td>${esc(name)}${origin.host_active===true?'':' <span class="badge">Inactive server</span>'}<small>${date(value.created)}</small></td><td>${state}</td><td>${esc(count(value.linked))} linked<small>${esc(count(value.reused))} exact-match reuse(s)</small></td><td>${link}</td></tr>`;
+ };
+ const fetchPage=async()=>{
+  if(!active())return;
+  const turn=++ticket,state=select.value;
+  load.disabled=previous.disabled=next.disabled=true;status.textContent='Loading candidates…';
+  try{
+   const data=await api('/ai/known-good/candidates?state='+encodeURIComponent(state)+'&offset='+offset+'&limit=20');
+   if(turn!==ticket||!active())return;
+   const items=Array.isArray(data?.items)?data.items:[];
+   table.innerHTML=items.length?`<div class="table-wrap"><table><thead><tr><th>Fingerprint</th><th>Origin</th><th>State</th><th>Links</th><th></th></tr></thead><tbody>${items.map(row).join('')}</tbody></table></div>`:`<p class="help">No ${state==='all'?'':esc(state)+' '}candidates on this page.</p>`;
+   pager.hidden=!(offset||data?.more);previous.disabled=!offset;next.disabled=data?.more!==true;
+   status.textContent=(items.length?`Showing ${state==='all'?'':state+' '}candidates ${offset+1}–${offset+items.length}.`:'No candidates on this page.')+' Retained records only; current context is rechecked at every lookup.';
+   load.textContent='Refresh candidates';
+  }catch{
+   if(turn!==ticket||!active())return;
+   table.innerHTML='';pager.hidden=true;
+   status.textContent='Candidates are unavailable. The summary and individual AI runs remain usable.';
+   load.textContent='Retry candidates';
+  }finally{if(turn===ticket&&active())load.disabled=false;}
+ };
+ load.onclick=()=>{offset=0;fetchPage();};
+ select.onchange=()=>{offset=0;if(load.textContent!=='Load candidates')fetchPage();};
+ previous.onclick=()=>{offset=Math.max(0,offset-20);fetchPage();};
+ next.onclick=()=>{offset+=20;fetchPage();};
 }
 async function packageHistory(revision=renderRevision,context=null){
  const root=context?.root||$('#content');

@@ -10492,3 +10492,23 @@ The startup catalog listed `/etc/xdg/autostart` and `~/.config/autostart` as met
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. A `system` origin is not a verified package default.
 - **Validation:** `tests/test_xdg_autostart.py` has 17 tests. They cannot run on main, where the module does not exist, and they pass on the branch. Four review-follow-up regressions fail on the earlier head `78168b5`: `sh -c '…'`, an unquoted backslash, each reserved character, and `AutostartCondition`.
 - **Remaining:** collection wiring into the startup inventory, per-user directory enumeration, provenance and UI.
+
+### Fleet known-good candidate list — worker checkpoint #928
+
+Roadmap B slice: administrators can now find a candidate without already knowing
+an assessment that links to it. `GET /api/ai/known-good/candidates?state=active|revoked|all`
+(administrator only, read-only, 1–50 per page) returns candidates newest first, with
+a fingerprint tie-break. Each item gives the fingerprint, version, model,
+classification source, origin assessment and subject, and the origin server (with
+whether it is still active). It also gives the revocation time, actor and reason,
+and per-page counts of linked observations and exact-match reuses, using two
+grouped queries. It never returns the canonical contract, saved result, snapshot,
+observation JSON or evidence. It takes no locks, writes nothing and makes no audit
+or provider calls.
+
+The Fleet known-good cache panel in AI activity adds an on-demand **Candidates**
+list with an Active/Revoked/All filter, paging, escaped text, an **Origin
+assessment** link (where Revoke and Linked servers already live), Retry, and a
+stale-response guard. Viewers never request it. Lookup, publication, revocation,
+approval, budget, pause, role and response boundaries are unchanged. Search by
+hash, bulk revocation and matched SQLite/MySQL production acceptance remain open.

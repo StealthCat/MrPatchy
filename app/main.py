@@ -1170,6 +1170,17 @@ def known_good_summary(user=Depends(admin_user)):
         return known_good.summary(s)
 
 
+@app.get('/api/ai/known-good/candidates')
+def known_good_candidates(state:str='active',offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_candidates as candidates
+    if state not in candidates.STATES:
+        raise HTTPException(400,'Invalid known-good candidate state')
+    if offset<0 or not 1<=limit<=candidates.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid known-good candidate pagination')
+    with Session() as s:
+        return candidates.page(s,state,offset,limit)
+
+
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
 def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
