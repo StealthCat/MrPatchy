@@ -3527,6 +3527,49 @@ unavailable and never implies a plan will start.
 - **Limitations:** this is a point-in-time read for one server. A fleet-wide
   plan queue view and startup-change plans (never automatic) are not covered.
 
+### Per-server process-triage queue breakdown — worker checkpoint #975
+
+`GET /api/investigation-status` reports fleet-wide totals only. When the queue
+was not draining, an administrator could not see which servers held the backlog
+or why each one was waiting. Update scoring (#917) and automatic plans (#922)
+already had queue summaries; process triage had no per-server view.
+
+The admin-only `GET /api/investigation-status/servers` lists each active server
+with unapproved `pending`/`error` behaviors. Each pending investigation is
+placed in exactly one class:
+- **active:** an unexpired claim holds it;
+- **eligible:** retry-eligible under the saved model/key and unclaimed;
+- **blocked:** needs configuration review or an explicit retry;
+- **retry wait:** waiting out a finite retry or provider wait, with the
+  server's earliest such time.
+
+Each row also reports the pending total, the oldest pending observation,
+whether AI is paused for the server, its per-server investigation limit (a
+corrupt stored limit is shown as the fail-closed minimum), `active_leases` and
+whether those leases have reached the limit. `active_leases` is the admission
+count: every unexpired claim on the server, including one whose behavior was
+approved while it runs, so the limit flag matches what `ai_claims.acquire`
+enforces. The list holds at most 50 servers, largest backlog
+first, and states the number of servers with a backlog and whether it was
+truncated.
+
+The classes use the predicates of `ai_runs.status()` and the claim query, so
+per-server pending, paused, eligible-unclaimed and active counts add up to the
+fleet totals. One difference is deliberate: a running claim takes precedence,
+so an investigation on its last attempt is `active` here while the fleet
+`blocked` total counts it until it ends.
+
+- **Unchanged:** the payload holds server IDs and names, counts, limits and
+  timestamps only: no evidence, paths, command lines, analysis, provider text or
+  key material. It sends no provider request and writes nothing. Admission,
+  claims, pause, budget, schema, roles and response authorization are unchanged.
+- **Limitations:** this is a point-in-time read, and "eligible" is not a promise
+  to start: shared start gates, worker capacity, the per-server limit and pause
+  still apply. Pause is read as the fleet status reads it, so a manually
+  corrupted per-server AI policy is not shown as paused although provider calls
+  for that server are refused. No page shows the breakdown yet; the UI panel, servers beyond the
+  first 50 and matched production acceptance remain open.
+
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
 The administrator's Investigations queue notice now names the admission control

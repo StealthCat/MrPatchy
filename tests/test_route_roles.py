@@ -20,6 +20,7 @@ EXPECTED_ROLES = {
     ('GET','/api/hosts/{host_id}/security/auto-plan-status'):'admin',
     ('GET','/api/hosts/{host_id}/security/auto-plan-failed'):'admin',
     ('POST','/api/hosts/{host_id}/security/auto-plan-failed/retry'):'admin',
+    ('GET','/api/investigation-status/servers'):'admin',
     ('GET','/api/update-scores/blocked'):'admin',
     ('GET','/api/update-scores/status'):'admin',
     ('POST','/api/update-scores/blocked/retry'):'admin',
