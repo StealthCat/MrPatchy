@@ -1,11 +1,13 @@
-"""Administrator notification while process triage is blocked on AI configuration.
+"""Administrator notification while process triage is blocked by non-transient failures.
 
-A non-transient provider failure (for example a rejected key, unavailable quota or
-an unsupported model) leaves each affected investigation ``blocked`` with no
-automatic retry until the model/key changes or an administrator retries it. This
-producer surfaces that state in the notification center. It reads state only: it
-never retries, unblocks, reserves spend or changes authorization, and it adds no
-SMTP/webhook alert.
+A non-transient failure leaves each affected investigation ``blocked`` with no
+automatic retry until the model/key changes or an administrator retries it. The
+cause may be the provider configuration (a rejected key, unavailable quota or an
+unsupported model) or a local refusal such as evidence over the 64 KB sharing
+limit, so the text stays cause-neutral and points to each investigation's own
+retry reason (#1007). This producer surfaces that state in the notification
+center. It reads state only: it never retries, unblocks, reserves spend or
+changes authorization, and it adds no SMTP/webhook alert.
 """
 import hashlib
 
@@ -17,12 +19,12 @@ from .db import Behavior
 IDENTITY = dict(source='ai-triage', kind='configuration-blocked',
                 subject_type='triage-configuration', subject_id='process-triage')
 LINK = '#investigations'
-MESSAGE = ('Process investigations are blocked by a non-transient AI provider failure under the current model '
-           'and API key, for example a rejected key, unavailable quota or an unsupported model. No automatic '
-           'retry is scheduled. Review the failure on Investigations, then correct the AI settings or explicitly '
-           'retry. Changing the saved model or key makes blocked investigations eligible again. New behavior is '
-           'not being triaged until then.')
-RESOLVED = 'No process investigation remains blocked by the AI configuration that caused the earlier failure.'
+MESSAGE = ('Process investigations are blocked by a non-transient failure, and no automatic retry is scheduled. '
+           'Review each one on Investigations: its retry reason names the cause. A rejected key, unavailable quota '
+           'or unsupported model is corrected in the AI settings, and changing the saved model or key makes those '
+           'investigations eligible again. Evidence too large to share needs manual review instead; a model or key '
+           'change does not help it. An administrator can also retry explicitly.')
+RESOLVED = 'No process investigation remains blocked by the earlier non-transient failure.'
 
 
 RETRY_LIMIT = 200

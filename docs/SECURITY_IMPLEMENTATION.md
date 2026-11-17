@@ -2506,6 +2506,16 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **UI validation:** `tests/ui_host_retry_blocked_investigations.cjs` fails on main and passes after. It covers the host-only endpoint (never the fleet route), the refresh, a partial batch, singular wording, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** blocked advisory-plan work is still not covered.
 
+#### Cause-specific blocked wording — worker checkpoint, fixes #1007
+
+- **Problem:** every non-transient block used one retry reason and one notification text, both blaming the API key, quota or model. Evidence over the 64 KB sharing limit is refused locally before any provider request, so following that advice could only lead to unnecessary key or model churn.
+- **Change:** `AIError` carries a `cause` used only for wording. The 64 KB refusal sets `evidence_size`; every other error keeps `provider`. `ai_retry.failed` gives an evidence-size block its own reason: nothing was sent, review the observation manually, and a key or model change does not help. Provider and configuration blocks keep the existing reason.
+- **Follow-up stage:** the target controls the size of the allowlisted follow-up evidence, so the same refusal can fire on the second request after the first-stage call was sent. The worker then sets `follow_up_evidence_size`, and the reason says the follow-up request was not sent but the first-stage request was and may be billed.
+- **Notification:** the `ai-triage`/`configuration-blocked` text is now cause-neutral. It points to each investigation's retry reason and separates configuration fixes from oversized evidence. The identity, revision key, severity, role and deep link are unchanged. The **Retry blocked investigations** help text says the same.
+- **Unchanged:** retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits an evidence-size block, which is then refused locally again), admission, reservations and authorization.
+- **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
+- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
