@@ -2363,6 +2363,27 @@ diagnostic is logged without affecting the verdict. The events are ordinary
 pruned AI-log diagnostics. Durable miss counters, saved-call estimates and
 matched production acceptance remain open.
 
+Worker checkpoint #1027 covers the "log retention" acceptance item. The worker's
+hourly history cleanup now lives in `worker.prune_history(s, cutoff)`. It deletes
+the same rows as before (observations, inventory revisions, and finished AI runs
+with their events, call receipts and host links), at the same time, from the
+same leader loop. `tests/test_known_good_retention.py` runs that real pruning
+against a candidate published from a worker-driven provider assessment:
+- After the source run's history is pruned, another server still reuses the
+  candidate with zero provider calls. The retained assessment, candidate and
+  per-host observations survive. The avoided-work estimate counts the reuse as
+  unattributable rather than free or priced.
+- Pruning keeps still-running runs, recent runs and every assessment and
+  known-good row.
+- If the origin assessment is missing, lookup fails closed. The miss is
+  explained as `candidate_unverified`, and the worker pays for a fresh
+  assessment instead of reusing.
+
+Lookup, publication, revocation, pause, budget, role and response
+authorization are unchanged. MySQL coverage comes from the hosted `mysql`
+job. Concurrency, role isolation and matched production acceptance for
+roadmap B are covered elsewhere or remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
@@ -3528,7 +3549,51 @@ only the fixture database URL. Three matched eight-subject pairs retained the
 same evidence fingerprint, 12 provider calls and four follow-ups per execution.
 Peak simultaneous provider handling rose from one to four in all three pairs.
 Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
-The CLI has no MySQL mode, and matched production measurements remain open.
+At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
+one. Matched production measurements remain open.
+
+### Native MySQL mode for the triage benchmark — worker checkpoint #976
+
+`tools/benchmark_ai.py --database mysql` runs the same disposable fixture on a
+MySQL database, so a serial/parallel pair can be repeated natively:
+
+```bash
+export AI_BENCHMARK_MYSQL_URL='mysql+pymysql://USER:PASSWORD@HOST:3306/EMPTY_DATABASE?charset=utf8mb4'
+python tools/benchmark_ai.py --database mysql --runs 8 --concurrency 1 --provider-delay-ms 150 > serial.json
+python tools/benchmark_ai.py --database mysql --runs 8 --concurrency 4 --provider-delay-ms 150 > parallel.json
+python tools/compare_ai_benchmarks.py serial.json parallel.json
+```
+
+- **Disposable only:** the URL is read from `AI_BENCHMARK_MYSQL_URL`, never from
+  the command line or `DATABASE_URL`. It must be a `mysql+pymysql` URL that names
+  a host and a database. The tool refuses to start unless that database has no
+  tables or views, and changes nothing in a refused database. Never point it at
+  a Mr Patchy deployment database.
+- **One run at a time:** the run holds a MySQL advisory lock named after the
+  database from before the empty check until cleanup. A second run against the
+  same database is refused and changes nothing.
+- **Cleanup:** on success and on failure it drops only the application's own
+  tables, so the next run can reuse the database. A table or view that someone
+  else created during the run is left in place and reported as a count on
+  stderr; the database is then no longer empty.
+- **No secrets in output:** refusals before the run starts are fixed text. A
+  connection failure reports only the error class. The report never contains
+  the URL. A failure inside the fixture itself is an ordinary Python traceback.
+- **Report:** `database` is `sqlite` or `mysql`, and `database_version` is the
+  server (or SQLite library) version. The comparator reads older reports as
+  SQLite, refuses a pair measured on different backends and states the backend.
+  Server versions are informational and may differ.
+- **Unchanged:** SQLite stays the default. The workload, assertions, provider and
+  SSH stubs, admission, budget, pause and response authorization are the same on
+  both backends; no application code changed.
+
+One matched eight-subject pair on a local MySQL 8.0.46 server (150 ms provider
+delay) kept the same evidence fingerprint and 12 provider calls. Peak
+simultaneous provider handling rose from one to four and throughput from 2.222
+to 5.590 subjects per second. These are loopback fixture numbers on one
+machine, not a production claim. The CI `mysql` job runs a four-subject pair on
+MySQL 8.4. Multi-process workers against MySQL and matched production
+measurements remain open.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -4221,6 +4286,39 @@ classify entries or authorize any response. Agent collection, inventory/UI
 wiring, provenance, AI classification and native acceptance remain open, so
 roadmap F is still incomplete.
 
+Worker checkpoint (issue #844): a pure, I/O-free contract (`app/udev_rules.py`)
+parses one captured udev `*.rules` file and a captured listing of the rules
+directories. Rules follow udev(7) and systemd's token validation: leading
+whitespace is stripped from each physical line, `#` lines are ignored even
+inside a continuation, blank lines are skipped, backslash continuations are
+joined, and each rule's
+comma-separated `KEY[{attr}]OP"value"` pairs become match and assignment records
+with `LABEL`/`GOTO`, its file and starting line. Plain strings honour only
+`\"` (any other backslash, including `\\`, is literal); `e"..."` strings use C
+escapes. A physical line of 16384 bytes or more (`UDEV_LINE_SIZE`) stops the
+file as udev does, and a joined line of that size is ignored; both are gaps. `RUN` (default `{program}`), `PROGRAM`
+and `IMPORT{program}` become execution records with a bounded command, the
+full-command SHA-256, the program token, the `/usr/lib/udev` and `/lib/udev`
+paths udev searches for a relative name and a flag for `$`/`%` substitutions.
+`RUN{builtin}` and `IMPORT{builtin}` are builtins with no external program, and
+`IMPORT{file|db|cmdline|parent}` are not executions. `PROGRAM`, `IMPORT` and
+`TEST` written with `=`/`+=`/`:=` are recorded as the `==` match udev runs, with
+the written operator kept. Unknown keys, missing or unexpected attributes,
+unknown `RUN`/`IMPORT` types, operators a key does not accept (such as `RUN==`
+or `MODE-=`), quoting and escape errors are line-numbered gaps and the rule is
+skipped, as udev skips it. A `GOTO` with no matching `LABEL` is a gap.
+Effective files apply `/etc/udev/rules.d` > `/run/udev/rules.d` >
+`/usr/local/lib/udev/rules.d` > `/usr/lib/udev/rules.d` > `/lib/udev/rules.d`
+precedence in lexical name order, list shadowed copies as overridden, report a
+`/dev/null` symlink as masking and list hidden (`.`-prefixed) and non-`.rules`
+names as ignored. Unknown
+directories and malformed, duplicate or unreadable entries are gaps.
+Over-limit, non-UTF-8 or NUL input yields no partial records, every record
+keeps `origin: not_assessed`, and no rule or command is ever executed. Agent
+collection, catalog `parse`-level wiring, persistence, UI, provenance, AI
+classification and native acceptance remain open, so roadmap F is still
+incomplete.
+
 Worker checkpoint (issue #711): a pure, I/O-free contract
 (`app/scheduled_jobs.py`) parses captured anacrontab text and individual at
 spool jobs into typed records. For anacrontab it returns jobs with numeric or
@@ -4262,6 +4360,33 @@ generated or transient), and `package_verified` is always false. Uncollected sea
 directories, unreadable, oversized or malformed input, invalid names, unresolved,
 dangling or foreign links, missing trigger targets and over-cap input all become
 explicit coverage gaps. The result carries a deterministic digest. Runtime unit state, read-only collection wiring, package provenance, UI and AI classification remain open, so roadmap F is not complete. Fixed systemd specifiers are covered by the #702 checkpoint below; host/boot/environment-dependent specifiers and `$VAR` substitution remain explicit gaps.
+
+Worker checkpoint (issue #702, account enumeration): this is contract-only, so
+roadmap F remains incomplete. The new pure module `app/systemd_user_accounts.py`
+decides which accounts' `systemd --user` managers to resolve, from captured
+read-only observations. `parse_login_defs()` reads `UID_MIN`/`UID_MAX` from
+`/etc/login.defs`. Absent keys use the documented `login.defs(5)` defaults
+(1000/60000) and are listed as `defaulted`. A non-decimal value (including the
+octal and hexadecimal forms shadow-utils also accepts), an inverted range or an
+uncollected file falls back to those defaults with a gap. Duplicate keys follow
+shadow-utils (last value wins) and are reported. `parse_passwd()` reads `getent
+passwd` output into name, UID, GID, home and shell. It never carries the password
+or GECOS fields forward, and a malformed line is identified only by its line
+number. Malformed lines, invalid names or IDs, and over-cap input (4 MiB or
+50,000 lines) become gaps. A name that appears more than once is dropped as
+ambiguous. `candidate_accounts()` combines these with a validated lingering
+list. The candidates are root, regular accounts in the UID range and every
+lingering account. Each one has a `default_runtime_dir` of `/run/user/<uid>` (the
+logind convention, not an observation) and an `interactive_shell` flag.
+Non-interactive accounts are kept, because lingering or `su -s` sessions still
+start their manager. Lingering names missing from passwd, unusable homes, and
+incomplete or uncollected upstream observations are reported as gaps. Because a
+user manager runs per UID, candidates whose UID is shared by more than one passwd
+name are dropped and reported as `passwd_duplicate_uid`. A vendor
+`/usr/etc/login.defs` is not merged, and `getent passwd` does not enumerate every
+NSS backend (for example sssd/LDAP with `enumerate = false`), so such directory
+accounts can be missing from a complete result. Running the collection commands, observed
+runtime directories, runtime unit state, UI and AI classification remain open.
 
 Worker checkpoint (issue #702, per-user units): the same contract adds
 `resolve_user(observations, home, runtime_dir, account, collected_roots)` for one
@@ -4343,6 +4468,31 @@ environment. It can carry `config_home`, `data_home` and `cache_home`, plus
   are `local`. `%E`/`%C` follow valid config/cache homes.
 - **Still open:** manager-environment collection, lingering/runtime state,
   account enumeration, collection wiring, UI and AI classification.
+
+### systemd version-gated specifiers — worker checkpoint #702
+
+Contract-only; roadmap F remains incomplete. This settles the earlier
+limitation that system `%u`/`%U`/`%h`/`%s` were assumed to follow current
+`systemd.unit(5)` because the systemd version was unknown.
+
+- **Parser:** `parse_systemd_version(text)` reads the first line of
+  `systemctl --version` (`systemd N` with an optional `(package-version)`).
+  Missing, oversized, NUL, leading-zero, out-of-range or trailing-text input
+  returns no version and a `systemd_version_*` gap; nothing is guessed.
+- **Gating:** `resolve()` and `resolve_user()` take an optional
+  `systemd_version`. From upstream NEWS, `SPECIFIER_MIN_VERSION` records the
+  first release that gave each specifier its current meaning: 228 for
+  `%u %U %h %s` (earlier releases resolved them from `User=`), 236 for
+  `%S %C %L`, 239 for `%E %j %J` and 240 for `%g %G`. An older release leaves
+  those specifiers raw with the existing `unexpanded_specifier` gap. For
+  example, EL7's systemd 219 never gets `%h`=/root.
+- **Invalid version:** a supplied value that is not an integer in 1–9999
+  withholds every version-dependent specifier and adds `systemd_version_invalid`.
+- **Compatibility:** omitting the version keeps the earlier output, limitation
+  text and digest exactly. When a version is supplied, results carry
+  `systemd_version`, and the limitations name whether it was applied.
+- **Still open:** running `systemctl --version` in the collector, collection
+  wiring, runtime state, UI and AI classification.
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
