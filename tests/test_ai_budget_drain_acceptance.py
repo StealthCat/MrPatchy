@@ -157,6 +157,13 @@ def test_another_worker_takes_queued_work_and_resume_restores_admission(admin,mo
             assert len([row for row in s.scalars(select(Behavior)) if row.verdict=='low'])==1
         # Resume records a new control revision; the next heartbeat reports again.
         drain(drained,'resume')
+        # Until that heartbeat the worker still reports ``drained``, so the
+        # reported-state half of the admission gate refuses capped work.
+        assert reported(drained)=='drained'
+        assert ai_claims.acquire(drained_owner) is None
+        worker.investigate_one(drained_owner)
+        assert len(provider.sent)==1
+        with Session() as s:assert len(ledger(s))==1
         assert drained.heartbeat(False,[],0,0) is False and reported(drained)=='reporting'
         worker.investigate_one(drained_owner)
         with Session() as s:
