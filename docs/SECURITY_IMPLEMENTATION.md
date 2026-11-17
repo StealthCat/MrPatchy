@@ -2478,6 +2478,44 @@ plus one bounded read for administrator source links. Lookup, publication,
 revocation, approval, budget, pause, role, response and schema are unchanged.
 Matched production acceptance remains open.
 
+### Cross-server exact hits and contextual misses — worker checkpoint #1035
+
+`tests/test_known_good_cross_server_acceptance.py` drives the real
+`worker.investigate_one()` path across several servers. Only the provider
+transport is a fixture.
+
+- **Exact hit:** server A's fresh low result publishes one active candidate. The
+  same artifact and behavior on server B, differing only in host, PID, start
+  ticks and ephemeral port, is reused with zero provider calls. B gets a
+  `known_good` assessment with a zero-call run and its own host observation.
+  Under a daily spend cap the hit adds no ledger reservation.
+- **Contextual misses:** each reaches the provider exactly once and publishes its
+  own distinct candidate, leaving A's entry untouched:
+  - the same path with a different SHA-256;
+  - the same hash with a different privileges manifest (account);
+  - the same hash with a different network-behavior manifest.
+- **No reuse:** a medium or unknown result publishes nothing, so the next
+  server still calls the provider. A revoked candidate is not reused and is
+  not reactivated.
+- **Concurrent first encounters:** two servers in flight at the provider at the
+  same time make one call each and publish one deduplicated candidate with
+  both observations. A third server then hits that candidate with zero calls.
+- **Mutation evidence:** each of these makes the named tests fail:
+  - ignoring the artifact and behavior components in the fingerprint (the 3
+    miss cases fail);
+  - adding observation fields to the fingerprint (4 hit tests fail);
+  - ignoring the active flag (the revocation test fails);
+  - a lookup that always misses (3 tests fail);
+  - never publishing (8 tests fail).
+- **Unchanged:** this adds tests only. Lookup, publication, revocation,
+  approval, admission, budget, pause, roles and response authorization are
+  unchanged. MySQL coverage comes from the native `mysql` CI shards, which run
+  the full suite.
+- **Remaining for requirement B:** script, interpreter, configuration and
+  provenance changes are covered at the fingerprint level in
+  `tests/test_known_good.py`, not through this worker path. Production hit
+  rates are not measured.
+
 ### Retry blocked process investigations — worker checkpoint #934
 
 Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
