@@ -56,5 +56,7 @@ module.exports=async(page,capture)=>{
   await page.unroute('**/api/identity',identity);await page.unroute('**/api/hosts/*/security/auto-plan-status',statusRoute);
   await page.unroute('**/api/hosts/*/security/policy',policyRoute);await page.unroute(base,count);await page.unroute(base+'/retry',retry);
   await page.setViewportSize({width:1440,height:1000});
+  // Restore the administrator shell so the next module does not inherit the operator render.
+  await page.reload();await page.waitForFunction(()=>document.body.dataset.role==='admin');
  }
 };
