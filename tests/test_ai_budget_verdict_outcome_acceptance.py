@@ -208,3 +208,41 @@ def test_invalid_structured_answer_is_rejected_and_still_charged(admin,monkeypat
         assert_settled_and_counted(s,1)
         assert_no_response(s)
         assert triage_notices(s)==[]
+
+
+def test_complete_low_verdict_publishes_a_candidate_reused_across_servers_without_a_charge(admin,monkeypatch,ssh):
+    """A complete low verdict under the cap still feeds the fleet known-good cache.
+
+    The first server pays for one call and publishes the candidate; an identical
+    subject on a second server reuses it with no provider call and no new charge.
+    """
+    from tests.test_known_good import complete
+    def contextual(host):
+        observed=complete();observed['host_id']=host
+        observed['investigation']['details']['known_good_context']['observation']['host_id']=host
+        return observed
+    configure();add_host(contextual('host-a'))
+    provider=Provider(answer('low'));monkeypatch.setattr(ai.transport,'post',provider)
+    worker.investigate_one()
+    assert len(provider.bodies)==1 and ssh==[]
+    with Session() as s:
+        saved=assessments(s);assert len(saved)==1
+        status=known_good.assessment(saved[0])
+        assert status['eligible'] is True and status['reasons']==[]
+        entry=s.get(known_good.Entry,status['fingerprint'])
+        assert entry and entry.active and entry.assessment_id==saved[0].id and entry.source_host_id=='host-a'
+        assert_settled_and_counted(s,1)
+        assert_no_response(s)
+        s.add(Host(id='host-b',name='host-b',address='203.0.113.6',fingerprint='SHA256:fixture-b',state='online',
+                   inventory={'os':'ID=debian\nVERSION_ID=12'}))
+        s.add(Behavior(id='subject-host-b',host_id='host-b',evidence=contextual('host-b')))
+        s.commit()
+    worker.investigate_one()
+    assert len(provider.bodies)==1 and ssh==[]
+    with Session() as s:
+        reused=s.get(Behavior,'subject-host-b')
+        assert reused.verdict=='low' and reused.approved is False
+        assert count(s,known_good.Entry)==1
+        assert count(s,known_good.Observation)==2
+        assert_settled_and_counted(s,1)
+        assert count(s,Job)==0 and count(s,Incident)==0 and count(s,Plan)==0
