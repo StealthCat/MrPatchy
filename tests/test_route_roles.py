@@ -28,6 +28,7 @@ EXPECTED_ROLES = {
     ('GET','/api/ai/triage/timings'):'admin',
     ('GET','/api/ai/runs'):'admin',
     ('GET','/api/ai/runs/{run_id}'):'admin',
+    ('GET','/api/ai/known-good/{fingerprint}/observations'):'admin',
     ('GET','/api/audit'):'admin',
     ('GET','/api/audit/entries/{entry_id}'):'admin',
     ('GET','/api/audit/export'):'admin',
