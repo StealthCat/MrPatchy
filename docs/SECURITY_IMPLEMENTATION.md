@@ -9421,6 +9421,21 @@ The startup catalog listed `~/.ssh/authorized_keys` under `ssh_forced_command` a
   - `permitopen`/`permitlisten` syntax validation, which is a gap today;
   - provenance, AI classification and UI.
 
+### authorized_keys permitopen/permitlisten validation — worker checkpoint #1041 (roadmap F)
+
+This closes the "`permitopen`/`permitlisten` syntax validation" item left by #895. `app/authorized_keys.py` now validates each value as OpenSSH `auth-options.c` `handle_permit()` does, using the same `hpdelim2()` and `a2port()` rules. The contract version moves to 2.
+
+- **Host:** a `permitlisten` value with no `:` gets an implicit `*:` listen host, so `permitlisten="8080"` is valid. The host ends at the first `:` or `/`, or just after the closing `]` when it starts with `[`. A missing `]`, text after `]`, or a host of 1025 (`NI_MAXHOST`) characters or more makes sshd refuse the line (`invalid_permission_host`).
+- **Port:** a missing or empty port, or port 0, makes sshd refuse the line (`invalid_permission_port`). Port `*` and decimal 1–65535 are valid, accepting `strtonum`'s leading whitespace and sign.
+- **Service-name ports:** any other port is resolved by `getservbyname(…, "tcp")` from the server's services database, which is not observed. Out-of-range numbers are included, because the lookup is tried for them too. These remain an explicit `forwarding_port_service_name` gap that lists the values, and never count as covered.
+- **Precedence:** a line with only valid values now shadows a later line for the same key. A refused line never shadows, so the later line is the `first` accepted one. Only a service-name gap keeps the later line `conditional` (`precedence_depends_on_forwarding_spec`).
+- **Compatibility:** the `forwarding_spec_unvalidated` gap kind is replaced by `forwarding_port_service_name`. Nothing consumes the contract yet, because it is not wired into collection.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. Nothing is executed or authorized.
+- **Validation:** `tests/test_authorized_keys.py` adds valid, refused and service-name cases. 33 cases fail on main `c86141a` and all 85 tests pass with the change.
+- **Remaining:**
+  - collection wiring into the startup inventory, with per-account file enumeration and `AuthorizedKeysFile`/`AuthorizedKeysCommand` from the effective sshd configuration;
+  - provenance, AI classification and UI.
+
 ## Ordered file assessment and visibility (#626)
 
 ### Automatic retained file trust (#636)
