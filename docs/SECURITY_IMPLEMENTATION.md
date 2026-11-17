@@ -2506,6 +2506,16 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **UI validation:** `tests/ui_host_retry_blocked_investigations.cjs` fails on main and passes after. It covers the host-only endpoint (never the fleet route), the refresh, a partial batch, singular wording, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** blocked advisory-plan work is still not covered.
 
+#### Cause-specific blocked wording — worker checkpoint, fixes #1007
+
+- **Problem:** every non-transient block used one retry reason and one notification text, both blaming the API key, quota or model. Evidence over the 64 KB sharing limit is refused locally before any provider request, so following that advice could only lead to unnecessary key or model churn.
+- **Change:** `AIError` carries a `cause` used only for wording. The 64 KB refusal sets `evidence_size`; every other error keeps `provider`. `ai_retry.failed` gives an evidence-size block its own reason: nothing was sent, review the observation manually, and a key or model change does not help. Provider and configuration blocks keep the existing reason.
+- **Follow-up stage:** the target controls the size of the allowlisted follow-up evidence, so the same refusal can fire on the second request after the first-stage call was sent. The worker then sets `follow_up_evidence_size`, and the reason says the follow-up request was not sent but the first-stage request was and may be billed.
+- **Notification:** the `ai-triage`/`configuration-blocked` text is now cause-neutral. It points to each investigation's retry reason and separates configuration fixes from oversized evidence. The identity, revision key, severity, role and deep link are unchanged. The **Retry blocked investigations** help text says the same.
+- **Unchanged:** retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits an evidence-size block, which is then refused locally again), admission, reservations and authorization.
+- **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
+- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
@@ -2763,6 +2773,34 @@ fails closed. Before this checkpoint nothing showed that in advance.
 - **Limitation:** a missing API key is still reported only by the existing
   `configuration` gate. Near-exhaustion of the cap remains undetected.
 
+### Data sharing under a daily cap — worker checkpoint #1000, fix #1001
+
+`tests/test_ai_budget_data_sharing_acceptance.py` covers the data-sharing part of
+milestone 4. It drives the real worker and update-scoring paths in capped modes,
+with only the provider transport and SSH as fixtures.
+
+- **Capping does not change what is shared.** A `daily_cap` investigation sends
+  byte-for-byte the same request as an unthrottled one: `store: false`, no
+  `process_identity`, connections truncated with an `omitted_connections` count,
+  and no host address or host key. The process identity is retained locally for
+  follow-up selection. The reservation is quoted from that same bounded request.
+- **Scoring opt-in.** With update scoring off, no package metadata is sent,
+  reserved or recorded, while investigations are still admitted under the cap.
+  With it on, the scoring batch reserves its own spend and carries only package
+  metadata: no address, host key, executable path, hash or process evidence.
+- **Evidence over the 64 KB limit (#1001, P1).** In `daily_cap` and
+  `rate_and_daily`, the claim-time quote refused such a subject and returned
+  without recording anything. The subject stayed `pending` at the head of the
+  queue, so no other subject in the fleet was ever claimed and nothing explained
+  why. `ai_claims.acquire()` now records the same outcome as an uncapped attempt:
+  verdict `error`, a `blocked` retry and the safe reason. Nothing is reserved or
+  sent, and later passes move on to other work. The regression test runs in
+  `daily_cap`, `rate_and_daily` and `unthrottled`.
+
+Mutations to stop stripping `process_identity`, stop truncating connections, or
+ignore the scoring opt-in are each caught. MySQL-native runs, contention/fairness
+and measured performance remain open milestone-4 items.
+
 ### Finite implementation and acceptance milestones
 
 Initial triage preflight reuses the global settings and encrypted key already
@@ -2788,6 +2826,19 @@ Issue reproduction/fixes retain priority over these roadmap milestones. Reconcil
 unfinished related work first and use the existing cycle budget, source/PR versioning
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
+
+### Daily-cap deferral reason — bug fix checkpoint #1015 (P3)
+
+A triage subject refused by the authoritative `ai_budget.reserve()` because the
+daily spend cap had no safe reservation was stored with the reason "Waiting for
+shared AI rate eligibility". `ai_retry.failed()` picked that text whenever the
+refusal carried `retry_after`, and the cap refusal does. The cap refusal now marks
+itself with `budget_wait`, and the deferred reason reads "Waiting for the daily AI
+spend cap to reset; no provider request was sent.". Rate-throttle, provider-backoff
+and pause waits keep their existing reasons. Deferral state, attempt refund and next
+eligibility are unchanged. `tests/test_ai_retry_deferral_reason.py`: the two cap
+cases (`daily_cap`, `rate_and_daily`) fail on main `c86141a` and pass after; the three
+other-wait cases pass on both.
 
 ### Worker drain and resume under a daily spend cap — milestone 4 acceptance #1008
 
@@ -9348,7 +9399,7 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Validation:** three focused tests fail on the #840 head `3bbcf07` (main `480100d` plus #839) and pass after the change. The related incident, coverage, notification, route-role and lifecycle suites pass on SQLite.
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
-  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan. Fixed by worker checkpoint #1043 below.
 
 ### OS support-end advance warning — worker checkpoint #341 (roadmap J)
 
@@ -9391,3 +9442,22 @@ The first #841 limitation: a policy saved before `enabled_since` existed stayed 
 - **Unchanged:** policies with `enabled_since`, the scheduler, `security_coverage.assessment`, the schema, roles and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `dff91c4` and pass after the change; a behavior-only check (legacy never-scanned policy publishes `overdue` after the interval plus grace) publishes nothing on main. The related SQLite coverage, notification, security, incident, operations and scheduling selection passes (580 passed, 2 skipped).
 - **Remaining:** the window before a legacy policy notifies starts at the upgrade's first coordinator tick, not at its true enablement time, which is unknown. YARA schedules and a configurable grace period remain out of scope.
+
+### Re-enabled scanning and returning servers in coverage notifications — worker checkpoint #1043
+
+Two re-enable paths published `overdue` straight away when the scheduler was held at that moment by a quarantine, a recovery-required operation, a full queue or a pending YARA or execution scan:
+
+- Re-enabling scheduled scanning on a server whose last scan was old. `enabled_since` was consulted only for never-scanned servers.
+- A disabled or re-enrolling server returning to the active set, either with an old last scan or never scanned with an old `enabled_since`. This was the #841 limitation.
+
+- **Change:** `classify` holds a scanned server's `overdue` while a valid `enabled_since` is within the interval plus the one-hour grace period. An invalid or missing clock keeps the #816 behavior.
+- **Resume marker:** the producer keeps a server-managed `security-scan-resumed:<host>` setting for servers with an enabled policy.
+  - It holds `{"inactive": true}` while the server is outside the active set.
+  - When the server is next seen active, it becomes `{"active_since": <epoch>}`, in whole microseconds.
+  - The later of that time and `enabled_since` starts the coverage clock.
+  - It is written only on these transitions. It is removed once the clock is older than the interval plus grace, when the policy is disabled or removed, or when the server is deleted.
+  - The prefix does not start with `security-policy:`, and the administrator's policy row is never written.
+- **No upgrade delay:** a server never seen inactive has no marker, so existing and continuously active servers keep the #816 schedule after upgrade.
+- **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
+- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
