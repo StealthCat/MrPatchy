@@ -2827,6 +2827,19 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Daily-cap deferral reason — bug fix checkpoint #1015 (P3)
+
+A triage subject refused by the authoritative `ai_budget.reserve()` because the
+daily spend cap had no safe reservation was stored with the reason "Waiting for
+shared AI rate eligibility". `ai_retry.failed()` picked that text whenever the
+refusal carried `retry_after`, and the cap refusal does. The cap refusal now marks
+itself with `budget_wait`, and the deferred reason reads "Waiting for the daily AI
+spend cap to reset; no provider request was sent.". Rate-throttle, provider-backoff
+and pause waits keep their existing reasons. Deferral state, attempt refund and next
+eligibility are unchanged. `tests/test_ai_retry_deferral_reason.py`: the two cap
+cases (`daily_cap`, `rate_and_daily`) fail on main `c86141a` and pass after; the three
+other-wait cases pass on both.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
@@ -8954,6 +8967,50 @@ workload equivalence. Production latency and full faster-triage acceptance
 remain open.
 
 
+### Retained fingerprinted serial/parallel benchmark records — worker checkpoint #1025
+
+Milestone 4 asks for recorded before/after performance and capability-equivalence
+results. The earlier retained reports (`ai-parallel-v1220.json`,
+`ai-persistence-delay.json` and `ai-transport-v1180.json`) predate the
+version-1 workload fingerprint, so the comparator refuses them. Regenerated
+records for main `c86141a` are kept in
+`docs/benchmarks/ai-equivalence-c86141a/`. They include each raw
+`tools/benchmark_ai.py` report, the `tools/compare_ai_benchmarks.py` output and a
+manifest of the exact commands and limits. Both workloads use 20 subjects, with
+every second subject requesting follow-up SSH evidence. The fixture delays are a
+25 ms loopback provider, 10 ms SSH and 5 ms receipt/usage persistence. Each pair
+compares concurrency 1 against concurrency 4.
+
+| Workload | Serial | Parallel (4) | Throughput |
+| --- | --- | --- | --- |
+| Cross-server (20 servers) | 2.052 s, 9.747/s | 1.119 s, 17.879/s | +83.4% |
+| Same server (4 supported slots) | 2.074 s, 9.641/s | 1.172 s, 17.060/s | +77.0% |
+
+Both pairs are accepted as capability-equivalent: identical workload fingerprints,
+30 provider calls, 3,000 input and 600 output tokens, 10 follow-up SSH evidence
+requests, all 20 subjects complete, none approved and no errors. The parallel runs
+actually overlapped four provider requests; the serial runs never overlapped any.
+Per-item latency rises under parallelism (cross-server run p50 122 → 211 ms,
+admission p50 11 → 34 ms) while total elapsed time falls. Three additional
+unretained repeats of each pair on the same checkout reproduced the same
+fingerprints, with serial throughput of 9.95–10.63/s and parallel throughput of
+18.06–20.85/s.
+
+`tests/test_ai_benchmark_records.py` re-runs the comparator over every retained
+pair and requires the output to equal the recorded comparison exactly. It also
+checks complete results, the full follow-up evidence count and real provider
+overlap. The test refuses a changed or missing fingerprint and a dropped
+follow-up call.
+
+These are loopback fixtures on a disposable SQLite database under shared local
+load. They are not production, TLS, live-provider or MySQL measurements. The
+reports do not record the AI control mode, and cost stays unavailable rather than
+zero. MySQL records (after #979), control-mode recording, production measurements
+and dashboard presentation remain open, so milestone 4 is still incomplete. This
+checkpoint changes no runtime, schema, admission, provider call or response
+authority.
+
+
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
 The server Overview now reports a read-only lifecycle assessment for reviewed
@@ -9379,7 +9436,6 @@ Roadmap A requires AI activity to show the blocked reason and next eligible star
 - **Validation:** the extended `tests/ui_ai_control_gates.cjs` fails on main `6de8c48` (no card on AI activity) and passes after the change. It covers finite, open, malformed (injection) and error states on AI activity, placement, refresh, a discarded late response, the viewer redirect, and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** the card is display-only and promises no start. Worker-health surfaces still show no shared gate state.
 
-
 ### Never-scanned legacy scan policies in coverage notifications — worker checkpoint #883
 
 The first #841 limitation: a policy saved before `enabled_since` existed stayed silent forever while its server had never had a `security-scan` attempt, unless an administrator happened to re-save it.
@@ -9410,6 +9466,28 @@ Two re-enable paths published `overdue` straight away when the scheduler was hel
 - **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
 - **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
+
+### XDG autostart contract — worker checkpoint #889 (roadmap F)
+
+The startup catalog listed `/etc/xdg/autostart` and `~/.config/autostart` as metadata only. Nothing said which `.desktop` entry is effective for a name, whether it starts at login, or what it runs.
+
+- **Change:** a new pure module, `app/xdg_autostart.py`, follows the freedesktop Autostart and Desktop Entry specifications.
+  - **Precedence:** it resolves effective entries by file name across directories in precedence order. A user file shadows a system file and is reported as `overrides`/`overridden_by`.
+  - **Statuses:** each entry is classified `enabled`, `hidden`, `disabled`, `conditional`, `invalid` or `unknown`.
+    - `hidden`: `Hidden=true`, which also suppresses the shadowed system file.
+    - `disabled`: `X-GNOME-Autostart-enabled=false`.
+    - `conditional`: `OnlyShowIn`/`NotShowIn`/`TryExec`, or GNOME `AutostartCondition`. These depend on the session and are never guessed.
+  - **Exec:** the value is tokenized with the spec's quoting rules and expanded with autostart field codes into `argv`/`program`.
+- **Gaps, never reported as covered:**
+  - an uncollected higher-precedence directory (`precedence_uncertain`);
+  - unreadable or oversized files;
+  - malformed lines and duplicate keys;
+  - unbalanced `Exec` quoting (no argv is guessed) and unknown or embedded field codes;
+  - reserved characters outside double quotes in `Exec`, such as `'`, `\`, `|`, `;` or `$` (`exec_unquoted_reserved`). The spec leaves these undefined and GIO applies shell quoting to them, so no argv is guessed for `sh -c '…'`;
+  - invalid names, and the 512-entry, 64 KiB and 4096-character caps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. A `system` origin is not a verified package default.
+- **Validation:** `tests/test_xdg_autostart.py` has 17 tests. They cannot run on main, where the module does not exist, and they pass on the branch. Four review-follow-up regressions fail on the earlier head `78168b5`: `sh -c '…'`, an unquoted backslash, each reserved character, and `AutostartCondition`.
+- **Remaining:** collection wiring into the startup inventory, per-user directory enumeration, provenance and UI.
 
 ### Free exact known-good hits under an exhausted daily cap — worker checkpoint #1030
 

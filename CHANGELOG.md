@@ -1,3 +1,15 @@
+## 1.75.20 — 2026-11-17
+
+1. [PR #890](https://github.com/StealthCat/MrPatchy/pull/890): Add a pure XDG autostart resolution contract that resolves user-over-system precedence, `Hidden`, GNOME-disabled and desktop- or GNOME-conditional entries, and extracts spec-conformant `Exec` argv; ambiguous quoting becomes an explicit coverage gap, never a guessed argv (#889). Compatibility: none; the module is new and nothing imports it yet. Limits: groundwork for login-autostart inventory, not yet wired into collection or the UI.
+
+## 1.75.19 — 2026-11-17
+
+1. [PR #1026](https://github.com/StealthCat/MrPatchy/pull/1026): Retain fingerprinted serial/parallel AI triage benchmark records for cross-server and same-server workloads in `docs/benchmarks/ai-equivalence-c86141a/`, with comparator output and a regression test that refuses tampered or pre-fingerprint records (#1025). Compatibility: none; docs, benchmark records and tests only, with no runtime, schema, settings, admission or response-authority change.
+
+## 1.75.18 — 2026-11-17
+
+1. [PR #1017](https://github.com/StealthCat/MrPatchy/pull/1017): A process investigation deferred by the daily AI spend cap now says it is waiting for the cap to reset in both `daily_cap` and `rate_and_daily` modes, instead of saying it is waiting for the rate throttle (#1015). Rate-throttle, pause and provider-backoff waits keep their existing reasons, and scheduling is unchanged. Compatibility: no schema, API or setting change; existing `ai_triage_retries` rows keep their stored reason until their next deferral.
+
 ## 1.75.17 — 2026-11-17
 
 1. [PR #1020](https://github.com/StealthCat/MrPatchy/pull/1020): A process investigation blocked because its evidence is over the 64 KB sharing limit now says so instead of advising an API key, quota or model change; if oversized follow-up evidence blocks the second request, the reason says the first request was already sent. The blocked-investigations notification and Retry blocked investigations help now point to each investigation's own retry reason (#1007). Compatibility: no schema, API shape, admission, reservation, role or response-authorization change; an already-active `configuration-blocked` notification gets one new revision with the new text, and existing retry rows keep their stored reason until their next failure.

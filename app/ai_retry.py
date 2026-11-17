@@ -90,6 +90,8 @@ def failed(s,row,error,now):
             if tail is not None:retry.next_at=max(retry.next_at,tail+3600.0/max(1,rate))
         retry.reason=('Waiting for shared AI rate eligibility; no provider request was sent.' if error.retry_after else
             'Waiting for AI policy resume; eligibility is rechecked before every provider call.')
+        if getattr(error,'budget_wait',False) is True:
+            retry.reason='Waiting for the daily AI spend cap to reset; no provider request was sent.'
         if provider_wait:retry.reason='Waiting for shared provider backoff; no provider request was sent.'
     elif isinstance(error,AIError) and error.transient:
         provider=min(error.provider_retry_after or 0,ai_provider_backoff.MAX_PROVIDER_DELAY)
