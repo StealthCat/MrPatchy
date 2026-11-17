@@ -4248,7 +4248,9 @@ OpenSSH `session.c` `do_rc_files()`. Nothing calls it yet.
   only when every possibility agrees. Otherwise the result is `uncertain`, with
   the possible outcomes and an `input_unknown` gap. These are also gaps:
   - `ChrootDirectory`, set or unknown;
-  - a home path the shell would re-split;
+  - a home or login shell path containing any character outside
+    `[A-Za-z0-9_./+,:@%=-]`, because sshd's `popen()` and the login shell parse
+    them as shell code (`$`, `;`, globs, quotes, whitespace and the rest);
   - a file of unknown kind;
   - a malformed, duplicate or over-cap account;
   - a malformed observation.
@@ -4259,7 +4261,8 @@ OpenSSH `session.c` `do_rc_files()`. Nothing calls it yet.
   not evaluated.
 
 Remaining: collect the two files and the effective sshd settings per account,
-derive `key_user_rc` from the `authorized_keys` contract, then persistence, UI and
+derive `key_user_rc` from the `authorized_keys` contract and, for certificate
+logins, the certificate's `permit-user-rc` extension, then persistence, UI and
 AI classification.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723

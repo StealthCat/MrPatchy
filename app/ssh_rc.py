@@ -25,13 +25,18 @@ happens when it is a directory, or when the login shell is ``nologin`` or
 ``false``. Both scripts run through ``/bin/sh``, so their mode does not matter.
 ``stat()`` follows symlinks, so a dangling symlink counts as absent.
 
+``key_user_rc`` must reflect every way the account can authenticate: the
+``authorized_keys`` options and, for certificate logins, the certificate's
+``permit-user-rc`` extension, which sets the same flag.
+
 Both hooks run as the logged-in user in their home directory. The observation is
 assumed to be collected with at least the user's view of these paths.
 
 It performs no I/O, never runs a command and never authorizes a response
 action. Every input that is unknown, malformed or over a cap, or that cannot be
-resolved exactly (``ChrootDirectory``, a home path that the shell would
-re-split) becomes an explicit coverage gap and never yields a covered result.
+resolved exactly (``ChrootDirectory``, or a home or login shell path that a
+shell would expand, glob, quote or split, because only paths made of
+``[A-Za-z0-9_./+,:@%=-]`` are taken literally) becomes an explicit coverage gap and never yields a covered result.
 """
 from __future__ import annotations
 
@@ -55,6 +60,11 @@ KEY_USER_RC = ('permitted', 'denied', 'mixed', 'unknown')
 _NON_EXECUTING_SHELLS = ('nologin', 'false')
 _USER = re.compile(r'[A-Za-z0-9_.][A-Za-z0-9_.@-]{0,255}\$?')
 _SHA256 = re.compile(r'[0-9a-f]{64}')
+# sshd builds the user rc command with popen(), so /bin/sh parses the login
+# shell path, and the login shell then parses '/bin/sh <pw_dir>/.ssh/rc' as
+# shell code. Only paths made entirely of characters that no POSIX shell
+# expands, globs, quotes or splits are taken literally; anything else is a gap.
+_SHELL_LITERAL = re.compile(r'[A-Za-z0-9_./+,:@%=-]+')
 
 
 class Invalid(ValueError):
@@ -147,7 +157,10 @@ def _decide(kind: str, sshd: dict[str, Any], key_permits: bool, user_rc_present:
         elif account['user_rc']['kind'] != 'regular':
             script_runs = None if script_runs else script_runs
             reasons.append('user_rc_kind_not_regular_or_unknown')
-        if re.search(r"[\s'\\]", account['home']):
+        if not _SHELL_LITERAL.fullmatch(shell):
+            script_runs = None
+            reasons.append('login_shell_path_parsed_by_shell')
+        if not _SHELL_LITERAL.fullmatch(account['home']):
             script_runs = None if script_runs else script_runs
             reasons.append('home_path_resplit_by_shell')
         return {'outcome': 'user_rc', 'path': path, 'command': _user_rc_command(shell, account['home']),

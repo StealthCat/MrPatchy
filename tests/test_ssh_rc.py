@@ -1,3 +1,5 @@
+import pytest
+
 from app import ssh_rc
 
 SHA = 'a' * 64
@@ -153,6 +155,39 @@ def test_match_override_applies_to_one_account_only():
     result = run(accounts=[account(), account(user='bob', home='/home/bob', sshd={'permit_user_rc': False})])
     assert sessions(result, 0)['session']['outcome'] == 'user_rc'
     assert sessions(result, 1)['session']['outcome'] == 'system_rc'
+
+
+SHELL_SPECIAL = [' ', '\t', '\n', "'", '"', '\\', '$', ';', '&', '|', '*', '?', '[', ']', '(', ')',
+                 '<', '>', '`', '~', '#', '{', '}', '!', '\u00e9']
+
+
+@pytest.mark.parametrize('char', SHELL_SPECIAL)
+def test_home_with_shell_special_character_is_unresolved(char):
+    result = run(accounts=[account(home=f'/home/a{char}b')])
+    s = sessions(result)['session']
+    assert s['outcome'] == 'user_rc' and s['script_runs'] is None
+    assert 'home_path_resplit_by_shell' in s['reasons']
+    assert result['complete'] is False
+
+
+@pytest.mark.parametrize('char', SHELL_SPECIAL)
+def test_login_shell_with_shell_special_character_is_unresolved(char):
+    result = run(accounts=[account(shell=f'/bin/ba{char}sh')])
+    s = sessions(result)['session']
+    assert s['outcome'] == 'user_rc' and s['script_runs'] is None
+    assert 'login_shell_path_parsed_by_shell' in s['reasons']
+    assert result['complete'] is False
+
+
+def test_nologin_shell_with_special_character_is_still_unresolved():
+    s = sessions(run(accounts=[account(shell='/sbin/no;login')]))['session']
+    assert s['script_runs'] is None
+
+
+def test_literal_home_and_shell_characters_stay_resolved():
+    result = run(accounts=[account(home='/srv/a_b.c+d,e:f@g%h=i-j', shell='/usr/bin/zsh-5.9')])
+    assert sessions(result)['session']['script_runs'] is True
+    assert result['complete'] is True
 
 
 def test_home_with_whitespace_or_quote_is_unresolved():
