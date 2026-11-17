@@ -60,12 +60,12 @@ def status(result):
 
 
 def test_reference_install_sources_parts_in_byte_order_and_runs_user_hooks():
-    files = [part('90gpg-agent'), part('15B'), part('15_b'), part('15b'), *reference_parts(), options()]
+    files = [part('90gpg-agent'), part('65B'), part('65_b'), part('65b'), *reference_parts(), options()]
     result = run(files)
     assert result['determined'] is True and result['gaps'] == []
     assert [p['name'] for p in result['session_parts']] == [
-        '15B', '15_b', '15b', '20x11-common_process-args', '40x11-common_xsessionrc',
-        '50x11-common_determine-startup', '90gpg-agent']
+        '20x11-common_process-args', '40x11-common_xsessionrc', '50x11-common_determine-startup',
+        '65B', '65_b', '65b', '90gpg-agent']
     assert [p['order'] for p in result['session_parts']] == list(range(1, 8))
     assert hooks(result) == {'~/.xsessionrc': 'sourced', '~/.xsession': 'runs_for_default_session',
                              '~/.Xsession': 'runs_for_default_session'}
@@ -111,7 +111,8 @@ def test_observations_flag_unsafe_parts_without_verdicts():
     assert obs['12private'] == ['not_world_readable']
     assert obs['40x11-common_xsessionrc'] == ['modified_reference_part']
     assert hooks(result)['~/.xsessionrc'] == 'undetermined'
-    assert hooks(result)['~/.xsession'] == 'runs_for_default_session'
+    # Unverified parts (10mine, 11open, 12private and the modified 40) are sourced before 50.
+    assert hooks(result)['~/.xsession'] == 'undetermined'
 
 
 @pytest.mark.parametrize('text, expected', [
@@ -281,5 +282,50 @@ def test_reference_hashes_match_installed_x11_common_when_it_is_the_reference_ve
     digest = hashlib.sha256(Path('/etc/X11/Xsession').read_bytes()).hexdigest()
     if digest != xs.REFERENCE_XSESSION_SHA256:
         pytest.skip('installed x11-common is not the reference version')
-    for name, sha in REF.items():
+    for name, sha in {**REF, **xs.PASSIVE_REFERENCE_PARTS}.items():
         assert hashlib.sha256(Path(f'/etc/X11/Xsession.d/{name}').read_bytes()).hexdigest() == sha
+
+
+def test_unverified_part_sourced_earlier_blocks_negative_and_positive_hook_conclusions():
+    # Peer review on #1055: an earlier part shares the shell and can re-enable allow-user-xsession,
+    # redefine has_option, set STARTUP or change USERXSESSIONRC, so no conclusion may be drawn past it.
+    no_user_xsession = options('allow-failsafe\n')
+    reported = run([*reference_parts(), part('30local-override'), no_user_xsession])
+    assert set(hooks(reported).values()) == {'undetermined'}
+    early = run([*reference_parts(), part('45local-override'), no_user_xsession])
+    assert hooks(early) == {'~/.xsessionrc': 'sourced', '~/.xsession': 'undetermined',
+                            '~/.Xsession': 'undetermined'}
+    by_path = {h['path']: h for h in early['user_hooks']}
+    assert by_path['~/.xsession']['preceding_parts'] == ['45local-override']
+    assert '45local-override' in by_path['~/.xsession']['detail']
+    late = run([*reference_parts(), part('60after'), no_user_xsession])
+    assert hooks(late) == {'~/.xsessionrc': 'sourced', '~/.xsession': 'disabled', '~/.Xsession': 'disabled'}
+    before_rc = run([*reference_parts(), part('10first'), options()])
+    assert set(hooks(before_rc).values()) == {'undetermined'}
+    unhashed_passive = run([*reference_parts(), part('30x11-common_xresources', sha256=None), options()])
+    assert set(hooks(unhashed_passive).values()) == {'undetermined'}
+
+
+def test_stock_passive_reference_parts_keep_hooks_determined_and_modified_ones_do_not():
+    passive = [part(name, sha256=sha) for name, sha in xs.PASSIVE_REFERENCE_PARTS.items()]
+    stock = run([*reference_parts(), *passive, options()])
+    assert stock['determined'] is True and hooks(stock) == {
+        '~/.xsessionrc': 'sourced', '~/.xsession': 'runs_for_default_session',
+        '~/.Xsession': 'runs_for_default_session'}
+    modified = run([*reference_parts(), part('35x11-common_xhost-local', sha256='e' * 64), options()])
+    assert hooks(modified)['~/.xsession'] == 'undetermined'
+    observed = {p['name']: [o['code'] for o in p['observations']] for p in modified['session_parts']}
+    assert observed['35x11-common_xhost-local'] == ['modified_reference_part']
+
+
+def test_preceding_part_list_is_bounded():
+    many = [part(f'0{i:02d}x') for i in range(12)]
+    result = run([*reference_parts(), *many, options()])
+    detail = {h['path']: h for h in result['user_hooks']}['~/.xsession']
+    assert len(detail['preceding_parts']) == 12 and 'and 4 more' in detail['detail']
+
+
+def test_without_process_args_the_detail_says_hooks_apply_to_every_session():
+    result = run([part('40x11-common_xsessionrc'), part('50x11-common_determine-startup'), options()])
+    detail = {h['path']: h for h in result['user_hooks']}['~/.xsession']
+    assert detail['status'] == 'runs_for_default_session' and 'every session' in detail['detail']

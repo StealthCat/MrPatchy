@@ -31,8 +31,12 @@ were checked against the real binary:
   passes one, so the user hooks run only for the default session.
 
 The per-user hooks are concluded only when the implementing parts are listed and
-byte-identical to the reference parts. A modified, missing or unhashed part
-makes that hook ``undetermined``. Other parts are listed but never interpreted.
+byte-identical to the reference parts, and every part sourced before them is
+byte-identical to a known reference part. All parts share one shell, so an
+earlier unverified part could re-enable ``allow-user-xsession``, redefine
+``has_option``, change ``USERXSESSIONRC`` or ``STARTUP`` or exit. A modified,
+missing or unhashed part, or an unverified earlier part, makes that hook
+``undetermined``. Other parts are listed but never interpreted.
 
 It performs no I/O, never runs or sources a script and never authorizes a
 response action. An unobserved or unreadable directory, malformed or over-limit
@@ -66,6 +70,15 @@ REFERENCE_PARTS = {
     '40x11-common_xsessionrc': '76944eea06861af747d0ed1cd516ef597d4f1543b040e025bfa1df15906ce73f',
     '50x11-common_determine-startup': 'c8aa9d6622178eeae1b0c20475338384f0f4e6a3b1a2f788906006bdacf3792a',
 }
+# Reference parts from the same package that are not interpreted but are known not to change the shell state the
+# user-hook parts depend on (they only run xrdb and xhost). A part that sorts before an implementing part must be
+# byte-identical to one of these or to a REFERENCE_PARTS entry, or the hook it implements is not concluded.
+PASSIVE_REFERENCE_PARTS = {
+    '30x11-common_xresources': 'afe858a06cfa7f21b8b5694780b98766de39c0cb6eaf7a4623b978ad3c6bc51c',
+    '35x11-common_xhost-local': '162189201eaa9ee96f1fc9546b83d88682903b69dc326e8c3cb51f58043a18d4',
+}
+KNOWN_PARTS = {**REFERENCE_PARTS, **PASSIVE_REFERENCE_PARTS}
+MAX_NAMED_PRECEDING = 8
 KNOWN_OPTIONS = ('allow-failsafe', 'allow-user-resources', 'allow-user-xsession', 'use-session-dbus', 'use-ssh-agent')
 FILE_TYPES = ('file', 'symlink', 'directory', 'other')
 BLOCKING = frozenset({
@@ -209,7 +222,7 @@ def _observations(name: str, stat: dict[str, Any]) -> list[dict[str, str]]:
         found.append('not_root_owned')
     if stat['mode'] & 0o022:
         found.append('group_or_other_writable')
-    if name in REFERENCE_PARTS and stat['sha256'] is not None and stat['sha256'] != REFERENCE_PARTS[name]:
+    if name in KNOWN_PARTS and stat['sha256'] is not None and stat['sha256'] != KNOWN_PARTS[name]:
         found.append('modified_reference_part')
     return [{'code': code, 'detail': OBSERVATIONS[code]} for code in found]
 
@@ -428,6 +441,26 @@ def evaluate(files: Any, *, directories: Any = None, xsession_sha256: Any = None
             return 'absent'
         return 'yes' if stat['sha256'] == REFERENCE_PARTS[name] else 'unknown'
 
+    order = [part['name'] for part in result['session_parts']]
+
+    def preceding_unverified(name: str) -> list[str]:
+        """Return the sourced parts before ``name`` that are not byte-identical to a known reference part."""
+        if name not in order:
+            return []
+        return [other for other in order[:order.index(name)]
+                if sourced[other]['sha256'] is None or sourced[other]['sha256'] != KNOWN_PARTS.get(other)]
+
+    def preceded(path: str, names: list[str]) -> bool:
+        if not names:
+            return False
+        shown = ', '.join(names[:MAX_NAMED_PRECEDING])
+        if len(names) > MAX_NAMED_PRECEDING:
+            shown += f' and {len(names) - MAX_NAMED_PRECEDING} more'
+        hook(path, 'undetermined', f'Sourced earlier in the same shell and not a verified reference part: {shown}. '
+                                   'Such a part can change the options, variables or functions this hook depends '
+                                   'on, or end the session.', preceding_parts=names)
+        return True
+
     def hook(path: str, status: str, detail: str, **extra: Any) -> None:
         result['user_hooks'].append({'path': path, 'status': status, 'detail': detail, **extra})
 
@@ -440,7 +473,9 @@ def evaluate(files: Any, *, directories: Any = None, xsession_sha256: Any = None
             hook(path, 'undetermined', 'The /etc/X11/Xsession wrapper is not verified.')
     else:
         rc = reference('40x11-common_xsessionrc')
-        if rc == 'yes':
+        if rc == 'yes' and preceded('~/.xsessionrc', preceding_unverified('40x11-common_xsessionrc')):
+            pass
+        elif rc == 'yes':
             hook('~/.xsessionrc', 'sourced', 'Sourced into the X session when it exists and is readable.')
         elif rc == 'absent':
             hook('~/.xsessionrc', 'not_by_reference',
@@ -450,7 +485,10 @@ def evaluate(files: Any, *, directories: Any = None, xsession_sha256: Any = None
         startup = reference('50x11-common_determine-startup')
         args = reference('20x11-common_process-args')
         allow = options['allow-user-xsession']
+        earlier = preceding_unverified('50x11-common_determine-startup') if startup == 'yes' else []
         for path in ('~/.xsession', '~/.Xsession'):
+            if startup == 'yes' and preceded(path, earlier):
+                continue
             if startup == 'absent':
                 hook(path, 'not_by_reference',
                      'The reference part that runs it is not listed; other parts are not interpreted.')
@@ -461,6 +499,12 @@ def evaluate(files: Any, *, directories: Any = None, xsession_sha256: Any = None
                 hook(path, 'undetermined', 'allow-user-xsession could not be determined.')
             elif not allow:
                 hook(path, 'disabled', 'allow-user-xsession is not set.')
+            elif args == 'absent':
+                hook(path, 'runs_for_default_session',
+                     'The first of ~/.xsession and ~/.Xsession that exists runs as the session program; it is '
+                     'executed when executable, otherwise run with $SHELL. The reference part that applies a '
+                     'display-manager session choice is not listed, so this applies to every session unless '
+                     'another part sets the session program.')
             else:
                 hook(path, 'runs_for_default_session',
                      'The first of ~/.xsession and ~/.Xsession that exists runs as the session program when the '

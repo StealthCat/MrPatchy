@@ -4256,6 +4256,17 @@ text, performs no I/O and never reads or sources a session part.
   reference. A missing reference part is `not_by_reference`, because other
   parts are listed but not interpreted. A modified or unhashed part is
   `undetermined`. A missing `/etc/X11/Xsession.d` aborts the session.
+- **Earlier parts.** All parts are sourced into one shell, so a part sourced
+  before `40` or `50` could re-enable `allow-user-xsession`, redefine
+  `has_option`, change `USERXSESSIONRC` or `STARTUP`, or exit. A hook is
+  concluded (`sourced`, `disabled` or `runs_for_default_session`) only when every
+  earlier part is byte-identical to a reference part. The passive stock parts
+  `30x11-common_xresources` and `35x11-common_xhost-local` are verified by hash.
+  Otherwise the hook is `undetermined`, and `preceding_parts` names the earlier
+  unverified parts (the detail text shows at most 8). When `20` is not listed,
+  the detail says the hooks apply to every session. Desktop packages that add
+  parts sorting before `50` (for example `20dbus_xdg-runtime`) therefore leave
+  `~/.xsession` undetermined until their reference hashes are added.
 - **Fail closed.** Each of the following is a blocking gap that marks the result
   incomplete:
   - an unobserved or unreadable directory;
