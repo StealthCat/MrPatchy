@@ -4786,6 +4786,44 @@ contract supplies `reached`), whether sshd uses PAM, AppArmor/SELinux, catalog
 schema, API, auth or response-authorization change.
 
 
+### systemd sleep and shutdown hooks — worker checkpoint #1067
+
+This is a contract increment only. The startup-awareness requirement is still incomplete. `app/systemd_hooks.py` is a pure, versioned contract for the catalog's `systemd_hooks` mechanism. It takes supplied directory-entry metadata, performs no I/O and never reads a hook's contents.
+
+- **Source.** The rules come from the systemd sources for v249, v252, v255, v256, v257 and v258: `sleep.c`, `shutdown.c`, `exec-util.c`, `conf-files.c` and `hidden_or_backup_file`. They were read, not recalled, and all six versions agree.
+  - A version outside v249–v258 is a blocking gap, and so is an unobserved version.
+- **Directories.** `systemd-sleep` scans only the compiled-in `<libexecdir>/system-sleep`, and `systemd-shutdown` scans only `<libexecdir>/system-shutdown`.
+  - On merged-usr hosts, both spellings are the same directory.
+  - On a split-usr host, the caller must say whether the build uses `/usr/lib/systemd` or `/lib/systemd`. Otherwise it is a blocking `libexec_dir_unknown` gap.
+  - Files in `/etc/systemd/system-{sleep,shutdown}` and `/usr/local/lib/systemd/system-{sleep,shutdown}` are never run. When they are supplied, they are listed as `not_scanned` with the directory they belong in.
+- **Entry rules.**
+  - Hidden and backup names are skipped: a leading `.`, a trailing `~`, `lost+found`, `aquota.*`, and the `.dpkg-*`, `.rpm*`, `.ucf-*`, `.swp`, `.bak`, `.old` and `.new` suffixes.
+  - Symlinks are followed. An entry that cannot be resolved is skipped.
+  - An empty file or a character device is a mask and is skipped.
+  - Anything that is not a regular file is skipped, and so is a file with no execute bit.
+  - Every remaining file runs as root. systemd checks neither ownership nor writability, so a runnable hook owned by a non-root user or writable by group or other is reported as an observation, not a skip.
+- **Invocation.** Hooks are started in byte order of their names and then run in parallel. Exit codes are ignored, and the build default timeout is 90 s.
+  - Sleep hooks get `pre`/`post` and `suspend`, `hibernate`, `hybrid-sleep` or `suspend-then-hibernate`, with `SYSTEMD_SLEEP_ACTION` set.
+  - Shutdown hooks get `halt`, `poweroff`, `reboot` or `kexec`, after services have stopped and most mounts are gone.
+- **Fail closed.** The following are blocking gaps, and they set `complete` to false:
+  - an unobserved, unreadable, truncated or contradictory directory;
+  - malformed or duplicate entries;
+  - missing file metadata (`mode`, `size` and `uid`);
+  - an unobserved symlink target;
+  - over-limit input.
+
+  Outside a `listed` directory, no hook is reported as running. `origin` is always `not_assessed`, and no result is a safety verdict. The tests pin every rule, including a layout built on a real directory with `lstat`/`stat`.
+
+**Not covered:**
+- agent collection;
+- whether the host ever suspends, hibernates or uses kexec;
+- who can write to the hook directories or symlink targets;
+- other sleep frameworks (pm-utils, elogind);
+- catalog `entries_parsed` wiring, persistence, UI, provenance and AI classification.
+
+There is no schema, API, authentication or response-authorization change.
+
+
 ### logrotate scripts and command directives — worker checkpoint #980
 
 Contract increment only; the startup-awareness requirement remains incomplete.
