@@ -1,3 +1,7 @@
+## 1.75.18 — 2026-11-17
+
+1. [PR #1017](https://github.com/StealthCat/MrPatchy/pull/1017): A process investigation deferred by the daily AI spend cap now says it is waiting for the cap to reset in both `daily_cap` and `rate_and_daily` modes, instead of saying it is waiting for the rate throttle (#1015). Rate-throttle, pause and provider-backoff waits keep their existing reasons, and scheduling is unchanged. Compatibility: no schema, API or setting change; existing `ai_triage_retries` rows keep their stored reason until their next deferral.
+
 ## 1.75.17 — 2026-11-17
 
 1. [PR #1020](https://github.com/StealthCat/MrPatchy/pull/1020): A process investigation blocked because its evidence is over the 64 KB sharing limit now says so instead of advising an API key, quota or model change; if oversized follow-up evidence blocks the second request, the reason says the first request was already sent. The blocked-investigations notification and Retry blocked investigations help now point to each investigation's own retry reason (#1007). Compatibility: no schema, API shape, admission, reservation, role or response-authorization change; an already-active `configuration-blocked` notification gets one new revision with the new text, and existing retry rows keep their stored reason until their next failure.
