@@ -4218,6 +4218,44 @@ comparable.
 
 Remaining roadmap F work is tracked above.
 
+### /etc/profile.d login-shell contract — worker checkpoint #1049
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/profile_d.py` is a pure, versioned contract for the `/etc/profile.d` part of
+the catalog's `shell_system` mechanism. It takes supplied `/etc/profile` text and
+directory-entry metadata, performs no I/O and never reads a sourced file.
+
+- **Source.** The behavior was probed on Ubuntu 24.04 with base-files
+  `/etc/profile`, dash 0.5.12 and bash 5.2, as root and as `nobody`, not recalled.
+  A test compares the contract with real dash as both accounts when it runs as
+  root. Login shells source each `/etc/profile.d/*.sh` that passes the unquoted
+  `[ -r $i ]` test. The glob never matches a leading dot.
+- **Accounts.** The logging-in account sources the files. Root reads any
+  existing file, even with mode 0000. Other accounts use one access(2) class:
+  owner, group or other. The result is `sourced`, `not_readable` or
+  `depends_on_account`. Symlinks are judged by their target, and a dangling
+  link is skipped. A directory named `*.sh` is a non-fatal error.
+- **Hazards.** A name with whitespace or glob characters is word-split or
+  re-globbed by `$i`. For example, `a -o b.sh` can source another path. Such a
+  name is `unknown` with a blocking gap. A FIFO, socket or device is also
+  blocking.
+- **Order.** Order is bytewise, as in dash and the C locale. When bash's locale
+  collation could reorder the names (punctuation, case, or one stem a prefix of
+  another), the result carries a non-blocking `order_locale_dependent` gap.
+- **Activation.** `active` requires the default base-files loop exactly once. A
+  missing `/etc/profile` is `inactive`. A modified loop, an unreadable or
+  oversized profile, the RPM family (`not_modelled`) and an unobserved family
+  are blocking gaps.
+- **Fail closed.** Unobserved, unreadable or truncated listings, malformed or
+  duplicate entries, missing mode/uid/gid, an unobserved symlink target and
+  over-cap input are blocking (`complete: false`). Outside a `listed`
+  directory, no file is reported as sourced.
+
+Open: collection wiring, the RPM loop and `sh.local`, `/etc/bash.bashrc`,
+per-user dotfiles, supplementary groups and the login locale, persistence, UI,
+provenance and AI classification. No schema, API, auth or response-authorization
+change.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
