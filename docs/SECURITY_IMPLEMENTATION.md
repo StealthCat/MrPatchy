@@ -2789,6 +2789,27 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Role and CSRF boundaries under a daily spend cap — milestone 4 checkpoint #1010
+
+`tests/test_ai_budget_role_csrf_acceptance.py` covers the role/CSRF part of
+milestone 4 for the shared spend controls. The requests have valid bodies that
+would expand spend or start billable work if accepted: switching to unthrottled,
+raising the daily cap, previewing an expansion, saving a key, a connection test,
+single and bulk re-triage, and clearing provider backoff. They are refused for
+operator and viewer sessions, and for administrator sessions with a missing, empty
+or wrong `X-CSRF-Token`. Each refusal leaves the stored controls, the key, audit
+action rows, the spend ledger, AI runs, queued re-triage and provider transmissions
+unchanged. Operators and viewers also cannot read spend history (JSON and CSV), AI
+control status or settings. When an administrator is demoted while signed in, the
+old session is revoked (401) before any change; signing in again gives an operator
+session, which is still refused. A positive control shows the same requests from an
+authorized administrator get past authentication and are answered on their merits.
+Mutations caught: removing the CSRF comparison, lowering the AI settings save to
+operator, lowering the connection test to viewer, and ignoring session generation.
+This is test coverage only, with no runtime change. Representative
+benign/suspicious/unknown outcomes and the before/after performance record remain
+open milestone 4 work.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
