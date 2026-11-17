@@ -2789,6 +2789,29 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Benign, suspicious and unknown outcomes under a daily spend cap — milestone 4 checkpoint #1013
+
+`tests/test_ai_budget_verdict_outcome_acceptance.py` drives the real
+`worker.investigate_one` path in `daily_cap` mode, with fixtures only for the
+provider transport and SSH. For each verdict (`low`, `medium`, `high`, `unknown`)
+there is one provider call, one stored verdict and assessment, and one settled
+ledger row counted against the cap. The subject stays unapproved, and no job,
+incident or response plan is created. `medium` and `high` raise an advisory
+notification that says it authorizes no response; `low` and `unknown` raise none.
+Only a low-risk result passes the known-good `result_not_safe` gate. A completed
+verdict is not re-sent or re-billed on later passes. When the model requests checks
+for a verified subject, SSH evidence is collected once and the second call carries
+it; both calls are charged to the same run. A subject with an unverified identity
+or a missing checksum never triggers an SSH request, and the second call says so.
+An out-of-schema risk or an unsupported requested check is rejected with no
+verdict, assessment or notification, and the sent call still counts against the
+cap. Mutations caught: skipping the identity check, treating `unknown` as
+significant, accepting any risk, accepting any requested check, letting any risk
+pass the known-good gate, approving a subject on verdict save, and skipping the
+follow-up call. This is SQLite test coverage only, with no runtime change.
+MySQL-native runs and the before/after performance record remain open milestone 4
+work.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
