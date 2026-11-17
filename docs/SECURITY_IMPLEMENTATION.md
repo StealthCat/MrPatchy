@@ -2363,6 +2363,27 @@ diagnostic is logged without affecting the verdict. The events are ordinary
 pruned AI-log diagnostics. Durable miss counters, saved-call estimates and
 matched production acceptance remain open.
 
+Worker checkpoint #1027 covers the "log retention" acceptance item. The worker's
+hourly history cleanup now lives in `worker.prune_history(s, cutoff)`. It deletes
+the same rows as before (observations, inventory revisions, and finished AI runs
+with their events, call receipts and host links), at the same time, from the
+same leader loop. `tests/test_known_good_retention.py` runs that real pruning
+against a candidate published from a worker-driven provider assessment:
+- After the source run's history is pruned, another server still reuses the
+  candidate with zero provider calls. The retained assessment, candidate and
+  per-host observations survive. The avoided-work estimate counts the reuse as
+  unattributable rather than free or priced.
+- Pruning keeps still-running runs, recent runs and every assessment and
+  known-good row.
+- If the origin assessment is missing, lookup fails closed. The miss is
+  explained as `candidate_unverified`, and the worker pays for a fresh
+  assessment instead of reusing.
+
+Lookup, publication, revocation, pause, budget, role and response
+authorization are unchanged. MySQL coverage comes from the hosted `mysql`
+job. Concurrency, role isolation and matched production acceptance for
+roadmap B are covered elsewhere or remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
