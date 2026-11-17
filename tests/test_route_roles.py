@@ -169,6 +169,8 @@ EXPECTED_ROLES = {
     ('POST','/api/investigations/retriage'):'admin',
     ('POST','/api/investigations/{behavior_id}/retriage'):'admin',
     ('POST','/api/investigations/blocked/retry'):'admin',
+    ('GET','/api/hosts/{host_id}/investigations/blocked'):'admin',
+    ('POST','/api/hosts/{host_id}/investigations/blocked/retry'):'admin',
     ('POST','/api/investigations/{behavior_id}/retry'):'admin',
     ('GET','/api/jobs'):'viewer',
     ('GET','/api/jobs/{job_id}'):'viewer',

@@ -2448,6 +2448,21 @@ from an assessment page returns to the filtered list when the visitor came from
 it. This is frontend-only, with no API, schema, admission, spend, pause,
 approval, role or authorization change. The page offset still has no address.
 
+Worker checkpoint #974 gives the page its own address. Page 2 and later are
+`<view>/page/<n>`, where `<view>` is any of the four addresses above; page 1
+keeps the bare view address, so existing links are unchanged. **Next** and
+**Previous** change the address, so a reload, a bookmark, a shared link and
+Back/Forward reproduce the page. This replaces the in-memory page offset:
+opening the bare address always shows page 1, and Back returns to the page the
+visitor left. Changing the filter still returns to page 1. A malformed page
+address is replaced by the nearest valid one without a history entry. A page
+past the end of the list says so and links to the first page. The link back
+from an assessment page returns to the page and filter the visitor came from.
+The bulk Re-triage selection is still kept across pages. This is frontend-only,
+with no API, schema, admission, spend, pause, approval, role or authorization
+change. Other paged lists (Activity, History, AI activity) still have no page
+address.
+
 Worker checkpoint #897 marks reused verdicts in the Investigations list.
 `GET /api/investigations` adds `known_good_reuse` to each row. It is set only
 when the newest retained assessment for the row's exact current state
@@ -2462,6 +2477,34 @@ existing Assessment history pages. A page costs one projected assessment query,
 plus one bounded read for administrator source links. Lookup, publication,
 revocation, approval, budget, pause, role, response and schema are unchanged.
 Matched production acceptance remains open.
+
+### Retry blocked process investigations — worker checkpoint #934
+
+Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
+
+- **Change:** the admin-only, CSRF-protected `POST /api/investigations/blocked/retry` re-queues the rows the notification counts: unapproved `pending`/`error` behaviors on active, unpaused servers whose retry state is blocked under the current configuration signature.
+  - Each row gets single-item retry semantics: the retry state is cleared, `attempted=0`, the verdict becomes `pending`, and the analysis records that an administrator requested the retry.
+  - It runs under the existing `ai-triage` lock (non-blocking, 409 when busy) and ordered per-host `queue` activity locks. Rows are re-read and re-checked against the predicate after the locks are taken.
+  - Each request handles at most 200 rows. The response reports the rows retried and those still blocked.
+  - A non-empty retry writes one audit row. AI disabled, or nothing eligible, retries nothing and writes no audit row.
+- **Excluded:** rows with a live claim or an active provider Retry-After are left blocked, as single retry refuses them. So are paused, disabled or deleted servers, approved rows, and rows already eligible because the configuration changed.
+- **UI:** for administrators, fleet Investigations shows **Retry blocked investigations** under the queue notice only when `/api/investigation-status` reports an integer `blocked > 0`. It names the count, says no provider request is sent now, and refreshes the view after it runs. Operators and viewers never see it.
+- **No bypass:** the action sends no provider request. AI enablement, pause, lifecycle, data sharing and shared rate/daily-cap admission and reservations still apply when the scheduler runs each item. A repeat failure blocks again and resurfaces the notification.
+- **Unchanged:** schema, admission, reservations, roles of existing routes, response authorization and SMTP/webhook alerts.
+- **Validation:** `tests/test_triage_blocked_retry.py` (11 of 14 fail on main `68887ce`; all pass after) covers scope, exclusions, batching, lock refusal, roles, audit and notification resolve/resurface. `tests/ui_retry_blocked_investigations.cjs` fails on main and passes after. It covers visibility, the action, a partial batch, malformed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** per-server Investigations tabs do not offer the action, because the status count is fleet-wide. Blocked advisory-plan work is still not covered.
+
+#### Per-server blocked retry — worker checkpoint #946
+
+- **Change:** `blocked_count` and `retry_candidates` take an optional `host_id` that narrows the #934 predicate. Omitted, the fleet behavior is unchanged.
+  - Admin-only `GET /api/hosts/{id}/investigations/blocked` returns `{blocked}` for one server, or 0 while AI is disabled.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/investigations/blocked/retry` re-queues only that server's candidates. It shares the fleet route's implementation: the `ai-triage` lock (409 when busy), the `queue` activity lock, the post-lock re-check, the 200-row batch and one audit row naming the server.
+  - Unknown servers return 404. A paused or inactive server retries nothing.
+- **No bypass:** no provider request is sent, and there are no schema, admission, reservation or response-authorization changes.
+- **Validation:** six host-scope tests in `tests/test_triage_blocked_retry.py` fail on main `0842ba4` and pass after. They cover scope isolation, AI disabled, pause, 404, the lock, roles and audit. The existing fleet tests still pass.
+- **UI:** Server → Investigations shows **Retry blocked investigations** to administrators only, while the server is enabled and its count is above 0. It calls the host route and refreshes the tab afterwards. A failed count read hides the action; operators never request the count.
+- **UI validation:** `tests/ui_host_retry_blocked_investigations.cjs` fails on main and passes after. It covers the host-only endpoint (never the fleet route), the refresh, a partial batch, singular wording, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** blocked advisory-plan work is still not covered.
 
 ### Throttling, daily cap and unthrottled operation
 
@@ -2719,6 +2762,34 @@ fails closed. Before this checkpoint nothing showed that in advance.
   authorize spend, change admission or add an SMTP/webhook alert.
 - **Limitation:** a missing API key is still reported only by the existing
   `configuration` gate. Near-exhaustion of the cap remains undetected.
+
+### Data sharing under a daily cap — worker checkpoint #1000, fix #1001
+
+`tests/test_ai_budget_data_sharing_acceptance.py` covers the data-sharing part of
+milestone 4. It drives the real worker and update-scoring paths in capped modes,
+with only the provider transport and SSH as fixtures.
+
+- **Capping does not change what is shared.** A `daily_cap` investigation sends
+  byte-for-byte the same request as an unthrottled one: `store: false`, no
+  `process_identity`, connections truncated with an `omitted_connections` count,
+  and no host address or host key. The process identity is retained locally for
+  follow-up selection. The reservation is quoted from that same bounded request.
+- **Scoring opt-in.** With update scoring off, no package metadata is sent,
+  reserved or recorded, while investigations are still admitted under the cap.
+  With it on, the scoring batch reserves its own spend and carries only package
+  metadata: no address, host key, executable path, hash or process evidence.
+- **Evidence over the 64 KB limit (#1001, P1).** In `daily_cap` and
+  `rate_and_daily`, the claim-time quote refused such a subject and returned
+  without recording anything. The subject stayed `pending` at the head of the
+  queue, so no other subject in the fleet was ever claimed and nothing explained
+  why. `ai_claims.acquire()` now records the same outcome as an uncapped attempt:
+  verdict `error`, a `blocked` retry and the safe reason. Nothing is reserved or
+  sent, and later passes move on to other work. The regression test runs in
+  `daily_cap`, `rate_and_daily` and `unthrottled`.
+
+Mutations to stop stripping `process_identity`, stop truncating connections, or
+ignore the scoring opt-in are each caught. MySQL-native runs, contention/fairness
+and measured performance remain open milestone-4 items.
 
 ### Finite implementation and acceptance milestones
 
@@ -3892,6 +3963,256 @@ exactly one class with its basis, verification strength (`authenticated`,
 **Not covered:** collecting ownership, package-database digests or authenticated
 vendor artifacts from targets; persistence; UI; AI classification; response actions.
 No schema, API, auth or response-authorization change.
+
+### Kernel-module configuration contract — worker checkpoint #952
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/kernel_modules.py` is a pure, versioned contract for the catalog's
+`modprobe` and `modules_load` mechanisms. It parses supplied text and performs
+no I/O.
+
+- **Effective files.** Only `*.conf` files are read. A name in a higher-priority
+  directory (`/etc`, `/run`, `/usr/local/lib`, `/usr/lib`, `/lib`) replaces the
+  same name in a lower one, and the remaining files are processed in name order.
+  Every supplied file is reported as effective, overridden, masked, ignored or
+  unreadable, with its reason.
+- **modprobe.d directives.** `install`, `remove`, `alias`, `blacklist`,
+  `options`, `softdep` and `weakdep` are parsed with line-start `#` comments,
+  backslash continuations and `-`/`_` equivalence. Deprecated `include`/`config`
+  lines and unknown or malformed lines are reported with file and line.
+- **Commands.** Each `install`/`remove` entry carries its module pattern, bounded
+  command text, full-command SHA-256, source and processing order. `/bin/true`
+  and `/bin/false` are labelled `disable`. Later entries for an already defined
+  pattern are marked shadowed. `commands_for()` returns both the first matching
+  entry and, when it differs, the first exact-name entry, because libkmod
+  chooses between them by where it found the module.
+- **Boot requests.** `modules-load.d` files and Debian's `/etc/modules`
+  (including the `modules.conf` link to it) list one module per line. Extra
+  tokens are reported and not interpreted.
+- **Boot-time command chains.** `boot_commands()` lists the `install` commands
+  each boot-requested module could run. It follows configuration aliases and
+  `softdep` pre/post modules with depth, chain and step limits, records how each
+  command was reached and flags blacklisted modules without dropping them. Only
+  the first matching `softdep` entry is used, and an alias target is not looked
+  up as an alias again. A pattern containing a backslash escape is a blocking
+  gap.
+- **Conditions instead of guesses.** The kernel's module tables are not
+  observed, so a command whose execution depends on them is listed and counted
+  with `conditions`, never dropped or reported as shadowed. An empty list means
+  the command runs whatever the tables hold.
+  - `module_in_kernel_tables`: a wildcard `install` entry, or anything reached
+    through a name the configuration does not define, runs only if that module
+    exists in the kernel tables.
+  - `module_not_in_kernel_tables`: an exact-name entry after an earlier
+    wildcard match runs only if the module is absent from the kernel tables.
+    Both entries are listed.
+  - `softdep_target_unresolved`: a module whose `softdep` names only modules
+    the configuration does not define runs its own command unless one of them
+    is in the kernel tables.
+  A module's own command is listed as ignored only when the configuration
+  itself defines one of its soft dependencies (an alias or an exact-name
+  `install`/`remove` entry). The result's `conditional` field counts the
+  chains that carry a condition.
+- **Checked against libkmod.** The resolver was compared with libkmod 31's
+  dry-run probe (what `modprobe -n -v` prints) on generated configurations,
+  with an empty module tree and with a populated `modules.dep.bin`. Blacklist
+  handling and backslash patterns were excluded from that comparison.
+- **Fail closed.** Unreadable files, unfollowed symlinks (other than `/dev/null`
+  masks), invalid UTF-8, NUL bytes and over-limit input mark the result
+  incomplete. An unreadable winning file still shadows lower-priority files.
+  Every result names what it cannot observe: the kernel command line, the
+  kernel's alias and dependency tables, the initramfs copy and tool overrides.
+  `origin` is always `not_assessed` and no result is a safety verdict.
+
+**Not covered:** agent collection of these files' text, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
+### Effective APT configuration hooks — worker checkpoint #950
+
+Contract-only; roadmap F remains incomplete. `app/apt_hooks.py` resolves the
+effective command-executing APT options from captured `/etc/apt/apt.conf.d`
+entries and `/etc/apt/apt.conf`. It performs no I/O and runs nothing.
+
+- **Files:** APT `Dir::Etc::Parts` rules decide which files are read: hidden and
+  non-regular entries are skipped; a name needs no extension or `.conf` and only
+  `[A-Za-z0-9_.:-]`; default `Dir::Ignore-Files-Silently` patterns are silent.
+  Files are read in byte order and `apt.conf` last. Ignored files are listed.
+- **Syntax:** `//`, `/* */` and `#` comments, scalar and unquoted values, nested
+  blocks, list items, `#clear` and `#include`; keys are case-insensitive. Later
+  scalars and tagged children override; untagged items append.
+  Inside a block a bare word is an untagged item (`{ /tmp/x; }`), as in apt
+  2.8.3. `#clear`/`#include` inside a block or with more than one argument are
+  syntax errors, and `#clear A::;` clears nothing. A same-line `/* */` comment
+  joins the text around it (`ev/*x*/il` is `evil`), as in apt 2.8.3.
+  Only space, tab, CR and LF separate words; a no-break space or other Unicode
+  space is part of a word. `#clear` empties an option in place, so a tag set
+  again keeps its position. `#x-apt-configure-index` is not a comment.
+- **Reported options:** `command` (Update/DPkg Invoke lists and
+  `DPkg::Pre-Install-Pkgs`, run through `sh -c`), `proxy_command`
+  (`Acquire::*::Proxy-Auto-Detect`), `binary_override` (`Dir::Bin::*`),
+  `path_override` (`DPkg::Path`) and `dpkg_options`, each with source file and
+  line. `Binary::<program>::` copies carry that scope. A scalar on a hook list
+  node is reported inert because APT never runs it.
+- **Fail closed:** syntax errors (including a quoted value left open at the end
+  of a line, a quoted string touching other text and `*/` directly followed by
+  `/`, a NUL, vertical tab or form feed, and `#x-apt-configure-index` with an
+  argument, none of which this contract interprets), unfollowed `#include`, unreadable or oversized files, directory
+  overrides (setting or clearing `RootDir`, `Dir`, `Dir::Etc`, `Dir::Etc::Main`
+  or `Dir::Etc::Parts`, since APT locates `apt.conf` after reading the parts
+  directory), over-cap input and uncollected files make APT behavior
+  `undetermined`. Hooks parsed before an error stay visible. The unobservable
+  `APT_CONFIG` environment is always disclosed. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog `entries_parsed` wiring,
+  inventory/UI, provenance and AI classification, and DNF/YUM plugin configuration.
+
+### dpkg configuration commands — worker checkpoint #970
+
+Contract-only; roadmap F remains incomplete. `app/dpkg_hooks.py` lists the
+command-executing and check-changing options in captured `/etc/dpkg/dpkg.cfg.d`
+entries and `/etc/dpkg/dpkg.cfg`. It performs no I/O and runs nothing. It
+complements the APT hook contract above: these options act one level lower, on
+every dpkg run, whichever front end starts it.
+
+- **Files:** a `dpkg.cfg.d` name is read when it does not start with `.` and
+  consists of `[A-Za-z0-9_-]`. Files are read in byte order and `dpkg.cfg`
+  after them. A dangling link is skipped; ignored names are listed.
+- **Syntax:** trailing whitespace is dropped; empty lines and lines starting
+  with `#` are skipped; leading whitespace is an error. The name is the leading
+  run of `[A-Za-z0-9-]`; the next character ends it, one following `=` and
+  leading whitespace are skipped, and a value starting with a quote must end
+  with the same quote. `force-<things>`, `refuse-<things>` and
+  `no-force-<things>` need no separate value.
+- **Reported options:** `commands` (`pre-invoke`, `post-invoke` and
+  `status-logger`, each run through `sh -c`; every occurrence runs, invoke
+  hooks in the order read and status loggers side by side),
+  `relocations` (`root`, `admindir`, `instdir`; every occurrence, dpkg uses the
+  last) and `behavior_changes` (`force`/`refuse` items, `no-debsig`,
+  `ignore-depends`, `no-act`, `no-triggers`, path filters), each with source
+  file and line. Other recognized options are only counted.
+- **Fail closed:** dpkg refuses to run on an unknown option, a missing or
+  unexpected value, unbalanced quotes, an unknown force item, an invalid
+  validated value or an action option; each is a `config_error` gap. A line
+  over dpkg's 1022-byte buffer, a NUL byte, a non-ASCII character directly
+  after the name, a non-regular entry, an unreadable, oversized or uncollected
+  file and over-cap input are gaps too. Any of these makes the result
+  `undetermined`; other commands stay visible. The invoking user's
+  `~/.dpkg.cfg`, per-run options and environment, and the locale collation
+  dpkg sorts the directory with are always disclosed as unobserved or assumed.
+  The option table is dpkg 1.22.6's. The result is not a safety verdict.
+- **Still open:** collector content capture, catalog location and
+  `entries_parsed` wiring, inventory/UI, provenance and AI classification,
+  other dpkg versions' option tables, and DNF/YUM/RPM plugin configuration.
+
+
+### Dynamic-loader configuration contract — worker checkpoint #960
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/dynamic_loader.py` is a pure, versioned contract for the catalog's
+`loader_preload` and `loader_config` mechanisms. It parses supplied content and
+performs no I/O.
+
+- **Preload entries.** `resolve_preload()` lists the libraries
+  `/etc/ld.so.preload` makes the loader add to every dynamically linked
+  process, including set-user-ID programs. Entries are separated only by a
+  space, tab, newline or colon. Each entry carries its line, order, SHA-256,
+  whether it is a path or a bare library name, any `$ORIGIN`/`$LIB`/`$PLATFORM`
+  token, whether it repeats an earlier entry and whether its bytes are valid
+  UTF-8.
+- **Comments that still load.** glibc removes a `#` comment to the end of its
+  line, but looks for the next `#` inside a window that shrinks with each
+  comment it finds. A `#` outside that window is not a comment, and the words
+  after it are loaded. The contract repeats that search and marks every entry
+  that follows a `#` on its line as `after_comment_marker`, so a library that
+  looks commented out is listed, not hidden.
+- **Search directories.** `resolve_search_paths()` reads `/etc/ld.so.conf` the
+  way `ldconfig` does: `#` ends a line, `hwcap` lines are ignored and every
+  other line is one directory with trailing whitespace removed and then
+  trailing slashes removed, once each, as `ldconfig` does. `/lib /` is the
+  directory `/lib` followed by a space and is reported as such, not as `/lib`.
+  Spaces, colons and commas do not separate directories. Each directory carries
+  its source file, line, order and whether it is absolute or repeated.
+- **Includes.** `include` patterns are resolved relative to the including
+  file, matched in byte order and followed into nested files. Hidden names
+  match only a pattern that starts with a dot. Every supplied file is reported
+  as parsed, absent, a directory, unreadable or not included.
+- **Fail closed.** Unreadable files, unfollowed symlinks, invalid UTF-8, NUL
+  bytes, over-limit input, include loops and budget overruns mark the result
+  incomplete. An `include` pattern the contract does not interpret (`[`, a
+  backslash, `.`/`..` components, a wildcard before the last component, or `?`
+  against a non-ASCII name), or one that points into a directory whose listing
+  was not supplied, is a gap and never an empty match. A directory line holding
+  `=` is reported with both the current and the older-glibc reading and marks
+  the result incomplete.
+- **Checked against glibc.** Both resolvers were compared with glibc 2.39 on
+  generated inputs: the loader's own preload attempts for `ld.so.preload`, and
+  `ldconfig -N -X -v -r <root>` for `ld.so.conf`. Inputs with a blocking gap
+  were excluded from the `ld.so.conf` comparison.
+- **Not observed.** The built `/etc/ld.so.cache`, ldconfig's built-in
+  directories, whether a directory or library exists, the collation locale,
+  environment variables, RPATH/RUNPATH and other C libraries are named in
+  every result. `origin` is always `not_assessed` and no result is a safety
+  verdict.
+
+**Not covered:** agent collection of these files' content, catalog
+`entries_parsed` wiring, persistence, baselines and alerts, UI, provenance and
+AI classification. No schema, API, auth or response-authorization change.
+
+### NetworkManager dispatcher script contract — worker checkpoint #962
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/nm_dispatcher.py` is a pure, versioned contract for the NetworkManager
+part of the catalog's `event_hooks` mechanism. It takes supplied file metadata,
+performs no I/O and never reads a script's contents.
+
+- **Source.** The rules follow `nm-dispatcher.c` as read in NetworkManager
+  1.36.6, 1.46.0, 1.52.0, 1.54.3 and 1.58.1. The functions are byte-identical
+  in the four releases from 1.46.0, and 1.36.6 agrees with them except that it
+  has no device handlers. A version above 1.58 gets a non-blocking gap.
+- **Scanned directories.** `/usr/lib/NetworkManager/dispatcher.d` and
+  `/etc/NetworkManager/dispatcher.d`, with `pre-up.d` (pre-up, vpn-pre-up) and
+  `pre-down.d` (pre-down, vpn-pre-down). The top directory serves every other
+  event. Each result lists its runnable scripts per event group in byte order of
+  their names, which is the order NetworkManager runs them.
+- **Name filter.** A leading dot, the `~`, `.rpmsave`, `.rpmorig`, `.rpmnew` and
+  `.swp` suffixes and a trailing `.dpkg-*` are not considered.
+- **Override and mask.** An `/etc` name replaces the same `/usr/lib` name before
+  any file check. A usable `/etc` script overrides it. An unusable `/etc` entry
+  (a `/dev/null` link, an empty file, a directory, a dangling link or a rejected
+  file) masks it, and neither runs.
+- **File checks.** A script must be a non-empty regular file owned by uid 0,
+  not writable by group or other, not set-UID and executable by its owner.
+  Symlinks are followed. Each file is reported as `runs`, `overridden`,
+  `masked`, `ignored`, `rejected` or `unresolved` with a fixed reason.
+- **No-wait.** A script that is a symlink into a directory whose resolved path
+  ends in `/no-wait.d` is marked as not blocking later scripts. Without the
+  resolved directory the decision uses the link text and says so in a
+  non-blocking gap. Files inside `no-wait.d` do not run from there.
+- **Device handlers.** From 1.46, `device/<name>` runs only for a generic
+  connection that names it, so handlers are listed separately with that
+  condition. `/etc` is tried first and `/usr/lib` is used when the `/etc` file
+  is unusable; there is no masking. The dispatcher applies no name filter,
+  but NetworkManager rejects a connection whose handler name starts with a dot
+  or has a character other than letters, digits, `-`, `_` and `.`, so a file
+  with such a name is reported as `ignored` with the reason that no connection
+  can name it. Upstream NEWS lists device handlers as new in 1.46, so on 1.36
+  to 1.44 they are reported as unsupported. On a 1.45 development snapshot,
+  which was not read, they are unresolved with a blocking gap.
+- **Fail closed.** The caller states for every scanned directory whether it was
+  listed, absent or unreadable, and supplies the NetworkManager version.
+  A directory or version that was not observed, a version older than 1.36,
+  missing or malformed metadata, an unobserved symlink target, duplicate paths
+  and over-limit input mark the result incomplete. When an `/etc` entry is
+  unresolved, the same-named `/usr/lib` script is unresolved too. Every result
+  names what it cannot observe: script contents, whether NetworkManager and its
+  dispatcher service run, which events occur and non-default build directories.
+  `origin` is always `not_assessed` and no result is a safety verdict.
+
+**Not covered:** a comparison against a running `nm-dispatcher`, agent
+collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
 
 ### Individual queued at jobs — worker checkpoint #831
 
@@ -9017,7 +9338,7 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Validation:** three focused tests fail on the #840 head `3bbcf07` (main `480100d` plus #839) and pass after the change. The related incident, coverage, notification, route-role and lifecycle suites pass on SQLite.
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
-  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan. Fixed by worker checkpoint #1043 below.
 
 ### OS support-end advance warning — worker checkpoint #341 (roadmap J)
 
@@ -9060,6 +9381,25 @@ The first #841 limitation: a policy saved before `enabled_since` existed stayed 
 - **Unchanged:** policies with `enabled_since`, the scheduler, `security_coverage.assessment`, the schema, roles and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `dff91c4` and pass after the change; a behavior-only check (legacy never-scanned policy publishes `overdue` after the interval plus grace) publishes nothing on main. The related SQLite coverage, notification, security, incident, operations and scheduling selection passes (580 passed, 2 skipped).
 - **Remaining:** the window before a legacy policy notifies starts at the upgrade's first coordinator tick, not at its true enablement time, which is unknown. YARA schedules and a configurable grace period remain out of scope.
+
+### Re-enabled scanning and returning servers in coverage notifications — worker checkpoint #1043
+
+Two re-enable paths published `overdue` straight away when the scheduler was held at that moment by a quarantine, a recovery-required operation, a full queue or a pending YARA or execution scan:
+
+- Re-enabling scheduled scanning on a server whose last scan was old. `enabled_since` was consulted only for never-scanned servers.
+- A disabled or re-enrolling server returning to the active set, either with an old last scan or never scanned with an old `enabled_since`. This was the #841 limitation.
+
+- **Change:** `classify` holds a scanned server's `overdue` while a valid `enabled_since` is within the interval plus the one-hour grace period. An invalid or missing clock keeps the #816 behavior.
+- **Resume marker:** the producer keeps a server-managed `security-scan-resumed:<host>` setting for servers with an enabled policy.
+  - It holds `{"inactive": true}` while the server is outside the active set.
+  - When the server is next seen active, it becomes `{"active_since": <epoch>}`, in whole microseconds.
+  - The later of that time and `enabled_since` starts the coverage clock.
+  - It is written only on these transitions. It is removed once the clock is older than the interval plus grace, when the policy is disabled or removed, or when the server is deleted.
+  - The prefix does not start with `security-policy:`, and the administrator's policy row is never written.
+- **No upgrade delay:** a server never seen inactive has no marker, so existing and continuously active servers keep the #816 schedule after upgrade.
+- **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
+- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
 
 ### Fleet automatic AI plan status — worker checkpoint #936
 

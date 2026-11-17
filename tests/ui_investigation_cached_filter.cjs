@@ -12,7 +12,7 @@ module.exports=async(page,capture)=>{
  const rows=route=>{const url=new URL(route.request().url());seen.push(url.search);
   const cached=url.searchParams.get('cached')==='true',offset=Number(url.searchParams.get('offset'));
   if(cached)return route.fulfill({json:cachedRows});
-  // Full pages at every offset: an earlier module may leave this view on a later page.
+  // Full pages at every offset, so Next is enabled.
   return route.fulfill({json:Array.from({length:50},(_,i)=>card(i?'tool-'+i:(offset?'page-'+offset+'-tool':'cached-tool'),!i&&!offset))});};
  await page.route('**/api/investigations?*',rows);
  try{
@@ -21,9 +21,8 @@ module.exports=async(page,capture)=>{
   await filter.waitFor();
   assert.equal(await filter.inputValue(),'all');
   // Move to a later page, then filter: the request must return to offset 0.
-  const start=Number(new URLSearchParams(seen.at(-1)).get('offset'));
-  await page.locator('#content .server-pagination button',{hasText:'Next'}).click();
-  await page.getByText('/usr/bin/page-'+(start+50)+'-tool',{exact:true}).waitFor();
+  await page.locator('#content .server-pagination button',{hasText:'Next'}).click();await at('#investigations/page/2');
+  await page.getByText('/usr/bin/page-50-tool',{exact:true}).waitFor();
   await filter.selectOption('cached');
   await cachedNotice().waitFor();
   assert.equal(await page.evaluate(()=>location.hash),'#investigations/cached');
@@ -37,11 +36,16 @@ module.exports=async(page,capture)=>{
    await capture('investigation-cached-filter-'+width);
   }
   await page.setViewportSize({width:1440,height:1000});
-  // Back returns to the unfiltered list from page 1; Forward restores the filter.
-  await page.goBack();await at('#investigations');
-  await page.getByText('/usr/bin/tool-1',{exact:true}).waitFor();
+  // Back returns to the unfiltered page the visitor left (#974), then to page 1; Forward restores the filter.
+  await page.goBack();await at('#investigations/page/2');
+  await page.getByText('/usr/bin/page-50-tool',{exact:true}).waitFor();
   assert.equal(await page.locator('#investigation-filter').inputValue(),'all');
+  assert.match(seen.at(-1),/^\?offset=50&limit=50$/);
+  await page.goBack();await at('#investigations');
+  await page.getByText('/usr/bin/page-50-tool',{exact:true}).waitFor({state:'detached'});
+  await page.getByText('/usr/bin/tool-1',{exact:true}).waitFor();
   assert.match(seen.at(-1),/^\?offset=0&limit=50$/);
+  await page.goForward();await at('#investigations/page/2');
   await page.goForward();await at('#investigations/cached');
   await cachedNotice().waitFor();
   assert.equal(await page.locator('#investigation-filter').inputValue(),'cached');

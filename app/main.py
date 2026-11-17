@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.4"
+APP_VERSION = "1.75.16"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2424,13 +2424,30 @@ def retry_blocked_investigations(user=Depends(admin_user)):
     single-item retry semantics. Sends no provider request: the scheduler still
     applies enablement, pause, lifecycle, data sharing and shared admission.
     """
+    return _retry_blocked_investigations(user)
+
+@app.get('/api/hosts/{host_id}/investigations/blocked')
+def host_blocked_investigations(host_id:str,user=Depends(admin_user)):
+    """Count one server's investigations blocked under the current AI configuration (#946)."""
+    from . import triage_block_notifications as blocked
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'blocked':blocked.blocked_count(s,time.time(),host_id)[0] if config(s).get('ai_enabled') else 0}
+
+@app.post('/api/hosts/{host_id}/investigations/blocked/retry')
+def retry_host_blocked_investigations(host_id:str,user=Depends(admin_user)):
+    """Re-queue one server's blocked investigations with the fleet action's semantics (#946)."""
+    with Session() as s:host_or_404(s,host_id)
+    return _retry_blocked_investigations(user,host_id)
+
+def _retry_blocked_investigations(user,host_id=None):
     from . import triage_block_notifications as blocked
     lock=worker.Lock('ai-triage')
     if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Retry when it finishes.')
     try:
         with Session() as s:
             now=time.time()
-            candidates=blocked.retry_candidates(s,now) if config(s).get('ai_enabled') else []
+            candidates=blocked.retry_candidates(s,now,host_id=host_id) if config(s).get('ai_enabled') else []
             retried=0
             if candidates:
                 try:
@@ -2439,10 +2456,10 @@ def retry_blocked_investigations(user=Depends(admin_user)):
                         # cannot hide a concurrent approval or retry.
                         s.rollback()
                         retried=blocked.retry(s,[row_id for row_id,_ in candidates],time.time())
-                        if retried:audit(s,'retry blocked AI investigations',user['username']+' re-queued '+str(retried)+' blocked investigation(s)')
+                        if retried:audit(s,'retry blocked AI investigations',user['username']+' re-queued '+str(retried)+' blocked investigation(s)'+(' on '+host_id if host_id else ''))
                         s.commit()
                 except (host_lifecycle.Busy,host_lifecycle.Inactive) as error:raise HTTPException(409,str(error)) from None
-            remaining=blocked.blocked_count(s,time.time())[0] if config(s).get('ai_enabled') else 0
+            remaining=blocked.blocked_count(s,time.time(),host_id)[0] if config(s).get('ai_enabled') else 0
         plural='' if retried==1 else 's'
         detail=(f'{retried} blocked investigation{plural} queued. AI pause, data sharing, shared rate and daily-cap admission still apply.' if retried
             else 'No investigation can be retried now under the current AI configuration.')

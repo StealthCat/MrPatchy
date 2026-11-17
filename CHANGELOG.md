@@ -1,3 +1,51 @@
+## 1.75.16 — 2026-11-17
+
+1. [PR #1044](https://github.com/StealthCat/MrPatchy/pull/1044): Scheduled malware-scan coverage notifications now wait the configured interval plus one hour after scheduled scanning is re-enabled, or after a disabled or re-enrolling server returns, before reporting the server overdue (#1043). Compatibility: no schema, route, UI, role, scheduler or response-authorization change; server-managed `security-scan-resumed:<host>` settings rows appear only for servers that are disabled or re-enrolling while scheduled scanning is enabled and are removed once interval plus grace has passed, the policy is disabled or removed, or the server is deleted. Upgraded and continuously active servers keep their existing overdue timing.
+
+## 1.75.15 — 2026-11-17
+
+1. [PR #1004](https://github.com/StealthCat/MrPatchy/pull/1004): Fix a stall in `daily_cap` and `rate_and_daily` AI triage modes where one investigation whose conservative reservation exceeds the entire daily cap blocked triage for every server (#1003). That investigation is now marked blocked with an explanation (nothing is reserved or sent and no attempt is counted), and other servers' investigations continue. Changing the AI model or key re-admits it automatically; raising the cap or switching to `rate`/`unthrottled` mode requires an explicit retry from Investigations. Compatibility: no schema or settings change; installations whose cap is below one call's reservation will see such investigations change from silently pending to blocked and raise the existing triage-blocked notification. Integration keeps #1002's oversized-evidence branch ahead of this over-cap guard.
+
+## 1.75.14 — 2026-11-17
+
+1. [PR #1002](https://github.com/StealthCat/MrPatchy/pull/1002): Fix a daily-spend-cap stall where one process with more than 64 KB of evidence stayed pending forever and stopped AI triage for every server; it is now marked as a blocked error, as in other modes, and other investigations continue (#1001). Add acceptance tests showing the cap does not change what is sent to the AI provider and that the update-scoring opt-in controls package sharing and spend (#1000). Compatibility: no schema, API or UI change; in `daily_cap` and `rate_and_daily` modes an oversized subject now shows a blocked `error` instead of an indefinite `pending`, and installations already stuck this way recover on the first claim pass after upgrade.
+
+## 1.75.13 — 2026-11-16
+
+1. [PR #978](https://github.com/StealthCat/MrPatchy/pull/978): Give fleet and per-server investigation lists URL-addressed pagination, including the cached filter; page navigation, reloads and Back/Forward restore the selected page. Page 1 keeps existing addresses. Compatibility: frontend-only; no API, schema, role or authorization change. Limits: other paged lists still have no page address.
+
+## 1.75.12 — 2026-11-16
+
+1. [PR #947](https://github.com/StealthCat/MrPatchy/pull/947): Add administrator count and retry controls for investigations blocked on one server. The host-scoped action uses the existing retry locks, lifecycle checks, 200-row bound and audit; the fleet action stays unchanged. Compatibility: additive API and server-tab UI; no provider call, schema or response-authorization change. Limits: blocked advisory-plan work is not included.
+
+## 1.75.11 — 2026-11-16
+
+1. [PR #971](https://github.com/StealthCat/MrPatchy/pull/971): Add an I/O-free dpkg configuration contract that reports command hooks, relocations, behavior-changing options, source locations and fail-closed coverage gaps. Compatibility: no runtime behavior changes; the parser is not wired to a collector or UI. Limits: the option table follows dpkg 1.22.6, and per-user/per-run configuration remains unobserved.
+
+## 1.75.10 — 2026-11-16
+
+1. [PR #973](https://github.com/StealthCat/MrPatchy/pull/973): Extend MySQL CI shard timeouts from 30 to 45 minutes so slow, still-passing shards can finish. Compatibility: CI only; no application, schema, API or UI change. Limits: 45 minutes is based on observed runtimes and unusually slow runners may still exceed it; the shard matrix and test behavior are unchanged.
+
+## 1.75.9 — 2026-11-16
+
+1. [PR #969](https://github.com/StealthCat/MrPatchy/pull/969): Reverify the bundled OpenAI catalog’s listed model rates, snapshot aliases, service tiers and cache rates, then extend its verification window through December 16, 2026 UTC. Compatibility: no schema or spend-policy changes; stored receipts retain their recorded rates and catalog version. Limits: estimates remain limited to listed models and tiers and exclude tool charges, taxes, credits and negotiated account adjustments; capped installations need a refreshed build before November 26, and admission still fails closed at the new expiry.
+
+## 1.75.8 — 2026-11-16
+
+1. [PR #963](https://github.com/StealthCat/MrPatchy/pull/963): Add a pure NetworkManager dispatcher contract that reports root-run scripts in byte order and event groups from captured file metadata, including `/etc` overrides and masks, no-wait links and device handlers with explicit coverage gaps. Compatibility: none; nothing calls the module. Limits: source review covered upstream 1.36.6–1.58.1 and native comparison only 1.46.0; distribution patches and custom build paths are not assessed; script contents, event occurrence, collection, catalog wiring, persistence, UI, provenance, classification and other hook directories remain outside scope. Roadmap F remains incomplete.
+
+## 1.75.7 — 2026-11-16
+
+1. [PR #951](https://github.com/StealthCat/MrPatchy/pull/951): Add a pure APT configuration contract that resolves recognized command hooks and binary/path overrides from captured `apt.conf.d` and `apt.conf` inputs, applying APT file and option semantics with explicit fail-closed gaps. Compatibility: none; the module has no caller. Limits: includes are not followed, `APT_CONFIG` and unrecognized execution options remain unobserved, and collection, persistence, UI, provenance and classification are not included; roadmap F remains incomplete.
+
+## 1.75.6 — 2026-11-16
+
+1. [PR #961](https://github.com/StealthCat/MrPatchy/pull/961): Add a pure contract for captured `/etc/ld.so.preload` entries and `/etc/ld.so.conf` directories/includes, including glibc comment-window behavior, with explicit gaps for unobserved or unsupported inputs. Compatibility: none; the new module has no caller. Limits: compared with glibc 2.39, selected include patterns and older releases remain gaps; no collection, persistence, UI, provenance or classification. Roadmap F remains incomplete.
+
+## 1.75.5 — 2026-11-16
+
+1. [PR #965](https://github.com/StealthCat/MrPatchy/pull/965): Restore the kernel-module configuration contract section in `docs/SECURITY_IMPLEMENTATION.md`, which the v1.75.4 integration merge omitted. Compatibility: documentation only; no application, runtime, API, schema, UI or authorization change. Limit: the broader startup-awareness requirement remains incomplete.
+
 ## 1.75.4 — 2026-11-16
 
 1. [PR #959](https://github.com/StealthCat/MrPatchy/pull/959): Give the Investigations “Cached known good” filter bookmarkable fleet and per-server addresses (`#investigations/cached` and `#servers/<id>/investigations/cached`) that restore the filter on reload and Back/Forward, while the bare address shows all investigations. Compatibility: the cached choice no longer persists at the bare address; use the filtered address to restore it. No API, schema, role or response-authorization change. Limits: page offset has no address; the per-server assessment back-link and phone-width focus visibility were not separately browser-verified.
