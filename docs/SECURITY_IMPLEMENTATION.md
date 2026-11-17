@@ -8916,6 +8916,50 @@ workload equivalence. Production latency and full faster-triage acceptance
 remain open.
 
 
+### Retained fingerprinted serial/parallel benchmark records — worker checkpoint #1025
+
+Milestone 4 asks for recorded before/after performance and capability-equivalence
+results. The earlier retained reports (`ai-parallel-v1220.json`,
+`ai-persistence-delay.json` and `ai-transport-v1180.json`) predate the
+version-1 workload fingerprint, so the comparator refuses them. Regenerated
+records for main `c86141a` are kept in
+`docs/benchmarks/ai-equivalence-c86141a/`. They include each raw
+`tools/benchmark_ai.py` report, the `tools/compare_ai_benchmarks.py` output and a
+manifest of the exact commands and limits. Both workloads use 20 subjects, with
+every second subject requesting follow-up SSH evidence. The fixture delays are a
+25 ms loopback provider, 10 ms SSH and 5 ms receipt/usage persistence. Each pair
+compares concurrency 1 against concurrency 4.
+
+| Workload | Serial | Parallel (4) | Throughput |
+| --- | --- | --- | --- |
+| Cross-server (20 servers) | 2.052 s, 9.747/s | 1.119 s, 17.879/s | +83.4% |
+| Same server (4 supported slots) | 2.074 s, 9.641/s | 1.172 s, 17.060/s | +77.0% |
+
+Both pairs are accepted as capability-equivalent: identical workload fingerprints,
+30 provider calls, 3,000 input and 600 output tokens, 10 follow-up SSH evidence
+requests, all 20 subjects complete, none approved and no errors. The parallel runs
+actually overlapped four provider requests; the serial runs never overlapped any.
+Per-item latency rises under parallelism (cross-server run p50 122 → 211 ms,
+admission p50 11 → 34 ms) while total elapsed time falls. Three additional
+unretained repeats of each pair on the same checkout reproduced the same
+fingerprints, with serial throughput of 9.95–10.63/s and parallel throughput of
+18.06–20.85/s.
+
+`tests/test_ai_benchmark_records.py` re-runs the comparator over every retained
+pair and requires the output to equal the recorded comparison exactly. It also
+checks complete results, the full follow-up evidence count and real provider
+overlap. The test refuses a changed or missing fingerprint and a dropped
+follow-up call.
+
+These are loopback fixtures on a disposable SQLite database under shared local
+load. They are not production, TLS, live-provider or MySQL measurements. The
+reports do not record the AI control mode, and cost stays unavailable rather than
+zero. MySQL records (after #979), control-mode recording, production measurements
+and dashboard presentation remain open, so milestone 4 is still incomplete. This
+checkpoint changes no runtime, schema, admission, provider call or response
+authority.
+
+
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
 The server Overview now reports a read-only lifecycle assessment for reviewed
