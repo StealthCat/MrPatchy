@@ -141,6 +141,31 @@ def test_unquoted_expansion_names_are_unknown_and_blocking(name):
     assert result['scripts'] == [] and result['complete'] is False
 
 
+@pytest.mark.parametrize('name', ['@(z).sh', '+(z).sh', '!(z).sh', 'a@(b).sh'])
+def test_extglob_names_are_unknown_and_blocking(name):
+    """bash_completion.sh (or any earlier script) can enable extglob before $i is re-globbed."""
+    result = run([f(name), f('z.sh')])
+    rec = by_name(result)[name]
+    assert rec['root'] == 'unknown' and rec['root_reason_code'] == 'unquoted_expansion'
+    assert result['complete'] is False
+
+
+@pytest.mark.parametrize('name', ['plain@.sh', 'a+b.sh', 'bang!.sh', 'paren(.sh'])
+def test_extglob_operator_without_group_is_not_flagged(name):
+    rec = by_name(run([f(name)]))[name]
+    assert rec['root'] == 'sourced'
+
+
+def test_loop_matching_splits_only_on_newline():
+    """The shell ends lines only at \\n; other separators must not reassemble the loop."""
+    assert profile_d.loop_present(DEFAULT_PROFILE) is True
+    for sep in ('\x0b', '\x0c', '\x1c', '\x85', '\u2028'):
+        merged = DEFAULT_PROFILE.replace('if [ -d /etc/profile.d ]; then\n', 'if [ -d /etc/profile.d ]; then' + sep, 1)
+        assert merged != DEFAULT_PROFILE
+        assert profile_d.loop_present(merged) is False, repr(sep)
+    assert profile_d.loop_present(DEFAULT_PROFILE.replace('\n', '\r\n')) is True
+
+
 @pytest.mark.parametrize(('names', 'sensitive'), [
     (['a.sh', 'b.sh', 'c10.sh'], False),
     (['a.sh', 'a1.sh'], True),

@@ -4236,8 +4236,11 @@ directory-entry metadata, performs no I/O and never reads a sourced file.
   `depends_on_account`. Symlinks are judged by their target, and a dangling
   link is skipped. A directory named `*.sh` is a non-fatal error.
 - **Hazards.** A name with whitespace or glob characters is word-split or
-  re-globbed by `$i`. For example, `a -o b.sh` can source another path. Such a
-  name is `unknown` with a blocking gap. A FIFO, socket or device is also
+  re-globbed by `$i`. For example, `a -o b.sh` can source another path. bash
+  may run the loop with extglob enabled (Ubuntu's `bash_completion.sh` sets
+  it), so `@(…)`, `+(…)` and `!(…)` groups count as glob characters too. Such a
+  name is `unknown` with a blocking gap. The loop is matched on `\n` line
+  endings only, as the shell reads it. A FIFO, socket or device is also
   blocking.
 - **Order.** Order is bytewise, as in dash and the C locale. When bash's locale
   collation could reorder the names (punctuation, case, or one stem a prefix of

@@ -28,8 +28,10 @@ loop is::
   later files. bash prints "is a directory", and dash fails silently.
 * ``$i`` is unquoted. A name containing whitespace or glob characters is
   word-split or re-globbed. A crafted name such as ``a -o b.sh`` can make the
-  test true and source a different path. Such names are reported as
-  ``unknown`` with a blocking gap.
+  test true and source a different path. bash may run the loop with extglob
+  enabled (Ubuntu's ``bash_completion.sh`` sets it), so ``@(…)``, ``+(…)`` and
+  ``!(…)`` also re-glob. Such names are reported as ``unknown`` with a
+  blocking gap.
 * dash and the C locale expand the glob in byte order. bash uses the login
   locale's collation, which can differ for punctuation, case or one name that
   is a prefix of another. Such sets get a non-blocking gap.
@@ -97,7 +99,9 @@ REASONS = {
     'special_file': 'Not a regular file or directory; sourcing it reads from a device, FIFO or socket.',
     'unresolved': 'Required metadata was not supplied, so the outcome is not determined.',
 }
-_UNSAFE = re.compile(r'[\s*?\[]')
+# ``*``, ``?`` and ``[`` glob by default; ``@(``, ``+(`` and ``!(`` glob once an earlier script
+# (Ubuntu's bash_completion.sh, for example) enables bash extglob.
+_UNSAFE = re.compile(r'[\s*?\[]|[+@!]\(')
 _ORDER_SAFE = re.compile(r'[a-z0-9]+')
 _CONTROL = re.compile(r'[\x00-\x1f\x7f]')
 
@@ -168,7 +172,7 @@ def _assess(entry: dict[str, Any], gaps: list[dict[str, Any]]) -> tuple[str, str
     """Return ``(root_code, other_code)`` for one matched, normalized entry."""
     name = entry['name']
     if _UNSAFE.search(name):
-        _gap(gaps, 'unquoted_expansion', name, 'The name contains whitespace or glob characters, which the '
+        _gap(gaps, 'unquoted_expansion', name, 'The name contains whitespace, glob characters or an extglob group, which the '
                                                'unquoted $i in /etc/profile splits or expands.')
         return 'unquoted_expansion', 'unquoted_expansion'
     if entry['type'] == 'symlink':
@@ -239,7 +243,7 @@ def _directory(directory: Any, entries_supplied: bool, gaps: list[dict[str, Any]
 
 def loop_present(text: str) -> bool:
     """Return whether ``text`` contains the default base-files loop exactly once, unindented."""
-    lines = [line.rstrip() for line in text.splitlines()]
+    lines = [line.rstrip() for line in text.split('\n')]
     size = len(DEFAULT_LOOP)
     hits = sum(1 for start in range(len(lines) - size + 1) if tuple(lines[start:start + size]) == DEFAULT_LOOP)
     mentions = sum(1 for line in lines if PROFILE_D in line and not line.lstrip().startswith('#'))
