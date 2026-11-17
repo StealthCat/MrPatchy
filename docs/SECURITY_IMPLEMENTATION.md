@@ -4185,6 +4185,51 @@ collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
 `entries_parsed` wiring, persistence, UI, provenance and AI classification. No
 schema, API, auth or response-authorization change.
 
+### update-motd.d login script contract — worker checkpoint #1047
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/update_motd.py` is a pure, versioned contract for the `/etc/update-motd.d`
+part of the catalog's `login_hooks` mechanism. It takes supplied directory-entry
+metadata and `pam_motd` session lines, performs no I/O and never reads a
+script's contents.
+
+- **Source.** The rules were checked against Ubuntu 24.04 binaries, not
+  recalled. In libpam-modules 1.5.3, `pam_motd.so` runs `/usr/bin/env -i
+  PATH=… run-parts --lsbsysinit /etc/update-motd.d` into `/run/motd.dynamic`
+  unless the line has `noupdate`; the directory is fixed. debianutils 5.17
+  provides `run-parts`. Upstream Linux-PAM `pam_motd` (RPM families) runs no
+  scripts, so that family is `not_applicable`; any other or unobserved family
+  is a blocking gap.
+- **Name rule.** `--lsbsysinit` considers a name matching
+  `^_?([a-z0-9_.]+-)+[a-z0-9]+$` or `^[a-z0-9][a-z0-9_-]*$`, unless it matches
+  `^[a-z0-9-].*\.dpkg-(old|dist|new|tmp)$`. Upper case, `.sh` suffixes and
+  `README` are not run, but `50-x.ucf-dist`, `50-x.dpkg-bak` and the hidden
+  `.x.dpkg-old` are. The tests pin this rule and the order against `run-parts
+  --list` output for a seeded corpus, and a live test compares names, file
+  types and order with the real binary when it is available as root.
+- **File checks.** Symlinks are followed. A regular file runs as root when it
+  has any execute bit and is not on a `noexec` mount. Directories and
+  non-executable files are skipped. A failed `stat` (a dangling link) and any
+  other type are skipped with the error run-parts reports; later scripts still
+  run. An unobserved mount flag is a non-blocking gap, and the script is
+  reported as running so that nothing that may run is hidden.
+- **Order.** `env -i` clears the locale, so scripts run in byte order.
+- **Activation.** Each `pam_motd` line, with the caller-resolved `reached`
+  value, is listed per service. The state is `active` when a reached line
+  updates, `possible` when one only might be reached (with a gap), and
+  `inactive` when every line has `noupdate` or is not reached. Missing or
+  malformed PAM input is `unknown`, never `active`.
+- **Fail closed.** An unobserved, unreadable or truncated directory, malformed
+  or duplicate entries, missing metadata, an unobserved symlink target and
+  over-limit input are blocking gaps, and `complete` is false. Outside a
+  `listed` directory no script is reported as running. `origin` is always
+  `not_assessed` and no result is a safety verdict.
+
+**Not covered:** agent collection, PAM stack resolution (the PAM service-stack
+contract supplies `reached`), whether sshd uses PAM, AppArmor/SELinux, catalog
+`entries_parsed` wiring, persistence, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
 
 ### Individual queued at jobs — worker checkpoint #831
 
