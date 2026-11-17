@@ -14,6 +14,14 @@ from . import ai_provider_backoff
 from .db import Base, Behavior, Setting, config
 
 MAX_ATTEMPTS=5
+PROVIDER_BLOCKED_REASON='Review the failure and correct API configuration or explicitly retry. No automatic retry is scheduled.'
+# A local refusal is not a key, quota or model problem (#1007): say so, so an
+# administrator does not rotate the key or change the model to clear it.
+EVIDENCE_SIZE_BLOCKED_REASON=('This observation\'s evidence is larger than Mr Patchy shares with the AI provider, so '
+    'nothing was sent. Review it manually. Changing the API key or model does not help. No automatic retry is scheduled.')
+FOLLOW_UP_EVIDENCE_SIZE_BLOCKED_REASON=('The follow-up evidence collected from the server is larger than Mr Patchy shares with '
+    'the AI provider, so the follow-up request was not sent. The first-stage request was sent and may be billed. '
+    'Review it manually. Changing the API key or model does not help. No automatic retry is scheduled.')
 
 
 class TriageRetry(Base):
@@ -60,7 +68,10 @@ def failed(s,row,error,now):
     from .ai import AIError
     retry=s.get(TriageRetry,row.id)
     retry.state='blocked';retry.next_at=0
-    retry.reason='Review the failure and correct API configuration or explicitly retry. No automatic retry is scheduled.'
+    retry.reason=PROVIDER_BLOCKED_REASON
+    cause=getattr(error,'cause',None) if isinstance(error,AIError) else None
+    if cause=='evidence_size':retry.reason=EVIDENCE_SIZE_BLOCKED_REASON
+    elif cause=='follow_up_evidence_size':retry.reason=FOLLOW_UP_EVIDENCE_SIZE_BLOCKED_REASON
     if isinstance(error,AIError) and error.policy_wait:
         retry.attempts=max(0,retry.attempts-1)
         retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
@@ -88,6 +99,24 @@ def failed(s,row,error,now):
             retry.state='deferred';retry.next_at=max(now+delay,retry.provider_until)
             retry.reason='Transient failure; queued until retry eligibility. Existing hourly and AI policy limits still apply.'
         else:retry.reason='Automatic retry limit reached (5 attempts). Review the failure before explicitly retrying.'
+    return retry
+
+
+def over_cap(s,row,signature,quote,cap):
+    """Block a subject whose conservative reservation alone exceeds the daily cap.
+
+    No attempt is counted because nothing was reserved or sent. The row keeps the
+    current model/key signature, so the existing blocked count, notification and
+    administrator retry apply, and a model or key change makes it eligible again.
+    """
+    retry=s.get(TriageRetry,row.id)
+    if not retry:
+        retry=TriageRetry(subject=row.id,configuration=signature,attempts=0);s.add(retry)
+    if retry.configuration!=signature:retry.attempts=0
+    retry.configuration=signature;retry.state='blocked';retry.next_at=0
+    retry.reason=(f'The daily spend cap (${cap:.4f}) is smaller than this investigation\'s conservative '
+        f'reservation (${quote:.4f}), so it can never be admitted. Nothing was reserved or sent. Raise the '
+        'cap or change the model, then explicitly retry. Other investigations continue.')
     return retry
 
 

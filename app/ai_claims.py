@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from decimal import Decimal
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
@@ -236,8 +237,21 @@ def acquire(owner=None):
                             row.verdict='error';row.attempted=now
                             row.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(error)
                             s.commit();return None
-                        if (ai_budget.waiting(s,now,payload) and
-                            not known_good.exact_hit_available(s,row,cfg['ai_model'])):return None
+                        # A subject whose own conservative reservation exceeds the
+                        # whole cap can never be admitted, even after a reset.
+                        # Block it with an explained reason instead of leaving it at
+                        # the head of the queue, where it would stall every host
+                        # (#1003). Nothing is reserved or sent; ordinary exhaustion
+                        # below still defers the whole fleet until the reset.
+                        # An exact known-good hit spends nothing, so neither refusal
+                        # holds it back (#1030).
+                        quote=ai_pricing.reservation(payload)
+                        cap=Decimal(str(cfg['ai_daily_cap_usd']))
+                        over=quote['ok'] and quote['amount_usd']>cap
+                        if ((over or ai_budget.waiting(s,now,payload)) and
+                            not known_good.exact_hit_available(s,row,cfg['ai_model'])):
+                            if over:ai_retry.over_cap(s,row,signature,quote['amount_usd'],cap);s.commit()
+                            return None
                     row.attempted=now;ai_retry.begin(s,row,signature,now)
                     run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
                     s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))
