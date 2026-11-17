@@ -4242,8 +4242,10 @@ reads a hook script's contents.
   components are blocking gaps, as is nesting deeper than 32 files.
 - **Stanzas.** The Linux family/method tables are fixed. `inherits` copies the
   first earlier match's options and hooks, then the stanza's own lines follow.
-  An implicit `auto lo` loopback stanza is added when no stanza uses
-  `loopback`. Each stanza reports its hooks with file/line provenance, the
+  `lo` is always first in the `auto` class, as ifupdown adds it before
+  reading any file (unless `ifup --no-loopback`), so hooks on an explicit `lo`
+  stanza run at boot without an `auto lo` line. An implicit `lo inet loopback`
+  stanza is added only when no stanza uses `loopback`. Each stanza reports its hooks with file/line provenance, the
   `-` ignore-status prefix, the `IF_*` variable names it exports, literal
   activation classes and `no-scripts`/`no-auto-down` pattern matches.
   `no-scripts` suppresses only the run-parts directories, not the hooks.

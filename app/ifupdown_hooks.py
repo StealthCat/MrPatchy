@@ -34,8 +34,10 @@ archive.ubuntu.com, not from recollection:
   methods are fixed tables below. ``inherits`` copies the options and hooks of
   the first earlier stanza with that name (and family, when given) before the
   stanza's own lines.
-* If no stanza uses the ``loopback`` method, ifupdown adds ``auto lo`` and an
-  ``lo inet loopback`` stanza with no hooks.
+* Unless ``ifup --no-loopback`` is used, ifupdown puts ``lo`` first in the
+  ``auto`` class before reading any file, whether or not ``lo`` has a stanza.
+  If no stanza uses the ``loopback`` method, it also adds an ``lo inet
+  loopback`` stanza with no hooks.
 * ``ifup`` runs, per stanza: ``pre-up`` hooks, ``run-parts
   /etc/network/if-pre-up.d``, the method, ``up`` hooks, ``run-parts
   /etc/network/if-up.d``. ``ifdown`` runs ``if-down.d``, ``down`` hooks, the
@@ -583,6 +585,7 @@ def assess(files: Any, directories: Any = None, hook_dirs: Any = None, *, family
         _gap(gaps, 'input_malformed', None, 'The interfaces path is not absolute.')
         result['complete'] = False
         return result
+    state.classes['auto'] = ['lo']
     accepted = _read(state, interfaces, 0, True)
     top = state.file(interfaces)
     if top is not None and top['state'] in ('read', 'absent', 'directory'):
@@ -594,7 +597,6 @@ def assess(files: Any, directories: Any = None, hook_dirs: Any = None, *, family
             state.stanzas.insert(0, {'logical': 'lo', 'family': 'inet', 'method': 'loopback', 'file': None,
                                      'line': None, 'inherits': None, 'implicit': True, 'options': [],
                                      'hooks': {phase: [] for phase in PHASES}})
-            state.classes.setdefault('auto', []).insert(0, 'lo')
         for stanza in state.stanzas:
             stanza['activation'] = sorted(cls for cls, members in state.classes.items()
                                           if stanza['logical'] in members)

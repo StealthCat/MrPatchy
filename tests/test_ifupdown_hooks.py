@@ -84,6 +84,17 @@ def test_implicit_loopback_only_without_a_loopback_stanza():
     assert explicit['stanzas'][0]['implicit'] is False
 
 
+def test_lo_is_always_first_in_auto_even_with_an_explicit_stanza_and_no_auto_line():
+    # config.c read_interfaces(): add_allow_up(..., "auto", LO_IFACE) runs before
+    # parsing unless --no-loopback, so ifup -a runs hooks on an explicit lo stanza.
+    result = _run('auto eth0\niface lo inet loopback\n    up /usr/local/bin/x\niface eth0 inet dhcp\n')
+    lo = _stanza(result, 'lo')
+    assert lo['implicit'] is False and lo['activation'] == ['auto']
+    assert result['classes']['auto'] == ['lo', 'eth0']
+    later = _run('auto eth0 lo\niface lo inet loopback\n')
+    assert later['classes']['auto'] == ['lo', 'eth0']
+
+
 @pytest.mark.parametrize('text,line', [
     ('  up /bin/x\n', 1),
     ('iface eth0 inet dhcp\nauto eth1\n  up /bin/x\n', 3),
