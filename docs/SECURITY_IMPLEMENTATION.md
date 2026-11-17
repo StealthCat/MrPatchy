@@ -2780,6 +2780,32 @@ retry) and blocked (the #815 predicate).
 - Keep the budget/reservation ledger durable and independent of configurable AI-log history pruning. Serialize competing admissions/settings changes without holding a lock across network I/O; reconcile crash/partial-write recovery without double spending or double release. Explain that locally estimated spend is not an exact provider invoice guarantee, and identify any unbounded pricing/usage uncertainty rather than claiming an enforceable cap for unsupported billing.
 - In Settings, Investigations, AI activity and worker health show selected mode, configured/effective concurrency/rate, queued/active count, oldest wait, blocked reason, next eligible time/reset, estimated spend, reserved/uncertain spend and remaining budget. Keep private evidence and credentials out of metrics. Integrate readable glass/tab/menu layouts and mascot guidance with existing role/audit boundaries.
 
+### Non-triage billable paths under one daily cap — worker checkpoint #1023
+
+`tests/test_ai_daily_cap_billable_paths.py` drives four non-triage paths through
+their real code into a `daily_cap` window with no safe room left: update scoring
+(`update_scores.run_one`), an AI security-plan job (`worker.execute`), release
+configuration review (`releases.ai_review`) and the administrator connection
+test (`POST /api/settings/ai-test`). Only the provider transport is a fixture,
+and the clock is pinned inside the bundled price catalog's validity.
+
+- In every path, nothing reaches the transport and no ledger row is written.
+- Scoring is deferred to the exact window reset, with a deferred run and zero
+  calls. It is not retried inside the spent window, and it completes after the
+  reset with one settled ledger row in the new window.
+- The security-plan job stays queued until the reset (`_ai_deferred`) rather
+  than failing, and then completes.
+- Release review raises a controlled wait whose eligibility is the reset.
+- The connection test is refused with the daily-cap reason.
+- With room for one scoring call, scoring sends it, and a security plan then
+  waits for the reset. The ledger holds only the one call that was sent.
+
+Three mutations are each caught: removing the cap check in `ai_budget.reserve`,
+dropping `policy_wait` from scoring deferral, and dropping plan deferral in the
+worker. This is acceptance coverage only, with no runtime change. CI runs it on
+SQLite and the MySQL shards. Startup plans share the same worker deferral branch
+as security plans, so they are covered through that branch, not separately.
+
 ### Unpriced saved model under a daily cap — worker checkpoint #735
 
 In `daily_cap` and `rate_and_daily` modes, capped admission must quote every
