@@ -183,7 +183,17 @@ def acquire(owner=None):
                     if host is not None and not host_lifecycle.active(host):return None
                     if cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
                         try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
-                        except ai.AIError:return None
+                        except ai.AIError as error:
+                            # This subject's own evidence cannot be shared (for
+                            # example over the 64 KB limit). Record the outcome an
+                            # uncapped attempt records instead of leaving it at the
+                            # head of the queue, where it would stall every host.
+                            # Nothing is reserved or sent.
+                            ai_retry.begin(s,row,signature,now)
+                            retry=ai_retry.failed(s,row,error,now)
+                            row.verdict='error';row.attempted=now
+                            row.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(error)
+                            s.commit();return None
                         if ai_budget.waiting(s,now,payload):return None
                     row.attempted=now;ai_retry.begin(s,row,signature,now)
                     run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
