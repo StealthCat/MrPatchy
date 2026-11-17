@@ -1,6 +1,6 @@
 """Versioned public token-price estimates, never an invoice or a model-access list.
 
-Rates checked 2026-10-26 against https://developers.openai.com/api/docs/pricing
+Rates checked 2026-11-16 against https://developers.openai.com/api/docs/pricing
 and the individual /api/docs/models/{model} pages for the older models below.
 Only exact catalogued IDs are priced: never guess a fine-tune/snapshot's rate.
 """
@@ -10,13 +10,13 @@ import json
 import re
 import time
 
-VERSION = '2026-10-26'
+VERSION = '2026-11-16'
 SOURCE = 'https://developers.openai.com/api/docs/pricing'
 # Bundled catalogs are deliberately short-lived. Updating prices requires a
 # reviewed source change; an old build must not silently promise a spend cap
 # using rates that have not been reverified.
-VERIFIED_AT = 1792972800  # 2026-10-26T00:00:00Z
-EXPIRES_AT = 1795651200   # 2026-11-26T00:00:00Z
+VERIFIED_AT = 1794787200  # 2026-11-16T00:00:00Z
+EXPIRES_AT = 1797379200   # 2026-12-16T00:00:00Z
 # USD per million: ordinary input, cached input, output, 30-minute cache write.
 RATES = {
     'gpt-6-astra': ('10', '1', '50', '12.5'),

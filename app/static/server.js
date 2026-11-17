@@ -239,9 +239,57 @@ function isolatedPanel(root,current,title,render,hostId){
  return run();
 }
 
+// Restrict-only per-server malware automatic-response override (#940). It can only lower the fleet
+// mode for this server and add exclusions; it never adds response authority and nothing enforces it yet.
+const SERVER_MALWARE_CAP_LABELS={inherit:'Follow the fleet policy',monitor_only:'At most Monitor only',disabled:'Disabled for this server'};
+const SERVER_MALWARE_MODE_LABELS={disabled:'Disabled',monitor_only:'Monitor only',enforce:'Enforce'};
+function serverMalwareOverrideForm(data){
+ const o=data.override,fleet=data.fleet_policy,eff=data.effective_policy,max=data.limits.max_exclusions;
+ const mode=m=>esc(SERVER_MALWARE_MODE_LABELS[m]||m);
+ const caps=data.mode_caps.map(c=>`<option value="${esc(c)}" ${c===o.mode_cap?'selected':''}>${esc(SERVER_MALWARE_CAP_LABELS[c]||c)}</option>`).join('');
+ const count=(n,word)=>`${esc(n)} ${word}${n===1?'':'s'}`;
+ return `<h3 id="server-malware-override-title">Automatic malware response for this server</h3>
+<div class="notice" id="server-malware-enforcement-notice"><strong>Not enforced.</strong> No containment executor exists yet, so this override is recorded and audited but never quarantines a file or terminates a process.</div>
+${data.stored_invalid?`<div class="notice" id="server-malware-invalid-notice" role="alert"><strong>The stored override is invalid, so this server is treated as Disabled.</strong> ${esc(data.stored_invalid_reason||'')}. Saving replaces it.</div>`:''}
+${data.fleet_stored_invalid?'<div class="notice" role="alert">The stored fleet policy is invalid and is treated as Disabled. Fix it in <a href="#settings/malware">Settings → Malware response</a>.</div>':''}
+<p class="help">Restrict-only: this override can lower the fleet mode for this server and add exclusions. It can never raise the mode, add actions, allow unknown-malware responses or relax thresholds. Edit the fleet policy in <a href="#settings/malware">Settings → Malware response</a>.</p>
+<dl class="server-facts" id="server-malware-summary"><div><dt>Fleet mode</dt><dd id="server-malware-fleet-mode">${mode(fleet.mode)} · ${count(fleet.excluded_paths.length,'path exclusion')} · ${count(fleet.excluded_sha256.length,'hash exclusion')}</dd></div>
+<div><dt>Effective for this server</dt><dd id="server-malware-effective">${mode(eff.mode)} · ${count(eff.excluded_paths.length,'path exclusion')} · ${count(eff.excluded_sha256.length,'hash exclusion')}${data.effective_invalid_reason?` <span class="notice" role="alert">Treated as Disabled: ${esc(data.effective_invalid_reason)}.</span>`:''}</dd></div></dl>
+<form id="server-malware-override-form"><fieldset><label>Mode cap<select name="mode_cap">${caps}</select></label>
+<label>Additional excluded paths · one absolute path per line<textarea name="excluded_paths" rows="3" spellcheck="false" autocomplete="off">${esc(o.excluded_paths.join('\n'))}</textarea></label>
+<label>Additional excluded SHA-256 hashes · one per line<textarea name="excluded_sha256" rows="3" spellcheck="false" autocomplete="off">${esc(o.excluded_sha256.join('\n'))}</textarea></label>
+<p class="help">These are added to the fleet exclusions. At most ${esc(max)} of each, counting the fleet's; if the combined lists exceed that, this server is treated as Disabled.</p>
+<button type="submit" class="primary">Save server override</button></fieldset><p class="help" role="status" id="server-malware-override-result"></p></form>`;
+}
+async function serverMalwareOverride(revision,root,hostId){
+ const target=root.querySelector('#server-malware-override');if(!target)return;
+ const alive=()=>root.isConnected&&target.isConnected&&currentView(revision,'servers');
+ const url='/hosts/'+encodeURIComponent(hostId)+'/malware-response';
+ const lines=v=>String(v||'').split('\n').map(x=>x.trim()).filter(Boolean);
+ const load=async()=>{
+  target.innerHTML='<h3 id="server-malware-override-title">Automatic malware response for this server</h3>'+PatchyUI.loading();
+  let data;try{data=await api(url);}catch(error){if(alive())panelError(target,'Automatic malware response for this server',error,load);return;}
+  if(!alive())return;
+  const render=message=>{
+   target.innerHTML=serverMalwareOverrideForm(data);
+   const form=target.querySelector('#server-malware-override-form'),result=target.querySelector('#server-malware-override-result');
+   if(message)result.textContent=message;
+   form.onsubmit=async event=>{
+    event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
+    const override={mode_cap:f.get('mode_cap'),excluded_paths:lines(f.get('excluded_paths')),excluded_sha256:lines(f.get('excluded_sha256')).map(h=>h.toLowerCase())};
+    fieldset.disabled=true;result.textContent='Saving…';
+    try{data=await api(url,'PUT',{override,expected_revision:data.revision});if(alive())render('Server override saved. It is recorded only and not enforced.');}
+    catch(error){if(alive()&&result.isConnected)result.textContent='Server override was not saved. '+error.message+(error.status===409&&/refresh/i.test(error.message)?' Your entries are still in the form; reload this tab to see the current saved override.':'');}
+    finally{if(fieldset.isConnected)fieldset.disabled=false;}
+   };
+  };
+  render('');
+ };
+ return load();
+}
 async function serverSecurity(revision,context){
  const {root,hostId}=context;let offset=0,historyOffset=0,ticket=0;
- root.innerHTML=scannerRecordControls()+'<p class="notice">Security findings are evidence for investigation, not proof of compromise. Coverage gaps remain explicit. AI plans require review and are manual-only; approval does not execute actions.</p><section class="card"><form id="security-scan-form"><label>Absolute directories, one per line<textarea name="paths">/usr/local/bin\n/var/www\n/tmp</textarea></label><button>Queue security scan</button></form></section><section class="card"><form id="yara-scan-form"><h3>Authenticated YARA scan</h3><label>Offline signed rule bundle ID<input name="bundle_id" required pattern="[A-Za-z0-9_-]{1,64}" maxlength="64"></label><label>Absolute directories, one per line<textarea name="paths" required>/tmp</textarea></label><p class="help">Requires YARA on the target and independently trusted rule keys/bundle on the controller. Read-only, bounded file scanning; no automatic AI upload or remediation.</p><button>Queue YARA scan</button></form></section><section class="card"><form id="security-policy-form"><h3>Scheduled scanning</h3><label class="check"><input name="enabled" type="checkbox">Enable recurring scans</label><label>Interval in hours<input name="interval_hours" type="number" min="1" max="720" value="24"></label><label>Scheduled directories, one per line<textarea name="paths"></textarea></label><label class="check"><input name="auto_ai_plan" type="checkbox">Automatically request AI plans for new detections</label><p class="help">Sends scanner evidence to the configured AI provider. One automatic attempt per incident scan and one plan at a time per server. Legacy AI control mode also limits plan requests to ten per hour across the fleet; other modes are paced by the shared AI start gates. Plans remain manual-only.</p><div class="notice" id="auto-plan-status" role="status" aria-live="polite"><strong>Automatic AI plans</strong> · Loading…</div><button>Save scan policy</button><p class="help">Uses the same bounded scan limits. Incomplete scans are not proof of coverage. Pending scans are not duplicated.</p></form></section><section class="card" id="execution-scan-panel"></section><div class="actions"><button id="security-refresh">Refresh security records</button></div><div id="security-latest"></div><section><h3>Incidents &amp; response plans</h3><div id="security-incidents"></div><div class="actions"><button id="incident-prev">Previous incidents</button><button id="incident-next">Next incidents</button></div></section><section><h3>Scan history</h3><div id="security-history"></div><div class="actions"><button id="scan-prev">Previous scans</button><button id="scan-next">Next scans</button></div></section>';
+ root.innerHTML=scannerRecordControls()+'<p class="notice">Security findings are evidence for investigation, not proof of compromise. Coverage gaps remain explicit. AI plans require review and are manual-only; approval does not execute actions.</p><section class="card"><form id="security-scan-form"><label>Absolute directories, one per line<textarea name="paths">/usr/local/bin\n/var/www\n/tmp</textarea></label><button>Queue security scan</button></form></section><section class="card"><form id="yara-scan-form"><h3>Authenticated YARA scan</h3><label>Offline signed rule bundle ID<input name="bundle_id" required pattern="[A-Za-z0-9_-]{1,64}" maxlength="64"></label><label>Absolute directories, one per line<textarea name="paths" required>/tmp</textarea></label><p class="help">Requires YARA on the target and independently trusted rule keys/bundle on the controller. Read-only, bounded file scanning; no automatic AI upload or remediation.</p><button>Queue YARA scan</button></form></section><section class="card"><form id="security-policy-form"><h3>Scheduled scanning</h3><label class="check"><input name="enabled" type="checkbox">Enable recurring scans</label><label>Interval in hours<input name="interval_hours" type="number" min="1" max="720" value="24"></label><label>Scheduled directories, one per line<textarea name="paths"></textarea></label><label class="check"><input name="auto_ai_plan" type="checkbox">Automatically request AI plans for new detections</label><p class="help">Sends scanner evidence to the configured AI provider. One automatic attempt per incident scan and one plan at a time per server. Legacy AI control mode also limits plan requests to ten per hour across the fleet; other modes are paced by the shared AI start gates. Plans remain manual-only.</p><div class="notice" id="auto-plan-status" role="status" aria-live="polite"><strong>Automatic AI plans</strong> · Loading…</div><button>Save scan policy</button><p class="help">Uses the same bounded scan limits. Incomplete scans are not proof of coverage. Pending scans are not duplicated.</p></form></section>'+(isAdmin()?'<section class="card" id="server-malware-override" aria-labelledby="server-malware-override-title"></section>':'')+'<section class="card" id="execution-scan-panel"></section><div class="actions"><button id="security-refresh">Refresh security records</button></div><div id="security-latest"></div><section><h3>Incidents &amp; response plans</h3><div id="security-incidents"></div><div class="actions"><button id="incident-prev">Previous incidents</button><button id="incident-next">Next incidents</button></div></section><section><h3>Scan history</h3><div id="security-history"></div><div class="actions"><button id="scan-prev">Previous scans</button><button id="scan-next">Next scans</button></div></section>';
  root.querySelector('#scanner-record-export').onclick=()=>exportResponseRecord(hostId,null,()=>root.isConnected&&currentView(revision,'servers'),true);
  const policyForm=root.querySelector('#security-policy-form');
  const policyTemplate=policyForm.innerHTML;let policyTicket=0;
@@ -274,6 +322,7 @@ async function serverSecurity(revision,context){
   }catch(error){if(policyCurrent()&&request===policyTicket)panelError(policyForm,'Scheduled scanning',error,loadPolicy);}
  };
  const policyTask=loadPolicy();
+ const malwareOverrideTask=isAdmin()?serverMalwareOverride(revision,root,hostId):null;
  const load=async()=>{const request=++ticket;
  const [latest,items,history]=await Promise.all([api('/hosts/'+hostId+'/security'),api('/hosts/'+hostId+'/security/incidents?offset='+offset),api('/hosts/'+hostId+'/security/history?offset='+historyOffset)]);
  if(!root.isConnected||!currentView(revision,'servers')||request!==ticket)return;
@@ -298,7 +347,7 @@ async function serverSecurity(revision,context){
  const latest=root.querySelector('#security-latest');
  // A failure renders only while its request still owns the panel, so a stale initial failure never overwrites a newer refresh.
  const first=()=>{const task=load(),request=ticket;return task.catch(error=>{if(alive()&&request===ticket)panelError(latest,'Latest scan coverage and incidents',error,first);});};
- const panels=[policyTask,first(),renderExecutionScans(root,hostId,alive)];
+ const panels=[policyTask,...(malwareOverrideTask?[malwareOverrideTask]:[]),first(),renderExecutionScans(root,hostId,alive)];
  for(const [title,render] of [['Evidence copies',renderEvidenceVault],['Evidence archives',renderEvidenceArchives],['Quarantines',renderQuarantines],['Process responses',renderProcessResponses],['Repair preparations',renderRepairPreparations],['Repair stages',renderRepairStages],['Repair publications',renderRepairPublications]])panels.push(isolatedPanel(root,alive,title,render,hostId));
  await Promise.allSettled(panels);
 }
