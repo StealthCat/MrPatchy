@@ -243,7 +243,7 @@ def test_listing_matches_native_run_parts(tmp_path):
     names = ['10a', '15B', '15_b', '15b', '20b.sh', '30c~', '.40d', '50E-x_y', '80noexec', '99x.dpkg-old', '50é']
     for name in names:
         (tmp_path / name).write_text('x\n')
-        os.chmod(tmp_path / name, 0o644)
+        os.chmod(tmp_path / name, 0o600)
     (tmp_path / '60dir').mkdir()
     os.symlink('10a', tmp_path / '70lnk')
     os.symlink('/nonexistent-target', tmp_path / '90dangling')
