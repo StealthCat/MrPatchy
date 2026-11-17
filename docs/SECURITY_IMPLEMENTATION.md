@@ -9310,7 +9310,7 @@ The #816 producer kept its event unchanged, or silent, whenever the latest `secu
 - **Validation:** three focused tests fail on the #840 head `3bbcf07` (main `480100d` plus #839) and pass after the change. The related incident, coverage, notification, route-role and lifecycle suites pass on SQLite.
 - **Remaining:**
   - Policies saved before this change carry no `enabled_since` and stay silent while never scanned until they are saved again. The producer does not backfill them.
-  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan.
+  - If a server is disabled before its first scan and later re-enabled, a notice can appear before the next scheduler tick enqueues that scan. Fixed by worker checkpoint #1043 below.
 
 ### OS support-end advance warning — worker checkpoint #341 (roadmap J)
 
@@ -9353,3 +9353,22 @@ The first #841 limitation: a policy saved before `enabled_since` existed stayed 
 - **Unchanged:** policies with `enabled_since`, the scheduler, `security_coverage.assessment`, the schema, roles and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** three focused tests in `tests/test_scan_coverage_notifications.py` fail on main `dff91c4` and pass after the change; a behavior-only check (legacy never-scanned policy publishes `overdue` after the interval plus grace) publishes nothing on main. The related SQLite coverage, notification, security, incident, operations and scheduling selection passes (580 passed, 2 skipped).
 - **Remaining:** the window before a legacy policy notifies starts at the upgrade's first coordinator tick, not at its true enablement time, which is unknown. YARA schedules and a configurable grace period remain out of scope.
+
+### Re-enabled scanning and returning servers in coverage notifications — worker checkpoint #1043
+
+Two re-enable paths published `overdue` straight away when the scheduler was held at that moment by a quarantine, a recovery-required operation, a full queue or a pending YARA or execution scan:
+
+- Re-enabling scheduled scanning on a server whose last scan was old. `enabled_since` was consulted only for never-scanned servers.
+- A disabled or re-enrolling server returning to the active set, either with an old last scan or never scanned with an old `enabled_since`. This was the #841 limitation.
+
+- **Change:** `classify` holds a scanned server's `overdue` while a valid `enabled_since` is within the interval plus the one-hour grace period. An invalid or missing clock keeps the #816 behavior.
+- **Resume marker:** the producer keeps a server-managed `security-scan-resumed:<host>` setting for servers with an enabled policy.
+  - It holds `{"inactive": true}` while the server is outside the active set.
+  - When the server is next seen active, it becomes `{"active_since": <epoch>}`, in whole microseconds.
+  - The later of that time and `enabled_since` starts the coverage clock.
+  - It is written only on these transitions. It is removed once the clock is older than the interval plus grace, when the policy is disabled or removed, or when the server is deleted.
+  - The prefix does not start with `security-policy:`, and the administrator's policy row is never written.
+- **No upgrade delay:** a server never seen inactive has no marker, so existing and continuously active servers keep the #816 schedule after upgrade.
+- **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
+- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
