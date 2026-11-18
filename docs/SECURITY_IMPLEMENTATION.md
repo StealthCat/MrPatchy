@@ -5924,6 +5924,61 @@ Open: collection wiring, file contents (Debian's `~/.profile` sources
 permission, persistence, UI, provenance and AI classification. No schema, API,
 auth or response-authorization change.
 
+### acpid event-rule contract — worker checkpoint #1079
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/acpid_events.py` is a pure, versioned contract for acpid, which runs a
+rule file's `action` as root through `/bin/sh -c` whenever an ACPI event
+(power button, lid, AC adapter and so on) matches the rule's `event` regular
+expression. It takes a captured listing, captured rule-file text and the
+`OPTIONS` value from `/etc/default/acpid`, and performs no I/O.
+
+- **Source.** `event.c` and `acpid.c` in acpid 2.0.28, 2.0.32, 2.0.33 and
+  2.0.34 (Ubuntu 26.04 `acpid_2.0.34-1ubuntu3`). Their rule-loading, matching
+  and command code is identical apart from a renamed debug variable. The rules
+  come from reading that source; no compiled acpid was run.
+- **Files.** Only names matching `^[a-zA-Z0-9_-]+$` load, so `power.conf`,
+  `x~` and dotfiles are `ignored`. A regular file or a symlink to one loads; a
+  directory, other file type, dangling link or link to a non-file is
+  `skipped_non_file`. Load order follows `readdir` and is unspecified, so files
+  are reported in byte order with that limit named.
+- **Lines.** `fgets` reads 510-byte pieces, so a longer line is parsed as
+  several lines and a later piece can set the action. Leading whitespace is
+  skipped and `#` lines are comments. The `%63[^=\n]=%255[^\n]` split keeps
+  whitespace in the key (`event =` is an unknown key) and in the value
+  (a CRLF file's value ends in `\r`), and truncates a value at 255 bytes; the
+  manual's 511 is not what the code does. A later `event` or `action` replaces
+  an earlier one. Unparsable lines and unknown keys are skipped and recorded.
+- **Outcomes.** A file is `loads`, `drop`, `skipped_incomplete` (no event or
+  no action), `rejected` (any `%` escape other than `%e` or `%%` on any
+  `action` line, even one a later line replaces) or `unresolved`. Each loaded
+  rule reports its event regex and flags, its action, the action SHA-256,
+  truncation and whether the action substitutes the event text with `%e`.
+- **Drop rules.** An action equal to the drop action (`<drop>`, or
+  `-r`/`--dropaction`) is a drop rule. Drop rules are checked before every
+  other rule and stop all later rules and client notifications for that event.
+- **Options.** `-c`/`--confdir`, `-r`/`--dropaction` and `-L`/`--lockfile` are
+  read from the whitespace-split `OPTIONS` words using `getopt_long` rules,
+  including unique long-option prefixes, clustered short options and `--`.
+  An unknown, ambiguous or argument-less option, `-v` or `-h` means acpid exits
+  instead of running. A missing configuration directory also means acpid
+  exits at startup and runs no rules.
+- **Fail closed.** An unobserved `OPTIONS` value, directory listing, entry
+  type, symlink target or rule text, a listing for a directory other than the
+  effective one, a relative `--confdir`, invalid UTF-8, NUL bytes, duplicate or
+  malformed entries and over-limit input mark the result incomplete. Every
+  result names what it cannot observe: whether each regex compiles under the
+  host C library (a file whose regex does not compile is reported as loaded),
+  whether acpid runs and whether a service override changes its command line,
+  which events occur, the lock file, the programs an action runs and the
+  directory order. `origin` is always `not_assessed` and no result is a
+  safety verdict.
+
+**Not covered:** agent collection of the directory, rule text and `OPTIONS`,
+catalog `entries_parsed` wiring, persistence, baselines and alerts, UI,
+provenance and AI classification. No schema, API, auth or
+response-authorization change.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
