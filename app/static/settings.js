@@ -58,30 +58,70 @@ if(stampsHistory){
  history.replaceState=function(state,...rest){const s=state&&typeof state==='object'&&SETTINGS_HISTORY_KEY in state?state:stampHistory(state,historyIndex());return nativeReplaceState(s,...rest);};
  if(historyIndex()===null)nativeReplaceState(stampHistory(history.state,0),'');
 }
-let settledSettingsHash=location.hash,settledHistoryIndex=historyIndex();
-// Set only while the guard's own history.go undo is in flight. Entries can share
+// The Navigation API also names each entry by key. Moving to a key is absolute, so
+// a dropped or repeated move cannot overshoot the way a relative history.go can.
+const navigationKey=()=>{const entry=window.navigation?.currentEntry;return entry&&typeof entry.key==='string'&&entry.key?entry.key:null;};
+let settledSettingsHash=location.hash,settledHistoryIndex=historyIndex(),settledHistoryKey=navigationKey();
+// Set only while the guard's own undo (by key or history.go) is in flight. Entries can share
 // an index (rapid back-to-back hash changes settle the newer entry first), so
 // arriving on the settled index is not by itself evidence of an undo.
-let pendingHistoryUndo=null;
+let pendingHistoryUndo=null,pendingHistoryUndoKey=null;
+// Each held move gets its own generation, so retries from an earlier prompt never
+// act after a newer prompt or a settled navigation.
+let historyGuardGeneration=0;
 function settleHistory(){
+ historyGuardGeneration++;
  let index=historyIndex();
  if(index===null&&stampsHistory){index=(settledHistoryIndex??-1)+1;nativeReplaceState(stampHistory(history.state,index),'');}
- settledSettingsHash=location.hash;settledHistoryIndex=index;
+ settledSettingsHash=location.hash;settledHistoryIndex=index;settledHistoryKey=navigationKey();
 }
+// A traversal started while another is still settling can be dropped (issue #1083:
+// a guard undo issued during browser Back never landed). Moving by key is retried a
+// bounded number of times, while it is still wanted, until the page is on that entry.
+function traverseToEntry(key,stillWanted,attempt=0){
+ if(!key||navigationKey()===key||!stillWanted())return;
+ let result;
+ try{result=window.navigation.traverseTo(key);}catch{result=null;}
+ const retry=()=>{if(attempt<3)setTimeout(()=>traverseToEntry(key,stillWanted,attempt+1),50*(attempt+1));};
+ if(!result||!result.finished){retry();return;}
+ result.finished.then(()=>{if(navigationKey()!==key)retry();},retry);
+}
+const canTraverseByKey=()=>typeof window.navigation?.traverseTo==='function'&&navigationKey()!==null;
 function unsavedSettingsPending(){return !document.getElementById('shell').classList.contains('hidden')&&settingsHasUnsavedChanges();}
-function confirmLeaveUnsaved(proceed){
+function confirmLeaveUnsaved(proceed,stay=()=>{}){
  modal('Leave without saving?','<p>You have unsaved Settings changes. Leaving this page discards them.</p><div class="actions"><button type="button" id="unsaved-stay">Stay on this page</button><button type="button" id="unsaved-discard" class="danger">Discard changes</button></div>');
  const dialog=modalRevision,box=document.getElementById('modal');
- document.getElementById('unsaved-stay').onclick=()=>{if(dialog===modalRevision)box.close();};
+ document.getElementById('unsaved-stay').onclick=()=>{if(dialog!==modalRevision)return;box.close();stay();};
  document.getElementById('unsaved-discard').onclick=()=>{if(dialog!==modalRevision)return;discardSettingsChanges();box.close();proceed();};
  document.getElementById('unsaved-stay').focus();
 }
 window.addEventListener('hashchange',event=>{
- const index=historyIndex(),undo=pendingHistoryUndo;pendingHistoryUndo=null;
+ const index=historyIndex(),undo=pendingHistoryUndo,undoKey=pendingHistoryUndoKey;pendingHistoryUndo=pendingHistoryUndoKey=null;
  // Landing back on the settled entry after the guard's own undo: restore it without rendering.
- if(undo!==null&&index===undo&&location.hash===settledSettingsHash){event.stopImmediatePropagation();return;}
+ // A key survives the eviction of the oldest entry at the history cap; an index shifts.
+ const undone=undoKey!==null?navigationKey()===undoKey:undo!==null&&index===undo;
+ if(undone&&location.hash===settledSettingsHash){event.stopImmediatePropagation();return;}
  if(!unsavedSettingsPending()){settleHistory();return;}
  event.stopImmediatePropagation();
+ const settledKey=settledHistoryKey,targetKey=navigationKey();
+ if(settledKey&&targetKey&&settledKey!==targetKey&&canTraverseByKey()&&window.navigation.entries().some(e=>e.key===settledKey)){
+  // The settled entry is still in session history: move to it by key, even where entries share
+  // an index. Stay re-checks the undo; Discard moves to the requested entry from wherever the
+  // undo left the page.
+  let discarded=false;
+  const generation=++historyGuardGeneration;
+  const undoWanted=()=>!discarded&&generation===historyGuardGeneration&&settledHistoryKey===settledKey;
+  const undoNow=()=>{pendingHistoryUndoKey=settledKey;traverseToEntry(settledKey,undoWanted);};
+  undoNow();
+  const leave=()=>{
+   const pending=window.navigation.transition;
+   if(pending){pending.finished.then(leave,leave);return;}
+   if(navigationKey()===targetKey){settleHistory();render();}else traverseToEntry(targetKey,()=>generation===historyGuardGeneration&&settledHistoryKey===settledKey);
+  };
+  confirmLeaveUnsaved(()=>{discarded=true;pendingHistoryUndoKey=null;leave();},
+   ()=>{if(undoWanted()&&navigationKey()!==settledKey)undoNow();});
+  return;
+ }
  // Without a measurable move (no index, or an entry sharing the settled index) the
  // address is restored in place; history.go(0) would reload and drop the edits.
  if(settledHistoryIndex===null||index===settledHistoryIndex){
