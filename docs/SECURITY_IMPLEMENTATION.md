@@ -11555,3 +11555,13 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+### Provider backoff under reversed failure writes — Roadmap A checkpoint #1117
+
+Shared provider backoff retains the latest recorded failure timestamp. If an
+earlier failure acquires the shared lock after a newer one, a response from a
+request already in flight at the newer failure still cannot clear the wait.
+The regression controls lock entry to exercise this order and checks admission
+before and after a later successful request.
+
+This check uses the existing worker clock timestamps. Clock skew across workers
+and matched production throughput remain outside this acceptance slice.
