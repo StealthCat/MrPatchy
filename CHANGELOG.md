@@ -1,3 +1,7 @@
+## 1.75.31 — 2026-11-18
+
+1. [PR #1051](https://github.com/StealthCat/MrPatchy/pull/1051): Exact fleet known-good matches are now reused while the daily AI spend cap is exhausted, or when a subject's quote exceeds the remaining headroom or the whole cap; these hits make no provider call and reserve nothing, so they no longer wait for the reset. Work that would call the provider is still deferred, and server pause, global disable, Re-triage and revocation still apply (#1030). Compatibility: no schema, API, UI, role or response-authorization change; `before_ai()` gains a keyword-only `persist=True` argument. Limits: while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is found only once those clear; the rate gate and provider backoff still hold back free hits.
+
 ## 1.75.30 — 2026-11-18
 
 1. [PR #1078](https://github.com/StealthCat/MrPatchy/pull/1078): Batched integration of [PR #1069](https://github.com/StealthCat/MrPatchy/pull/1069), [PR #1064](https://github.com/StealthCat/MrPatchy/pull/1064), [PR #1058](https://github.com/StealthCat/MrPatchy/pull/1058), [PR #1055](https://github.com/StealthCat/MrPatchy/pull/1055), [PR #1062](https://github.com/StealthCat/MrPatchy/pull/1062).
