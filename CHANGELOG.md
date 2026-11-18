@@ -1,3 +1,7 @@
+## 1.75.37 — 2026-11-18
+
+1. [PR #1087](https://github.com/StealthCat/MrPatchy/pull/1087): Fleet AI activity adds an administrator-only **Servers holding the triage backlog** panel showing which servers hold pending process investigations and why each is waiting (active, eligible, retry wait, blocked, AI paused or at the investigation limit), with links to each server's Investigations tab (#975). Display-only; uses the existing read-only `GET /api/investigation-status/servers`. Compatibility: UI only.
+
 ## 1.75.36 — 2026-11-18
 
 1. [PR #1090](https://github.com/StealthCat/MrPatchy/pull/1090): Batched integration of [PR #1084](https://github.com/StealthCat/MrPatchy/pull/1084), [PR #1080](https://github.com/StealthCat/MrPatchy/pull/1080).

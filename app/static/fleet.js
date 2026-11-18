@@ -311,7 +311,7 @@ async function aiDiagnostics(revision=renderRevision,context=null){
  const key=context?.hostId||'fleet',saved=aiListContext.get(key)||{purpose:'',state:'',offset:0};
  const status=context?null:await api('/investigation-status');if(!currentView(revision,context?'servers':'ai-logs')||!root.isConnected)return;
  root.innerHTML=(context?'<p class="help">AI activity linked to this server. Shared scoring batches show the whole batch cost, not a per-server charge. Older runs without a server association remain in fleet AI logs.</p>':heading('Know what Mr Patchy is thinking.','Persistent run stages, provider errors, retries, and worker health.')+triageStatus(status)+(isAdmin()?'<div class="notice" id="ai-scoring-queue" role="status" aria-live="polite"><strong>Scoring queue</strong> · Loading…</div>':''))+`<div class="toolbar"><label>Purpose<select id="ai-log-purpose"><option value="">All logged AI activity</option><option value="triage">Process triage</option><option value="update_scoring">Update importance</option><option value="connection_test">Connection tests</option><option value="release_configuration">Release configuration</option><option value="security_plan">Security response plans</option><option value="worker">Worker failures</option></select></label><label>State<select id="ai-log-state"><option value="">All run states</option><option value="running">Running</option><option value="complete">Complete</option><option value="error">Failed</option><option value="deferred">Deferred</option><option value="interrupted">Interrupted</option></select></label><p class="help">API keys, raw prompts and provider bodies are excluded.</p></div><p class="help">Costs are estimated in USD from returned token usage and saved public rates. Older activity and calls without usage or known pricing show Unavailable.</p><div class="card" id="ai-log-table"></div><div class="actions"><button id="ai-log-prev">Previous</button><button id="ai-log-next">Next</button></div>`;
- if(!context&&isAdmin()){loadAiActivityScoringQueue(root,revision);bindAiControlGates(root,revision);bindTriageTimingSummary(root,revision);bindKnownGoodSummary(root,revision);bindKnownGoodLookups(root,revision);}
+ if(!context&&isAdmin()){loadAiActivityScoringQueue(root,revision);bindAiControlGates(root,revision);bindTriageTimingSummary(root,revision);bindTriageQueueServers(root,revision);bindKnownGoodSummary(root,revision);bindKnownGoodLookups(root,revision);}
  let offset=saved.offset,ticket=0;
  const table=$('#ai-log-table'),purposeFilter=$('#ai-log-purpose'),stateFilter=$('#ai-log-state');
  purposeFilter.value=saved.purpose;stateFilter.value=saved.state;
@@ -355,6 +355,42 @@ function bindTriageTimingSummary(root,revision){
    table.hidden=true;table.innerHTML='';
    status.textContent='Timing summary is unavailable. You can still inspect individual AI runs.';
    button.textContent='Retry timing summary';
+  }finally{if(active())button.disabled=false;}
+ };
+}
+
+// Per-server process-triage backlog (#975), read on demand from the admin-only breakdown.
+function bindTriageQueueServers(root,revision){
+ const panel=document.createElement('section');
+ panel.className='card';
+ panel.setAttribute('aria-labelledby','ai-triage-servers-title');
+ panel.innerHTML='<h2 id="ai-triage-servers-title">Servers holding the triage backlog</h2><p class="help">See which servers have process investigations waiting, and why each one is waiting. This is a point-in-time read. It starts no investigation and changes no limit, pause or budget.</p><button type="button">Load server backlog</button><p class="help" role="status"></p><div class="table-wrap" tabindex="0" role="region" aria-label="Pending process investigations by server" hidden></div><ul class="help triage-servers-limits" hidden></ul>';
+ root.querySelector('.toolbar').before(panel);
+ const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),table=panel.querySelector('.table-wrap'),limits=panel.querySelector('.triage-servers-limits');
+ const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unavailable';
+ const when=value=>Number.isFinite(value)&&value>0?date(value):'—';
+ const state=s=>[s.paused?'AI paused':'',s.at_investigation_limit?`At limit (${count(s.active_leases)} of ${count(s.investigation_limit)})`:`${count(s.active_leases)} of ${count(s.investigation_limit)} leases`].filter(Boolean).join(' · ');
+ const clear=()=>{table.hidden=true;table.innerHTML='';limits.hidden=true;limits.innerHTML='';};
+ button.onclick=async()=>{
+  if(!active()||button.disabled)return;
+  button.disabled=true;status.textContent='Loading server backlog…';
+  try{
+   const data=await api('/investigation-status/servers');
+   if(!active())return;
+   const servers=Array.isArray(data?.servers)?data.servers.filter(s=>s&&typeof s.host_id==='string'):[];
+   table.innerHTML=servers.length?`<table><thead><tr><th scope="col">Server</th><th scope="col">Pending</th><th scope="col">Active</th><th scope="col">Eligible now</th><th scope="col">Retry wait</th><th scope="col">Blocked</th><th scope="col">Admission</th><th scope="col">Oldest observation</th><th scope="col">Next retry</th></tr></thead><tbody>${servers.map(s=>`<tr><td><a href="${serverLink(s.host_id,'investigations')}">${esc(s.name||hostName(s.host_id))}</a></td><td>${count(s.pending)}</td><td>${count(s.active)}</td><td>${count(s.eligible)}</td><td>${count(s.retry_wait)}</td><td>${count(s.blocked)}</td><td>${esc(state(s))}</td><td>${when(s.oldest_pending_observation_at)}</td><td>${when(s.next_retry_at)}</td></tr>`).join('')}</tbody></table>`:'';
+   table.hidden=!servers.length;
+   const notes=Array.isArray(data?.limitations)?data.limitations.filter(n=>typeof n==='string'):[];
+   limits.innerHTML=notes.map(n=>`<li>${esc(n)}</li>`).join('');limits.hidden=!servers.length||!notes.length;
+   const total=Number.isSafeInteger(data?.servers_with_backlog)?data.servers_with_backlog:servers.length;
+   status.textContent=servers.length?`${count(total)} server${total===1?'':'s'} with pending process investigations.`+(data?.truncated?` Showing the ${count(servers.length)} largest backlogs.`:''):'No server has pending process investigations.';
+   button.textContent='Refresh server backlog';
+  }catch{
+   if(!active())return;
+   clear();
+   status.textContent='Server backlog is unavailable. Fleet queue totals above still apply.';
+   button.textContent='Retry server backlog';
   }finally{if(active())button.disabled=false;}
  };
 }

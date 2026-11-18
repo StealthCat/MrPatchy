@@ -222,6 +222,7 @@ const assert=require('assert/strict');
     await require('./ui_scoring_queue.cjs')(page,capture);
     await require('./ui_ai_activity_scoring_queue.cjs')(page,capture);
     await require('./ui_ai_timing_summary.cjs')(page,capture);
+    await require('./ui_ai_triage_servers.cjs')(page,capture);
     await require('./ui_known_good_summary.cjs')(page,capture);
     await require('./ui_known_good_lookups.cjs')(page,capture);
     await require('./ui_known_good_candidates.cjs')(page,capture);
