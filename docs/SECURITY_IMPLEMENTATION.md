@@ -5279,6 +5279,84 @@ downloaded binary was not permitted in the authoring session), agent collection
 of this metadata, ifupdown2/ifupdown-ng/netplan, catalog `entries_parsed`
 wiring, persistence, UI, provenance and AI classification. No schema, API,
 auth or response-authorization change.
+### systemd-binfmt registration contract — worker checkpoint #1081
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/binfmt_rules.py` is a pure, versioned contract for the binfmt_misc
+handlers `systemd-binfmt` registers at boot. A handler's interpreter runs on
+every matching `execve` by any user, so a registration is a boot-time
+persistence and interception point. The contract takes supplied
+`binfmt.d/*.conf` metadata and text, performs no I/O and never reads
+interpreter files.
+
+- **Source.** The rules were read from systemd v255 (`src/binfmt/binfmt.c`,
+  `src/basic/conf-files.c`, `fileio.c` and `path-util.c`) and Linux v6.8
+  (`fs/binfmt_misc.c`), not recalled.
+- **File selection.** Files come from `/etc`, `/run`, `/usr/local/lib` and
+  `/usr/lib/binfmt.d`, in that precedence. They apply in `strcmp` order of
+  basename. A `.conf` name that is not hidden or a backup name
+  (`hidden_or_backup_file`) is taken from the first directory that holds it.
+  `systemd-binfmt` lists files with no flags, so nothing is stat-ed:
+  - a directory, dangling symlink, empty file or `/dev/null` link still claims
+    the name and shadows lower copies
+  - an empty file or `/dev/null` link masks the name
+  - a dangling link is ignored
+  - a directory fails to read
+- **Lines.** Lines end at `\n`, `\r` or NUL and are stripped of spaces and
+  tabs. Lines starting with `#` or `;` are skipped.
+- **Registration.** All existing handlers are flushed first. For each rule line,
+  the name is the text up to the second occurrence of the first character.
+  `systemd-binfmt` refuses invalid names and `register`/`status`. Otherwise it
+  deletes any handler with that name, then writes the line and a newline to
+  `register`. A later same-named rule therefore replaces an earlier one, and a
+  rejected later rule still deletes it.
+- **Kernel parser.** `kernel_parse` mirrors `create_entry`:
+  - the register string is 11–1920 bytes, with any delimiter
+  - type is `M` or `E`
+  - the `M` offset is checked with `kstrtoint`, rejecting negative values and
+    hex
+  - `scanarg` requires two hex digits after each `\x`
+  - the decoded mask length must equal the magic length
+  - `offset + size <= 256`
+  - for `E` rules, the offset and mask fields are skipped and the extension
+    must be non-empty and contain no `/`
+  - the interpreter must be non-empty
+  - flags are only `P`, `O`, `C` and `F`, followed by nothing else
+- **Handler attributes.** Each handler reports the following, and the list is
+  in kernel match order, newest registration first:
+  - `credentials_from_binary` (`C`): the interpreter gets the matched binary's
+    setuid credentials
+  - `open_binary` (`O`, implied by `C`)
+  - `interpreter_opened_at_registration` (`F`): registration is conditional on
+    the interpreter opening at boot
+  - `interpreter_relative`
+  - whether every ELF executable, every `#!` script or every file matches. This
+    is computed with the mask, and bytes past the prefix must be masked out, so
+    qemu-user rules that pin the ELF class or machine do not count. binfmt_misc
+    is added with `insert_binfmt`, ahead of the native ELF and script loaders,
+    so these matches really do intercept native execution.
+- **Fail closed.** These are blocking gaps, and `complete` is false:
+  - an unobserved, unreadable or incomplete directory listing
+  - missing, truncated or over-limit file text
+  - a FIFO, socket or device without observed content
+  - an unobserved symlink target
+  - malformed or duplicate entries
+  - over-limit rules
+
+  An unresolved winning file never falls back to a lower copy. `origin` is
+  always `not_assessed` and no result is a safety verdict. 74 unit tests pin
+  these rules, and seven mutations (replacement, match order, trailing-text
+  check, precedence, size boundary, `C` flag, truncated content) are each
+  caught. binfmt_misc was not mounted in the validation sandbox, so there is no
+  live kernel differential test.
+
+**Not covered:** agent collection, whether `systemd-binfmt.service` runs, Debian
+`binfmt-support`/`update-binfmts` (`/usr/share/binfmts`, `/var/lib/binfmts`),
+handlers added by container runtimes, live `/proc/sys/fs/binfmt_misc` state,
+interpreter existence and contents, per-user-namespace instances, catalog
+wiring, persistence, UI, provenance and AI classification. No schema, API, auth
+or response-authorization change.
+
 ### update-motd.d login script contract — worker checkpoint #1047
 
 Contract increment only; the startup-awareness requirement remains incomplete.
