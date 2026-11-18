@@ -18,10 +18,14 @@ and ``addpackage``):
   directories follow, each only when it is a directory:
   ``/usr/local/lib/python3.X/dist-packages``, ``/usr/lib/python3/dist-packages``
   and ``/usr/lib/python3.X/dist-packages``.
-* In a directory, only names that end in ``.pth`` (case-sensitive) and do not
-  start with ``.`` are read, in ``sorted()`` (code point) order. ``open`` follows
-  symlinks, and a directory, a dangling symlink or an unreadable file is skipped
-  silently.
+* In a directory, only names that end in ``.pth`` (case-sensitive) are read, in
+  ``sorted()`` (code point) order. ``open`` follows symlinks, and a directory, a
+  dangling symlink or an unreadable file is skipped silently. Names that start
+  with ``.`` are skipped only by interpreters that carry gh-113659 (upstream
+  3.11.8, 3.12.2 and every 3.13). Debian bookworm's 3.11.2 packages still read
+  them, and the observation does not carry the patch level, so on 3.11 and 3.12
+  a dot-named ``.pth`` file is ``undetermined`` with a
+  ``pth_hidden_name_patch_dependent`` gap and never reported as skipped.
 * 3.11 and 3.12 read the file in the locale encoding with universal newlines
   (``\\n``, ``\\r`` and ``\\r\\n``). 3.13 decodes UTF-8 with an optional BOM (and
   falls back to the locale) and splits with ``str.splitlines()``, which also
@@ -56,6 +60,9 @@ from typing import Any
 CONTRACT_VERSION = 1
 FAMILIES = ('debian',)
 VERSIONS = ('3.11', '3.12', '3.13')
+# Versions whose dot-named .pth handling depends on an unobserved patch level:
+# gh-113659 (skip names starting with '.') first shipped in 3.11.8 and 3.12.2.
+HIDDEN_PTH_PATCH_DEPENDENT = ('3.11', '3.12')
 DIR_STATES = ('present', 'absent', 'unknown')
 DIR_KINDS = ('directory', 'other')
 ENTRY_KINDS = ('regular', 'directory', 'dangling', 'other')
@@ -245,12 +252,19 @@ def _process_sitedir(directory: dict[str, Any], version: str, gaps: list[dict[st
     result['processed'] = True
     if not directory['complete']:
         _gap(gaps, 'site_dir_listing_incomplete', path=path)
-    for name in sorted(n for n in directory['entries'] if n.endswith('.pth') and not n.startswith('.')):
+    hidden_uncertain = version in HIDDEN_PTH_PATCH_DEPENDENT
+    for name in sorted(n for n in directory['entries']
+                       if n.endswith('.pth') and (hidden_uncertain or not n.startswith('.'))):
         entry = directory['entries'][name]
         full = posixpath.join(path, name)
         record: dict[str, Any] = {'name': name, 'path': full, 'sha256': entry['sha256'],
                                   'link_target': entry['link_target'], 'lines': []}
-        if entry['kind'] == 'regular':
+        if name.startswith('.'):
+            # Read by pre-gh-113659 builds such as Debian bookworm's 3.11.2,
+            # skipped by later ones; the interpreter patch level is not observed.
+            record['status'] = 'undetermined'
+            _gap(gaps, 'pth_hidden_name_patch_dependent', path=full, python_version=version)
+        elif entry['kind'] == 'regular':
             record['status'], record['lines'] = _pth_lines(path, entry, version, gaps, full)
         elif entry['kind'] == 'other':
             record['status'] = 'undetermined'

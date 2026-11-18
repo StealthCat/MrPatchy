@@ -62,7 +62,6 @@ def test_import_lines_run_in_sorted_file_order_and_other_lines_extend_sys_path()
     dirs = base_dirs(**{DIST: present(
         pth('zz.pth', 'import evil; evil.go()\n'),
         pth('a.pth', '# comment\n\n../extra\nimport\tos\n  import sys\nimport\nimporter\n'),
-        pth('.hidden.pth', 'import hidden\n'),
         pth('UPPER.PTH', 'import upper\n'),
         pth('B.pth', 'import b\n'),
     ), '/usr/lib/python3/extra': present(), DIST + '/  import sys': ABSENT, DIST + '/import': ABSENT,
@@ -79,6 +78,33 @@ def test_import_lines_run_in_sorted_file_order_and_other_lines_extend_sys_path()
     executed = result['system']['executed_code']
     assert [(e['path'].rsplit('/', 1)[1], e['text']) for e in executed] == [
         ('B.pth', 'import b'), ('a.pth', 'import\tos'), ('zz.pth', 'import evil; evil.go()')]
+    assert result['complete'] is True
+
+
+@pytest.mark.parametrize('version', ['3.11', '3.12'])
+def test_hidden_pth_is_patch_dependent_before_3_13(version):
+    # Debian bookworm's python3.11 3.11.2 predates gh-113659 and still reads
+    # dot-named .pth files; 3.11.8+/3.12.2+ skip them. The patch level is not
+    # observed, so a hidden .pth must never be reported as covered or skipped.
+    hidden = pth('.evil.pth', 'import inert_marker_module\n')
+    dirs = base_dirs(**{DIST: present(hidden, pth('a.pth', 'import ok\n'))})
+    dirs = {k.replace('3.12', version).replace('312', version.replace('.', '')): v for k, v in dirs.items()}
+    result = run(dirs, version=version)
+    files = site_dir(result, DIST)['pth_files']
+    assert [(f['name'], f['status']) for f in files] == [('.evil.pth', 'undetermined'), ('a.pth', 'read')]
+    assert files[0]['lines'] == []
+    assert result['complete'] is False
+    assert [g['code'] for g in result['gaps']] == ['pth_hidden_name_patch_dependent']
+    assert result['gaps'][0]['path'] == DIST + '/.evil.pth'
+
+
+def test_hidden_pth_is_skipped_on_3_13():
+    dirs = base_dirs(**{DIST: present(pth('.evil.pth', 'import inert_marker_module\n'),
+                                      pth('a.pth', 'import ok\n'))})
+    dirs13 = {k.replace('3.12', '3.13').replace('312', '313'): v for k, v in dirs.items()}
+    result = run(dirs13, version='3.13')
+    assert [f['name'] for f in site_dir(result, DIST)['pth_files']] == ['a.pth']
+    assert [e['text'] for e in result['system']['executed_code']] == ['import ok']
     assert result['complete'] is True
 
 
@@ -256,7 +282,13 @@ def test_matches_real_cpython_site(tmp_path, version):
             sitedir + "/  import sys; sys._log.append('never')": ABSENT,
             f'/usr/lib/python{version}/dist-packages': ABSENT}
     result = psh.resolve({'family': 'debian', 'python_version': version, 'directories': dirs, 'accounts': []})
-    assert result['complete'] is True, result['gaps']
+    if version in psh.HIDDEN_PTH_PATCH_DEPENDENT:
+        # Whether '.h.pth' runs depends on the local interpreter's patch level.
+        assert [g['code'] for g in result['gaps']] == ['pth_hidden_name_patch_dependent'], result['gaps']
+        reference['log'] = [entry for entry in reference['log'] if entry != 'hidden']
+    else:
+        assert result['complete'] is True, result['gaps']
+        assert 'hidden' not in reference['log']
     executed = result['system']['executed_code']
     # Lines after a failing import line are reported as after_code; the reference
     # shows they did not run. Everything the reference ran is reported, in order.
