@@ -1,3 +1,7 @@
+## 1.75.34 — 2026-11-18
+
+1. [PR #1040](https://github.com/StealthCat/MrPatchy/pull/1040): Installations that never chose an AI admission mode now move once at startup from the hidden legacy hourly allowances to the shared smooth rate at the lowest legacy ceiling (10/hour by default). The move never expands admission or spend, is audited, and leaves an explicitly saved legacy mode unchanged (#1039). Compatibility: upgraded installations that never reviewed AI admission switch from per-purpose rolling-hour allowances to one shared rate (10/hour with the 20/20 defaults, or lower if a legacy limit was lower); no purpose gains capacity, and triage or scoring that had 20/hour by default get the lower shared ceiling until an administrator raises the rate. No schema change; a Settings form loaded before the migration gets the existing 409 stale-revision refusal.
+
 ## 1.75.33 — 2026-11-18
 
 1. [PR #782](https://github.com/StealthCat/MrPatchy/pull/782): Administrators can record review completion for a revoked fleet known-good candidate, bound to the exact revocation and linked-assessment count; it clears "review required", lowers the pending-review count and resolves the candidate's bell event. The candidate stays revoked, and the review approves nothing and authorizes no response (#781). Compatibility: one new table created automatically at startup (no ALTER statements); the known-good summary API gains one key.

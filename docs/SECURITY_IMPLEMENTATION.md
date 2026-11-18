@@ -3618,6 +3618,42 @@ unchanged. Nothing is saved or switched automatically.
 - **Still open:** automatic, unattended migration of legacy installations, and the
   broader shared-controls acceptance.
 
+### Unattended legacy admission migration — worker checkpoint #1039
+
+The #879 "still open" automatic migration is delivered for installations that
+never chose an admission mode. A stored configuration without an
+`ai_control_mode` key reads as `legacy`, with hidden burst-then-stop allowances.
+At controller (`app/main.py` lifespan) and standalone worker (`app/worker.py`)
+startup, `app/ai_control_migration.py` moves such an installation once to the
+shared smooth `rate` mode at the `legacy_migration()` proposal: the lowest enabled
+legacy per-purpose ceiling, including the fixed 10/hour automatic-plan allowance.
+- **No silent expansion:** the proposal is applied only when `compare()` (the
+  Settings preview and save-audit comparison) reports no expansion. Otherwise
+  nothing is written and a warning is logged; the Settings suggestion with
+  explicit preview and confirmation remains the path.
+- **Scope:** an administrator who explicitly saved `legacy` keeps it. Fresh
+  installations (no stored config) and every explicit mode are untouched. Only
+  `ai_control_mode` and `ai_rate_per_hour` are written; stored legacy limits and
+  unrelated settings are retained.
+- **Concurrency:** it runs under the `settings-config` lock used by settings saves
+  and re-reads the stored value, so concurrent controllers/workers and restarts
+  apply it at most once. The stored controls revision changes, so a Settings form
+  loaded before the migration gets the existing 409 stale-revision refusal.
+- **Audit:** one `migrate AI admission controls` row names the shared rate and
+  the per-purpose hourly ceilings before and after.
+- **Unchanged:** no provider call; admission, reservations, daily cap, pause,
+  lifecycle, roles and response authorization code are untouched.
+- **Throughput:** purposes that had higher legacy allowances get the lower shared
+  ceiling until an administrator raises the rate, which is previewed and
+  confirmed as an expansion.
+- **Validation:** `tests/test_ai_control_auto_migration.py` covers the migration,
+  idempotency, explicit-mode and fresh-install exclusions, a refused expanding
+  proposal, four concurrent startups applying once, the stale-revision refusal and
+  controller startup. The startup case fails without the hook. The standalone
+  worker hook has no dedicated test.
+- **Still open:** an in-app notification for the migration and the broader
+  shared-controls acceptance.
+
 ### Refuse unconfirmed AI admission/spend expansions on save — worker checkpoint #881
 
 The #871 limitation is closed. An expanding save is no longer just audited; the

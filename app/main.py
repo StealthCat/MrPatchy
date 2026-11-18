@@ -36,6 +36,8 @@ async def lifespan(app):
     route_roles.inventory(app,ROLE_DEPENDENCIES)  # fail closed if any route declares no role
     with runtime_guard():
         init()
+        from .ai_control_migration import migrate_implicit_legacy
+        migrate_implicit_legacy()  # once, non-expanding, audited (#1039)
         from .worker_preflight import publish
         publish(APP_VERSION)
         with Session() as s:
@@ -62,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.33"
+APP_VERSION = "1.75.34"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware

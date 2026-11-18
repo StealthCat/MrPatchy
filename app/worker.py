@@ -1109,6 +1109,8 @@ if __name__=='__main__':
         from .worker_registry import source_version
         admission(source_version())
         init()
+        from .ai_control_migration import migrate_implicit_legacy
+        migrate_implicit_legacy()  # once, non-expanding, audited (#1039)
         signal.signal(signal.SIGTERM,lambda *args:stop.set())
         signal.signal(signal.SIGINT,lambda *args:stop.set())
         loop(role="worker")
