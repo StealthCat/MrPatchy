@@ -3888,10 +3888,13 @@ python tools/compare_ai_benchmarks.py serial.json parallel.json
 - **One run at a time:** the run holds a MySQL advisory lock named after the
   database from before the empty check until cleanup. A second run against the
   same database is refused and changes nothing.
-- **Cleanup:** on success and on failure it drops only the application's own
-  tables, so the next run can reuse the database. A table or view that someone
-  else created during the run is left in place and reported as a count on
-  stderr; the database is then no longer empty.
+- **Cleanup:** on success and on workload failure it drops only the
+  application's own tables while the original session still owns the lock
+  (#1095). If the session disconnected or ownership cannot be verified, the
+  benchmark skips cleanup and asks the operator to inspect the disposable
+  database before reusing it. A successful JSON report is emitted after
+  cleanup. A table or view outside the benchmark's table set is left in place
+  and reported as a count on stderr.
 - **No secrets in output:** refusals before the run starts are fixed text. A
   connection failure reports only the error class. The report never contains
   the URL. A failure inside the fixture itself is an ordinary Python traceback.
@@ -3910,6 +3913,11 @@ to 5.590 subjects per second. These are loopback fixture numbers on one
 machine, not a production claim. The CI `mysql` job runs a four-subject pair on
 MySQL 8.4. Multi-process workers against MySQL and matched production
 measurements remain open.
+
+Cleanup validation for #1095 covers a disconnected session, an absent lock
+and a lock assigned to another session. The native MySQL fixture verifies that
+stale cleanup leaves the subsequent holder's table intact. This is fixture
+cleanup acceptance. Production failover and throughput acceptance remain open.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -7017,6 +7025,12 @@ for resolved notification history. Before it, only `notification_arrivals` were
 pruned. Revisions and per-user read/dismiss rows of resolved events grew without
 bound. The leader's hourly cleanup now calls `notifications.prune_resolved()` with
 the existing `history_days` cutoff, after arrival pruning.
+
+Worker checkpoint (#1099): resolved-history cleanup uses the same hourly
+leader pass as arrival cleanup. This removes repeated retention scans from
+the five-second AI dispatch path and avoids an unbound cutoff on follower
+workers. The two cleanup calls handle failures independently. Scheduler
+regressions cover the hourly cutoff, follower AI dispatch and failure isolation.
 
 - **What is pruned:** an event whose current revision is `resolved` and whose last
   update precedes the cutoff loses all of its revisions and per-user state. It then
@@ -11541,6 +11555,16 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+### Provider backoff under reversed failure writes — Roadmap A checkpoint #1117
+
+Shared provider backoff retains the latest recorded failure timestamp. If an
+earlier failure acquires the shared lock after a newer one, a response from a
+request already in flight at the newer failure still cannot clear the wait.
+The regression controls lock entry to exercise this order and checks admission
+before and after a later successful request.
+
+This check uses the existing worker clock timestamps. Clock skew across workers
+and matched production throughput remain outside this acceptance slice.
 
 ### incron table contract — worker checkpoint #1132 (roadmap F)
 

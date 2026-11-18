@@ -82,7 +82,9 @@ def failed(error,now=None):
             # the administrator review cue and notification would be lost.
             capped=capped or (row.reason==CAPPED_REASON and (row.blocked_until or 0)>now+delay)
             row.blocked_until=max(row.blocked_until or 0,now+delay)
-            row.updated=now
+            # Failure timestamps are sampled before lock acquisition. Preserve the
+            # newest one so an in-flight success cannot clear its backoff floor.
+            row.updated=max(row.updated or 0,now)
             row.reason=(CAPPED_REASON if capped else
                 'Provider Retry-After floor is active.' if provider>0 else
                 'Transient provider or transport failure; bounded exponential backoff is active.')
