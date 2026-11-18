@@ -1,8 +1,4 @@
-"""#1015: a daily-cap deferral names the cap, not the rate throttle.
-
-Each kind of policy wait keeps its own reason text. Only the text changes: the
-deferral state, attempt refund and next eligibility stay exactly as before.
-"""
+"""Triage policy waits preserve reason, attempt refunds and independent deadlines."""
 import time
 from decimal import Decimal
 
