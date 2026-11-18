@@ -4,7 +4,7 @@ import json
 import math
 import time
 from typing import NamedTuple
-from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_
+from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
@@ -196,7 +196,15 @@ def run_one():
     lock=Lock('ai-update-scoring')
     if not lock.acquire(False):return
     try:
-        ai_runs.reconcile('update_scoring')
+        with Session() as s:
+            for run in ai_runs.reconcile(s, 'update_scoring'):
+                # A new attempt can temporarily retain the previous run link.
+                s.execute(update(UpdateScore).where(
+                    UpdateScore.run_id == run.id, UpdateScore.state == 'running',
+                    UpdateScore.attempted <= run.started,
+                ).values(state='error', next_at=0,
+                         explanation='Scoring was interrupted before a result was saved. Normal retry timing applies.'))
+            s.commit()
         with Session() as s:
             cfg=config(s);secret=s.get(Setting,'openai_key');now=time.time()
             if not cfg['ai_enabled'] or not cfg['ai_updates_enabled'] or not cfg['ai_model'] or not secret:return
