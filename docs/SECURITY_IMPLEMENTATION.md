@@ -2792,6 +2792,26 @@ every paid call until the reset, while neither the exhausted notice nor (below
   larger request (for example a release plan) still defers that request
   without a notice, because no queued payload is quoted here.
 
+Worker checkpoint #810 makes the #739 advance-warning threshold configurable.
+`ai_daily_cap_warning_percent` (integer 0-99, default 80) is saved through
+`PUT /api/settings/ai` and `PUT /api/settings` and shown in Settings → AI next
+to the cap. `0` turns the advance warning off and resolves an active one; the
+exhausted-cap notification is unaffected.
+- **Predicate and text:** the warning is active while counted spend is at least
+  the configured percent of the cap and below it, and the text names that
+  percent. A stored value outside 0-99 or of the wrong type falls back to 80.
+- **Revision binding:** the default keeps the pre-#810 fingerprint, so an
+  upgrade does not republish an active warning as unread. Another threshold is
+  appended to the fingerprint, so a changed threshold that current spend still
+  meets publishes one new revision with the amounts at that time; a raised
+  threshold above current spend resolves the warning on the next collection.
+- **Unchanged:** admission, reservations, spend accounting, SMTP/webhook
+  alerts, roles and response authorization. The threshold is notification-only
+  and is not part of the AI-controls revision token; changes are recorded in the
+  settings audit detail.
+- **Limitation:** headroom smaller than the next call's quote but below the
+  threshold still defers without a notice.
+
 Worker checkpoint #790 extends configuration blocking to update-importance
 scoring. Before this checkpoint a non-transient provider rejection (rejected key,
 denied access, unavailable quota or an unsupported model) marked the batch
@@ -3371,6 +3391,23 @@ connection tests. The groups sum to the counted total in the budget status.
   Per-activity history for earlier windows, per-server attribution and
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
+
+### Spend ledger retained after AI history pruning — worker checkpoint #986
+
+The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
+run-history deletion to `ai_runs.prune_history(session, cutoff)`. It runs the same four deletions as before (events, calls and host links of
+finished runs started before the cutoff, then the runs) and still keeps `running`
+runs. The scheduler calls it with the unchanged `history_days` cutoff.
+`tests/test_ai_budget_pruning_acceptance.py` covers the milestone 4 item "retained
+ledgers after history pruning". It runs that deletion at the shortest retention (one day) against ledger
+rows in every status. The rows are linked to pruned runs, retained runs and no run, across the
+current and an older window. Every ledger row, `status()`, `history()`, the CSV
+and capped admission read identically afterwards. A cap reached by spend whose
+runs were pruned still refuses admission. Entries whose runs were pruned still
+reconcile, release and become uncertain. Mutations that delete ledger rows with
+their runs, or prune children of running runs, fail the suite. The suite runs on
+SQLite locally and on MySQL in the hosted shards. Pruning cadence, retention
+settings and the rest of milestone 4 are unchanged and remain open.
 
 ### Release definitely unsent spend — worker checkpoint #588
 
@@ -5431,6 +5468,63 @@ Remaining: collect the two files and the effective sshd settings per account,
 derive `key_user_rc` from the `authorized_keys` contract and, for certificate
 logins, the certificate's `permit-user-rc` extension, then persistence, UI and
 AI classification.
+
+### PAM service-stack contract — worker checkpoint #967
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`/etc/pam.d` stays catalogued as `login_hooks` with metadata-only parsing, and
+nothing calls the new module yet.
+
+`app/pam_stacks.py` is a pure function over captured, read-only text of PAM
+service files. `evaluate(files, family, version, vendor_dir=None)` returns, for
+each service, the ordered modules it loads, with:
+
+- **File choice.** `/etc/pam.d/<service>` replaces the same name in
+  `/usr/lib/pam.d` and an optional vendor directory. Replaced files are listed.
+- **Line rules.** Comments, backslash continuation, the `-` type prefix and
+  bracketed fields follow libpam. A line libpam installs as an always-failing
+  entry (unknown type, missing control or module) is reported as `must_fail`.
+- **Includes.** `include`, `substack` and Debian's `@include` are resolved in
+  place. Each entry keeps its own file and line and the chain of including
+  lines. A relative include name is looked up like a service, `/etc/pam.d`
+  first and then the distribution directories. The caller states the family,
+  which decides whether `@include` is recognised.
+- **`other`.** Types the service file leaves empty are listed as using the
+  `other` service. A `substack` line holds its type even when the named file
+  yields nothing. libpam reads `other` for every service, so a blocking gap
+  in `other` is a gap for every service.
+- **Executed commands.** A `pam_exec.so` entry reports its options, its `type=`
+  filter, `seteuid`, `expose_authtok` and the command argv. The command is
+  reported as applicable only when every `type=` option matches the entry's
+  type, as `pam_exec` requires. Modules named by
+  absolute path are flagged. Values are bounded and carry a SHA-256 of the full
+  text.
+
+The contract fails closed. Each of these is a blocking gap for every service
+that reaches it, never a shorter stack: an include target that was not
+captured, an include loop, a relative include name containing `/`
+(`include_relative_path`; libpam loads it, the contract does not resolve it),
+`substack` nesting past libpam's 16 levels, an include chain longer than the
+contract's own 32-file bound, an unfinished
+continuation, a line near libpam's 1024-byte buffer, a control character
+(including a carriage return), an unreadable file, invalid UTF-8 and over-limit
+input. An unreadable file still shadows a lower-priority file of the same name.
+
+The rules were read from Linux-PAM 1.4.0 and 1.5.3 (`pam_handlers.c`,
+`pam_misc.c`, `pam_exec.c`) and Debian's `031_pam_include` patch. Other
+versions report the blocking `version_unverified` gap; 1.7.0 rewrote the line
+reader and was not compared.
+
+Stack resolution for the `debian` family was compared by peer workers with
+compiled Ubuntu `libpam0g 1.5.3-5ubuntu5.7` on generated trees; the method,
+counts and limits are recorded in PR #968. The `upstream` family, Linux-PAM
+1.4.x and a vendor directory were not compared with a compiled library.
+
+**Not covered:** `/etc/pam.conf`, validation
+of bracketed control values, module binaries and the programs they run,
+collection from servers, catalog wiring, persistence, UI, provenance and AI
+classification. No schema, API, UI or authorization change, and nothing is
+labelled safe.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -10862,6 +10956,7 @@ reused or revoked candidates. It has escaped names, paging, Retry and a stale-re
 guard, and states that linkage grants no approval and authorizes no response. This
 does not complete roadmap B: complete context collection, the canonical fingerprint
 over full evidence and SQLite/MySQL runtime acceptance remain open.
+
 ### Shared AI start gates on Activity → Workers — worker checkpoint #930
 
 Roadmap A requires worker health to show the blocked reason and next eligible start. The #914 checkpoint recorded that worker-health surfaces still showed no shared gate state, so administrators could misread a worker's idle `AI tasks` capacity as a worker fault while the fleet-wide gates were holding new provider calls.
@@ -10869,3 +10964,32 @@ Roadmap A requires worker health to show the blocked reason and next eligible st
 - **Unchanged:** the API, schema, roles, admission, reservations, pause, lifecycle and response authorization. Viewers still get the access-required page and never request the snapshot. The snapshot is fleet-wide, so it says nothing about any individual worker.
 - **Validation:** the new `tests/ui_worker_ai_control_gates.cjs` times out on main `68887ce` (no card) and passes after the change. It covers the finite, open, malformed (injection) and error/retry states, placement, refresh, pagination, a slow snapshot with a discarded late response, the viewer case, and no horizontal scroll at 320, 768 and 1440 px. `ui_workers.cjs` and `ui_ai_control_gates.cjs` still pass.
 - **Remaining:** the card is display-only and promises no start. Per-worker gate state and full queue/spend dashboard acceptance remain open.
+
+### Fleet automatic AI plan status — worker checkpoint #936
+
+This closes the #922 limitation that automatic AI plan status was readable only one server at a time.
+
+- **API:** admin-only `GET /api/security/auto-plan-status` (`auto_plan_status.fleet()`). It lists every non-deleted server whose scan policy enables automatic AI plans, ordered by name then ID. Each row has the same fields as the per-server status: state, awaiting count, truncation, oldest awaiting time, active plan job and latest automatic attempt. Disabled servers stay listed as `inactive`. Opted-out servers, deleted servers and malformed policies are omitted.
+- **Totals:** listed servers, ready servers, the awaiting count (marked as a lower bound when any row is truncated) and plan jobs queued or running. Pacing is reported once, using the per-server rules: the legacy fleet allowance, or no plan-specific cap in other modes.
+- **Bounds:** at most `FLEET_LIMIT` (100) servers, with `truncated` set when more opted-in servers exist. Totals count only the listed rows. Each row keeps the per-server `AWAITING_LIMIT` window.
+- **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
+- **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
+- **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
+### Notification-center status filter — worker checkpoint #835 (roadmap J)
+
+The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
+- **API:** `GET /api/notifications` accepts an optional `lifecycle` value of `active` or `resolved`. The filter applies to the event's **current** revision, so an event that resolved and then reopened is listed as active only. Any other value returns 400 with the fixed text "Invalid notification status filter".
+- **Counts and paging:** `total` and `more` use the same filter. The bell's unread count, arrivals and the SSE stream cursor ignore the center filter and are unchanged.
+- **Same boundaries:** role visibility, per-account read/dismiss state and the include-dismissed and unread-only options combine with the status filter. The route keeps its self-service session check.
+- **UI:** Apply keeps the selection across re-renders, Clear resets it with the other filters, and Previous/Next keep it.
+- **Unchanged:** this filters display only. It never acknowledges, resolves or reopens an event, changes response authorization or alters schema.
+- **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
+### Daily-cap window in the Investigations worker status — worker checkpoint #876
+
+The admin-only **AI worker status** card on Investigations now shows the full daily-cap window from the existing `budget` object of `GET /api/investigation-status`. It previously showed only counted, remaining and uncertain spend.
+- **Amounts:** cap, counted, settled, reserved, uncertain and remaining. Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled.
+- **Reconciliation:** when transmitted calls await a usage receipt, the card shows their count and the oldest reservation time, and notes that their full ceiling stays counted until reconciliation. When the count is 0, nothing is added.
+- **Reset:** the reset time and timezone are shown. When `next_reset_authoritative` is false (spend admitted before a timezone change still overlaps), the reset is labelled a recheck boundary, not a promised refill.
+- **Safety:** malformed amounts, counts or times render as "Unavailable". Text is escaped. Nothing appears while no cap is enabled.
+- **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
+- **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.

@@ -227,10 +227,29 @@ function scoringQueueSummary(q){
  const c=q.counts,stopped={ai_disabled:'Central AI provider calls are disabled, so no scoring batch starts.',scoring_disabled:'Automatic update scoring is off, so no scoring batch starts.',not_configured:'A saved model and API key are required before scoring can start.'}[q.scheduler];
  return `<strong>Scoring queue</strong> · ${esc(q.current_updates)} current pending update${q.current_updates===1?'':'s'}: ${esc(c.complete)} scored · ${esc(c.running)} running · ${esc(c.eligible)} eligible now · ${esc(c.deferred)} deferred by shared admission · ${esc(c.retry_wait)} waiting for the hourly retry · ${esc(c.blocked)} blocked${q.paused_server_updates?' · '+esc(q.paused_server_updates)+' on AI-paused servers (not queued)':''}.${q.unscored?'<br>Oldest unscored since '+esc(date(q.oldest_waiting_since))+(q.next_eligible_at?' · next timed eligibility '+esc(date(q.next_eligible_at)):''):''}${stopped?'<br>'+esc(stopped):''}<br><span class="help">Shared start gates, per-server pause and the daily cap still decide when a batch starts. Scores are advisory.</span>`;
 }
+// Daily-cap window on the Investigations worker card (#876). Display-only, from
+// the same admin-only ai_budget.status payload that Settings shows.
+function aiBudgetStatus(budget){
+ if(!budget||budget.enabled!==true)return '';
+ const usd=value=>typeof value==='string'&&/^\d{1,12}(\.\d{1,12})?$/.test(value)?'$'+value:'Unavailable';
+ const when=value=>Number.isFinite(value)&&value>0?date(value):null;
+ const zone=typeof budget.timezone==='string'&&budget.timezone?budget.timezone:'timezone unavailable';
+ const resetAt=when(budget.next_reset);
+ const reset=!resetAt?'Next reset unavailable.':budget.next_reset_authoritative===false
+  ?`Configured reset ${resetAt} (${esc(zone)}) is only a recheck boundary: spend admitted before a timezone change stays counted, so headroom may not refill then.`
+  :`Resets ${resetAt} (${esc(zone)}).`;
+ const count=budget.unreconciled_call_count;
+ const pending=Number.isSafeInteger(count)&&count>0
+  ?`<p class="help" data-ai-budget-unreconciled><strong>${count} transmitted AI ${count===1?'call awaits':'calls await'} reconciliation.</strong> Oldest reservation ${when(budget.oldest_unreconciled_reservation_at)||'time unavailable'}. Their full reserved ceiling stays counted until a usage receipt reconciles them.</p>`
+  :Number.isSafeInteger(count)&&count===0?'':'<p class="help" data-ai-budget-unreconciled>Calls awaiting reconciliation: Unavailable.</p>';
+ const facts=[['cap',budget.cap_usd],['counted',budget.counted_usd],['settled',budget.settled_usd],['reserved',budget.reserved_usd],['uncertain',budget.uncertain_usd],['remaining',budget.remaining_usd]]
+  .map(([label,value])=>`<span><strong>${esc(usd(value))}</strong> ${label}</span>`).join('');
+ return `<section class="ai-budget-status" data-ai-budget-status aria-labelledby="ai-budget-status-title"><h3 id="ai-budget-status-title">Daily AI spend cap</h3><div class="status-facts">${facts}</div><p class="help">${reset} Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled. Public price estimates are not provider invoices.</p>${pending}</section>`;
+}
 function triageStatus(status){
  const count=value=>Number.isSafeInteger(value)&&value>=0?value:'Unavailable';
  const control=aiAdmissionControl(status);
- const budget=status.budget||{};const spend=budget.enabled?`<p class="help">Daily budget: $${esc(budget.counted_usd)} counted · $${esc(budget.remaining_usd)} remaining · $${esc(budget.uncertain_usd)} uncertain · resets ${date(budget.next_reset)} (${esc(budget.timezone)}). Public price estimates are not provider invoices.</p>`:'';
+ const spend=aiBudgetStatus(status.budget);
  const plans=status.plan_deferred_by_action;
  const planDetails=plans&&status.plan_deferred>0?`<details><summary>Deferred plans by purpose</summary>
  <p class="help">Queue-ready means the job is due and server AI is active. Shared controls can still delay a start. Recorded retry times may belong to paused servers.</p>
@@ -436,7 +455,7 @@ async function users(revision=renderRevision){
 
 async function fleetSecurityCoverage(revision){
  const root=$('#content');let offset=0,query='',ticket=0;
- root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>';
+ root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>'+(isAdmin()?'<section class="card" id="fleet-auto-plans" aria-labelledby="fleet-auto-plans-title"><h2 id="fleet-auto-plans-title">Automatic AI plans across the fleet</h2><div class="fleet-auto-plans-body"></div></section>':'');
  const current=()=>currentView(revision,'security')&&root.isConnected;
  const load=async()=>{const turn=++ticket;try{
   const data=await api('/security/coverage?offset='+offset+'&q='+encodeURIComponent(query));if(!current()||turn!==ticket)return;
@@ -445,7 +464,7 @@ async function fleetSecurityCoverage(revision){
   root.querySelector('#coverage-results').innerHTML='<p>'+data.summary.servers+' servers on this page · '+data.summary.disabled+' disabled · '+data.summary.open_incidents+' open or acknowledged scanner incidents</p>'+data.items.map(h=>'<article class="card"><div class="card-head"><h2>'+esc(h.name)+'</h2><a class="button" href="'+serverLink(h.id,'security')+'">Review server security</a></div><p>'+badge(h.enabled?'enabled':'disabled')+' · Last contact '+date(h.last_seen)+' · '+h.open_incidents+' open incidents · ClamAV age limit '+h.expected_hours+' hours · YARA age limit 24 hours</p>'+(!h.enabled?'<p class="notice">Management is disabled. These results are historical; collection is suspended.</p>':'')+'<div class="server-grid">'+engine('ClamAV',h.engines.ClamAV)+engine('YARA',h.engines.YARA)+'</div></article>').join('')+(data.items.length?'':'<p>No matching managed servers.</p>');
   root.querySelector('#coverage-prev').disabled=!offset;root.querySelector('#coverage-next').disabled=!data.more;
  }catch(error){if(current()&&turn===ticket)root.querySelector('#coverage-results').innerHTML=PatchyUI.error('Unable to load coverage',esc(error.message));}};
- root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root)]);
+ root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root),fleetAutoPlans(revision,root)]);
 }
 
 // Stored advisory-scan ledger only (#911): version applicability, never exploitation evidence, a clean-host verdict
@@ -486,6 +505,47 @@ function fleetExposureContent(data){
   return '<li><details><summary><span class="badge high">Open</span> <strong>'+text(item.advisory_id)+'</strong>'+(cves.length?' · '+esc(cves.join(', ')):'')+' · '+count(item.servers)+' server'+(item.servers===1?'':'s')+' · '+count(item.packages)+' package'+(item.packages===1?'':'s')+' · Earliest '+esc(time(item.first_affected_at))+'</summary><ul class="fleet-exposure-servers">'+exposures+'</ul>'+more+'</details></li>';
  }).join('');
  return summary+truncated+'<ul class="advisory-applicability fleet-exposure-list">'+rows+'</ul>'+limits+coverage+refresh;
+}
+
+// Read-only automatic AI plan status for opted-in servers (#936), the fleet form of the Security tab
+// notice (#922). Admin-only; it reads stored rows and never implies a plan will start.
+async function fleetAutoPlans(revision,root){
+ const card=root.querySelector('#fleet-auto-plans');if(!card||!isAdmin())return;
+ const body=card.querySelector('.fleet-auto-plans-body');let ticket=0;
+ const load=async()=>{
+  const turn=++ticket,current=()=>turn===ticket&&body.isConnected&&currentView(revision,'security');
+  body.innerHTML='<p role="status">Loading automatic AI plan status…</p>';
+  try{const data=await api('/security/auto-plan-status');if(!current())return;body.innerHTML=fleetAutoPlansContent(data);}
+  catch(error){if(!current())return;body.innerHTML='<div class="notice" role="alert"><p>Automatic AI plan status is unavailable right now. This never means a plan will start; pause, holds and shared start gates still apply. The rest of this page is unaffected.</p><button type="button" class="fleet-auto-plans-refresh">Retry automatic plan status</button></div>';}
+  body.querySelectorAll('.fleet-auto-plans-refresh').forEach(button=>button.onclick=load);
+ };
+ await load();
+}
+const FLEET_AUTO_PLAN_STATES={off:['Off','disabled'],ai_disabled:['AI disabled','disabled'],not_configured:['Needs model and key','medium'],paused:['AI paused','medium'],held:['Response hold','medium'],inactive:['Server disabled','disabled'],ready:['Ready','low']};
+function fleetAutoPlansContent(data){
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unknown';
+ const time=value=>typeof value==='number'&&Number.isFinite(value)&&value>0?date(value):'Unknown';
+ const job=value=>value&&typeof value==='object'&&typeof value.state==='string'?value:null;
+ const refresh='<div class="actions"><button type="button" class="fleet-auto-plans-refresh">Refresh automatic plan status</button></div>';
+ const limits='<p class="help">Each server opts in on its Security tab. Plans are proposals for review and never execute automatically. Ready means a plan can be requested, not that one will start: AI pause, response holds and the shared AI start gates still decide.</p>';
+ if(!data||typeof data!=='object'||!Array.isArray(data.items)||!data.totals||!data.pacing)return '<div class="notice" role="status"><p>Automatic AI plan status is unavailable in this response. This never means a plan will start.</p></div>'+limits+refresh;
+ const t=data.totals,p=data.pacing;
+ const pacing=p.mode==='legacy'?'Legacy fleet allowance: '+count(p.used)+' of '+count(p.limit)+' plan requests used this hour'+(typeof p.next_at==='number'?' · next free '+esc(time(p.next_at)):'')+'.':'No plan-specific hourly limit; the shared AI start gates (rate throttle, daily cap, provider backoff) pace each plan.';
+ const summary='<div class="status-facts" role="status"><span><strong>'+count(t.servers)+'</strong>Servers opted in</span><span><strong>'+count(t.ready)+'</strong>Ready</span><span><strong>'+count(t.awaiting)+(t.awaiting_truncated?'+':'')+'</strong>Incidents awaiting an attempt</span><span><strong>'+count(t.active_plans)+'</strong>Plan jobs queued or running</span></div><p class="help">'+pacing+'</p>';
+ const truncated=data.truncated===true?'<div class="notice">Only the first '+count(data.items.length)+' opted-in servers are shown, ordered by name. The totals count the listed servers only.</div>':'';
+ if(!data.items.length)return summary+'<p>No server has automatic AI plans enabled. Turn them on from a server\'s Security tab.</p>'+limits+refresh;
+ const rows=data.items.map(raw=>{
+  const item=raw&&typeof raw==='object'?raw:{},state=FLEET_AUTO_PLAN_STATES[item.state]||['Unknown','unknown'];
+  const name=typeof item.host_name==='string'&&item.host_name?esc(item.host_name):'Unknown server';
+  const host=typeof item.host_id==='string'&&item.host_id?'<a href="'+serverLink(item.host_id,'security')+'">'+name+'</a>':name;
+  const facts=[];
+  facts.push(item.awaiting||item.awaiting_truncated?count(item.awaiting)+(item.awaiting_truncated?' or more':'')+' awaiting'+(item.oldest_awaiting_since?' · oldest updated '+esc(time(item.oldest_awaiting_since)):''):'Nothing awaiting');
+  const active=job(item.active_plan),latest=job(item.latest_automatic);
+  if(active)facts.push('Plan '+(active.state==='running'?'running':'queued')+' since '+esc(time(active.created)));
+  facts.push(latest?'Latest automatic attempt: '+esc(latest.state)+' at '+esc(time(latest.created)):'No automatic attempt yet');
+  return '<li><div>'+host+' <span class="badge '+state[1]+'">'+esc(state[0])+'</span></div><div class="help">'+facts.join(' · ')+'</div></li>';
+ }).join('');
+ return summary+truncated+'<ul class="fleet-auto-plans-list">'+rows+'</ul>'+limits+refresh;
 }
 
 async function aiRunPage(revision,context,base,parts){

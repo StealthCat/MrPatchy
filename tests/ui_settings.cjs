@@ -118,6 +118,11 @@ module.exports=async(page,capture)=>{
  await page.locator('[name=ai_control_mode]').selectOption('rate_and_daily');
  await page.locator('[name=ai_daily_cap_usd]').fill('12.50');
  await page.locator('[name=ai_budget_timezone]').fill('America/New_York');
+ // Advance cap warning threshold (#810): default 80, saved with the form, labelled help.
+ const warningPercent=page.getByLabel('Advance cap warning · % of cap');
+ assert.equal(await warningPercent.inputValue(),'80');
+ assert.match(await page.locator('#ai-cap-warning-help').textContent(),/Enter 0 to turn the advance warning off/);
+ await warningPercent.fill('65');
  await page.getByRole('button',{name:'Save AI settings',exact:true}).click();
  // Raising the cap and moving its reset timezone expand spend, so the save asks first (#871).
  assert.match(await page.locator('#ai-expansion-list').innerText(),/\$10\.00\/day to \$12\.50\/day[\s\S]*America\/New_York/);
@@ -125,7 +130,7 @@ module.exports=async(page,capture)=>{
  await page.locator('#ai-save-result').filter({hasText:'AI settings saved'}).waitFor();
  const aiState=await (await page.request.get(new URL('/api/settings',page.url()).href)).json();
  assert.equal(aiState.ai_control_mode,'rate_and_daily');assert.equal(aiState.ai_daily_cap_usd,12.5);
- assert.equal(aiState.ai_budget_timezone,'America/New_York');
+ assert.equal(aiState.ai_budget_timezone,'America/New_York');assert.equal(aiState.ai_daily_cap_warning_percent,65);
  // A concurrent control change makes this open form stale: saving it must be refused, not overwrite (#709).
  const concurrent=await page.evaluate(async()=>{const {expansion_confirmation}=await api('/settings/ai/preview','POST',{ai_daily_cap_usd:20});return (await fetch('/api/settings/ai',{method:'PUT',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({ai_daily_cap_usd:20,confirm_ai_expansion:expansion_confirmation})})).status;});
  assert.equal(concurrent,200);
