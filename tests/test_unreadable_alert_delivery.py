@@ -60,7 +60,7 @@ def test_unreadable_configuration_with_undelivered_alert_notifies_admins_without
         items = [i for i in notifications.list_for_user(s, 'admin') if i['kind'] == 'delivery-failing']
     assert len(items) == 1
     reason = items[0]['reason']
-    assert 'cannot be read' in reason and 'Account → Operations' in reason
+    assert 'cannot be read' in reason and 'Activity → Alert delivery' in reason
     for leaked in ('not-a-fernet-token', 'secret', '<b>', 'InvalidToken'):
         assert leaked not in reason
 
