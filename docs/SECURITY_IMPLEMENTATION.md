@@ -2411,6 +2411,21 @@ predict what a fresh investigation would cost today. Lookup, publication,
 revocation, pause, budget, role, approval and response boundaries are
 unchanged. Hit/miss reasons and matched production acceptance remain open.
 
+Worker checkpoint #779 notifies the other administrators when an
+administrator revokes a fleet known-good candidate through
+`POST /api/ai/known-good/{fingerprint}/revoke`. Before the revocation commits,
+the endpoint publishes one fleet-scoped, admin-only
+`ai-known-good`/`candidate-revoked` event keyed by the candidate fingerprint,
+with `medium` severity. The reason is fixed text containing only the acting
+account name and the linked-assessment count. The free-form revocation reason
+stays in the audit log and on the assessment history, which the deep link opens
+(falling back to the Investigations workspace when the original assessment is
+unavailable). Not-found, version-changed and already-revoked requests publish
+nothing, and a later AI contradiction of an already revoked candidate adds no
+second event. The producer adds no SMTP/webhook alert and changes no lookup,
+publication, revocation, role, approval or response semantics. Recording review
+completion, hit/miss reasons and matched production acceptance remain open.
+
 ### Selected-investigation Re-triage — worker checkpoint #887
 
 Administrators can select several completed investigations on the fleet or
@@ -2725,6 +2740,36 @@ plus the counted and remaining amounts recorded when the warning was raised.
   headroom smaller than the next call's quote but above 20% of the cap still
   defers without notice.
 
+Worker checkpoint #819 detects daily-cap headroom that no paid call can use.
+Counted spend can stay below the cap while the remaining headroom is smaller
+than any Mr Patchy call's conservative reservation. Capped admission then defers
+every paid call until the reset, while neither the exhausted notice nor (below
+80% of the cap) the advance warning applies.
+- **Lower bound:** `budget_headroom_notifications.minimum_call_reservation()`
+  quotes the saved model with the smallest bounded output any billable path uses
+  (the investigation's `INVESTIGATION_TOKENS`), an empty input and the default
+  tier. `ai_pricing.reservation()` is monotonic in input bytes and output tokens,
+  so every real call's quote is at least this amount. A path that adds a smaller
+  output bound or a cheaper tier must lower this floor.
+- **Notification:** while AI is enabled in a cap mode, the model is priced,
+  counted spend is below the cap and the headroom is below the bound,
+  `operations.collect_alerts()` publishes one admin-only
+  `ai-budget`/`daily-cap-headroom` notification (medium, `#settings/ai`). It
+  names the cap, remaining amount, minimum reservation, timezone and reset, as
+  recorded when raised; the model ID is not included.
+- **Revision binding:** a digest of the window, cap, catalog version and model
+  digest. An active notice for the same binding is not republished; a later
+  window resurfaces it as unread.
+- **Resolution:** one `resolved` revision when the headroom fits, the window
+  resets, the cap is raised, the mode becomes uncapped, AI is disabled, the cap
+  is reached (the exhausted notice applies) or the model becomes unpriced (the
+  unpriced-model notice applies).
+- **Unchanged:** admission, reservations, SMTP/webhook alerts, read/dismiss/
+  acknowledgement and response authorization. The producer only reads.
+- **Limitation:** headroom that fits the smallest call but not a particular
+  larger request (for example a release plan) still defers that request
+  without a notice, because no queued payload is quoted here.
+
 Worker checkpoint #790 extends configuration blocking to update-importance
 scoring. Before this checkpoint a non-transient provider rejection (rejected key,
 denied access, unavailable quota or an unsupported model) marked the batch
@@ -2805,6 +2850,20 @@ retry) and blocked (the #815 predicate).
   or inventory refresh can change it immediately afterwards. Its cost is one
   identity pass over current candidates per request (compare #436).
   Investigations and worker-health surfaces do not show the scoring queue.
+
+Worker checkpoint #926 shows the same summary on the fleet AI activity page
+(`#ai-logs`), below the process-triage worker status, for administrators.
+- **One renderer:** `scoringQueueSummary()` in `fleet.js` produces the text for
+  both Settings → AI and AI activity, so the two cannot drift. The Settings
+  output is unchanged.
+- **Loading:** the region is fetched separately from `GET /api/update-scores/status`
+  and never delays the run table. A reply that arrives after navigation is
+  ignored. A failed load says the queue is unavailable and never implies that
+  scoring may start. Values are escaped.
+- **Scope:** non-administrators and the per-server AI tab neither render nor
+  fetch it. Backend, schema, roles and admission are unchanged.
+- **Limitation:** Investigations and worker-health surfaces still do not show
+  the scoring queue.
 
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
@@ -4080,6 +4139,20 @@ The #911 view capped 50 rows per advisory but said "More affected servers are no
 - **UI:** a truncated advisory says "Showing N of M open exposures. Each exposure is one package on one server, so more affected packages or servers are not listed." It omits "of M" when the total is missing or malformed.
 - **Unchanged:** schema (no index was added, because nothing was measured to justify one), routes, roles and the read-only boundary. There are no scan, advisory-service, AI-provider or SSH calls.
 - **Validation:** `tests/test_cve_exposure_fleet.py` adds a one-server/six-package case and a statement spy showing that no query loads more than advisories × limit rows (main loaded 16 rows in one statement where the bound allows 6). It also proves that output under the limit is identical. `tests/ui_fleet_exposure.cjs` asserts the new wording.
+
+#### Advisory publication dates in the exposure history — worker checkpoint #938
+
+Before this checkpoint the durable exposure history (#858) and its Patching card (#893) never showed when an advisory was published, although each scan has stored the OSV `published_at` on its latest-scan applicability rows since #862. The coverage text said "advisory publication is not shown here".
+
+- **API:** `GET /api/operations/{host}/advisories` adds two fields to each `exposure_history` item:
+  - `published_at`: taken from the server's latest stored scan (`advisories:<host>`) for that advisory ID, by `advisories.publication_dates`;
+  - `publication_to_first_affected`: `first_affected_at - published_at` in seconds. The ledger records only scans that classified the pair as affected, so earlier scans that found the package fixed, unaffected or not installed are not visible here; the field is the time to the first affected observation, not an unmonitored period.
+- **Fail closed:** a date is kept only when every applicability row for that advisory in the latest scan carries the same positive, finite epoch number. A missing, malformed or boolean value, or rows that disagree, give `null`. Invalid advisory IDs are ignored. The gap is `null` when either time is unknown or the publication is after the first affected scan (for example a re-issued record).
+- **Honest limits:** the coverage statement says where the date comes from, that it is omitted when the latest scan did not include the advisory, and that the period from publication to the first affected scan was not measured: it may include scans that found the package not affected, and is not proof the server was exposed for all of it.
+- **UI:** the Patching **CVE exposure history** card adds "Published YYYY-MM-DD (UTC)" to each row with a valid date. Where the interval is known it adds "First seen affected N days after publication (exposure in that period was not measured)". Anything unknown or malformed shows nothing.
+- **Unchanged:** the ledger, schema, routes, roles, scans, notifications, patch selection and response authorization. There are no OSV, AI-provider or SSH calls. The date is read from the stored latest scan, not persisted in the ledger. A resolved exposure whose advisory is absent from the latest scan therefore shows no date.
+- **Validation:** `tests/test_cve_exposure_publication.py` (15 cases) fails on main `3c65842` and passes on the branch. `tests/ui_exposure_history.cjs` adds valid, sub-day, non-numeric, negative-gap and missing cases.
+- **Remaining in requirement D:** scheduled scans, a full `exposure_window()` state per exposure, verified restart and activation, RPM updateinfo, and exploitation monitoring and containment.
 
 ### Exploitation containment eligibility contract — worker checkpoint #725
 
@@ -5826,6 +5899,34 @@ belongs to an active server.
 - Filter event payloads, list/detail reads and unread counts by the user's current role and subject access before transmission. Recheck/terminate streams on session expiry, logout, account disable or permission changes; reset all account-scoped client state during account switching. Use authenticated same-origin transport, avoid credentials in event/query data and preserve CSRF protection for read-state/acknowledgement mutations. Escape all untrusted text and keep secrets, raw prompts/provider bodies and unnecessary endpoint evidence out of notifications.
 - Keep deterministic human-attention notifications available when AI is disabled, paused or unavailable. Significant new findings may create an alert, but delivery/read state never grants destructive-action authority or bypasses the existing reviewed/automatic response policies. Preserve the existing SMTP/webhook channel behavior unless separately changed by an administrator.
 
+### Managed agent file integrity notifications — worker checkpoint #777
+
+The raw `integrity` alert stays SMTP/webhook-only because it serializes
+endpoint-supplied collector text. A separate producer,
+`app/agent_integrity_notifications.py`, runs on each alert pass and publishes
+one admin-only, `high`-severity `agent-integrity` notification per affected
+server.
+
+- **Trigger:** the latest stored snapshot reports at least one of these:
+  - an enrolled managed file whose SHA-256 differs from the enrollment baseline, or which is missing
+  - an enrolled managed file whose ownership, mode or metadata changed
+  - a missing managed baseline
+
+  Only findings the controller writes for paths in the server's own enrolled
+  baseline count. Collector, eBPF, spool, telemetry-age and hash-sweep findings
+  are ignored, and so is endpoint text that copies a finding string.
+- **Payload:** fixed text with category counts and a link to the server's
+  Agent health tab, which offers live verification and reviewed repair. The
+  text also points to the Integrity findings on the server's Overview. Paths and endpoint text are
+  never copied.
+- **Lifecycle:** identical counts publish nothing, and a count change appends a
+  revision. The notification resolves through the shared operational path when
+  the findings clear, or when the server is disabled, deleted or re-enrolling.
+  A rejected payload keeps the event active and never blocks SMTP/webhook
+  collection.
+- **Unchanged:** nothing repairs files, acknowledges alerts or authorizes a
+  response.
+
 ### Finite delivery and acceptance milestones
 
 1. **Event model and producers:** deliver subject/revision-aware committed events, source/severity policy, safe deduplication/reopening/escalation, recipient authorization and per-user read state, with migration/retention and existing alert-lifecycle coverage.
@@ -6243,6 +6344,32 @@ starting points, not evidence that this milestone is finished. Use
 - Update the UI design guide, navigation documentation and actual application screenshots with the implemented design. Capture representative populated, loading, empty, error, warning and success states at mobile/tablet/desktop sizes; inspect the rendered text and controls as well as the artwork.
 - Exercise critical end-to-end workflows through the new pages/tabs/menus: login, enrollment and Overview landing, server selection, update selection/approval, scheduling, AI pause/investigation, security evidence/response review, jobs/history, deployment health and settings. Include direct links, Back/Forward, keyboard navigation, permissions and long-content/failed-loading cases.
 - Mark the rework complete only after the defined screen inventory has been migrated and the readability, usability, navigation, visual and regression criteria are met. Existing glass CSS, a few mascot placements or one polished screen do not complete the milestone. Once complete, the existing completion gate prevents open-ended cosmetic work merely to fill scheduled cycles.
+
+Worker checkpoint (issue #513, Settings slice): every Settings form now records a
+snapshot of the values it loaded or last saved successfully. The forms covered are
+the API key, AI settings, Patch policy, History retention and Database destination.
+Leaving with a value that differs from the snapshot asks first. This applies to a
+section tab, any shell link, Back/Forward or the page Refresh control. The user
+sees a "Leave without saving?" dialog with **Stay on this page** (also Escape)
+and **Discard changes**. A hashchange cannot be cancelled, so the move is undone
+through session history (`history.go`, using the Navigation API entry index,
+or a position index kept in `history.state` where that API is unavailable)
+without rewriting any entry, and the shell does not render
+until the user chooses Discard, which repeats the move. Back/Forward → Stay
+therefore leaves the history stack intact. Only the guard's own undo arrival is
+held; any other arrival, including one on an entry that shares the settled
+position, renders normally, and a move that cannot be measured restores the
+address in place instead of reloading. Reloading or closing the tab triggers the
+browser's native `beforeunload` prompt. Reverting an edit or saving it clears the
+warning. The Settings search box and the spend-history filter are view filters
+and never prompt. Sign-out and session expiry are not held. The change is UI-only,
+with no API, schema, authorization or response changes. The shell's Overview
+load and non-admin redirect no longer rewrite an address that changed while they
+were loading, so a reload straight after a hash navigation keeps the requested
+page instead of landing on Overview. Remaining #513 items:
+section navigation restructuring, splitting the AI page, consistent save
+feedback, role-aware destinations and screenshots. The UI rework remains
+incomplete.
 
 
 ## v0.6.0 — server workbench navigation foundation
@@ -10346,9 +10473,18 @@ The reason text is fixed per channel (SMTP email or webhook). It never contains 
 The producer is read-only. It never sends, retries, changes backoff or acknowledges anything, and it adds no `Alert` row, so a broken channel cannot alert about itself. There are no schema, role or response-authorization changes.
 
 **Remaining:**
-- The event has no deep link, because the Operations panel is a modal with no route.
+- ~~The event has no deep link, because the Operations panel is a modal with no route.~~ Addressed by the #824 worker checkpoint below.
 - The threshold is fixed.
 - ~~A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.~~ Addressed by the #812 worker checkpoint below.
+
+### Alert-delivery notification deep link — worker checkpoint #824
+
+The admin-only `alert-delivery`/`delivery-failing` event now links to a routable page, `#activity/delivery`, shown as an **Alert delivery** tab in the admin Activity navigation. Every revision carries this link: failing, unreadable configuration and resolved. The fixed reason text now points to Activity → Alert delivery instead of Account → Operations.
+
+- **Page:** it shows the delivery channel (SMTP email, webhook, disabled or unreadable configuration) and the open alerts that have not been delivered, with server, kind, raised time, attempts and the stored sanitized error class. All text is escaped. No URL, token, password or recipient is shown. **Open delivery settings** opens the existing Operations panel, where configuration changes and acknowledgement remain. The page only reads the existing admin-only `GET /api/operations/alerts` and `GET /api/operations/notifications` routes, so it never sends, retries or acknowledges anything. Non-admins see the administrator-required state and no data request is made.
+- **Upgrade impact:** the link is part of the notification payload fingerprint. An event that is already active therefore gains one unread revision on the first collection pass after upgrade. Later passes add none.
+- **Unchanged:** schema, roles, routes, delivery and backoff, admission and response authorization.
+- **Remaining:** the threshold is still fixed, and the page lists only the 200 most recent alerts that the existing route returns.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 
@@ -10567,6 +10703,14 @@ reused or revoked candidates. It has escaped names, paging, Retry and a stale-re
 guard, and states that linkage grants no approval and authorizes no response. This
 does not complete roadmap B: complete context collection, the canonical fingerprint
 over full evidence and SQLite/MySQL runtime acceptance remain open.
+
+### Shared AI start gates on Activity → Workers — worker checkpoint #930
+
+Roadmap A requires worker health to show the blocked reason and next eligible start. The #914 checkpoint recorded that worker-health surfaces still showed no shared gate state, so administrators could misread a worker's idle `AI tasks` capacity as a worker fault while the fleet-wide gates were holding new provider calls.
+- **Change:** the administrator `#activity/workers` page shows the same **Shared AI start gates** card after **Registered runtimes** and before **Controllers**. It reuses `GET /api/settings/ai-control-status`, the existing renderer, **Refresh start gates** and retry. The card loads independently, so a slow or failed snapshot never delays worker, controller or endpoint-agent sections. A response is discarded if the administrator leaves or the page re-renders, for example on pagination.
+- **Unchanged:** the API, schema, roles, admission, reservations, pause, lifecycle and response authorization. Viewers still get the access-required page and never request the snapshot. The snapshot is fleet-wide, so it says nothing about any individual worker.
+- **Validation:** the new `tests/ui_worker_ai_control_gates.cjs` times out on main `68887ce` (no card) and passes after the change. It covers the finite, open, malformed (injection) and error/retry states, placement, refresh, pagination, a slow snapshot with a discarded late response, the viewer case, and no horizontal scroll at 320, 768 and 1440 px. `ui_workers.cjs` and `ui_ai_control_gates.cjs` still pass.
+- **Remaining:** the card is display-only and promises no start. Per-worker gate state and full queue/spend dashboard acceptance remain open.
 
 ### Daily-cap window in the Investigations worker status — worker checkpoint #876
 

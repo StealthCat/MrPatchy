@@ -133,18 +133,80 @@ def test_concurrent_contradiction_after_unlocked_lookup_publishes_once(client, m
         assert rows[0].subject_revision.endswith(CONTRADICTION_ID)
 
 
-def test_administrator_revocation_is_not_notified(admin):
+def revoke(admin, fingerprint, version, reason='Administrator review of <script>/usr/bin/fixture'):
+    return admin.post('/api/ai/known-good/' + fingerprint + '/revoke',
+                      json={'expected_version': version, 'reason': reason})
+
+
+def test_administrator_revocation_publishes_one_safe_admin_fleet_event(admin):
+    source = retained()
+    with Session() as s:
+        seed_users(s)
+        s.add(source)
+        published = known_good.publish(s, source)
+        s.commit()
+    response = revoke(admin, published['fingerprint'], published['version'])
+    assert response.status_code == 200, response.text
+    with Session() as s:
+        assert not s.get(known_good.Entry, published['fingerprint']).active
+        actor = s.get(known_good.Entry, published['fingerprint']).revoked_by
+        saved = revisions(s)
+        events = list(s.scalars(select(notifications.NotificationEvent)))
+        admin_items = notifications.list_for_user(s, 'admin-two')
+        hidden = (notifications.list_for_user(s, 'operator'), notifications.list_for_user(s, 'viewer'),
+                  notifications.unread_count(s, 'operator'), notifications.unread_count(s, 'viewer'))
+        alerts = s.scalar(select(func.count()).select_from(Alert))
+    assert len(saved) == 1 and len(events) == 1
+    revision, event = saved[0], events[0]
+    assert event.minimum_role == 'admin' and event.host_id == ''
+    assert revision.severity == 'medium' and revision.lifecycle == 'active'
+    assert revision.subject_revision == 'revoked:v' + str(published['version']) + ':admin'
+    assert revision.deep_link == '#investigations/item/behavior-one/history/assessment-one'
+    assert revision.reason.startswith('Administrator ' + actor + ' revoked')
+    assert '1 linked assessment(s)' in revision.reason
+    # The free-form reason stays in the audit log and on the assessment history.
+    for unsafe in ('Administrator review', '<script>', '/usr/bin', 'fixture', 'host-one'):
+        assert unsafe not in revision.reason
+    assert len(admin_items) == 1
+    item = admin_items[0]
+    assert item['source'] == 'ai-known-good' and item['kind'] == 'candidate-revoked'
+    assert item['subject_id'] == published['fingerprint']
+    assert hidden == ([], [], 0, 0)
+    assert alerts == 0
+
+
+def test_failed_administrator_revocations_publish_nothing(admin):
     source = retained()
     with Session() as s:
         s.add(source)
         published = known_good.publish(s, source)
         s.commit()
-    response = admin.post('/api/ai/known-good/' + published['fingerprint'] + '/revoke',
-                          json={'expected_version': published['version'], 'reason': 'Administrator review'})
-    assert response.status_code == 200, response.text
+    assert revoke(admin, 'f' * 64, 1).status_code == 404
+    assert revoke(admin, published['fingerprint'], published['version'] + 1).status_code == 409
     with Session() as s:
-        assert not s.get(known_good.Entry, published['fingerprint']).active
+        assert s.get(known_good.Entry, published['fingerprint']).active
         assert revisions(s) == []
+    assert revoke(admin, published['fingerprint'], published['version']).status_code == 200
+    # Already revoked: the repeat is rejected and adds no second revision.
+    assert revoke(admin, published['fingerprint'], published['version']).status_code == 409
+    with Session() as s:
+        assert len(revisions(s)) == 1
+
+
+def test_contradiction_after_administrator_revocation_adds_no_contradiction_event(admin):
+    source = retained()
+    row = contradicting('high')
+    with Session() as s:
+        s.add(source)
+        published = known_good.publish(s, source)
+        s.commit()
+    assert revoke(admin, published['fingerprint'], published['version']).status_code == 200
+    with Session() as s:
+        s.add(row)
+        assert known_good.invalidate_contradiction(s, row) is None
+        s.commit()
+        kinds = [event.kind for event in s.scalars(select(notifications.NotificationEvent))]
+    assert kinds == ['candidate-revoked']
 
 
 def test_producer_ignores_missing_revocation_or_unsupported_risk(client):
@@ -152,4 +214,8 @@ def test_producer_ignores_missing_revocation_or_unsupported_risk(client):
         assert known_good_notifications.publish_contradiction(s, None, 'high') is False
         assert known_good_notifications.publish_contradiction(
             s, {'fingerprint': 'f' * 64, 'version': 1}, 'low') is False
+        assert revisions(s) == []
+        assert known_good_notifications.publish_revocation(s, None, 'admin') is False
+        assert known_good_notifications.publish_revocation(
+            s, {'fingerprint': 'f' * 64, 'version': 1}, '  ') is False
         assert revisions(s) == []
