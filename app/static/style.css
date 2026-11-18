@@ -581,4 +581,7 @@ button.danger { border-color: var(--red); color: var(--red); }
 .exposure-history-list li > div { overflow-wrap:anywhere; }
 .fleet-exposure-list summary, .fleet-exposure-servers li > div { overflow-wrap:anywhere; } .fleet-exposure-servers { list-style:none; padding:0 0 0 12px; margin:8px 0 0; display:grid; gap:8px; } .fleet-exposure-servers .help { margin:2px 0 0; }
 .help.warning{color:var(--amber);font-weight:600}
+.agent-policy-option { margin: 0 0 14px; }
+.agent-policy-option select { max-width: 100%; }
+.agent-policy-effective { margin: 6px 0 0; }
 .retriage-bulk { align-items: center; flex-wrap: wrap; margin: 0 0 14px; }.retriage-bulk .help { flex: 1 1 260px; margin: 0; }.retriage-select { font-size: 13px; margin-bottom: 6px; }.retriage-bulk-list { margin: 0 0 12px; padding-left: 20px; max-height: 220px; overflow: auto; }.retriage-bulk-list li { overflow-wrap: anywhere; }
