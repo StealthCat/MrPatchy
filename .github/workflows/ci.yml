@@ -294,11 +294,18 @@ jobs:
           cache: npm
       - run: pip install -r requirements.txt
       - run: npm ci
+      # Hosted-runner Ubuntu mirrors sometimes stall mid-download (#1077, #782, #1040
+      # needed reruns). Bound each attempt and retry instead of failing the whole run.
       - name: Install browser system dependencies
-        timeout-minutes: 5
+        timeout-minutes: 10
         run: |
           bash .github/scripts/configure-ci-apt.sh
-          npx playwright install-deps chromium
+          for attempt in 1 2 3; do
+            timeout 180 npx playwright install-deps chromium && exit 0
+            echo "Browser dependency install attempt $attempt failed or stalled; retrying."
+            sleep 5
+          done
+          exit 1
       - name: Download Chromium
         timeout-minutes: 5
         run: npx playwright install chromium
