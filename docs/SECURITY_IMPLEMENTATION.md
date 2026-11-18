@@ -5891,6 +5891,75 @@ of bracketed control values, module binaries and the programs they run,
 collection from servers, catalog wiring, persistence, UI, provenance and AI
 classification. No schema, API, UI or authorization change, and nothing is
 labelled safe.
+### xinetd configuration contract — worker checkpoint #1122
+
+This is a contract increment only, and the startup-awareness requirement
+remains incomplete. `app/xinetd_conf.py` is a pure, versioned contract for
+`/etc/xinetd.conf` and the files it reaches through `include` and
+`includedir`. xinetd listens for each enabled service and, for every
+connection, starts its `server` with `server_args` as its `user`, or answers
+with a built-in. So one `/etc/xinetd.d` file with `server = /bin/sh` and
+`user = root` puts a root shell on a port. The contract takes captured file
+text and directory listings and performs no I/O, name lookup or response
+action.
+
+- **Source.** The rules come from reading the xinetd 2.3.15.4 source as
+  packaged by Ubuntu (`xinetd_2.3.15.4-6build1`); no compiled xinetd was run.
+  - orig tarball sha256: `cbb6d078…2129a`
+  - debian tarball sha256: `68b3e200…15832`
+- **Files.** Comments are lines whose first non-space character is `#`. A
+  `#` after other text is a value.
+  - `service`/`defaults` must be followed by a line holding only `{`.
+    Otherwise the entry is skipped up to the next line holding only `}`.
+  - `includedir` reads regular files in `strcmp` order and skips names
+    containing `.` or ending in `~`.
+  - An `include` cycle is reported as a blocking gap.
+- **Attributes.**
+  - An attribute needs a space before its operator, or the whole entry is
+    dropped.
+  - Unknown attributes, repeats of single-valued attributes (the first one
+    wins), `+=`/`-=` on single-valued attributes and wrong value counts are
+    each ignored.
+  - A failed attribute parser disables the service. A later `disable = no`
+    re-enables it.
+  - On any `disable` line, if the service is disabled at that point, the
+    entry is abandoned.
+- **Loading.**
+  - A defaults `enabled` list disables every unlisted id, and re-enables
+    listed ids even after a parser failure.
+  - A defaults `disabled` list removes listed ids.
+  - The lookup-independent `service_fill`/`check_entry`/`service_attr_check`
+    rules apply: required attributes, `dgram` services must `wait`, the
+    NAMEINARGS and redirect rules, TCPMUX must be UNLISTED, and an UNLISTED
+    service needs a port.
+- **Per-service report.** Each service reports:
+  - its file and line, and its id;
+  - a status: `loads_if_lookups_succeed`, `unresolved` (some other attribute
+    parser was not modelled) or `disabled` with its reasons;
+  - its server and argv (NAMEINARGS uses `server_args` as the full argv);
+    redirects and built-ins have no argv;
+  - its user and group, and a root flag (`root` or uid `0`; `null` for other
+    names);
+  - its socket type, protocol, port, types, flags and bind address;
+  - the lookups it needs: passwd and group, `server` executability,
+    `/etc/services`, `/etc/protocols` and `/etc/rpc`.
+- **Fail closed.** These inputs make the result incomplete:
+  - an unobserved, unreadable, binary or over-limit file;
+  - an unobserved `includedir` listing;
+  - an unparsable defaults line;
+  - defaults `-=`.
+
+  `origin` stays `not_assessed`. `not_observed` names:
+  - whether xinetd is installed or running, and its options;
+  - Debian `INETD_COMPAT`, which also loads `/etc/inetd.conf`;
+  - name, uid and executable lookups;
+  - bind resolution, duplicate port/protocol/bind conflicts and built-in
+    availability;
+  - program contents.
+- **Out of scope:** collection, catalog wiring, persistence and alerts, UI,
+  AI classification and any response action. There is no schema, API, auth
+  or response-authorization change.
+
 ### Per-user shell startup files contract — worker checkpoint #1057
 
 Contract increment only; the startup-awareness requirement remains incomplete.
