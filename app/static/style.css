@@ -105,6 +105,7 @@ main { margin-left: calc(var(--sidebar) + 32px); padding: 0 32px; max-width: 190
 .notification-meta time { margin-left:auto;text-transform:none;white-space:nowrap; }
 .notification-severity { padding:2px 7px;border-radius:8px;background:#a7bdc714;color:var(--muted);font-weight:750; }
 .notification-resolved { color:var(--mint); }
+.notification-dismissed { color:var(--muted); font-style:italic; }
 .notification-item[data-severity="critical"] .notification-severity,.notification-item[data-severity="high"] .notification-severity { color:var(--red);background:#ffb1a814; }
 .notification-item[data-severity="medium"] .notification-severity { color:var(--amber);background:#f7cf8a14; }
 .notification-reason { margin:9px 0 11px;overflow-wrap:anywhere;color:var(--text);font-size:13px;line-height:1.5; }
@@ -459,6 +460,11 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 /* Long configuration identifiers (e.g. MRPATCHY_EXPECTED_CONTROLLER_IDS) must wrap on phones. */
 #controller-registrations, #endpoint-agent-health { overflow-wrap:anywhere; }
 .endpoint-agent-counts { display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center; }
+.deployment-health-overall { display:flex;flex-wrap:wrap;gap:8px;align-items:center; }
+.deployment-health-counts { display:flex;flex-wrap:wrap;gap:4px 12px; }
+.deployment-health-table th small,.deployment-health-table td small { display:block; }
+.badge.maintenance { color:var(--amber);background:#f7cf8a14; }
+@media(max-width:640px) { .deployment-health-table thead { display:none; }.deployment-health-table tr,.deployment-health-table th,.deployment-health-table td { display:block;width:auto; }.deployment-health-table td { border-top:0; } }
 .endpoint-agent-pager { align-items:center; }
 
 /* Keep cooperative worker controls beside identity, reachable before horizontal scrolling. */
@@ -473,6 +479,8 @@ button.danger { border-color: var(--red); color: var(--red); }
 .ai-run-facts { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px; }
 .ai-run-facts dt { color:var(--muted);font-size:12px; }
 .ai-run-facts dd { margin:6px 0 0;overflow-wrap:anywhere; }
+.known-good-links { margin:16px 0; }
+.known-good-links table td { overflow-wrap:anywhere; }
 .ai-run-message { white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word; }
 @media(max-width:800px){.ai-run-facts{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media(max-width:480px){.ai-run-facts{grid-template-columns:minmax(0,1fr);}}
@@ -540,6 +548,11 @@ button.danger { border-color: var(--red); color: var(--red); }
 
 .assessment-policy code, .assessment-summary code, .assessment-artifact { overflow-wrap:anywhere; }
 .known-good-fingerprint { overflow-wrap:anywhere;word-break:break-all; }
+.known-good-candidates { margin-top:18px; }
+.known-good-candidate-controls { display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:10px; }
+.known-good-candidate-controls label { margin-bottom:0; }.known-good-candidate-controls select { width:auto; }
+.known-good-candidates td small { display:block; }
+.known-good-candidates td { overflow-wrap:anywhere; }
 .upgrade-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 12px; line-height: 18px; background: #274a40; color: #a8efd3; border: 1px solid #b5cdd91f; vertical-align: middle; }
 .fleet-spool-list { margin:12px 0;padding-left:20px;overflow-wrap:anywhere; }
 .badge.ok,.badge.warning{background:#274a40;color:#a8efd3}

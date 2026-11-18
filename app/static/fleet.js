@@ -129,6 +129,7 @@ async function investigationAssessmentPage(revision,context,base){
   const explanation=item.source==='legacy'?item.result.saved_analysis:item.result.explanation;
   const reused=item.source==='known_good',provider=item.source==='ai';
   root.innerHTML=intro+`<a class="button" href="${historyBase}">← Assessment list</a><section class="card"><h2>${item.source==='legacy'?'Preserved legacy result':reused?'Reused exact-match assessment':'Recorded AI assessment'}</h2><dl class="ai-run-facts"><div><dt>Recorded</dt><dd>${date(item.created)}</dd></div><div><dt>Risk</dt><dd>${esc(item.result.risk)}</dd></div><div><dt>Requested model</dt><dd>${esc(item.model||'Not recorded')}</dd></div><div><dt>Assessment ID</dt><dd><code>${esc(item.id)}</code></dd></div></dl><pre class="ai-run-message">${esc(explanation||'No explanation saved.')}</pre>${provider||reused?`<h3>Recommended checks</h3><pre class="ai-run-message">${esc(item.result.recommended_checks)}</pre>`:'<p class="notice">Preserved at refresh request time, not a reconstructed original assessment timestamp. Original model, run and exact inputs are unavailable.</p>'}${item.refresh?.id?`<p class="help">Refresh requested by ${esc(item.refresh.actor)} · ${date(item.refresh.created)}${item.refresh.withdrew_approval?' · Prior approval explicitly withdrawn':''}</p><pre class="ai-run-message">${esc(item.refresh.reason)}</pre>`:''}${assessmentContextCoverage(item)}${assessmentKnownGood(item)}<details><summary>Evidence snapshot and supplied inputs</summary>${provider||reused?`<p class="help assessment-policy">Recorded policy digest: <code>${esc(item.policy_hash)}</code>. ${reused?'No provider input was sent; the exact candidate context was revalidated locally.':'Inputs retain their original collection limits; this is not verified fleet-wide matching.'}</p>`:''}<pre class="ai-run-message">${esc(JSON.stringify({snapshot:item.snapshot,inputs:item.inputs},null,2))}</pre></details>${item.run_id?`<a class="button" href="${context?serverLink(context.hostId,'ai'):'#ai-logs'}/run/${encodeURIComponent(item.run_id)}/summary">Original run diagnostics</a><p class="help">Diagnostics may expire under normal retention. This assessment and evidence remain available.</p>`:''}</section>`;
+  loadKnownGoodLinks(root,item.known_good,revision,view);
  }else{
   root.innerHTML=intro+`<section class="card">${data.items.length?`<div class="table-wrap"><table><thead><tr><th>Recorded</th><th>Source</th><th>Risk</th><th>Requested model</th><th></th></tr></thead><tbody>${data.items.map(r=>`<tr><td>${date(r.created)}</td><td>${esc(r.source==='legacy'?'Preserved legacy result':r.source==='known_good'?'Exact-match reuse':'AI assessment')}</td><td>${badge(r.risk)}</td><td>${esc(r.model||'Not recorded')}</td><td><a class="button" href="${historyBase}/${encodeURIComponent(r.id)}">Review assessment</a></td></tr>`).join('')}</tbody></table></div>`:empty('No retained assessments yet','History starts with the next completed triage or a preserved result when Re-triage is requested. Existing AI diagnostics remain separate.')}</section><div class="actions"><button id="assessment-previous" ${offset?'':'disabled'}>Previous assessments</button><button id="assessment-next" ${data.more?'':'disabled'}>Next assessments</button></div>`;
   root.querySelector('#assessment-previous').onclick=()=>{assessmentOffsets.set(key,Math.max(0,offset-20));render();};root.querySelector('#assessment-next').onclick=()=>{assessmentOffsets.set(key,offset+20);render();};
@@ -351,6 +352,51 @@ function bindKnownGoodSummary(root,revision){
    button.textContent='Retry cache summary';
   }finally{if(active())button.disabled=false;}
  };
+ bindKnownGoodCandidates(panel,revision);
+}
+// On-demand fleet list of known-good candidates. Rows show provenance metadata
+// only and link to the origin assessment, where Revoke and Linked servers live.
+function bindKnownGoodCandidates(panel,revision){
+ const section=document.createElement('section');
+ section.className='known-good-candidates';
+ section.setAttribute('aria-labelledby','known-good-candidates-title');
+ section.innerHTML='<h3 id="known-good-candidates-title">Candidates</h3><p class="help">Each candidate is one exact verified context. Listing grants no approval and authorizes no response. Open the origin assessment to review linked servers or revoke a candidate.</p><div class="known-good-candidate-controls"><label>Show<select name="known-good-state"><option value="active">Active</option><option value="revoked">Revoked</option><option value="all">All</option></select></label><button type="button" data-known-good-candidates="load">Load candidates</button></div><p class="help" role="status" aria-live="polite"></p><div class="known-good-candidate-table"></div><div class="actions" hidden><button type="button" data-known-good-candidates="previous">Previous candidates</button><button type="button" data-known-good-candidates="next">Next candidates</button></div>';
+ panel.append(section);
+ const select=section.querySelector('select'),load=section.querySelector('[data-known-good-candidates=load]'),status=section.querySelector('[role=status]'),table=section.querySelector('.known-good-candidate-table'),pager=section.querySelector('.actions'),previous=section.querySelector('[data-known-good-candidates=previous]'),next=section.querySelector('[data-known-good-candidates=next]');
+ const count=v=>Number.isSafeInteger(v)&&v>=0?v.toLocaleString():'Unavailable';
+ const fingerprint=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v)?v:'';
+ let offset=0,ticket=0;
+ const active=()=>section.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
+ const row=item=>{
+  const value=item&&typeof item==='object'?item:{},origin=value.origin&&typeof value.origin==='object'?value.origin:{};
+  const print=fingerprint(value.fingerprint),name=origin.host_name||origin.host_id||'Unknown server';
+  const link=value.origin_subject&&value.origin_assessment_id?`<a class="button" href="#investigations/item/${encodeURIComponent(value.origin_subject)}/history/${encodeURIComponent(value.origin_assessment_id)}">Origin assessment</a>`:'<span class="help">Origin assessment not retained</span>';
+  const state=value.active===true?badge('active'):`${badge('revoked')}<small>${date(value.revoked_at)} · ${esc(value.revoked_by||'unknown')}</small>${value.revoked_reason?`<small class="known-good-reason">${esc(value.revoked_reason)}</small>`:''}`;
+  return `<tr><td><code class="known-good-fingerprint">${esc(print||'Invalid fingerprint')}</code><small>v${esc(value.version)} · ${esc(value.model||'model not recorded')}</small></td><td>${esc(name)}${origin.host_active===true?'':' <span class="badge">Inactive server</span>'}<small>${date(value.created)}</small></td><td>${state}</td><td>${esc(count(value.linked))} linked<small>${esc(count(value.reused))} exact-match reuse(s)</small></td><td>${link}</td></tr>`;
+ };
+ const fetchPage=async()=>{
+  if(!active())return;
+  const turn=++ticket,state=select.value;
+  load.disabled=previous.disabled=next.disabled=true;status.textContent='Loading candidates…';
+  try{
+   const data=await api('/ai/known-good/candidates?state='+encodeURIComponent(state)+'&offset='+offset+'&limit=20');
+   if(turn!==ticket||!active())return;
+   const items=Array.isArray(data?.items)?data.items:[];
+   table.innerHTML=items.length?`<div class="table-wrap"><table><thead><tr><th>Fingerprint</th><th>Origin</th><th>State</th><th>Links</th><th></th></tr></thead><tbody>${items.map(row).join('')}</tbody></table></div>`:`<p class="help">No ${state==='all'?'':esc(state)+' '}candidates on this page.</p>`;
+   pager.hidden=!(offset||data?.more);previous.disabled=!offset;next.disabled=data?.more!==true;
+   status.textContent=(items.length?`Showing ${state==='all'?'':state+' '}candidates ${offset+1}–${offset+items.length}.`:'No candidates on this page.')+' Retained records only; current context is rechecked at every lookup.';
+   load.textContent='Refresh candidates';
+  }catch{
+   if(turn!==ticket||!active())return;
+   table.innerHTML='';pager.hidden=true;
+   status.textContent='Candidates are unavailable. The summary and individual AI runs remain usable.';
+   load.textContent='Retry candidates';
+  }finally{if(turn===ticket&&active())load.disabled=false;}
+ };
+ load.onclick=()=>{offset=0;fetchPage();};
+ select.onchange=()=>{offset=0;if(load.textContent!=='Load candidates')fetchPage();};
+ previous.onclick=()=>{offset=Math.max(0,offset-20);fetchPage();};
+ next.onclick=()=>{offset+=20;fetchPage();};
 }
 async function packageHistory(revision=renderRevision,context=null){
  const root=context?.root||$('#content');
@@ -484,4 +530,27 @@ async function aiRunPage(revision,context,base,parts){
  const summary=`<section class="card"><h2>Saved run</h2><dl class="ai-run-facts"><div><dt>Purpose</dt><dd>${esc(run.purpose)}</dd></div><div><dt>Model</dt><dd>${esc(run.model)}</dd></div><div><dt>Started</dt><dd>${date(run.started)}</dd></div><div><dt>Finished</dt><dd>${run.finished?date(run.finished):run.state==='running'?'Not yet':'Not recorded'}</dd></div><div><dt>API calls</dt><dd>${esc(run.calls)}</dd></div><div><dt>Run ID</dt><dd><code>${esc(run.id)}</code></dd></div></dl><h3>Last diagnostic</h3><pre class="ai-run-message">${esc(run.message||'No diagnostic saved.')}</pre><div class="ai-cost-total">${aiCost(run.cost)}</div></section>`;
  const timeline=`<section class="card"><h2>Run timeline</h2><p class="help">Saved stages describe processing at the recorded time; they do not certify current server health or response execution. Timing records use monotonic elapsed milliseconds and can overlap; do not add them together. Queue age includes policy/backoff waits. Older or interrupted runs may have incomplete timing coverage.</p><div class="timeline">${(run.events||[]).map(event=>`<div><section><h3>${esc(typeof event.stage==='string'&&event.stage.startsWith('timing_')?'Timing · '+event.stage.slice(7).replaceAll('_',' '):event.stage)}</h3><small>${date(event.created)}</small><pre class="ai-run-message">${esc(event.message)}</pre></section></div>`).join('')||'<p>No stage events were saved for this run.</p>'}</div></section>`;
  root.innerHTML=(context?'':heading('A closer look at the work.','Saved AI processing, usage and diagnostic evidence.'))+back+`<div class="ai-run-title"><h2>AI run · ${esc(run.purpose)}</h2>${badge(run.state)}</div><p class="help">Read-only history. Browsing does not retry AI requests or approve actions. ${run.shared_batch?'Shared batch: displayed cost covers the whole run, not a per-server charge.':''}</p>`+nav+(tab==='cost'?`<section class="card">${aiCostDetails(run)}</section>`:tab==='timeline'?timeline:summary);
+}
+// Per-server linkage for one fleet known-good candidate. The page loads lazily
+// below the candidate notice and only shows identifiers, never retained evidence.
+function loadKnownGoodLinks(root,value,revision,view,offset=0){
+ if(!value?.fingerprint||!(value.published||value.reused||value.review_required))return;
+ const anchor=root.querySelector('.assessment-known-good');if(!anchor)return;
+ let section=root.querySelector('#known-good-links');
+ if(!section){section=document.createElement('section');section.id='known-good-links';section.className='known-good-links';section.setAttribute('aria-labelledby','known-good-links-title');section.setAttribute('aria-live','polite');anchor.after(section);}
+ const token=String(Math.random());section.dataset.request=token;
+ section.innerHTML='<h3 id="known-good-links-title">Linked servers</h3><p class="help" role="status">Loading linked assessments…</p>';
+ const stale=()=>!currentView(revision,view)||!section.isConnected||section.dataset.request!==token;
+ const roles={origin:'Published this candidate',reuse:'Exact-match reuse · no provider call',linked:'Independent AI assessment · same fingerprint'};
+ api('/ai/known-good/'+encodeURIComponent(value.fingerprint)+'/observations?offset='+offset+'&limit=20').then(data=>{
+  if(stale())return;
+  const rows=data.items.map(i=>{const name=i.host_name||i.host_id;const link=`#investigations/item/${encodeURIComponent(i.subject)}/history/${encodeURIComponent(i.assessment_id)}`;return `<tr><td>${esc(name)}${i.host_active?'':' <span class="badge">Inactive server</span>'}</td><td>${esc(roles[i.role]||i.role)}</td><td>${date(i.created)}</td><td><a class="button" href="${link}">Review assessment</a></td></tr>`;}).join('');
+  section.innerHTML=`<h3 id="known-good-links-title">Linked servers</h3><p class="help">${esc(data.total)} retained assessment(s) on the fleet are bound to fingerprint v${esc(data.version)}${data.active?'':' (revoked: each needs review)'}. Linkage is provenance only. It grants no approval and authorizes no response.</p>${rows?`<div class="table-wrap"><table><thead><tr><th>Server</th><th>Link</th><th>Recorded</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<p class="help">No linked assessments are retained on this page.</p>'}<div class="actions"><button type="button" data-known-good-links="previous" ${data.offset?'':'disabled'}>Previous linked</button><button type="button" data-known-good-links="next" ${data.more?'':'disabled'}>Next linked</button></div>`;
+  section.querySelector('[data-known-good-links="previous"]').onclick=()=>loadKnownGoodLinks(root,value,revision,view,Math.max(0,offset-20));
+  section.querySelector('[data-known-good-links="next"]').onclick=()=>loadKnownGoodLinks(root,value,revision,view,offset+20);
+ }).catch(error=>{
+  if(stale())return;
+  section.innerHTML=`<h3 id="known-good-links-title">Linked servers</h3>${PatchyUI.error('Unable to load linked assessments',esc(error.message),'<button type="button" data-known-good-links="retry">Retry</button>')}`;
+  section.querySelector('[data-known-good-links="retry"]').onclick=()=>loadKnownGoodLinks(root,value,revision,view,offset);
+ });
 }

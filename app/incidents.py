@@ -296,8 +296,16 @@ def awaiting_auto_plan():
     from .db import Job
     planned=select(Plan.id).where(Plan.incident_id==Incident.id,Plan.state!='superseded').exists()
     attempted=select(Job.id).where(Job.action=='security-plan',Job.host_id==Incident.host_id,
-        Job.payload['incident_id'].as_string()==Incident.id,Job.payload['scan_id'].as_string()==Incident.scan_id).exists()
+        Job.payload['incident_id'].as_string()==Incident.id,Job.payload['scan_id'].as_string()==Incident.scan_id,
+        unreleased_attempt()).exists()
     return (Incident.state=='open',~planned,~attempted)
+
+
+def unreleased_attempt():
+    """An administrator can release a failed automatic attempt for retry (#1036); released ones no longer count."""
+    from .db import Job
+    released=Job.payload['retry_released'].as_boolean()
+    return or_(released.is_(None),released==False)  # noqa: E712
 
 
 def automatic_candidate(row):
