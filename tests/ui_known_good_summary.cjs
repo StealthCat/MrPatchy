@@ -5,7 +5,7 @@ module.exports=async(page,capture)=>{
   const originalViewport=page.viewportSize();
   let calls=0,release,requestStarted;
   const held=new Promise(resolve=>release=resolve),started=new Promise(resolve=>requestStarted=resolve);
-  const populated={active_entries:1234,revoked_entries:2,retained_reuse_assessments:57,reuse_assessments_on_revoked_entries:3,avoided_estimate:{reuse_with_priced_source:50,reuse_with_unpriced_source:4,reuse_with_unavailable_source:3,estimated_calls:1100,estimated_usd:'1.23456',currency:'USD'}};
+  const populated={active_entries:1234,revoked_entries:2,retained_reuse_assessments:57,reuse_assessments_on_revoked_entries:3,reuse_assessments_pending_review:1,avoided_estimate:{reuse_with_priced_source:50,reuse_with_unpriced_source:4,reuse_with_unavailable_source:3,estimated_calls:1100,estimated_usd:'1.23456',currency:'USD'}};
   const routeHandler=async route=>{
     switch(++calls){
       case 1:return route.fulfill({status:503,json:{detail:'Internal fixture details'}});
@@ -33,8 +33,8 @@ module.exports=async(page,capture)=>{
     assert.equal(await panel.locator('img').count(),0);
     await panel.getByRole('button',{name:'Refresh cache summary'}).click();
     await panel.getByText('1,234 active safe candidates').waitFor();
-    assert.deepEqual(await facts.allTextContents(),['1,234 active safe candidates','2 revoked candidates','57 retained reuse assessments','3 reuse assessments on revoked candidates']);
-    assert.match(await panel.locator('.known-good-review').textContent(),/^3 retained reuse assessment\(s\) are linked to revoked candidates and need review\./);
+    assert.deepEqual(await facts.allTextContents(),['1,234 active safe candidates','2 revoked candidates','57 retained reuse assessments','3 reuse assessments on revoked candidates','1 still awaiting recorded review']);
+    assert.match(await panel.locator('.known-good-review').textContent(),/^1 retained reuse assessment\(s\) are linked to revoked candidates and need review\./);
     assert.equal(await panel.locator('.known-good-estimate').textContent(),'Estimated avoided provider work: about 1,100 provider call(s) and about $1.2346 USD from 50 reuse(s) of fully priced investigations. 4 reuse(s) have unpriced or partly priced source receipts; 3 have no retained source receipts (pruned, unlinked or still running), so these figures are lower bounds. Estimated from originating investigation receipts, not a provider invoice.');
     assert.match(await panel.textContent(),/grants no approval and authorizes no response/);
     assert.match(await panel.textContent(),/not a provider invoice/);

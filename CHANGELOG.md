@@ -1,3 +1,7 @@
+## 1.75.33 — 2026-11-18
+
+1. [PR #782](https://github.com/StealthCat/MrPatchy/pull/782): Administrators can record review completion for a revoked fleet known-good candidate, bound to the exact revocation and linked-assessment count; it clears "review required", lowers the pending-review count and resolves the candidate's bell event. The candidate stays revoked, and the review approves nothing and authorizes no response (#781). Compatibility: one new table created automatically at startup (no ALTER statements); the known-good summary API gains one key.
+
 ## 1.75.32 — 2026-11-18
 
 1. [PR #803](https://github.com/StealthCat/MrPatchy/pull/803): Fleet AI logs add a **Cache lookup outcomes** panel with durable daily counts of process-triage known-good cache hits and misses by fixed reason for the last 30 UTC days, retained independently of AI-log pruning and containing no evidence or identifiers, served by admin-only `GET /api/ai/known-good/lookups` (#802). Compatibility: one additive table created automatically; the worker preflight schema digest includes it, so upgrade the controller schema before remote workers. Counting starts at upgrade with no backfill.

@@ -297,6 +297,7 @@ def test_empty_known_good_summary(admin):
     assert response.json() == {
         'active_entries': 0, 'revoked_entries': 0,
         'retained_reuse_assessments': 0, 'reuse_assessments_on_revoked_entries': 0,
+        'reuse_assessments_pending_review': 0,
         'avoided_estimate': EMPTY_ESTIMATE,
     }
 
@@ -324,6 +325,7 @@ def test_admin_revocation_blocks_reuse_and_marks_every_linked_assessment_for_rev
     assert admin.get(summary).json() == {
         'active_entries': 2, 'revoked_entries': 0,
         'retained_reuse_assessments': 1, 'reuse_assessments_on_revoked_entries': 0,
+        'reuse_assessments_pending_review': 0,
         'avoided_estimate': UNAVAILABLE_ONE,
     }
 
@@ -335,6 +337,7 @@ def test_admin_revocation_blocks_reuse_and_marks_every_linked_assessment_for_rev
     assert admin.get(summary).json() == {
         'active_entries': 1, 'revoked_entries': 1,
         'retained_reuse_assessments': 1, 'reuse_assessments_on_revoked_entries': 1,
+        'reuse_assessments_pending_review': 1,
         'avoided_estimate': UNAVAILABLE_ONE,
     }
     with Session() as s:

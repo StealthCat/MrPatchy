@@ -18,6 +18,7 @@ EXPECTED_ROLES = {
     ('GET','/api/ai/known-good/lookups'):'admin',
     ('GET','/api/ai/known-good/candidates'):'admin',
     ('POST','/api/ai/known-good/{fingerprint}/revoke'):'admin',
+    ('POST','/api/ai/known-good/{fingerprint}/review'):'admin',
     ('POST','/api/ai/provider-backoff/clear'):'admin',
     ('GET','/api/hosts/{host_id}/security/auto-plan-status'):'admin',
     ('GET','/api/security/auto-plan-status'):'admin',
