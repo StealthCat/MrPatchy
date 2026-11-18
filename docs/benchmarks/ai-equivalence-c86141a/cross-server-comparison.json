@@ -1,0 +1,233 @@
+{
+  "baseline": {
+    "concurrency": 1,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "sqlite",
+    "database_version": null,
+    "execution": "serial",
+    "fixture_hosts": 20,
+    "name": "cross-server-serial.json",
+    "persistence_delay_ms": 5,
+    "persistence_delay_source": "report",
+    "provider_delay_ms": 25,
+    "queue_age_seconds": 2,
+    "queue_age_source": "report",
+    "retained_history_rows": 0,
+    "runs": 20,
+    "single_server_slots": null,
+    "ssh_delay_ms": 10,
+    "ssh_delay_source": "report"
+  },
+  "candidate": {
+    "concurrency": 4,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "sqlite",
+    "database_version": null,
+    "execution": "parallel",
+    "fixture_hosts": 20,
+    "name": "cross-server-parallel.json",
+    "persistence_delay_ms": 5,
+    "persistence_delay_source": "report",
+    "provider_delay_ms": 25,
+    "queue_age_seconds": 2,
+    "queue_age_source": "report",
+    "retained_history_rows": 0,
+    "runs": 20,
+    "single_server_slots": null,
+    "ssh_delay_ms": 10,
+    "ssh_delay_source": "report"
+  },
+  "capability": {
+    "input_tokens": 3000,
+    "output_tokens": 600,
+    "provider_calls": 30,
+    "runs": 20,
+    "stage_samples": {
+      "admission": 20,
+      "one_stage": 10,
+      "provider": 30,
+      "queue_age": 20,
+      "receipt_persistence": 30,
+      "run": 20,
+      "ssh_evidence": 10,
+      "two_stage": 10,
+      "usage_persistence": 30
+    },
+    "workload_fingerprint": {
+      "sha256": "f94c8160f9b0507aed99f51f69e5f714bb0c50aed767777c5adef32bc083dee6",
+      "version": 1
+    }
+  },
+  "capability_equivalent": true,
+  "deltas": {
+    "elapsed_seconds": {
+      "absolute": -0.933,
+      "baseline": 2.052,
+      "candidate": 1.119,
+      "percent": -45.468,
+      "percent_unavailable": null
+    },
+    "runs_per_second": {
+      "absolute": 8.132,
+      "baseline": 9.747,
+      "candidate": 17.879,
+      "percent": 83.431,
+      "percent_unavailable": null
+    },
+    "stages": {
+      "admission": {
+        "p50_ms": {
+          "absolute": 22.806,
+          "baseline": 11.139,
+          "candidate": 33.945,
+          "percent": 204.74,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 57.158,
+          "baseline": 16.252,
+          "candidate": 73.41,
+          "percent": 351.698,
+          "percent_unavailable": null
+        }
+      },
+      "one_stage": {
+        "p50_ms": {
+          "absolute": 81.166,
+          "baseline": 68.177,
+          "candidate": 149.343,
+          "percent": 119.052,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 109.591,
+          "baseline": 148.476,
+          "candidate": 258.067,
+          "percent": 73.811,
+          "percent_unavailable": null
+        }
+      },
+      "provider": {
+        "p50_ms": {
+          "absolute": 11.784,
+          "baseline": 40.817,
+          "candidate": 52.601,
+          "percent": 28.87,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 41.189,
+          "baseline": 49.098,
+          "candidate": 90.287,
+          "percent": 83.891,
+          "percent_unavailable": null
+        }
+      },
+      "queue_age": {
+        "p50_ms": {
+          "absolute": -459.481,
+          "baseline": 3007.176,
+          "candidate": 2547.695,
+          "percent": -15.279,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": -920.875,
+          "baseline": 3876.964,
+          "candidate": 2956.089,
+          "percent": -23.752,
+          "percent_unavailable": null
+        }
+      },
+      "receipt_persistence": {
+        "p50_ms": {
+          "absolute": 4.246,
+          "baseline": 6.273,
+          "candidate": 10.519,
+          "percent": 67.687,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 12.702,
+          "baseline": 7.215,
+          "candidate": 19.917,
+          "percent": 176.05,
+          "percent_unavailable": null
+        }
+      },
+      "run": {
+        "p50_ms": {
+          "absolute": 88.554,
+          "baseline": 122.18,
+          "candidate": 210.734,
+          "percent": 72.478,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 179.301,
+          "baseline": 142.502,
+          "candidate": 321.803,
+          "percent": 125.823,
+          "percent_unavailable": null
+        }
+      },
+      "ssh_evidence": {
+        "p50_ms": {
+          "absolute": 0.23,
+          "baseline": 10.087,
+          "candidate": 10.317,
+          "percent": 2.28,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 0.909,
+          "baseline": 10.144,
+          "candidate": 11.053,
+          "percent": 8.961,
+          "percent_unavailable": null
+        }
+      },
+      "two_stage": {
+        "p50_ms": {
+          "absolute": 125.864,
+          "baseline": 126.633,
+          "candidate": 252.497,
+          "percent": 99.393,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 226.974,
+          "baseline": 142.502,
+          "candidate": 369.476,
+          "percent": 159.278,
+          "percent_unavailable": null
+        }
+      },
+      "usage_persistence": {
+        "p50_ms": {
+          "absolute": 2.024,
+          "baseline": 6.095,
+          "candidate": 8.119,
+          "percent": 33.208,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 6.602,
+          "baseline": 6.557,
+          "candidate": 13.159,
+          "percent": 100.686,
+          "percent_unavailable": null
+        }
+      }
+    }
+  },
+  "fixture_only": true,
+  "interpretation": {
+    "cost": "Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.",
+    "database": "Both reports measured the same database backend; server versions are informational and may differ.",
+    "latency": "Negative elapsed/stage deltas indicate lower fixture latency.",
+    "scope": "Disposable loopback fixture only; this comparison does not establish production performance.",
+    "throughput": "Positive throughput deltas indicate higher fixture throughput."
+  },
+  "schema_version": 1
+}

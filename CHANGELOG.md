@@ -1,3 +1,175 @@
+## 1.75.25 — 2026-11-17
+
+1. [PR #1066](https://github.com/StealthCat/MrPatchy/pull/1066): Batched integration of [PR #846](https://github.com/StealthCat/MrPatchy/pull/846), [PR #804](https://github.com/StealthCat/MrPatchy/pull/804), [PR #979](https://github.com/StealthCat/MrPatchy/pull/979), [PR #1028](https://github.com/StealthCat/MrPatchy/pull/1028), [PR #809](https://github.com/StealthCat/MrPatchy/pull/809), [PR #905](https://github.com/StealthCat/MrPatchy/pull/905), [PR #903](https://github.com/StealthCat/MrPatchy/pull/903), [PR #902](https://github.com/StealthCat/MrPatchy/pull/902).
+2. [PR #846](https://github.com/StealthCat/MrPatchy/pull/846): Add a pure udev rules parser reporting each rule's matches, assignments, labels and the external programs or builtins it runs (`RUN`, `PROGRAM`, `IMPORT{program}`), applying rules-directory precedence including `/dev/null` masking and following systemd v256 `udev-rules.c` parsing (#844). New pure module; nothing calls it yet.
+3. [PR #804](https://github.com/StealthCat/MrPatchy/pull/804): Add a pure account-enumeration contract for per-user systemd managers that reads the login.defs UID range and passwd entries, never carries passwords or GECOS forward, and selects root, regular and lingering accounts with explicit gaps; names sharing one UID are dropped and reported. Collection wiring is not included yet.
+4. [PR #979](https://github.com/StealthCat/MrPatchy/pull/979): The AI triage benchmark CLI can measure a disposable MySQL database (`tools/benchmark_ai.py --database mysql`, target from `AI_BENCHMARK_MYSQL_URL`); it refuses any database that already has tables, allows one run per database, removes only its own tables, reports the backend, and the comparator refuses pairs from different backends (#976). No runtime change.
+5. [PR #1028](https://github.com/StealthCat/MrPatchy/pull/1028): Add acceptance tests showing fleet known-good reuse still needs no provider call after AI run history is pruned and that a candidate whose origin assessment is missing fails closed with one fresh provider call; the worker's hourly history cleanup is extracted into `worker.prune_history()` with no behavior change (#1027).
+6. [PR #809](https://github.com/StealthCat/MrPatchy/pull/809): systemd unit resolution can take the manager's systemd version; specifiers that release did not support with today's meaning (for example `%h` before systemd 228) are reported as coverage gaps instead of guessed, and output is unchanged when no version is supplied. Nothing in `app/` calls these resolvers yet.
+7. [PR #905](https://github.com/StealthCat/MrPatchy/pull/905): Update the pinned lint-only `ruff` to 0.17.4 (Dependabot).
+8. [PR #903](https://github.com/StealthCat/MrPatchy/pull/903): Pin both CodeQL `init` and `analyze` to `github/codeql-action` v4.39.3 (`33d7b85`); main's previous pin `4bfa242` was commented v4.39.3 but is the v3.39.1 release (Dependabot; supersedes #901).
+9. [PR #902](https://github.com/StealthCat/MrPatchy/pull/902): Update the Playwright browser-test dependency to 1.65.0 (Dependabot). Compatibility for this batch: no schema, API, UI, auth or runtime behavior change; CI, test, benchmark-tool and pure-contract changes only.
+
+## 1.75.24 — 2026-11-17
+
+1. [PR #1065](https://github.com/StealthCat/MrPatchy/pull/1065): Batched integration of [PR #1053](https://github.com/StealthCat/MrPatchy/pull/1053), [PR #1050](https://github.com/StealthCat/MrPatchy/pull/1050), [PR #1048](https://github.com/StealthCat/MrPatchy/pull/1048), [PR #1046](https://github.com/StealthCat/MrPatchy/pull/1046), [PR #1042](https://github.com/StealthCat/MrPatchy/pull/1042), [PR #985](https://github.com/StealthCat/MrPatchy/pull/985), [PR #981](https://github.com/StealthCat/MrPatchy/pull/981), [PR #849](https://github.com/StealthCat/MrPatchy/pull/849).
+2. [PR #1053](https://github.com/StealthCat/MrPatchy/pull/1053): Add a source-grounded ifupdown contract that resolves which hook commands (`pre-up`, `up`, `down`, `post-down`, …) and `/etc/network/if-*.d` scripts run as root when interfaces go up or down, including implicit `auto lo` handling (#1052). New pure module; nothing calls it yet.
+3. [PR #1050](https://github.com/StealthCat/MrPatchy/pull/1050): Add a pure `/etc/profile.d` contract that resolves which files Debian/Ubuntu login shells source through `/etc/profile`, in what order, as root and other accounts, and why other entries are skipped; hazardous names, special files, locale-dependent order, a modified loop and unobserved input are explicit gaps (#1049). New pure module; nothing calls it yet.
+4. [PR #1048](https://github.com/StealthCat/MrPatchy/pull/1048): Add a pure update-motd.d contract that resolves which `/etc/update-motd.d` scripts Debian's `pam_motd` runs as root at login, in what order and for which PAM services, with name rules pinned against `run-parts --lsbsysinit`; unobserved, truncated or malformed input fails closed (#1047). New pure module; nothing calls it yet.
+5. [PR #1046](https://github.com/StealthCat/MrPatchy/pull/1046): Add a pure SSH login rc-hook contract that resolves, per account and session kind, whether sshd runs `~/.ssh/rc`, `/etc/ssh/sshrc` or neither, with the exact command, observed script hash and executability, following OpenSSH `do_rc_files()`; unresolvable inputs are explicit gaps (#1045). New pure module; nothing calls it yet.
+6. [PR #1042](https://github.com/StealthCat/MrPatchy/pull/1042): The authorized_keys contract now validates `permitopen`/`permitlisten` values as sshd does: malformed hosts and missing, empty or zero ports mark the line refused, valid values no longer leave a gap, and service-name ports remain an explicit gap (#1041). Compatibility: gap kind `forwarding_spec_unvalidated` is renamed `forwarding_port_service_name` and the contract version moves from 1 to 2; nothing outside tests consumes the module yet.
+7. [PR #985](https://github.com/StealthCat/MrPatchy/pull/985): Add acceptance tests for daily spend cap resets on 23- and 25-hour budget days, in zones that change clocks at local midnight, and for calls in flight at the reset (#984). Tests only.
+8. [PR #981](https://github.com/StealthCat/MrPatchy/pull/981): Add a pure logrotate contract that lists the rotation scripts and `compresscmd`, `uncompresscmd`, `su` and `shred` directives logrotate configuration can run, following includes in logrotate's order; malformed or uncollected input makes the result undetermined. Compared against logrotate 3.21.0; nothing collects or displays it yet.
+9. [PR #849](https://github.com/StealthCat/MrPatchy/pull/849): Add a pure run-parts eligibility assessment for `/etc/cron.hourly`, `daily`, `weekly` and `monthly` entries applying Debian and cronie naming, unquoted-expansion, execute-bit and nesting rules, failing closed for symlinks, glob-character names and unrecorded metadata (#848); not yet shown in the UI. Compatibility for this batch: new pure contracts and tests only; no schema, API, UI, auth or runtime behavior change.
+
+## 1.75.23 — 2026-11-17
+
+1. [PR #1060](https://github.com/StealthCat/MrPatchy/pull/1060): Batched integration of [PR #1009](https://github.com/StealthCat/MrPatchy/pull/1009), [PR #1006](https://github.com/StealthCat/MrPatchy/pull/1006), [PR #999](https://github.com/StealthCat/MrPatchy/pull/999), [PR #997](https://github.com/StealthCat/MrPatchy/pull/997), [PR #995](https://github.com/StealthCat/MrPatchy/pull/995), [PR #993](https://github.com/StealthCat/MrPatchy/pull/993), [PR #991](https://github.com/StealthCat/MrPatchy/pull/991), [PR #989](https://github.com/StealthCat/MrPatchy/pull/989).
+2. [PR #1009](https://github.com/StealthCat/MrPatchy/pull/1009): Add acceptance tests showing that draining a worker under a daily spend cap lets admitted triage (including its follow-up call) finish with spend settled while the draining worker claims, reserves and sends nothing new; another worker can take queued work, and after Resume plus the next heartbeat the worker admits capped work again (#1008). Tests and docs only.
+3. [PR #1006](https://github.com/StealthCat/MrPatchy/pull/1006): Add acceptance tests showing that under a daily spend cap an AI answer arriving after the evidence, an approval or the AI key changed, or after another worker took over or the lease expired, is never accepted while the sent call's cost stays counted, and a subject whose evidence keeps changing is not re-billed in a loop (#1005). Tests and docs only.
+4. [PR #999](https://github.com/StealthCat/MrPatchy/pull/999): Add acceptance tests showing a paused server takes no daily-cap headroom, a pause is refused while a capped call is in flight, and disabling AI between a first call and its follow-up stops the second call while the first stays counted (#998). Tests and docs only.
+5. [PR #997](https://github.com/StealthCat/MrPatchy/pull/997): Add acceptance tests showing provider rate limits and transient failures under the daily spend cap keep possibly incurred charges counted, waiting for a provider floor costs nothing, automatic retries stop at the attempt limit, and a retry starts only when both provider eligibility and cap headroom allow it (#996). Tests and docs only.
+6. [PR #995](https://github.com/StealthCat/MrPatchy/pull/995): Add acceptance tests proving that under a daily spend cap, calls with unknown usage or price keep their full conservative reservation counted and report an unavailable cost rather than $0, a later overrunning call is refused before sending, unpriceable requests are refused before admission, and uncapped modes add no spend guard (#994). Tests and docs only.
+7. [PR #993](https://github.com/StealthCat/MrPatchy/pull/993): Add acceptance tests showing triage work whose lease is lost, or whose worker hangs mid-call, keeps any possibly incurred charge counted under the daily cap; a recovering worker reserves its own spend or waits for the reset, and a stale result is never accepted (#992). Tests and docs only.
+8. [PR #991](https://github.com/StealthCat/MrPatchy/pull/991): Add acceptance tests proving simultaneous daily-cap admissions stay consistent while an administrator lowers, raises, removes or re-zones the cap: each reservation uses one settings snapshot and a save never rewrites, releases or re-grants recorded spend (#990). Tests and docs only.
+9. [PR #989](https://github.com/StealthCat/MrPatchy/pull/989): Add acceptance tests showing a two-stage investigation reserves each AI call separately under the shared daily cap, and a cap running out between the calls defers the investigation to the reset without a second transmission, overspend or lost work, including four concurrent investigations racing for one remaining reservation (#988). Tests and docs only. Compatibility for this batch: tests and documentation only; no runtime, schema, API, settings or response-authorization change.
+
+## 1.75.22 — 2026-11-17
+
+1. [PR #1059](https://github.com/StealthCat/MrPatchy/pull/1059): Batched integration of [PR #1037](https://github.com/StealthCat/MrPatchy/pull/1037), [PR #1031](https://github.com/StealthCat/MrPatchy/pull/1031), [PR #1024](https://github.com/StealthCat/MrPatchy/pull/1024), [PR #1022](https://github.com/StealthCat/MrPatchy/pull/1022), [PR #1019](https://github.com/StealthCat/MrPatchy/pull/1019), [PR #1016](https://github.com/StealthCat/MrPatchy/pull/1016), [PR #1014](https://github.com/StealthCat/MrPatchy/pull/1014), [PR #1011](https://github.com/StealthCat/MrPatchy/pull/1011).
+2. [PR #1037](https://github.com/StealthCat/MrPatchy/pull/1037): Add worker-level acceptance tests showing fleet known-good results are reused across servers only for exact matches, with zero provider calls and no daily-cap reservation; a different hash, account or network behavior, a `medium`/`unknown` result or a revoked candidate still reaches the provider, and concurrent first encounters publish one deduplicated candidate (#1035). Tests only.
+3. [PR #1031](https://github.com/StealthCat/MrPatchy/pull/1031): Add acceptance tests showing an administrator's known-good Re-triage is held without a provider call, charge or cached-verdict fallback while the server is paused, AI is disabled or the daily cap has no headroom, and once allowed sends the same bounded evidence as an ordinary investigation (#1029). Tests and docs only.
+4. [PR #1024](https://github.com/StealthCat/MrPatchy/pull/1024): Add acceptance tests showing update scoring, AI security plans, release configuration review and the AI connection test share one daily spend cap; when it is spent they send nothing, record no spend and wait for the reset instead of failing (#1023). Tests and docs only.
+5. [PR #1022](https://github.com/StealthCat/MrPatchy/pull/1022): Add end-to-end acceptance tests for Rate throttle mode: one start per interval across servers, no saved-up burst after idle time, the visible next start, uncharged durable deferral when a slot is lost after the claim, and one slot shared with the AI connection test (#1021). Tests and docs only.
+6. [PR #1019](https://github.com/StealthCat/MrPatchy/pull/1019): Add acceptance tests proving Unthrottled mode removes only Mr Patchy's pacing and daily spend cap; per-server concurrency, provider Retry-After backoff, server AI pause and global AI disable still apply (#1018). Tests and docs only.
+7. [PR #1016](https://github.com/StealthCat/MrPatchy/pull/1016): Add acceptance tests for low, medium, high and unknown triage verdicts under a daily spend cap: each is stored and charged once, follow-up evidence is collected only for verified subjects, invalid answers are rejected but counted, no verdict approves a behavior or starts a response, and a complete low verdict publishes a reusable fleet known-good candidate (#1013). Tests and docs only.
+8. [PR #1014](https://github.com/StealthCat/MrPatchy/pull/1014): Add acceptance tests for triage claim contention, cross-server fairness and host election under a daily spend cap across threads, fresh processes, a bypassed preflight and the shared budget lock (#1012). Tests and docs only.
+9. [PR #1011](https://github.com/StealthCat/MrPatchy/pull/1011): Add acceptance tests showing operators, viewers, requests without a valid CSRF token and demoted administrator sessions cannot change daily-cap AI controls, start billable AI work or read spend diagnostics, and that refused requests change nothing (#1010). Tests and docs only. Compatibility for this batch: tests and documentation only; no runtime, schema, API, settings or response-authorization change.
+
+## 1.75.21 — 2026-11-17
+
+1. [PR #1056](https://github.com/StealthCat/MrPatchy/pull/1056): Run the SQLite CI suite as four shards (the existing `MRPATCHY_TEST_SHARD` hook used by the MySQL job) and move the Docker build, native Caddy adapter, Compose HTTPS startup and proxy/TLS checks into a separate parallel `smoke` job, roughly halving CI run time; newer pushes to main now supersede in-progress main runs. AGENTS.md and the coordinator guide now allow batched integration of up to 8 independent ready PRs in one CI run with one version and one changelog item per PR. Compatibility: CI and process only; check names change from `tests` to `tests (1)`–`tests (4)` plus `smoke`; no application, schema, API or UI change.
+
+## 1.75.20 — 2026-11-17
+
+1. [PR #890](https://github.com/StealthCat/MrPatchy/pull/890): Add a pure XDG autostart resolution contract that resolves user-over-system precedence, `Hidden`, GNOME-disabled and desktop- or GNOME-conditional entries, and extracts spec-conformant `Exec` argv; ambiguous quoting becomes an explicit coverage gap, never a guessed argv (#889). Compatibility: none; the module is new and nothing imports it yet. Limits: groundwork for login-autostart inventory, not yet wired into collection or the UI.
+
+## 1.75.19 — 2026-11-17
+
+1. [PR #1026](https://github.com/StealthCat/MrPatchy/pull/1026): Retain fingerprinted serial/parallel AI triage benchmark records for cross-server and same-server workloads in `docs/benchmarks/ai-equivalence-c86141a/`, with comparator output and a regression test that refuses tampered or pre-fingerprint records (#1025). Compatibility: none; docs, benchmark records and tests only, with no runtime, schema, settings, admission or response-authority change.
+
+## 1.75.18 — 2026-11-17
+
+1. [PR #1017](https://github.com/StealthCat/MrPatchy/pull/1017): A process investigation deferred by the daily AI spend cap now says it is waiting for the cap to reset in both `daily_cap` and `rate_and_daily` modes, instead of saying it is waiting for the rate throttle (#1015). Rate-throttle, pause and provider-backoff waits keep their existing reasons, and scheduling is unchanged. Compatibility: no schema, API or setting change; existing `ai_triage_retries` rows keep their stored reason until their next deferral.
+
+## 1.75.17 — 2026-11-17
+
+1. [PR #1020](https://github.com/StealthCat/MrPatchy/pull/1020): A process investigation blocked because its evidence is over the 64 KB sharing limit now says so instead of advising an API key, quota or model change; if oversized follow-up evidence blocks the second request, the reason says the first request was already sent. The blocked-investigations notification and Retry blocked investigations help now point to each investigation's own retry reason (#1007). Compatibility: no schema, API shape, admission, reservation, role or response-authorization change; an already-active `configuration-blocked` notification gets one new revision with the new text, and existing retry rows keep their stored reason until their next failure.
+
+## 1.75.16 — 2026-11-17
+
+1. [PR #1044](https://github.com/StealthCat/MrPatchy/pull/1044): Scheduled malware-scan coverage notifications now wait the configured interval plus one hour after scheduled scanning is re-enabled, or after a disabled or re-enrolling server returns, before reporting the server overdue (#1043). Compatibility: no schema, route, UI, role, scheduler or response-authorization change; server-managed `security-scan-resumed:<host>` settings rows appear only for servers that are disabled or re-enrolling while scheduled scanning is enabled and are removed once interval plus grace has passed, the policy is disabled or removed, or the server is deleted. Upgraded and continuously active servers keep their existing overdue timing.
+
+## 1.75.15 — 2026-11-17
+
+1. [PR #1004](https://github.com/StealthCat/MrPatchy/pull/1004): Fix a stall in `daily_cap` and `rate_and_daily` AI triage modes where one investigation whose conservative reservation exceeds the entire daily cap blocked triage for every server (#1003). That investigation is now marked blocked with an explanation (nothing is reserved or sent and no attempt is counted), and other servers' investigations continue. Changing the AI model or key re-admits it automatically; raising the cap or switching to `rate`/`unthrottled` mode requires an explicit retry from Investigations. Compatibility: no schema or settings change; installations whose cap is below one call's reservation will see such investigations change from silently pending to blocked and raise the existing triage-blocked notification. Integration keeps #1002's oversized-evidence branch ahead of this over-cap guard.
+
+## 1.75.14 — 2026-11-17
+
+1. [PR #1002](https://github.com/StealthCat/MrPatchy/pull/1002): Fix a daily-spend-cap stall where one process with more than 64 KB of evidence stayed pending forever and stopped AI triage for every server; it is now marked as a blocked error, as in other modes, and other investigations continue (#1001). Add acceptance tests showing the cap does not change what is sent to the AI provider and that the update-scoring opt-in controls package sharing and spend (#1000). Compatibility: no schema, API or UI change; in `daily_cap` and `rate_and_daily` modes an oversized subject now shows a blocked `error` instead of an indefinite `pending`, and installations already stuck this way recover on the first claim pass after upgrade.
+
+## 1.75.13 — 2026-11-16
+
+1. [PR #978](https://github.com/StealthCat/MrPatchy/pull/978): Give fleet and per-server investigation lists URL-addressed pagination, including the cached filter; page navigation, reloads and Back/Forward restore the selected page. Page 1 keeps existing addresses. Compatibility: frontend-only; no API, schema, role or authorization change. Limits: other paged lists still have no page address.
+
+## 1.75.12 — 2026-11-16
+
+1. [PR #947](https://github.com/StealthCat/MrPatchy/pull/947): Add administrator count and retry controls for investigations blocked on one server. The host-scoped action uses the existing retry locks, lifecycle checks, 200-row bound and audit; the fleet action stays unchanged. Compatibility: additive API and server-tab UI; no provider call, schema or response-authorization change. Limits: blocked advisory-plan work is not included.
+
+## 1.75.11 — 2026-11-16
+
+1. [PR #971](https://github.com/StealthCat/MrPatchy/pull/971): Add an I/O-free dpkg configuration contract that reports command hooks, relocations, behavior-changing options, source locations and fail-closed coverage gaps. Compatibility: no runtime behavior changes; the parser is not wired to a collector or UI. Limits: the option table follows dpkg 1.22.6, and per-user/per-run configuration remains unobserved.
+
+## 1.75.10 — 2026-11-16
+
+1. [PR #973](https://github.com/StealthCat/MrPatchy/pull/973): Extend MySQL CI shard timeouts from 30 to 45 minutes so slow, still-passing shards can finish. Compatibility: CI only; no application, schema, API or UI change. Limits: 45 minutes is based on observed runtimes and unusually slow runners may still exceed it; the shard matrix and test behavior are unchanged.
+
+## 1.75.9 — 2026-11-16
+
+1. [PR #969](https://github.com/StealthCat/MrPatchy/pull/969): Reverify the bundled OpenAI catalog’s listed model rates, snapshot aliases, service tiers and cache rates, then extend its verification window through December 16, 2026 UTC. Compatibility: no schema or spend-policy changes; stored receipts retain their recorded rates and catalog version. Limits: estimates remain limited to listed models and tiers and exclude tool charges, taxes, credits and negotiated account adjustments; capped installations need a refreshed build before November 26, and admission still fails closed at the new expiry.
+
+## 1.75.8 — 2026-11-16
+
+1. [PR #963](https://github.com/StealthCat/MrPatchy/pull/963): Add a pure NetworkManager dispatcher contract that reports root-run scripts in byte order and event groups from captured file metadata, including `/etc` overrides and masks, no-wait links and device handlers with explicit coverage gaps. Compatibility: none; nothing calls the module. Limits: source review covered upstream 1.36.6–1.58.1 and native comparison only 1.46.0; distribution patches and custom build paths are not assessed; script contents, event occurrence, collection, catalog wiring, persistence, UI, provenance, classification and other hook directories remain outside scope. Roadmap F remains incomplete.
+
+## 1.75.7 — 2026-11-16
+
+1. [PR #951](https://github.com/StealthCat/MrPatchy/pull/951): Add a pure APT configuration contract that resolves recognized command hooks and binary/path overrides from captured `apt.conf.d` and `apt.conf` inputs, applying APT file and option semantics with explicit fail-closed gaps. Compatibility: none; the module has no caller. Limits: includes are not followed, `APT_CONFIG` and unrecognized execution options remain unobserved, and collection, persistence, UI, provenance and classification are not included; roadmap F remains incomplete.
+
+## 1.75.6 — 2026-11-16
+
+1. [PR #961](https://github.com/StealthCat/MrPatchy/pull/961): Add a pure contract for captured `/etc/ld.so.preload` entries and `/etc/ld.so.conf` directories/includes, including glibc comment-window behavior, with explicit gaps for unobserved or unsupported inputs. Compatibility: none; the new module has no caller. Limits: compared with glibc 2.39, selected include patterns and older releases remain gaps; no collection, persistence, UI, provenance or classification. Roadmap F remains incomplete.
+
+## 1.75.5 — 2026-11-16
+
+1. [PR #965](https://github.com/StealthCat/MrPatchy/pull/965): Restore the kernel-module configuration contract section in `docs/SECURITY_IMPLEMENTATION.md`, which the v1.75.4 integration merge omitted. Compatibility: documentation only; no application, runtime, API, schema, UI or authorization change. Limit: the broader startup-awareness requirement remains incomplete.
+
+## 1.75.4 — 2026-11-16
+
+1. [PR #959](https://github.com/StealthCat/MrPatchy/pull/959): Give the Investigations “Cached known good” filter bookmarkable fleet and per-server addresses (`#investigations/cached` and `#servers/<id>/investigations/cached`) that restore the filter on reload and Back/Forward, while the bare address shows all investigations. Compatibility: the cached choice no longer persists at the bare address; use the filtered address to restore it. No API, schema, role or response-authorization change. Limits: page offset has no address; the per-server assessment back-link and phone-width focus visibility were not separately browser-verified.
+
+## 1.75.3 — 2026-11-16
+
+1. [PR #957](https://github.com/StealthCat/MrPatchy/pull/957): Fix the known-good summary browser test race by awaiting mocked identity responses, asserting after the viewer render, and restoring an administrator render before the next test. Compatibility: no application, UI or runtime behavior change. Limits: this test-only change does not establish a fix for the separate investigation-history link timeout seen on #955.
+
+## 1.75.2 — 2026-11-16
+
+1. [PR #955](https://github.com/StealthCat/MrPatchy/pull/955): Give the serial SQLite suite its own 60-minute step limit within a 75-minute CI job, leaving 15 minutes for the Docker, Caddy and Compose smoke checks; report the 25 slowest tests and update the measured-runtime comment. Compatibility: no application behavior or compatibility change. Limits: a hung test job can occupy a runner for up to 75 minutes (was 45); the suite remains serial and unsharded.
+
+## 1.75.1 — 2026-11-15
+
+1. [PR #954](https://github.com/StealthCat/MrPatchy/pull/954): Add a bounded, pure parser and resolver for captured `modprobe.d`, `modules-load.d` and `/etc/modules` text, including effective-file precedence and potential boot-time install commands. It performs no I/O, runs no commands and authorizes nothing. Compatibility: no schema, API, UI, agent or runtime behavior change; no existing module is modified. Limits: file collection, catalog wiring, persistence, UI and runtime coverage remain out of scope; kernel aliases/dependencies, command-line settings and initramfs copies are unobserved, and requirement F remains incomplete.
+
+## 1.75.0 — 2026-11-15
+
+1. [PR #941](https://github.com/StealthCat/MrPatchy/pull/941): Add per-server restrict-only malware automatic-response overrides through Server → Security and admin API. An override can cap a server at Monitor only or Disabled and add path/hash exclusions; it never expands the fleet policy or authorizes response actions. It is recorded and audited but not enforced because no containment executor exists. Compatibility: additive setting rows and API, with no schema change; fleet policy API behavior is unchanged. Limits: group overrides and fleet listing remain open, and requirement E and other #682 runtime items remain incomplete.
+
+## 1.74.0 — 2026-11-15
+
+1. [PR #949](https://github.com/StealthCat/MrPatchy/pull/949): Add an administrator-configurable in-app telemetry-loss notice threshold from 5 to 1440 minutes (default 15), expose its effective value in settings, and audit changes. The default preserves existing notice behavior and text; SMTP/webhook stale alerts (120 seconds) are unchanged. Compatibility: additive optional `telemetry_lost_minutes` API field; no schema change or migration, and clients omitting the field retain stored values. A changed threshold can revise the text of still-qualifying active notices once. Limit: endpoint-agent readiness and alerting remains open (#737).
+
+## 1.73.1 — 2026-11-15
+
+1. [PR #945](https://github.com/StealthCat/MrPatchy/pull/945): Fix whole-microsecond rounding so scan-coverage `first_seen` and security-policy `enabled_since` markers never land after their observation time; also add deterministic and seeded property regressions. Compatibility: no schema, API, role or authorization change, and already-stored markers remain unchanged. Limits: marker precision remains whole microseconds; the representation may be less than one microsecond earlier than the observation. Resolves [issue #942](https://github.com/StealthCat/MrPatchy/issues/942).
+
+## 1.73.0 — 2026-11-15
+
+1. [PR #944](https://github.com/StealthCat/MrPatchy/pull/944): Add a GCP join-worker installer mode for 1–16 replicas on the same Docker host as a controller-only installation. The installer reuses the controller's rendered project, identity, data volume and database; the worker wrapper refuses to target the controller Compose project. Compatibility: additive; complete and controller installation modes remain unchanged, with no application runtime, schema, role or response-authorization change. Limits: same host only; live `docker compose up` was not exercised without a Docker daemon; remote-machine workers and multi-host acceptance remain outside this roadmap slice (#943 remains open).
+
+## 1.72.0 — 2026-11-15
+
+1. [PR #935](https://github.com/StealthCat/MrPatchy/pull/935): Add an admin-only fleet action to retry up to 200 process investigations blocked under the current AI configuration, using the existing triage and per-host queue locks, rechecking candidates under lock, and recording one audit event for each non-empty batch. Compatibility: additive route and UI; no schema, authorization, provider-call, pause, data-sharing, reservation, or response-authorization change; normal scheduler admission still governs execution. Limits: Fleet Investigations only; blocked advisory-plan work is excluded; batches are capped at 200, and the displayed blocked count can differ from the eligible retry count.
+
+## 1.71.0 — 2026-11-15
+
+1. [PR #933](https://github.com/StealthCat/MrPatchy/pull/933): Keep an administrator's Re-triage selection across Investigations pages and the All/Cached filters within one view. The client caps selection at the existing 50-item endpoint limit, drops rows whose verdict or revision changes, and includes selected rows across visited pages in the confirmation and submit. Compatibility: frontend-only; the existing endpoint, API/schema, admission, approval and server-side all-or-nothing revision checks remain unchanged. Limits: selecting every matching row still requires visiting its page, and selections above 50 are not supported.
+
+## 1.70.0 — 2026-11-15
+
+1. [PR #884](https://github.com/StealthCat/MrPatchy/pull/884): Send the existing admin-only overdue security-scan coverage notice for enabled legacy policies that have no scan attempt, starting its clock when the producer first observes the policy after upgrade and waiting through the scan interval plus one-hour grace. Compatibility: adds a server-managed `security-scan-legacy-since:<host>` setting; the administrator policy row, schema, roles, scheduler and response authorization are unchanged. No scan is enqueued. Limits: the historical enablement time is unknown; YARA schedules and configurable grace remain out of scope.
+
+## 1.69.0 — 2026-11-15
+
+1. [PR #896](https://github.com/StealthCat/MrPatchy/pull/896): Add a pure OpenSSH `authorized_keys` parser that reports per-line acceptance, rejection, expiry and precedence, SHA256 key fingerprints, forced commands and effective restrictions without exposing raw key material. Compatibility: new unimported module and tests only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: account/file enumeration and effective sshd configuration, forwarding-value validation, provenance, AI classification and UI remain out of scope; uncertain cases stay explicit gaps.
+
+## 1.68.0 — 2026-11-15
+
+1. [PR #923](https://github.com/StealthCat/MrPatchy/pull/923): Add an admin-only, read-only per-server automatic AI plan status under Security → Scheduled scanning, including the reason requests are inactive, a bounded count of open non-YARA incidents awaiting an attempt, queued/running and latest-attempt state, and mode-correct pacing. Correct the help text so only legacy mode claims the fleet ten-per-hour limit; other modes use shared AI start gates. Compatibility: adds one read-only route and UI; schema, roles, admission, automatic tick behavior, and response authorization are unchanged. Plans remain manual-only. Limits: point-in-time for one server; counts read at most 500 eligible incidents and report larger backlogs as truncated; startup-change plans and fleet-wide queue view remain out of scope.
+
+## 1.67.0 — 2026-11-15
+
+1. [PR #925](https://github.com/StealthCat/MrPatchy/pull/925): Add **Show → Cached known good** to fleet and per-server Investigations, listing only verdicts whose current state is an exact known-good reuse and allowing review or bulk Re-triage. Compatibility: adds optional `cached=true`; the default response is unchanged, with no schema, role, admission, spend or response-authorization changes. Limits: filter state has no URL deep link, fleet-wide selection across pages remains open, and filtered scans use bounded chunks over retained candidates with the same offset-pagination behavior as the default view.
+
 ## 1.66.0 — 2026-11-15
 
 1. [PR #908](https://github.com/StealthCat/MrPatchy/pull/908): Add Settings → Malware response, where administrators can record and audit one fleet-wide automatic-response policy against the existing eligibility contract. Compare-and-set saves, audit entries and fail-closed handling keep invalid or unconfirmed enforcement disabled. Compatibility: additive administrator-only read/write endpoints and UI; existing installs default to Disabled; no migration, detector, executor, provider call, or response-authorization change. Limits: policy has no runtime effect, Enforce is unavailable, and per-server/group policies and enforcement remain open.
