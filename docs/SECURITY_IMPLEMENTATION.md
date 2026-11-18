@@ -5020,6 +5020,63 @@ contract supplies `reached`), whether sshd uses PAM, AppArmor/SELinux, catalog
 schema, API, auth or response-authorization change.
 
 
+### Debian kernel package hook contract — worker checkpoint #1072
+
+This is a contract increment only. The startup-awareness requirement remains
+incomplete. `app/kernel_hooks.py` is a pure, versioned contract for the
+`/etc/kernel/*.d` hook directories that Debian-family kernel packages run as
+root from their maintainer scripts. It takes supplied directory-entry metadata,
+performs no I/O and never reads a script's contents. The startup catalog does
+not list these directories yet.
+
+- **Source.** The rules were checked against shipped artifacts, not recalled:
+  the maintainer scripts of the Ubuntu 24.04 `linux-image`, `linux-modules` and
+  `linux-headers` 6.8.0-71 packages, and debianutils 5.17 `run-parts`. Each hook
+  is guarded by `[ -d DIR ]` and runs `DEB_MAINT_PARAMS="$*" run-parts --report
+  --exit-on-error --arg=VERSION [--arg=IMAGE_PATH] DIR`:
+  - `preinst.d` runs on every image preinst call except `abort-upgrade`.
+  - `postinst.d` runs after image or modules `configure`. It is deferred
+    through the `linux-update-VERSION` dpkg trigger.
+  - `prerm.d` runs on `remove` only.
+  - `postrm.d` runs on every postrm call.
+  - `header_postinst.d` runs on headers `configure`, with the version only.
+- **Name rule.** Without `--lsbsysinit`, run-parts considers only names that
+  match `^[A-Za-z0-9_-]+$`. Dots, `~` backups and hidden names never run. The
+  tests pin this rule against `LC_ALL=C run-parts --list` output for a seeded
+  corpus plus real hook names.
+- **Walk.** Symlinks are followed. A regular file runs as root when it has any
+  execute bit and is not on a `noexec` mount. Directories and non-executable
+  files are skipped silently.
+  - A failed `stat` stops the walk under `--exit-on-error` (`stops_early`, with
+    `stops_at`). Later entries are reported `not_reached`.
+  - Another file type is reported, later scripts still run, and run-parts then
+    exits non-zero (`fails_after_run`).
+  - Either failure fails the maintainer script and so the dpkg operation.
+  - Every script after the first runs only if all earlier ones exit zero.
+  - A script after an entry with unknown metadata has `reached: unknown`.
+  - A live test compares the real binary's run order and stop point with the
+    contract when `run-parts` is available as root.
+- **Fail closed.** The following are blocking gaps, and `complete` is false:
+  - an unobserved family or hook directory;
+  - an unreadable or truncated directory;
+  - malformed, duplicate or unknown input;
+  - missing metadata or an unobserved symlink target;
+  - over-limit input.
+
+  RPM-family kernels use `kernel-install` plugins, so that family is
+  `not_applicable`. Order is reported as byte (C locale) order, and a non-C
+  `strcoll` order is a listed limitation. `origin` is always `not_assessed`,
+  and no result is a safety verdict.
+
+**Not covered:**
+- agent collection;
+- which kernel packages are installed;
+- `kernel-install` plugins;
+- catalog locations (adding them needs a baseline-preserving change like #826);
+- `entries_parsed` wiring, persistence, UI, provenance and AI classification.
+
+There is no schema, API, auth or response-authorization change.
+
 ### logrotate scripts and command directives — worker checkpoint #980
 
 Contract increment only; the startup-awareness requirement remains incomplete.
