@@ -11032,3 +11032,24 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Safety:** malformed amounts, counts or times render as "Unavailable". Text is escaped. Nothing appears while no cap is enabled.
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
+### dhclient hook contract — worker checkpoint #1063 (roadmap F)
+
+ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
+
+- **Change:** a new pure module, `app/dhclient_hooks.py`. From captured `lstat`/`stat` metadata it reports which hooks are sourced, in which phase (`enter` or `exit`) and order, and why other entries are not.
+- **Reference:** the rules follow `dhclient-script` from `isc-dhcp-client` 4.4.3-P1-4ubuntu2 (`run_hook`, `run_hookdir` and `exit_with_hooks`) and `run-parts --list` from debianutils 5.17. Both were run to confirm the behavior.
+  - The single hook file is sourced before its directory.
+  - A directory entry is listed only when its name fully matches `^[A-Za-z0-9_-]+$`, so `hook.sh`, dotfiles and backup names are not sourced.
+  - Entries are sourced in byte order. `dhclient` passes the script no locale, so the C locale applies.
+  - Only regular files are sourced, after following symlinks. Directories, special files, and dangling or looping symlinks are skipped.
+  - Mode, owner and the executable bit do not matter.
+- **Gaps, never reported as covered:** an unobserved `/etc/dhcp` or hook directory, an unreadable directory, an unobserved symlink target, malformed or duplicate input, file metadata for a hook directory that contradicts its directory observation, the 1024-entry cap, an isc-dhcp-client version outside the 4.4 series, and a non-Debian family. A `dhclient-script` whose SHA-256 is missing or differs from the reference is a non-blocking `script_not_reference` gap.
+- **Unobserved, stated in every result:**
+  - hook contents (a sourced hook can change variables or `exit` and stop later hooks);
+  - whether dhclient is the DHCP client in use;
+  - a replacement script set by `dhclient.conf` `script` or `-sf`;
+  - error paths that exit without exit hooks;
+  - RPM-family hook locations.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
