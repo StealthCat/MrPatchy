@@ -122,7 +122,8 @@ def test_value_options_are_reported():
     assert rec['principals'] == 'ops,deploy'
     assert rec['tunnel'] == '0'
     assert rec['cert_authority'] is True and rec['verify_required'] is True
-    assert {g['kind'] for g in rec['gaps']} == {'environment_requires_sshd_config', 'forwarding_spec_unvalidated'}
+    # Both forwarding values are syntactically valid with numeric ports (#1041).
+    assert {g['kind'] for g in rec['gaps']} == {'environment_requires_sshd_config'}
 
 
 def test_expiry_utc_local_and_unevaluated():
@@ -231,10 +232,11 @@ def test_cert_authority_line_does_not_shadow_plain_key_line():
     assert again['status'] == 'shadowed' and again['shadowed_by_line'] == 2
 
 
-@pytest.mark.parametrize('option', ['permitopen="no-colon"', 'permitlisten="8080"'])
+@pytest.mark.parametrize('option', ['permitopen="db:postgresql"', 'permitlisten="ssh"'])
 def test_unvalidated_forwarding_spec_on_earlier_line_makes_later_conditional(option):
-    # sshd refuses a line with a malformed permitopen/permitlisten value and
-    # keeps reading, so the later line's forced command may be the one that runs.
+    # sshd refuses a line whose permitopen/permitlisten service-name port does
+    # not resolve on the server and keeps reading, so the later line's forced
+    # command may be the one that runs.
     text = f'{option},command="/bin/a" ' + key() + '\ncommand="/bin/b" ' + key()
     first, later = ak.parse_text(text)['entries']
     assert first['precedence'] == 'first'
@@ -296,3 +298,61 @@ def test_unexpected_value_error_marks_line_unknown_not_file_abort(monkeypatch):
     parsed = ak.parse_text(f'command="/bin/a" {key()}\n{key()}\n')
     assert [entry['status'] for entry in parsed['entries']] == ['unknown', 'unknown']
     assert all(any(gap['kind'] == 'line_unparsed' for gap in entry['gaps']) for entry in parsed['entries'])
+
+
+# --- permitopen/permitlisten syntax, mirroring sshd handle_permit (#1041) ---
+
+@pytest.mark.parametrize('option', [
+    'permitopen="db:5432"', 'permitopen="db/5432"', 'permitopen="[::1]:22"', 'permitopen="[fe80::1%eth0]/22"',
+    'permitopen="*:*"', 'permitopen="host:*"', 'permitopen=":80"', 'permitopen="h:65535"', 'permitopen="h:+80"',
+    'permitopen="h: 080"', 'permitlisten="8080"', 'permitlisten="*"', 'permitlisten="localhost:8080"',
+    'permitlisten="[::]:443"', 'permitopen="db:1",permitopen="cache:2"',
+])
+def test_valid_forwarding_values_are_covered_and_shadow_later_lines(option):
+    text = f'{option},command="/bin/a" ' + key() + '\ncommand="/bin/b" ' + key()
+    first, later = ak.parse_text(text)['entries']
+    assert first['status'] == 'accepted' and first['gaps'] == []
+    assert later['status'] == 'shadowed' and later['shadowed_by_line'] == 1
+
+
+@pytest.mark.parametrize('option, kind', [
+    ('permitopen="no-colon"', 'invalid_permission_port'),
+    ('permitopen="db:"', 'invalid_permission_port'),
+    ('permitopen="db:0"', 'invalid_permission_port'),
+    ('permitopen="db:-0"', 'invalid_permission_port'),
+    ('permitopen="[::1]"', 'invalid_permission_port'),
+    ('permitopen="[::1:22"', 'invalid_permission_host'),
+    ('permitopen="[::1]x:22"', 'invalid_permission_host'),
+    ('permitopen="' + 'h' * 1025 + ':22"', 'invalid_permission_host'),
+    ('permitlisten="localhost:"', 'invalid_permission_port'),
+    ('permitlisten="0"', 'invalid_permission_port'),
+    ('permitlisten=""', 'invalid_permission_port'),
+    ('permitopen="db:5432",permitopen="oops"', 'invalid_permission_port'),
+])
+def test_malformed_forwarding_value_refuses_the_line(option, kind):
+    # sshd refuses the whole line and keeps reading, so a later line for the
+    # same key is the first accepted one and its forced command runs.
+    text = f'{option},command="/bin/a" ' + key() + '\ncommand="/bin/b" ' + key()
+    first, later = ak.parse_text(text)['entries']
+    assert first['status'] == 'invalid' and first['reject_kind'] == kind
+    assert 'sshd refuses' in first['reason']
+    assert later['status'] == 'accepted' and later['precedence'] == 'first' and later['gaps'] == []
+
+
+def test_host_just_under_ni_maxhost_is_valid():
+    assert one('permitopen="' + 'h' * 1024 + ':22" ' + key())['gaps'] == []
+
+
+@pytest.mark.parametrize('option', [
+    'permitopen="db:postgresql"', 'permitopen="db:70000"', 'permitlisten="ssh"', 'permitlisten="host/80"',
+])
+def test_service_name_port_is_an_explicit_gap(option):
+    rec = one(f'{option} ' + key())
+    assert rec['status'] == 'accepted'
+    gaps = [g for g in rec['gaps'] if g['kind'] == 'forwarding_port_service_name']
+    assert len(gaps) == 1 and gaps[0]['values'] == [option]
+
+
+def test_numeric_and_bracketed_values_are_reported_verbatim():
+    rec = one('permitopen="[::1]:22",permitlisten="8080" ' + key())
+    assert rec['permitopen'] == ['[::1]:22'] and rec['permitlisten'] == ['8080']
