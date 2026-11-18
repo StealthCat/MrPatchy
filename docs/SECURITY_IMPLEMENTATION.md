@@ -5259,6 +5259,45 @@ contract supplies `reached`), whether sshd uses PAM, AppArmor/SELinux, catalog
 schema, API, auth or response-authorization change.
 
 
+### systemd sleep and shutdown hooks — worker checkpoint #1067
+
+This is a contract increment only. The startup-awareness requirement is still incomplete. `app/systemd_hooks.py` is a pure, versioned contract for the catalog's `systemd_hooks` mechanism. It takes supplied directory-entry metadata, performs no I/O and never reads a hook's contents.
+
+- **Source.** The rules come from the systemd sources for v249, v252, v255, v256, v257 and v258: `sleep.c`, `shutdown.c`, `exec-util.c`, `conf-files.c` and `hidden_or_backup_file`. They were read, not recalled, and all six versions agree.
+  - A version outside v249–v258 is a blocking gap, and so is an unobserved version.
+- **Directories.** `systemd-sleep` scans only the compiled-in `<libexecdir>/system-sleep`, and `systemd-shutdown` scans only `<libexecdir>/system-shutdown`.
+  - On merged-usr hosts, both spellings are the same directory.
+  - On a split-usr host, the caller must say whether the build uses `/usr/lib/systemd` or `/lib/systemd`. Otherwise it is a blocking `libexec_dir_unknown` gap.
+  - Files in `/etc/systemd/system-{sleep,shutdown}` and `/usr/local/lib/systemd/system-{sleep,shutdown}` are never run. When they are supplied, they are listed as `not_scanned` with the directory they belong in.
+- **Entry rules.**
+  - Hidden and backup names are skipped: a leading `.`, a trailing `~`, `lost+found`, `aquota.*`, and the `.dpkg-*`, `.rpm*`, `.ucf-*`, `.swp`, `.bak`, `.old` and `.new` suffixes.
+  - Symlinks are followed. An entry that cannot be resolved is skipped.
+  - An entry that is not a regular file, symlink or unknown type (for example a device node placed directly in the directory) is dropped before any stat.
+  - An empty file, or a symlink to a character device such as `/dev/null`, is a mask and is skipped.
+  - Anything that is not a regular file is skipped, and so is a file with no execute bit.
+  - Every remaining file runs as root. systemd checks neither ownership nor writability, so a runnable hook owned by a non-root user or writable by group or other is reported as an observation, not a skip.
+- **Invocation.** Hooks are started in byte order of their names and then run in parallel. Exit codes are ignored, and the build default timeout is 90 s.
+  - Sleep hooks get `pre`/`post` and `suspend`, `hibernate`, `hybrid-sleep` or `suspend-then-hibernate`, with `SYSTEMD_SLEEP_ACTION` set.
+  - Shutdown hooks get `halt`, `poweroff`, `reboot` or `kexec`, after services have stopped and most mounts are gone. A system manager running in a container passes `exit` when it exits (`systemctl exit`).
+- **Fail closed.** The following are blocking gaps, and they set `complete` to false:
+  - an unobserved, unreadable, truncated or contradictory directory;
+  - malformed or duplicate entries;
+  - missing file metadata (`mode`, `size` and `uid`);
+  - an unobserved symlink target;
+  - over-limit input.
+
+  Outside a `listed` directory, no hook is reported as running. `origin` is always `not_assessed`, and no result is a safety verdict. The tests pin every rule, including a layout built on a real directory with `lstat`/`stat`.
+
+**Not covered:**
+- agent collection;
+- whether the host ever suspends, hibernates or uses kexec;
+- who can write to the hook directories or symlink targets;
+- other sleep frameworks (pm-utils, elogind);
+- catalog `entries_parsed` wiring, persistence, UI, provenance and AI classification.
+
+There is no schema, API, authentication or response-authorization change.
+
+
 ### logrotate scripts and command directives — worker checkpoint #980
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -5316,6 +5355,66 @@ configuration trees; the counts are in the pull request for #980.
 **Not covered:** agent collection of these files, persistence, UI and AI
 classification; directive value validation; `tabooext`/`taboopat` evaluation;
 which logs exist; other logrotate versions. No schema, API or UI change.
+
+### Debian Xsession session-part contract — worker checkpoint #1054
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/xsession.py` is a pure, versioned contract for the X session part of the
+catalog's `login_hooks` mechanism. It takes supplied file metadata and option
+text, performs no I/O and never reads or sources a session part.
+
+- **Source.** The rules follow `/etc/X11/Xsession` and its `x11-common_*` parts
+  from x11-common `1:7.7+23ubuntu3`, and debianutils `run-parts` 5.17. The
+  run-parts rules were checked against the real binary.
+- **Session parts.** `run-parts --list /etc/X11/Xsession.d` lists names matching
+  `^[A-Za-z0-9_-]+$` in byte order, because run-parts never calls `setlocale`.
+  Symlinks are followed, and only regular files are listed. Directories,
+  devices (including a `/dev/null` link) and dangling links are skipped. No
+  executable bit is needed, because every listed part is sourced into each
+  user's X session as that user. Each sourced part is reported with its order
+  and SHA-256. Observations, never verdicts, flag a part that is not world-readable
+  (the session aborts for other accounts), not root-owned, group/other-writable
+  or a modified reference part.
+- **Options.** `has_option` reads `Xsession.options` followed by
+  `Xsession.options.d` files from `run-parts --list --regex '\.conf$'`,
+  concatenated with no separator. The last line starting `(no-)?<option>` at a
+  GNU grep word boundary decides. A non-ASCII character after the name is
+  locale-dependent and undetermined. Text with a backslash, which the shell
+  `echo` would interpret, also makes the options undetermined.
+- **User hooks.** `~/.xsessionrc` is reported as sourced, and `~/.xsession` /
+  `~/.Xsession` as run for the default session (when the display manager passes
+  no session program) with `allow-user-xsession`, only when the wrapper and the
+  `20`, `40` and `50` `x11-common` parts are present and byte-identical to the
+  reference. A missing reference part is `not_by_reference`, because other
+  parts are listed but not interpreted. A modified or unhashed part is
+  `undetermined`. A missing `/etc/X11/Xsession.d` aborts the session.
+- **Earlier parts.** All parts are sourced into one shell, so a part sourced
+  before `40` or `50` could re-enable `allow-user-xsession`, redefine
+  `has_option`, change `USERXSESSIONRC` or `STARTUP`, or exit. A hook is
+  concluded (`sourced`, `disabled` or `runs_for_default_session`) only when every
+  earlier part is byte-identical to a reference part. The passive stock parts
+  `30x11-common_xresources` and `35x11-common_xhost-local` are verified by hash.
+  Otherwise the hook is `undetermined`, and `preceding_parts` names the earlier
+  unverified parts (the detail text shows at most 8). When `20` is not listed,
+  the detail says the hooks apply to every session. Desktop packages that add
+  parts sorting before `50` (for example `20dbus_xdg-runtime`) therefore leave
+  `~/.xsession` undetermined until their reference hashes are added.
+- **Fail closed.** Each of the following is a blocking gap that marks the result
+  incomplete:
+  - an unobserved or unreadable directory;
+  - an unobserved options file, or option text that is missing, unreadable by
+    other accounts, binary, escaped or over-limit;
+  - an unobserved or non-reference `/etc/X11/Xsession` hash;
+  - malformed or missing metadata, duplicate paths, or over-limit input.
+
+  Every result names what it cannot observe: which display manager uses the
+  wrapper and which session it passes, other part contents, home directories,
+  directory permissions, and Wayland sessions. `origin` is always
+  `not_assessed`.
+
+**Not covered:** other x11-common or debianutils versions, agent collection of
+this metadata, catalog `entries_parsed` wiring, persistence, UI, provenance and
+AI classification. No schema, API, auth or response-authorization change.
 
 ### Individual queued at jobs — worker checkpoint #831
 
@@ -5525,6 +5624,51 @@ of bracketed control values, module binaries and the programs they run,
 collection from servers, catalog wiring, persistence, UI, provenance and AI
 classification. No schema, API, UI or authorization change, and nothing is
 labelled safe.
+### Per-user shell startup files contract — worker checkpoint #1057
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/shell_user_startup.py` is a pure, versioned contract for the catalog's
+`shell_user` mechanism. It takes one account's passwd shell, uid/gid (with
+optional supplementary groups) and supplied metadata for `~/.bash_profile`,
+`~/.bash_login`, `~/.profile`, `~/.bashrc` and `~/.bash_logout`. It says which
+file runs at login, in an interactive non-login shell, for a non-interactive
+`ssh host command` and at logout. It performs no I/O and never reads a file.
+
+- **Source.** The behavior was probed on Ubuntu 24.04 (bash 5.2.21, dash 0.5.12)
+  as root and as `nobody`, not recalled. Tests compare the contract with real
+  bash and dash as both accounts when they run as root on a Debian host.
+- **Login chain.** A login bash tries the three files in order. Only a missing
+  name or a dangling (ENOENT) symlink falls through. An unreadable file or a
+  directory prints an error and stops the chain, so a locked `~/.bash_login`
+  hides `~/.profile`. A symlink that cannot be followed for another reason
+  (ELOOP loop, EACCES on an unsearchable directory, ENOTDIR) also stops the
+  chain with an error. Collectors report it as an explicit `target_error`
+  resolved with the account's own credentials (root searches a mode 0000
+  directory), and an unrecognized error is a blocking
+  `symlink_error_unrecognized` gap. Root reads a mode 0000 file. A FIFO blocks
+  the login and is a blocking `special_file` gap.
+- **`~/.bashrc`.** It runs in interactive non-login shells and, because Debian
+  builds bash with `SSH_SOURCE_BASHRC`, in every non-interactive `ssh host
+  command` (`SSH_CLIENT` set, `SHLVL` below 2). `~/.bash_logout` runs when a
+  login bash exits through `exit`/`logout` or end of input.
+- **Other shells.** `sh`/`dash` (and an empty shell field) read only
+  `~/.profile` at login and silently skip an unreadable, directory or
+  unfollowable-symlink one.
+  `nologin` and `false` run nothing. Any other shell, and non-canonical shell
+  paths, are a blocking `shell_not_modelled` gap.
+- **Accounts.** One access(2) class applies: owner, group (primary or supplied
+  supplementary gid) or other. When readability depends on unsupplied groups,
+  the result is `unknown` with a blocking gap, and later chain files are
+  `unresolved`.
+- **Fail closed.** An unobserved account, family, home or dotfile; malformed or
+  unexpected input; an unreadable home; the RPM family (`not_modelled`); and an
+  unobserved symlink target are blocking (`complete: false`). No session is
+  then reported as running a file.
+
+Open: collection wiring, file contents (Debian's `~/.profile` sources
+`~/.bashrc` for bash), `/etc/bash.bashrc`, the RPM family, home-directory search
+permission, persistence, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -10394,6 +10538,48 @@ checkpoint changes no runtime, schema, admission, provider call or response
 authority.
 
 
+### AI control mode in triage benchmark reports — worker checkpoint #1061
+
+Before this change, `tools/benchmark_ai.py` stored a fixture config without
+`ai_control_mode`. The application therefore read it as the implicit `legacy`
+mode, which uses separate rolling-hour limits. Reports did not say which mode
+they measured, and the comparator could not detect a mixed pair.
+
+- **`--control-mode {legacy,unthrottled}`:** the default is `legacy`, which keeps
+  the earlier behavior. The chosen mode is now stored explicitly.
+  `unthrottled` removes only Mr Patchy's own pacing and spend cap.
+- **What is recorded:** the report's `ai_control_mode` is read back from the
+  application's effective config during the run, not copied from the flag.
+- **Comparator:**
+  - A report without the field is read as `legacy`, with
+    `ai_control_mode_source: legacy implicit default`.
+  - An unknown value is refused.
+  - A pair measured under different modes is refused with
+    `capability mismatch: ai_control_mode differs`.
+  - Both summaries state the mode.
+- **Retained records:** the raw reports in `docs/benchmarks/ai-equivalence-c86141a/`
+  are unchanged. Their two `*-comparison.json` files were regenerated with the
+  comparator, and the only difference is the added mode fields
+  (`legacy implicit default`). `tests/test_ai_benchmark_records.py` still
+  requires an exact match.
+- **Validation:** `tests/test_ai_benchmark_control_mode.py` has 24 tests. All 24
+  fail against main's tools. Removing the mismatch refusal makes 5 of them fail.
+  An unthrottled 4-subject serial/parallel pair compares as equivalent and keeps
+  the legacy run's workload fingerprint. Local 8-subject runs with a 40 ms
+  provider delay gave the following, on loopback fixtures only:
+
+  | Mode | Serial | Parallel (4) |
+  | --- | --- | --- |
+  | legacy | 7.04/s | 11.02/s |
+  | unthrottled | 7.21/s | 10.41/s |
+
+- **Still open:** `rate`, `daily_cap` and `rate_and_daily` benchmark modes. Rate
+  pacing deliberately spaces starts, and a capped mode needs a priced fixture
+  model. MySQL records (#976) and production measurements are also open.
+- **Unchanged:** no runtime, admission, provider, schema or
+  response-authorization behavior.
+
+
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
 The server Overview now reports a read-only lifecycle assessment for reviewed
@@ -10993,3 +11179,24 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Safety:** malformed amounts, counts or times render as "Unavailable". Text is escaped. Nothing appears while no cap is enabled.
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
+### dhclient hook contract — worker checkpoint #1063 (roadmap F)
+
+ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
+
+- **Change:** a new pure module, `app/dhclient_hooks.py`. From captured `lstat`/`stat` metadata it reports which hooks are sourced, in which phase (`enter` or `exit`) and order, and why other entries are not.
+- **Reference:** the rules follow `dhclient-script` from `isc-dhcp-client` 4.4.3-P1-4ubuntu2 (`run_hook`, `run_hookdir` and `exit_with_hooks`) and `run-parts --list` from debianutils 5.17. Both were run to confirm the behavior.
+  - The single hook file is sourced before its directory.
+  - A directory entry is listed only when its name fully matches `^[A-Za-z0-9_-]+$`, so `hook.sh`, dotfiles and backup names are not sourced.
+  - Entries are sourced in byte order. `dhclient` passes the script no locale, so the C locale applies.
+  - Only regular files are sourced, after following symlinks. Directories, special files, and dangling or looping symlinks are skipped.
+  - Mode, owner and the executable bit do not matter.
+- **Gaps, never reported as covered:** an unobserved `/etc/dhcp` or hook directory, an unreadable directory, an unobserved symlink target, malformed or duplicate input, file metadata for a hook directory that contradicts its directory observation, the 1024-entry cap, an isc-dhcp-client version outside the 4.4 series, and a non-Debian family. A `dhclient-script` whose SHA-256 is missing or differs from the reference is a non-blocking `script_not_reference` gap.
+- **Unobserved, stated in every result:**
+  - hook contents (a sourced hook can change variables or `exit` and stop later hooks);
+  - whether dhclient is the DHCP client in use;
+  - a replacement script set by `dhclient.conf` `script` or `-sf`;
+  - error paths that exit without exit hooks;
+  - RPM-family hook locations.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.

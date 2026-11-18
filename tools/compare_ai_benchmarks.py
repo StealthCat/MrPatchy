@@ -24,6 +24,10 @@ STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
     'queue_age', 'receipt_persistence', 'usage_persistence',
 )
+# AI control modes the fixture can measure without pacing or pricing changing
+# the workload. Reports from before --control-mode ran in the implicit legacy mode.
+CONTROL_MODES = ('legacy', 'unthrottled')
+LEGACY_CONTROL_MODE = 'legacy'
 
 
 class ComparisonError(ValueError):
@@ -208,6 +212,16 @@ def _validate(report, label):
     else:
         ssh_delay = 10
         ssh_delay_source = 'legacy fixed default'
+    # Reports created before --control-mode stored no ai_control_mode, so the
+    # application read them as the implicit legacy mode.
+    control_mode_source = 'report'
+    if 'ai_control_mode' in report:
+        control_mode = report['ai_control_mode']
+        if not isinstance(control_mode, str) or control_mode not in CONTROL_MODES:
+            raise ComparisonError(f'{label}.ai_control_mode must be one of {", ".join(CONTROL_MODES)}')
+    else:
+        control_mode = LEGACY_CONTROL_MODE
+        control_mode_source = 'legacy implicit default'
     # Reports created before the optional synthetic receipt/usage persistence
     # delay carried no field and ran with no added delay. Treat only that
     # documented legacy contract as zero; bound any reported value.
@@ -247,6 +261,7 @@ def _validate(report, label):
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
         'cost_status': cost_status, 'workload_fingerprint': workload_fingerprint,
         'stages': stages,
+        'ai_control_mode': control_mode, 'ai_control_mode_source': control_mode_source,
     }
 
 
@@ -269,6 +284,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     current = _validate(candidate, 'candidate')
     if (base['execution'], base['concurrency']) == (current['execution'], current['concurrency']):
         raise ComparisonError('candidate must use a distinct execution configuration')
+    if base['ai_control_mode'] != current['ai_control_mode']:
+        raise ComparisonError('capability mismatch: ai_control_mode differs')
     controls = (
         'database', 'runs', 'fixture_hosts', 'single_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
@@ -301,6 +318,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'retained_history_rows': base['retained_history_rows'],
             'database': base['database'], 'database_version': base['database_version'],
             'cost_status': base['cost_status'],
+            'ai_control_mode': base['ai_control_mode'],
+            'ai_control_mode_source': base['ai_control_mode_source'],
         },
         'candidate': {
             'name': candidate_name, 'execution': current['execution'],
@@ -316,6 +335,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'retained_history_rows': current['retained_history_rows'],
             'database': current['database'], 'database_version': current['database_version'],
             'cost_status': current['cost_status'],
+            'ai_control_mode': current['ai_control_mode'],
+            'ai_control_mode_source': current['ai_control_mode_source'],
         },
         'capability': {
             'runs': base['runs'], 'provider_calls': base['provider_calls'],
@@ -340,6 +361,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'scope': 'Disposable loopback fixture only; this comparison does not establish production performance.',
             'database': 'Both reports measured the same database backend; server versions are informational and may differ.',
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
+            'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
     }
 
