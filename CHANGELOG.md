@@ -1,3 +1,7 @@
+## 1.75.39 — 2026-11-18
+
+1. [PR #1100](https://github.com/StealthCat/MrPatchy/pull/1100): Resolved-notification history cleanup now runs with the existing hourly leader maintenance and fresh retention cutoff, rather than on each five-second AI dispatch tick. Followers no longer issue retention scans or log the unbound-cutoff error; arrival and resolved cleanup failures remain isolated. Compatibility: retention policy, API, schema and response authorization are unchanged.
+
 ## 1.75.38 — 2026-11-18
 
 1. [PR #1113](https://github.com/StealthCat/MrPatchy/pull/1113): Daily-cap refusals preserve the reset boundary observed during admission, so a retry recorded after that boundary can be reconsidered immediately. Rate pacing follows only rate waiters; cap and provider-backoff waits do not delay that queue. Attempt refunds and authoritative admission remain. Compatibility: no schema change; previously deferred rows keep saved deadlines until re-evaluation, and rows recorded before #1015 may retain the old rate-wait reason until then.

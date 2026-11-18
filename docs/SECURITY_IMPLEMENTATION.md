@@ -7018,6 +7018,12 @@ pruned. Revisions and per-user read/dismiss rows of resolved events grew without
 bound. The leader's hourly cleanup now calls `notifications.prune_resolved()` with
 the existing `history_days` cutoff, after arrival pruning.
 
+Worker checkpoint (#1099): resolved-history cleanup uses the same hourly
+leader pass as arrival cleanup. This removes repeated retention scans from
+the five-second AI dispatch path and avoids an unbound cutoff on follower
+workers. The two cleanup calls handle failures independently. Scheduler
+regressions cover the hourly cutoff, follower AI dispatch and failure isolation.
+
 - **What is pruned:** an event whose current revision is `resolved` and whose last
   update precedes the cutoff loses all of its revisions and per-user state. It then
   disappears from lists, counts and arrivals.
