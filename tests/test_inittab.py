@@ -160,3 +160,15 @@ def test_fail_closed_inputs():
     assert run(DEBIAN, inittab_d={'state': 'listed', 'names': ['README']})['complete']
     many = run(''.join(f'{n}:2:once:/bin/a\n' for n in range(it.MAX_ENTRIES + 1)))
     assert not many['complete'] and many['entries'] == []
+
+
+def test_off_entries_are_parsed_but_never_started():
+    # startup() skips OFF entries, so init never runs their process.
+    result = run('o:2:off:/bin/o --flag\ne:2:off:\n')
+    assert result['rejected'] == []
+    for ident in ('o', 'e'):
+        entry = by_id(result)[ident]
+        assert entry['action'] == 'off' and entry['runs'] is False and entry['trigger'] is None
+        assert entry['command'] is None and entry['command_single_user'] is None
+        assert entry['notes'] == []
+    assert by_id(result)['o']['process'] == '/bin/o --flag'
