@@ -55,5 +55,9 @@ def test_browser_dependency_install_retries_bounded_attempts():
     assert 'for attempt in 1 2 3' in run
     assert 'timeout 180 npx playwright install-deps chromium' in run
     assert run.rstrip().endswith('exit 1'), 'all attempts failing must still fail the job'
+    # A stopped attempt must not leave apt-get holding the dpkg lock for the next one.
+    loop = run[run.index('for attempt'):]
+    assert loop.index('pkill -KILL -x apt-get') < loop.index('done')
+    assert 'dpkg --configure -a' in loop
     # Three bounded attempts plus setup must fit inside the step bound.
     assert 3 * 180 / 60 < step['timeout-minutes'] <= 15
