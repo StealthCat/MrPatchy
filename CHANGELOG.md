@@ -1,3 +1,27 @@
+## 1.75.42 — 2026-11-18
+
+1. [PR #1118](https://github.com/StealthCat/MrPatchy/pull/1118): Shared AI provider backoff now preserves the newest failure timestamp when parallel failures are recorded out of order, so a success from a request already in flight at the newer failure cannot clear that retry floor. A later successful request can still clear it. Compatibility: no schema, API, role, client, or response-authorization change; timestamp ordering assumes synchronized worker clocks, and matched production throughput remains outside this slice.
+
+## 1.75.41 — 2026-11-18
+
+1. [PR #1107](https://github.com/StealthCat/MrPatchy/pull/1107): Settings' unsaved-navigation guard now returns to the edited entry when Back or an in-app tab navigation is held, and Discard reaches the exact requested history entry after a dropped undo. Where the Navigation API is available, keyed traversals use bounded retries and per-prompt guards. Compatibility: browsers without the Navigation API retain the existing `history.go` path; no API, schema, role, audit, or response-authorization behavior changes. #1083 remains open pending hosted confirmation and resolution of its separate diagnostics defect.
+
+## 1.75.40 — 2026-11-18
+
+1. [PR #1096](https://github.com/StealthCat/MrPatchy/pull/1096): The optional MySQL AI benchmark verifies the original session still owns its advisory lock before cleanup DDL; when ownership cannot be verified, cleanup is skipped and operators are told to inspect the disposable database. Successful reports follow cleanup. Compatibility: production runtime, workload and report schema are unchanged; refused cleanup can leave fixture tables for inspection.
+
+## 1.75.39 — 2026-11-18
+
+1. [PR #1100](https://github.com/StealthCat/MrPatchy/pull/1100): Resolved-notification history cleanup now runs with the existing hourly leader maintenance and fresh retention cutoff, rather than on each five-second AI dispatch tick. Followers no longer issue retention scans or log the unbound-cutoff error; arrival and resolved cleanup failures remain isolated. Compatibility: retention policy, API, schema and response authorization are unchanged.
+
+## 1.75.38 — 2026-11-18
+
+1. [PR #1113](https://github.com/StealthCat/MrPatchy/pull/1113): Daily-cap refusals preserve the reset boundary observed during admission, so a retry recorded after that boundary can be reconsidered immediately. Rate pacing follows only rate waiters; cap and provider-backoff waits do not delay that queue. Attempt refunds and authoritative admission remain. Compatibility: no schema change; previously deferred rows keep saved deadlines until re-evaluation, and rows recorded before #1015 may retain the old rate-wait reason until then.
+
+## 1.75.37 — 2026-11-18
+
+1. [PR #1087](https://github.com/StealthCat/MrPatchy/pull/1087): Fleet AI activity adds an administrator-only **Servers holding the triage backlog** panel showing which servers hold pending process investigations and why each is waiting (active, eligible, retry wait, blocked, AI paused or at the investigation limit), with links to each server's Investigations tab (#975). Display-only; uses the existing read-only `GET /api/investigation-status/servers`. Compatibility: UI only.
+
 ## 1.75.36 — 2026-11-18
 
 1. [PR #1090](https://github.com/StealthCat/MrPatchy/pull/1090): Batched integration of [PR #1084](https://github.com/StealthCat/MrPatchy/pull/1084), [PR #1080](https://github.com/StealthCat/MrPatchy/pull/1080).
