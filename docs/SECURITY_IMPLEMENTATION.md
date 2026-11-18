@@ -272,7 +272,7 @@ Package checks use `dpkg --verify-format=rpm --verify` or `rpm --verify --noscri
 
 This is not the independent trusted-vendor verification milestone. Dpkg's local checksum coverage is limited to metadata it has recorded; local databases, binaries and a compromised root/kernel are not independently trusted. A discrepancy may be a legitimate administrative change, and no reported differences is not a clean-host verdict. Exact installed-version artifacts authenticated through repository signatures, approved custom baselines, and broader RPM-native platform validation remain required.
 
-The optional startup inventory covers `/etc/systemd/system`, system cron directories and `/var/spool/cron`, `/etc/init.d`, `/etc/profile.d`, `/etc/crontab`, `/etc/rc.local` and `/etc/ld.so.preload`. It retains paths, ownership, permissions, modification time, symlink targets, and SHA-256 for regular files up to 1 MiB. It does not collect file contents, follow symlinks, or execute startup entries. It uses the descriptor-based traversal and identity checks from the scanner, with a 15-second budget and at most 256 recorded entries. Missing roots are explicit; inaccessible paths, special files, races and limits are gaps. This is an inventory, not a detector that declares startup entries malicious. User home startup files, transient units, kernel mechanisms, runtime injection and other persistence locations remain outside its scope. History permits manual comparison; automatic persistence-change alerts and incident linkage are not yet implemented.
+The optional startup inventory covers `/etc/systemd/system`, system cron directories and `/var/spool/cron`, `/etc/init.d`, `/etc/profile.d`, `/etc/crontab`, `/etc/rc.local`, `/etc/ld.so.preload` and `/etc/anacrontab`. It retains paths, ownership, permissions, modification time, symlink targets, and SHA-256 for regular files up to 1 MiB. It does not collect file contents, follow symlinks, or execute startup entries. It uses the descriptor-based traversal and identity checks from the scanner, with a 15-second budget and at most 256 recorded entries. Missing roots are explicit; inaccessible paths, special files, races and limits are gaps. This is an inventory, not a detector that declares startup entries malicious. User home startup files, transient units, kernel mechanisms, runtime injection and other persistence locations remain outside its scope. History permits manual comparison; automatic persistence-change alerts and incident linkage are not yet implemented.
 
 Redeploy the collector and bridge with **Finish / verify installation** before using this feature. Older helpers reject the new action rather than returning a fabricated successful report. Unit tests cover native output parsing, safe argument selection, RPM script suppression, deadlines/limits, symlink handling, report immutability, roles and host scoping. A native read-only dpkg check is exercised where available; RPM behavior also requires validation on a real RPM target.
 
@@ -306,6 +306,28 @@ repairs. See [Agent maintenance](AGENT_MAINTENANCE.md) for the trust boundary,
 blocked access-path changes, verification and retry limits. This maintains the
 Mr Patchy installation; it is not arbitrary malware remediation or independent
 attestation of a compromised root/kernel.
+
+### Global defaults with per-server overrides — worker checkpoint #621
+
+The backend slice (#622) stores a global default for `auto_upgrade` and
+`auto_repair` and resolves each option per server as an explicit override when
+present, otherwise the current default. Legacy per-server rows stay explicit
+overrides. The UI slice adds:
+
+- **Settings → Agent maintenance:** an administrator form for both defaults
+  using the existing compare-and-set `PUT /api/settings/agent-maintenance`; a
+  stale editor is refused with a refresh message.
+- **Server Agent health:** each option is a choice of **Use global default
+  (current value)**, **On for this server** or **Off for this server**. It shows
+  the effective value, an Inherited/Override badge and the current global
+  default. Saving sends `null` for inherited options, so an unchanged save no
+  longer turns inherited options into overrides, and then reloads the resolved
+  state.
+
+Milestones: (1) resolver, global API and override reset — delivered by #622;
+(2) Settings and server inheritance UI with responsive browser coverage —
+this checkpoint; (3) MySQL run of the existing resolver suite. No schema,
+route, role, audit, queueing or trust-path change.
 
 ## Startup inventory comparison
 
@@ -2770,6 +2792,26 @@ every paid call until the reset, while neither the exhausted notice nor (below
   larger request (for example a release plan) still defers that request
   without a notice, because no queued payload is quoted here.
 
+Worker checkpoint #810 makes the #739 advance-warning threshold configurable.
+`ai_daily_cap_warning_percent` (integer 0-99, default 80) is saved through
+`PUT /api/settings/ai` and `PUT /api/settings` and shown in Settings → AI next
+to the cap. `0` turns the advance warning off and resolves an active one; the
+exhausted-cap notification is unaffected.
+- **Predicate and text:** the warning is active while counted spend is at least
+  the configured percent of the cap and below it, and the text names that
+  percent. A stored value outside 0-99 or of the wrong type falls back to 80.
+- **Revision binding:** the default keeps the pre-#810 fingerprint, so an
+  upgrade does not republish an active warning as unread. Another threshold is
+  appended to the fingerprint, so a changed threshold that current spend still
+  meets publishes one new revision with the amounts at that time; a raised
+  threshold above current spend resolves the warning on the next collection.
+- **Unchanged:** admission, reservations, spend accounting, SMTP/webhook
+  alerts, roles and response authorization. The threshold is notification-only
+  and is not part of the AI-controls revision token; changes are recorded in the
+  settings audit detail.
+- **Limitation:** headroom smaller than the next call's quote but below the
+  threshold still defers without a notice.
+
 Worker checkpoint #790 extends configuration blocking to update-importance
 scoring. Before this checkpoint a non-transient provider rejection (rejected key,
 denied access, unavailable quota or an unsupported model) marked the batch
@@ -2864,6 +2906,31 @@ Worker checkpoint #926 shows the same summary on the fleet AI activity page
   fetch it. Backend, schema, roles and admission are unchanged.
 - **Limitation:** Investigations and worker-health surfaces still do not show
   the scoring queue.
+
+Worker checkpoint #806 covers failed advisory-plan work. Before this checkpoint,
+a `security-plan` or `startup-plan` job that ended `failed` published nothing.
+That covers rejected keys, unsupported models, declined or invalid structured
+results, and evidence or validation refusals. A failed automatic proposal
+disappeared because automatic planning tries once per incident evidence revision.
+- **Notification:** `job_notifications` now publishes one admin-only
+  `operations`/`<action>` event per plan incident when such a job fails. The
+  event subject is the incident (`incident` for `security-plan`,
+  `startup-incident` for `startup-plan`), with `host_id` kept for
+  authorization, so a plan for one incident never resolves or overwrites
+  another incident's failure. It links to `#activity/jobs/<id>`. The reason is
+  fixed text saying no plan was proposed and nothing ran; no provider message,
+  error or evidence is copied. A later failure for the same incident appends a
+  revision; a later `complete` plan for the same incident resolves it.
+- **Not published:** controlled AI waits (budget, pacing, provider backoff,
+  pause) keep the job queued. Automatic proposals the worker skips before any
+  AI call, because the policy was turned off or the evidence changed, are
+  superseded attempts, not failures.
+- **Unchanged:** routes, roles, admission, spend reservation, plan approval and
+  response authorization. Nothing is retried and no SMTP/webhook alert is
+  added. Existing operation-failure events keep their `operator` audience.
+- **Limitation:** failed jobs are not blocked under a configuration signature as
+  scoring and triage are, so a new incident revision under a rejected
+  configuration still makes one automatic attempt.
 
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
@@ -3324,6 +3391,23 @@ connection tests. The groups sum to the counted total in the budget status.
   Per-activity history for earlier windows, per-server attribution and
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
+
+### Spend ledger retained after AI history pruning — worker checkpoint #986
+
+The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
+run-history deletion to `ai_runs.prune_history(session, cutoff)`. It runs the same four deletions as before (events, calls and host links of
+finished runs started before the cutoff, then the runs) and still keeps `running`
+runs. The scheduler calls it with the unchanged `history_days` cutoff.
+`tests/test_ai_budget_pruning_acceptance.py` covers the milestone 4 item "retained
+ledgers after history pruning". It runs that deletion at the shortest retention (one day) against ledger
+rows in every status. The rows are linked to pruned runs, retained runs and no run, across the
+current and an older window. Every ledger row, `status()`, `history()`, the CSV
+and capped admission read identically afterwards. A cap reached by spend whose
+runs were pruned still refuses admission. Entries whose runs were pruned still
+reconcile, release and become uncertain. Mutations that delete ledger rows with
+their runs, or prune children of running runs, fail the suite. The suite runs on
+SQLite locally and on MySQL in the hosted shards. Pruning cadence, retention
+settings and the rest of milestone 4 are unchanged and remain open.
 
 ### Release definitely unsent spend — worker checkpoint #588
 
@@ -3977,6 +4061,21 @@ until the corresponding detection and response milestones are completed.
 - Deliver applicability/exposure tracking, CVE-specific detectors, typed automatic containment and UI/audit integration as coherent milestones. Include SQLite/MySQL migration support where needed and document supported platforms, detectors and coverage limits.
 - Validate with controlled exploitation simulations and benign lookalikes, vendor backports, patch/reboot/rollback transitions, delayed/offline telemetry, false positives, process reuse/file replacement races, policy changes, AI pause, duplicate events, helper failures and quarantine recovery. Add real-target acceptance and response drills before claiming supported automatic protection. Missing detections never certify an endpoint as unexploited.
 
+### Pending-reboot visibility — worker checkpoint #828
+
+The read-only agent inventory now reports whether installed updates await a
+reboot: the Debian `/var/run/reboot-required` flag with up to 50 validated
+package names from `reboot-required.pkgs`, or the RPM marker only when it names
+the current boot (the same rule the bridge health check uses). The controller
+validates this untrusted value strictly; malformed or absent reports (older
+agents) are `not_reported`, never `not_required`. The flag alone does not retain
+a new inventory revision or reset repository refresh state. Server Overview and
+Patching show the state, report time and requesting packages as escaped text.
+This is visibility only: nothing reboots the server, and patch, release and
+response authorization are unchanged. Remaining for roadmap D: running-process
+use of replaced libraries without a reboot flag, binding reboot completion to
+CVE exposure closure, and notifications.
+
 ### Applicability and exposure-window contract — worker checkpoint #672
 
 The first bounded increment adds the pure `app/cve_exposure.py` contract. It has
@@ -4384,6 +4483,34 @@ Remaining: group overrides,
 fleet-level visibility of overridden servers, and every runtime item under
 #682.
 
+### Fleet list of servers with malware response overrides — worker checkpoint #1033
+
+Status: **bounded read-only slice; requirement E remains planned/incomplete.**
+Settings → Malware response now lists the servers whose #940 override changes
+something, so an administrator does not have to open each server's Security tab.
+
+- **API:** admin-only `GET /api/settings/malware-response/overrides` returns the
+  fleet mode and, for each stored override that restricts anything, the server id
+  and name, mode cap, effective mode, and path/hash exclusion counts. Paths and
+  hashes are never returned. The route writes nothing and adds no audit entry.
+- **Fail-closed reporting:** a stored override that no longer validates is listed
+  as invalid and Disabled, the same as `malware_policy.effective`. Combined
+  exclusions over the contract limit report the effective-invalid reason.
+- **Not hidden:** a row whose server no longer exists is listed as orphaned,
+  after the existing servers, because server deletion does not remove override
+  rows. Rows equal to the default (follow the fleet, no exclusions) are counted,
+  not listed. The scan reads at most 5,000 rows and reports truncation.
+- **UI:** a "Servers with overrides" table under the fleet form links each server
+  to its Security tab. It refreshes after a fleet save, because effective modes
+  depend on the fleet mode, escapes untrusted text, explains a load failure
+  without disabling the form, and stacks into labelled rows below 640 px.
+  `tests/ui_settings_malware_overrides.cjs` covers these cases at 320/768/1440 px.
+- **Unchanged:** no executor, detector, provider call, schema change or response
+  authorization; `enforce` stays unavailable.
+
+Remaining: group overrides, cleanup of orphaned override rows, and every runtime
+item under #682.
+
 ## Planned: comprehensive startup and scheduled-task awareness
 
 Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse
@@ -4495,6 +4622,23 @@ response. Agent collection of `/etc/anacrontab` and the at spool
 (`/var/spool/cron/atjobs`, `/var/spool/at`), inventory/UI wiring, provenance, AI
 classification and native acceptance remain open, so roadmap F is still
 incomplete.
+
+Worker checkpoint (issue #826): the agent's built-in startup scope now includes
+`/etc/anacrontab`. Inventories hash it like the other built-in files, or list it
+as a missing root. `persistence.compare` accepts an additive built-in scope
+change only when the later scope equals the earlier scope plus paths from the
+fixed, reviewed `ADDITIVE_BUILTIN_SCOPE` list. In that case it compares within
+the earlier scope and lists the newly covered paths in `newly_in_scope`, rather
+than reporting their files as added. Existing administrator-reviewed baselines
+therefore keep comparing after the agent upgrade. Removals, unknown or custom
+additions and agent downgrades still return "scope changed". The Startup
+inventory labels such files `not_in_baseline` until a new baseline is collected.
+A stored custom path equal to a promoted built-in path stays valid and is covered
+once by built-in scope, so saved monitoring policies do not start failing. The
+file's jobs are not parsed yet, and `/var/spool/anacron` timestamps are excluded
+because they change daily. Agent anacron job parsing using the #711 contract,
+the at spool, provenance, AI classification and native acceptance remain open,
+so roadmap F is still incomplete.
 
 Worker checkpoint (issue #702): a pure, I/O-free contract
 (`app/systemd_units.py`) resolves captured read-only observations of the system
@@ -4686,6 +4830,28 @@ hashes, and it never executes or sources anything.
 
 Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
 
+
+### System crontab loading rules — worker checkpoint #771
+
+View increment only; the startup-awareness requirement remains incomplete.
+`app/cron_loading.py` is pure and I/O-free. For each stored `/etc/crontab` and
+`/etc/cron.d/*` entry, it uses the existing receipt metadata (kind, owner uid,
+permission bits) and the host's package family to decide whether the
+distribution's default cron rules would load the file.
+
+- **Debian/Ubuntu/Raspberry Pi OS cron:** the file must be owned by root and must not be group- or other-writable. `/etc/cron.d` names may contain only letters, digits, `_` and `-`.
+- **cronie (RPM):** `/etc/cron.d` names starting with `.` or `#`, ending with `~`, `.rpmsave`, `.rpmorig` or `.rpmnew`, or of 255 bytes or more are skipped. The file must be owned by root and satisfy `(mode & 07533) == 0400`.
+- **Unknown family, symlink or malformed metadata:** the result is `unknown`, never guessed.
+
+The Startup files view shows "Cron would skip this file" with the reasons, and
+Coverage counts skipped and unassessed files. Receipts, comparisons, baselines,
+incident evidence, AI payloads and the agent are unchanged. **Not evaluated:**
+which cron implementation is installed (apt hosts are assessed as Debian cron
+and RPM hosts as cronie, so an apt host running cronie can be shown the wrong
+result), daemon options such as cronie `-p` or Debian `cron -l`, patched
+daemons, hard-link counts (Debian cron skips files with more than one link),
+whether cron runs, user spool crontab owner/mode rules, run-parts directories,
+anacron and at.
 
 ### Startup-entry provenance classification contract — worker checkpoint #720
 
@@ -5093,6 +5259,44 @@ contract supplies `reached`), whether sshd uses PAM, AppArmor/SELinux, catalog
 schema, API, auth or response-authorization change.
 
 
+### systemd sleep and shutdown hooks — worker checkpoint #1067
+
+This is a contract increment only. The startup-awareness requirement is still incomplete. `app/systemd_hooks.py` is a pure, versioned contract for the catalog's `systemd_hooks` mechanism. It takes supplied directory-entry metadata, performs no I/O and never reads a hook's contents.
+
+- **Source.** The rules come from the systemd sources for v249, v252, v255, v256, v257 and v258: `sleep.c`, `shutdown.c`, `exec-util.c`, `conf-files.c` and `hidden_or_backup_file`. They were read, not recalled, and all six versions agree.
+  - A version outside v249–v258 is a blocking gap, and so is an unobserved version.
+- **Directories.** `systemd-sleep` scans only the compiled-in `<libexecdir>/system-sleep`, and `systemd-shutdown` scans only `<libexecdir>/system-shutdown`.
+  - On merged-usr hosts, both spellings are the same directory.
+  - On a split-usr host, the caller must say whether the build uses `/usr/lib/systemd` or `/lib/systemd`. Otherwise it is a blocking `libexec_dir_unknown` gap.
+  - Files in `/etc/systemd/system-{sleep,shutdown}` and `/usr/local/lib/systemd/system-{sleep,shutdown}` are never run. When they are supplied, they are listed as `not_scanned` with the directory they belong in.
+- **Entry rules.**
+  - Hidden and backup names are skipped: a leading `.`, a trailing `~`, `lost+found`, `aquota.*`, and the `.dpkg-*`, `.rpm*`, `.ucf-*`, `.swp`, `.bak`, `.old` and `.new` suffixes.
+  - Symlinks are followed. An entry that cannot be resolved is skipped.
+  - An entry that is not a regular file, symlink or unknown type (for example a device node placed directly in the directory) is dropped before any stat.
+  - An empty file, or a symlink to a character device such as `/dev/null`, is a mask and is skipped.
+  - Anything that is not a regular file is skipped, and so is a file with no execute bit.
+  - Every remaining file runs as root. systemd checks neither ownership nor writability, so a runnable hook owned by a non-root user or writable by group or other is reported as an observation, not a skip.
+- **Invocation.** Hooks are started in byte order of their names and then run in parallel. Exit codes are ignored, and the build default timeout is 90 s.
+  - Sleep hooks get `pre`/`post` and `suspend`, `hibernate`, `hybrid-sleep` or `suspend-then-hibernate`, with `SYSTEMD_SLEEP_ACTION` set.
+  - Shutdown hooks get `halt`, `poweroff`, `reboot` or `kexec`, after services have stopped and most mounts are gone. A system manager running in a container passes `exit` when it exits (`systemctl exit`).
+- **Fail closed.** The following are blocking gaps, and they set `complete` to false:
+  - an unobserved, unreadable, truncated or contradictory directory;
+  - malformed or duplicate entries;
+  - missing file metadata (`mode`, `size` and `uid`);
+  - an unobserved symlink target;
+  - over-limit input.
+
+  Outside a `listed` directory, no hook is reported as running. `origin` is always `not_assessed`, and no result is a safety verdict. The tests pin every rule, including a layout built on a real directory with `lstat`/`stat`.
+
+**Not covered:**
+- agent collection;
+- whether the host ever suspends, hibernates or uses kexec;
+- who can write to the hook directories or symlink targets;
+- other sleep frameworks (pm-utils, elogind);
+- catalog `entries_parsed` wiring, persistence, UI, provenance and AI classification.
+
+There is no schema, API, authentication or response-authorization change.
+
 ### Debian kernel package hook contract — worker checkpoint #1072
 
 This is a contract increment only. The startup-awareness requirement remains
@@ -5207,6 +5411,66 @@ configuration trees; the counts are in the pull request for #980.
 **Not covered:** agent collection of these files, persistence, UI and AI
 classification; directive value validation; `tabooext`/`taboopat` evaluation;
 which logs exist; other logrotate versions. No schema, API or UI change.
+
+### Debian Xsession session-part contract — worker checkpoint #1054
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/xsession.py` is a pure, versioned contract for the X session part of the
+catalog's `login_hooks` mechanism. It takes supplied file metadata and option
+text, performs no I/O and never reads or sources a session part.
+
+- **Source.** The rules follow `/etc/X11/Xsession` and its `x11-common_*` parts
+  from x11-common `1:7.7+23ubuntu3`, and debianutils `run-parts` 5.17. The
+  run-parts rules were checked against the real binary.
+- **Session parts.** `run-parts --list /etc/X11/Xsession.d` lists names matching
+  `^[A-Za-z0-9_-]+$` in byte order, because run-parts never calls `setlocale`.
+  Symlinks are followed, and only regular files are listed. Directories,
+  devices (including a `/dev/null` link) and dangling links are skipped. No
+  executable bit is needed, because every listed part is sourced into each
+  user's X session as that user. Each sourced part is reported with its order
+  and SHA-256. Observations, never verdicts, flag a part that is not world-readable
+  (the session aborts for other accounts), not root-owned, group/other-writable
+  or a modified reference part.
+- **Options.** `has_option` reads `Xsession.options` followed by
+  `Xsession.options.d` files from `run-parts --list --regex '\.conf$'`,
+  concatenated with no separator. The last line starting `(no-)?<option>` at a
+  GNU grep word boundary decides. A non-ASCII character after the name is
+  locale-dependent and undetermined. Text with a backslash, which the shell
+  `echo` would interpret, also makes the options undetermined.
+- **User hooks.** `~/.xsessionrc` is reported as sourced, and `~/.xsession` /
+  `~/.Xsession` as run for the default session (when the display manager passes
+  no session program) with `allow-user-xsession`, only when the wrapper and the
+  `20`, `40` and `50` `x11-common` parts are present and byte-identical to the
+  reference. A missing reference part is `not_by_reference`, because other
+  parts are listed but not interpreted. A modified or unhashed part is
+  `undetermined`. A missing `/etc/X11/Xsession.d` aborts the session.
+- **Earlier parts.** All parts are sourced into one shell, so a part sourced
+  before `40` or `50` could re-enable `allow-user-xsession`, redefine
+  `has_option`, change `USERXSESSIONRC` or `STARTUP`, or exit. A hook is
+  concluded (`sourced`, `disabled` or `runs_for_default_session`) only when every
+  earlier part is byte-identical to a reference part. The passive stock parts
+  `30x11-common_xresources` and `35x11-common_xhost-local` are verified by hash.
+  Otherwise the hook is `undetermined`, and `preceding_parts` names the earlier
+  unverified parts (the detail text shows at most 8). When `20` is not listed,
+  the detail says the hooks apply to every session. Desktop packages that add
+  parts sorting before `50` (for example `20dbus_xdg-runtime`) therefore leave
+  `~/.xsession` undetermined until their reference hashes are added.
+- **Fail closed.** Each of the following is a blocking gap that marks the result
+  incomplete:
+  - an unobserved or unreadable directory;
+  - an unobserved options file, or option text that is missing, unreadable by
+    other accounts, binary, escaped or over-limit;
+  - an unobserved or non-reference `/etc/X11/Xsession` hash;
+  - malformed or missing metadata, duplicate paths, or over-limit input.
+
+  Every result names what it cannot observe: which display manager uses the
+  wrapper and which session it passes, other part contents, home directories,
+  directory permissions, and Wayland sessions. `origin` is always
+  `not_assessed`.
+
+**Not covered:** other x11-common or debianutils versions, agent collection of
+this metadata, catalog `entries_parsed` wiring, persistence, UI, provenance and
+AI classification. No schema, API, auth or response-authorization change.
 
 ### Individual queued at jobs — worker checkpoint #831
 
@@ -5359,6 +5623,108 @@ Remaining: collect the two files and the effective sshd settings per account,
 derive `key_user_rc` from the `authorized_keys` contract and, for certificate
 logins, the certificate's `permit-user-rc` extension, then persistence, UI and
 AI classification.
+
+### PAM service-stack contract — worker checkpoint #967
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`/etc/pam.d` stays catalogued as `login_hooks` with metadata-only parsing, and
+nothing calls the new module yet.
+
+`app/pam_stacks.py` is a pure function over captured, read-only text of PAM
+service files. `evaluate(files, family, version, vendor_dir=None)` returns, for
+each service, the ordered modules it loads, with:
+
+- **File choice.** `/etc/pam.d/<service>` replaces the same name in
+  `/usr/lib/pam.d` and an optional vendor directory. Replaced files are listed.
+- **Line rules.** Comments, backslash continuation, the `-` type prefix and
+  bracketed fields follow libpam. A line libpam installs as an always-failing
+  entry (unknown type, missing control or module) is reported as `must_fail`.
+- **Includes.** `include`, `substack` and Debian's `@include` are resolved in
+  place. Each entry keeps its own file and line and the chain of including
+  lines. A relative include name is looked up like a service, `/etc/pam.d`
+  first and then the distribution directories. The caller states the family,
+  which decides whether `@include` is recognised.
+- **`other`.** Types the service file leaves empty are listed as using the
+  `other` service. A `substack` line holds its type even when the named file
+  yields nothing. libpam reads `other` for every service, so a blocking gap
+  in `other` is a gap for every service.
+- **Executed commands.** A `pam_exec.so` entry reports its options, its `type=`
+  filter, `seteuid`, `expose_authtok` and the command argv. The command is
+  reported as applicable only when every `type=` option matches the entry's
+  type, as `pam_exec` requires. Modules named by
+  absolute path are flagged. Values are bounded and carry a SHA-256 of the full
+  text.
+
+The contract fails closed. Each of these is a blocking gap for every service
+that reaches it, never a shorter stack: an include target that was not
+captured, an include loop, a relative include name containing `/`
+(`include_relative_path`; libpam loads it, the contract does not resolve it),
+`substack` nesting past libpam's 16 levels, an include chain longer than the
+contract's own 32-file bound, an unfinished
+continuation, a line near libpam's 1024-byte buffer, a control character
+(including a carriage return), an unreadable file, invalid UTF-8 and over-limit
+input. An unreadable file still shadows a lower-priority file of the same name.
+
+The rules were read from Linux-PAM 1.4.0 and 1.5.3 (`pam_handlers.c`,
+`pam_misc.c`, `pam_exec.c`) and Debian's `031_pam_include` patch. Other
+versions report the blocking `version_unverified` gap; 1.7.0 rewrote the line
+reader and was not compared.
+
+Stack resolution for the `debian` family was compared by peer workers with
+compiled Ubuntu `libpam0g 1.5.3-5ubuntu5.7` on generated trees; the method,
+counts and limits are recorded in PR #968. The `upstream` family, Linux-PAM
+1.4.x and a vendor directory were not compared with a compiled library.
+
+**Not covered:** `/etc/pam.conf`, validation
+of bracketed control values, module binaries and the programs they run,
+collection from servers, catalog wiring, persistence, UI, provenance and AI
+classification. No schema, API, UI or authorization change, and nothing is
+labelled safe.
+### Per-user shell startup files contract — worker checkpoint #1057
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/shell_user_startup.py` is a pure, versioned contract for the catalog's
+`shell_user` mechanism. It takes one account's passwd shell, uid/gid (with
+optional supplementary groups) and supplied metadata for `~/.bash_profile`,
+`~/.bash_login`, `~/.profile`, `~/.bashrc` and `~/.bash_logout`. It says which
+file runs at login, in an interactive non-login shell, for a non-interactive
+`ssh host command` and at logout. It performs no I/O and never reads a file.
+
+- **Source.** The behavior was probed on Ubuntu 24.04 (bash 5.2.21, dash 0.5.12)
+  as root and as `nobody`, not recalled. Tests compare the contract with real
+  bash and dash as both accounts when they run as root on a Debian host.
+- **Login chain.** A login bash tries the three files in order. Only a missing
+  name or a dangling (ENOENT) symlink falls through. An unreadable file or a
+  directory prints an error and stops the chain, so a locked `~/.bash_login`
+  hides `~/.profile`. A symlink that cannot be followed for another reason
+  (ELOOP loop, EACCES on an unsearchable directory, ENOTDIR) also stops the
+  chain with an error. Collectors report it as an explicit `target_error`
+  resolved with the account's own credentials (root searches a mode 0000
+  directory), and an unrecognized error is a blocking
+  `symlink_error_unrecognized` gap. Root reads a mode 0000 file. A FIFO blocks
+  the login and is a blocking `special_file` gap.
+- **`~/.bashrc`.** It runs in interactive non-login shells and, because Debian
+  builds bash with `SSH_SOURCE_BASHRC`, in every non-interactive `ssh host
+  command` (`SSH_CLIENT` set, `SHLVL` below 2). `~/.bash_logout` runs when a
+  login bash exits through `exit`/`logout` or end of input.
+- **Other shells.** `sh`/`dash` (and an empty shell field) read only
+  `~/.profile` at login and silently skip an unreadable, directory or
+  unfollowable-symlink one.
+  `nologin` and `false` run nothing. Any other shell, and non-canonical shell
+  paths, are a blocking `shell_not_modelled` gap.
+- **Accounts.** One access(2) class applies: owner, group (primary or supplied
+  supplementary gid) or other. When readability depends on unsupplied groups,
+  the result is `unknown` with a blocking gap, and later chain files are
+  `unresolved`.
+- **Fail closed.** An unobserved account, family, home or dotfile; malformed or
+  unexpected input; an unreadable home; the RPM family (`not_modelled`); and an
+  unobserved symlink target are blocking (`complete: false`). No session is
+  then reported as running a file.
+
+Open: collection wiring, file contents (Debian's `~/.profile` sources
+`~/.bashrc` for bash), `/etc/bash.bashrc`, the RPM family, home-directory search
+permission, persistence, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -5528,6 +5894,18 @@ This is a focused requested usability fix. Comprehensive startup discovery,
 provenance/AI classifications, CVE monitoring, automatic containment and retention
 remain unfinished as tracked above.
 
+
+### Cron job SHELL and PATH — worker checkpoint #837
+
+Newer agents report, for each parsed cron job, the `SHELL` and `PATH` that the same
+crontab file assigned above that job line (`null` when the file sets none, meaning
+the daemon default applies and is not evaluated). Values follow cron's quote and
+blank trimming, are bounded to 512 characters with a truncation flag, have control
+characters escaped and pass through the existing command redaction. Every other
+environment value is still only counted. The controller accepts jobs from older
+agents unchanged and rejects malformed new fields; comparisons and incident evidence
+remain metadata-only. Still open for this slice: showing the values on Startup
+Files (sequenced after #772 and #832) and updating the coverage-gap text.
 
 ## Planned: separate controller and remote-worker deployments
 
@@ -5947,6 +6325,24 @@ belongs to an active server.
   queues nothing. The GO route keeps its digest, blocker, expiry and pending-job
   checks, and read/dismiss grants nothing. Resolution can lag by about one
   scheduler tick (~30 seconds). Per-user targeting remains open.
+
+### Patch-deadline notifications — worker checkpoint #775
+
+The SMTP/webhook `overdue` alert stays outbox-only because its package count
+changes with every arriving or installed update. A separate producer publishes
+one admin-only `operations`/`patch-deadline` event per active, non-enrolling
+server that has a pending update past its configured priority deadline. It reads
+the highest overdue priority with one grouped query per 500-server chunk. The
+reason text is fixed and names only that priority, with no counts, package names
+or endpoint text. Severity maps critical→critical, high→high, normal→medium and
+low→low. Count changes are no-ops, and a change of the highest overdue priority
+appends one revision. The event deep-links to the server Patching timeline and
+resolves through the shared operational path once nothing is overdue, a deadline
+is extended, or the server is disabled, deleted or enrolling. A rejected publish
+keeps any existing event active. Nothing installs packages, acknowledges alerts,
+changes deadlines or authorizes responses. Holds, freezes and failed operations
+are not distinguished in the text. Coordinator integration and exact-head checks
+remain required.
 
 ### Asynchronous delivery and access control
 
@@ -10198,6 +10594,48 @@ checkpoint changes no runtime, schema, admission, provider call or response
 authority.
 
 
+### AI control mode in triage benchmark reports — worker checkpoint #1061
+
+Before this change, `tools/benchmark_ai.py` stored a fixture config without
+`ai_control_mode`. The application therefore read it as the implicit `legacy`
+mode, which uses separate rolling-hour limits. Reports did not say which mode
+they measured, and the comparator could not detect a mixed pair.
+
+- **`--control-mode {legacy,unthrottled}`:** the default is `legacy`, which keeps
+  the earlier behavior. The chosen mode is now stored explicitly.
+  `unthrottled` removes only Mr Patchy's own pacing and spend cap.
+- **What is recorded:** the report's `ai_control_mode` is read back from the
+  application's effective config during the run, not copied from the flag.
+- **Comparator:**
+  - A report without the field is read as `legacy`, with
+    `ai_control_mode_source: legacy implicit default`.
+  - An unknown value is refused.
+  - A pair measured under different modes is refused with
+    `capability mismatch: ai_control_mode differs`.
+  - Both summaries state the mode.
+- **Retained records:** the raw reports in `docs/benchmarks/ai-equivalence-c86141a/`
+  are unchanged. Their two `*-comparison.json` files were regenerated with the
+  comparator, and the only difference is the added mode fields
+  (`legacy implicit default`). `tests/test_ai_benchmark_records.py` still
+  requires an exact match.
+- **Validation:** `tests/test_ai_benchmark_control_mode.py` has 24 tests. All 24
+  fail against main's tools. Removing the mismatch refusal makes 5 of them fail.
+  An unthrottled 4-subject serial/parallel pair compares as equivalent and keeps
+  the legacy run's workload fingerprint. Local 8-subject runs with a 40 ms
+  provider delay gave the following, on loopback fixtures only:
+
+  | Mode | Serial | Parallel (4) |
+  | --- | --- | --- |
+  | legacy | 7.04/s | 11.02/s |
+  | unthrottled | 7.21/s | 10.41/s |
+
+- **Still open:** `rate`, `daily_cap` and `rate_and_daily` benchmark modes. Rate
+  pacing deliberately spaces starts, and a capped mode needs a priced fixture
+  model. MySQL records (#976) and production measurements are also open.
+- **Unchanged:** no runtime, admission, provider, schema or
+  response-authorization behavior.
+
+
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
 The server Overview now reports a read-only lifecycle assessment for reviewed
@@ -10760,6 +11198,7 @@ reused or revoked candidates. It has escaped names, paging, Retry and a stale-re
 guard, and states that linkage grants no approval and authorizes no response. This
 does not complete roadmap B: complete context collection, the canonical fingerprint
 over full evidence and SQLite/MySQL runtime acceptance remain open.
+
 ### Shared AI start gates on Activity → Workers — worker checkpoint #930
 
 Roadmap A requires worker health to show the blocked reason and next eligible start. The #914 checkpoint recorded that worker-health surfaces still showed no shared gate state, so administrators could misread a worker's idle `AI tasks` capacity as a worker fault while the fleet-wide gates were holding new provider calls.
@@ -10767,3 +11206,53 @@ Roadmap A requires worker health to show the blocked reason and next eligible st
 - **Unchanged:** the API, schema, roles, admission, reservations, pause, lifecycle and response authorization. Viewers still get the access-required page and never request the snapshot. The snapshot is fleet-wide, so it says nothing about any individual worker.
 - **Validation:** the new `tests/ui_worker_ai_control_gates.cjs` times out on main `68887ce` (no card) and passes after the change. It covers the finite, open, malformed (injection) and error/retry states, placement, refresh, pagination, a slow snapshot with a discarded late response, the viewer case, and no horizontal scroll at 320, 768 and 1440 px. `ui_workers.cjs` and `ui_ai_control_gates.cjs` still pass.
 - **Remaining:** the card is display-only and promises no start. Per-worker gate state and full queue/spend dashboard acceptance remain open.
+
+### Fleet automatic AI plan status — worker checkpoint #936
+
+This closes the #922 limitation that automatic AI plan status was readable only one server at a time.
+
+- **API:** admin-only `GET /api/security/auto-plan-status` (`auto_plan_status.fleet()`). It lists every non-deleted server whose scan policy enables automatic AI plans, ordered by name then ID. Each row has the same fields as the per-server status: state, awaiting count, truncation, oldest awaiting time, active plan job and latest automatic attempt. Disabled servers stay listed as `inactive`. Opted-out servers, deleted servers and malformed policies are omitted.
+- **Totals:** listed servers, ready servers, the awaiting count (marked as a lower bound when any row is truncated) and plan jobs queued or running. Pacing is reported once, using the per-server rules: the legacy fleet allowance, or no plan-specific cap in other modes.
+- **Bounds:** at most `FLEET_LIMIT` (100) servers, with `truncated` set when more opted-in servers exist. Totals count only the listed rows. Each row keeps the per-server `AWAITING_LIMIT` window.
+- **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
+- **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
+- **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
+### Notification-center status filter — worker checkpoint #835 (roadmap J)
+
+The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
+- **API:** `GET /api/notifications` accepts an optional `lifecycle` value of `active` or `resolved`. The filter applies to the event's **current** revision, so an event that resolved and then reopened is listed as active only. Any other value returns 400 with the fixed text "Invalid notification status filter".
+- **Counts and paging:** `total` and `more` use the same filter. The bell's unread count, arrivals and the SSE stream cursor ignore the center filter and are unchanged.
+- **Same boundaries:** role visibility, per-account read/dismiss state and the include-dismissed and unread-only options combine with the status filter. The route keeps its self-service session check.
+- **UI:** Apply keeps the selection across re-renders, Clear resets it with the other filters, and Previous/Next keep it.
+- **Unchanged:** this filters display only. It never acknowledges, resolves or reopens an event, changes response authorization or alters schema.
+- **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
+### Daily-cap window in the Investigations worker status — worker checkpoint #876
+
+The admin-only **AI worker status** card on Investigations now shows the full daily-cap window from the existing `budget` object of `GET /api/investigation-status`. It previously showed only counted, remaining and uncertain spend.
+- **Amounts:** cap, counted, settled, reserved, uncertain and remaining. Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled.
+- **Reconciliation:** when transmitted calls await a usage receipt, the card shows their count and the oldest reservation time, and notes that their full ceiling stays counted until reconciliation. When the count is 0, nothing is added.
+- **Reset:** the reset time and timezone are shown. When `next_reset_authoritative` is false (spend admitted before a timezone change still overlaps), the reset is labelled a recheck boundary, not a promised refill.
+- **Safety:** malformed amounts, counts or times render as "Unavailable". Text is escaped. Nothing appears while no cap is enabled.
+- **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
+- **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
+### dhclient hook contract — worker checkpoint #1063 (roadmap F)
+
+ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
+
+- **Change:** a new pure module, `app/dhclient_hooks.py`. From captured `lstat`/`stat` metadata it reports which hooks are sourced, in which phase (`enter` or `exit`) and order, and why other entries are not.
+- **Reference:** the rules follow `dhclient-script` from `isc-dhcp-client` 4.4.3-P1-4ubuntu2 (`run_hook`, `run_hookdir` and `exit_with_hooks`) and `run-parts --list` from debianutils 5.17. Both were run to confirm the behavior.
+  - The single hook file is sourced before its directory.
+  - A directory entry is listed only when its name fully matches `^[A-Za-z0-9_-]+$`, so `hook.sh`, dotfiles and backup names are not sourced.
+  - Entries are sourced in byte order. `dhclient` passes the script no locale, so the C locale applies.
+  - Only regular files are sourced, after following symlinks. Directories, special files, and dangling or looping symlinks are skipped.
+  - Mode, owner and the executable bit do not matter.
+- **Gaps, never reported as covered:** an unobserved `/etc/dhcp` or hook directory, an unreadable directory, an unobserved symlink target, malformed or duplicate input, file metadata for a hook directory that contradicts its directory observation, the 1024-entry cap, an isc-dhcp-client version outside the 4.4 series, and a non-Debian family. A `dhclient-script` whose SHA-256 is missing or differs from the reference is a non-blocking `script_not_reference` gap.
+- **Unobserved, stated in every result:**
+  - hook contents (a sourced hook can change variables or `exit` and stop later hooks);
+  - whether dhclient is the DHCP client in use;
+  - a replacement script set by `dhclient.conf` `script` or `-sf`;
+  - error paths that exit without exit hooks;
+  - RPM-family hook locations.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.

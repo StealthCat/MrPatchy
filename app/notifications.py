@@ -216,7 +216,7 @@ def _allowed_roles(role):
 
 
 def _query(session, username, *, unread_only=False, include_dismissed=False,
-           severity='', source='', host_id=''):
+           severity='', source='', host_id='', lifecycle=''):
     user = _user(session, username)
     if not user:
         return None
@@ -242,20 +242,25 @@ def _query(session, username, *, unread_only=False, include_dismissed=False,
         query = query.where(NotificationEvent.source == source)
     if host_id:
         query = query.where(NotificationEvent.host_id == host_id)
+    if lifecycle:
+        # The joined revision is the event's current one, so a resolved event
+        # that later reopens is filtered by its newest lifecycle only.
+        query = query.where(NotificationRevision.lifecycle == lifecycle)
     return query
 
 
 def list_for_user(session, username, *, unread_only=False,
                   include_dismissed=False, severity='', source='', host_id='',
-                  limit=50, offset=0):
+                  lifecycle='', limit=50, offset=0):
     if type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('Notification limit must be between 1 and 100')
     if type(offset) is not int or offset < 0:
         raise ValueError('Notification offset must be non-negative')
-    severity, source, host_id = validate_filters(severity, source, host_id)
+    severity, source, host_id, lifecycle = validate_filters(
+        severity, source, host_id, lifecycle)
     query = _query(session, username, unread_only=unread_only,
                    include_dismissed=include_dismissed, severity=severity,
-                   source=source, host_id=host_id)
+                   source=source, host_id=host_id, lifecycle=lifecycle)
     if query is None:
         return []
     rows = session.execute(query.order_by(
@@ -315,21 +320,24 @@ def stream_cursor(session, username):
     return hashlib.sha256(json.dumps(values, separators=(',', ':')).encode()).hexdigest()
 
 
-def validate_filters(severity='', source='', host_id=''):
+def validate_filters(severity='', source='', host_id='', lifecycle=''):
     if severity and severity not in SEVERITIES:
         raise ValueError('Invalid notification severity filter')
+    if lifecycle and lifecycle not in LIFECYCLES:
+        raise ValueError('Invalid notification status filter')
     source = _text('source filter', source, 40, identifier=True, empty=True)
     host_id = _text('host filter', host_id, 36, empty=True)
-    return severity, source, host_id
+    return severity, source, host_id, lifecycle
 
 
 def count_for_user(session, username, *, unread_only=False, include_dismissed=False,
-                   severity='', source='', host_id=''):
+                   severity='', source='', host_id='', lifecycle=''):
     """Count only the current revisions visible to the user's current role."""
-    severity, source, host_id = validate_filters(severity, source, host_id)
+    severity, source, host_id, lifecycle = validate_filters(
+        severity, source, host_id, lifecycle)
     query = _query(session, username, unread_only=unread_only,
                    include_dismissed=include_dismissed, severity=severity,
-                   source=source, host_id=host_id)
+                   source=source, host_id=host_id, lifecycle=lifecycle)
     if query is None:
         return 0
     return session.scalar(select(func.count()).select_from(query.subquery()))

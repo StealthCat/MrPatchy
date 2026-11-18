@@ -25,7 +25,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes, reboot_status
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.27"
+APP_VERSION = "1.75.30"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -445,11 +445,11 @@ def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:st
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
                       severity:str='',source:str='',host_id:str='',
-                      limit:int=50,offset:int=0,user=Depends(self_user)):
+                      lifecycle:str='',limit:int=50,offset:int=0,user=Depends(self_user)):
     """Return a bounded, current-role-filtered page for the signed-in user."""
     with Session() as s:
         try:
-            filters={'severity':severity,'source':source,'host_id':host_id}
+            filters={'severity':severity,'source':source,'host_id':host_id,'lifecycle':lifecycle}
             items=notification_events.list_for_user(
                 s,user['username'],unread_only=unread_only,
                 include_dismissed=include_dismissed,limit=limit,offset=offset,
@@ -740,7 +740,7 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None,
-                'lifecycle':lifecycle}
+                'lifecycle':lifecycle,'reboot':reboot_status.evaluate(h.inventory)}
 
 @app.get('/api/spool-health')
 def fleet_spool_health(user=Depends(viewer_user)):
@@ -1370,6 +1370,8 @@ class ConfigInput(BaseModel):
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
+    # Notification-only advance warning for the daily cap; 0 turns it off (#810).
+    ai_daily_cap_warning_percent:int=Field(default=80,ge=0,le=99,strict=True)
     history_days:int=Field(default=30,ge=1,le=3650)
     os_lifecycle_warning_days:int=Field(default=90,ge=0,le=730)
     api_key:str=Field(default='',max_length=1000)
@@ -1398,7 +1400,11 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
             if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
             if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
             if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
+            if previous['ai_daily_cap_warning_percent']!=merged['ai_daily_cap_warning_percent']:detail+='; daily AI cap warning changed from '+_warning_text(previous['ai_daily_cap_warning_percent'])+' to '+_warning_text(merged['ai_daily_cap_warning_percent'])
             audit(s,'update settings',detail); s.commit(); return {'ok':True,'ai_controls_revision':ai_controls_revision(merged)}
+
+def _warning_text(percent):
+    return 'off' if not percent else str(percent)+'%'
 
 AI_CONTROL_FIELDS=('ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone',
     'ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled')
@@ -1437,6 +1443,8 @@ class AISettingsInput(BaseModel):
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
+    # Notification-only advance warning for the daily cap; 0 turns it off (#810).
+    ai_daily_cap_warning_percent:int=Field(default=80,ge=0,le=99,strict=True)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
     confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 
@@ -1484,6 +1492,8 @@ def save_settings_section(values,section,expected_ai_controls_revision=None,conf
                     detail+='; telemetry-loss notification threshold changed from '+str(before)+' to '+str(values['telemetry_lost_minutes'])+' minutes'
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
+            if section=='ai' and previous['ai_daily_cap_warning_percent']!=values['ai_daily_cap_warning_percent']:
+                detail+='; daily AI cap warning changed from '+_warning_text(previous['ai_daily_cap_warning_percent'])+' to '+_warning_text(values['ai_daily_cap_warning_percent'])
             audit(s,'update '+section+' settings',detail)
             s.commit()
             result={'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}
@@ -3348,6 +3358,13 @@ def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id)
         return auto_plan_status.status(s,host_id)
 
+@app.get('/api/security/auto-plan-status')
+def fleet_security_auto_plan_status(user=Depends(admin_user)):
+    """Read-only automatic AI plan status for opted-in servers (#936). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        return auto_plan_status.fleet(s)
+
 @app.get('/api/hosts/{host_id}/security/auto-plan-failed')
 def security_auto_plan_failed(host_id:str,user=Depends(admin_user)):
     """Count this server's incidents whose one automatic AI plan attempt failed (#1036). Read-only."""
@@ -3571,6 +3588,12 @@ class MalwarePolicyInput(BaseModel):
 def malware_policy_read(user=Depends(admin_user)):
     from . import malware_policy
     with Session() as s:return malware_policy.state(s)
+
+@app.get('/api/settings/malware-response/overrides')
+def malware_policy_overrides(user=Depends(admin_user)):
+    """Read-only fleet list of restrict-only server overrides (#1033); counts only, never paths or hashes."""
+    from . import malware_policy
+    with Session() as s:return malware_policy.overrides(s)
 
 @app.put('/api/settings/malware-response')
 def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):
