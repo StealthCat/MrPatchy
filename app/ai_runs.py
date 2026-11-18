@@ -309,14 +309,16 @@ def response_received(response):
     event('api_response', 'OpenAI HTTP '+str(getattr(response,'status_code','unknown'))+suffix)
 
 
-def reconcile(purpose):
-    """Called only while owning that purpose's distributed execution lock."""
-    with Session() as s:
-        for row in s.scalars(select(AIRun).where(AIRun.purpose==purpose, AIRun.state=='running')):
-            row.state='interrupted'; row.finished=time.time(); row.stage='interrupted'
-            row.message='Previous run lost its worker before completion. Normal retry limits still apply.'
-            s.add(AIEvent(run_id=row.id, stage=row.stage, message=row.message))
-        s.commit()
+def reconcile(s, purpose):
+    """Interrupt abandoned runs in the caller's transaction under its execution lock."""
+    rows = list(s.scalars(select(AIRun).where(AIRun.purpose == purpose, AIRun.state == 'running')))
+    for row in rows:
+        row.state = 'interrupted'
+        row.finished = time.time()
+        row.stage = 'interrupted'
+        row.message = 'Previous run lost its worker before completion. Normal retry limits still apply.'
+        s.add(AIEvent(run_id=row.id, stage=row.stage, message=row.message))
+    return rows
 
 
 def heartbeat():
