@@ -187,3 +187,19 @@ def test_unobserved_always_listed():
     codes = {u['code'] for u in r['unobserved']}
     assert {'kernel_command_line', 'credentials', 'runtime_writes', 'live_value'} <= codes
     assert all(k['state'] == 'not_configured' for k in r['keys'])
+
+
+def test_unreadable_file_reason_is_its_own_cause_after_gaps_cap_or_earlier_gaps():
+    # Review finding on #1089: once MAX_GAPS is reached the last gap becomes
+    # gaps_truncated, and an unreadable file's reason must not read it back.
+    bad = [f(f'/etc/sysctl.d/{i:03d}.conf', b'\xff') for i in range(se.MAX_GAPS)]
+    r = se.resolve(bad + [f('/etc/sysctl.d/999.conf', 'a\x00b')])
+    assert r['complete'] is False and r['gaps'][-1]['code'] == 'gaps_truncated'
+    reasons = {x['path']: x['reason'] for x in r['files']}
+    assert reasons['/etc/sysctl.d/999.conf'] == 'nul_byte'
+    assert {reasons[x['path']] for x in bad} == {'invalid_utf8'}
+    # A non-regular /etc/sysctl.conf reports its own cause, not an earlier file's gap.
+    r = se.resolve([f('/etc/sysctl.d/a.conf', b'\xff'), {'path': '/etc/sysctl.conf', 'type': 'directory'}])
+    conf = next(x for x in r['files'] if x['path'] == '/etc/sysctl.conf')
+    assert conf['status'] == 'unreadable' and conf['reason'] == 'not_regular_file'
+    assert r['complete'] is False

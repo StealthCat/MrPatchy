@@ -175,26 +175,30 @@ def glob_matches(pattern: str, key: str) -> bool:
         fnmatch.fnmatchcase(k, p) for p, k in zip(pattern_parts, key_parts))
 
 
-def _decode(path: str, text: Any, gaps: list[dict[str, Any]]) -> str | None:
+def _decode(path: str, text: Any, gaps: list[dict[str, Any]]) -> tuple[str | None, str]:
+    """Return ``(text, '')``, or ``(None, code)`` naming this file's own failure.
+
+    The code is returned rather than read back from ``gaps`` because a capped gap
+    list ends in ``gaps_truncated`` and would hide the file's real cause."""
     if isinstance(text, bytes):
         if len(text) > MAX_TEXT:
-            _gap(gaps, 'text_over_limit', path)
-            return None
+            return _unreadable(gaps, 'text_over_limit', path)
         try:
             text = text.decode('utf-8')
         except UnicodeDecodeError:
-            _gap(gaps, 'invalid_utf8', path)
-            return None
+            return _unreadable(gaps, 'invalid_utf8', path)
     if not isinstance(text, str):
-        _gap(gaps, 'file_unreadable', path)
-        return None
+        return _unreadable(gaps, 'file_unreadable', path)
     if len(text) > MAX_TEXT:
-        _gap(gaps, 'text_over_limit', path)
-        return None
+        return _unreadable(gaps, 'text_over_limit', path)
     if '\x00' in text:
-        _gap(gaps, 'nul_byte', path)
-        return None
-    return text
+        return _unreadable(gaps, 'nul_byte', path)
+    return text, ''
+
+
+def _unreadable(gaps: list[dict[str, Any]], code: str, path: str) -> tuple[None, str]:
+    _gap(gaps, code, path)
+    return None, code
 
 
 def _effective_files(files: Any, gaps: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[tuple[str, str]],
@@ -264,9 +268,9 @@ def _effective_files(files: Any, gaps: list[dict[str, Any]]) -> tuple[list[dict[
             winner.update(link_target=target)
             linked.add(target)
             source, text = target, linked_item[1].get('text')
-        decoded = _decode(source, text, gaps)
+        decoded, reason = _decode(source, text, gaps)
         if decoded is None:
-            winner.update(status='unreadable', reason=gaps[-1]['code'])
+            winner.update(status='unreadable', reason=reason)
             continue
         winner.update(status='effective', sha256=_sha(decoded))
         effective.append((winner['path'], decoded))
@@ -276,11 +280,13 @@ def _effective_files(files: Any, gaps: list[dict[str, Any]]) -> tuple[list[dict[
         if SYSCTL_CONF in linked:
             record.update(status='read_through_link')
         else:
-            decoded = _decode(SYSCTL_CONF, item.get('text'), gaps) if item.get('type', 'file') == 'file' else None
+            if item.get('type', 'file') == 'file':
+                decoded, reason = _decode(SYSCTL_CONF, item.get('text'), gaps)
+            else:
+                decoded, reason = None, 'not_regular_file'
+                _gap(gaps, 'file_unreadable', SYSCTL_CONF, detail='/etc/sysctl.conf is not a regular file.')
             if decoded is None:
-                record.update(status='unreadable', reason=gaps[-1]['code'] if gaps else 'not_regular_file')
-                if item.get('type', 'file') != 'file':
-                    _gap(gaps, 'file_unreadable', SYSCTL_CONF, detail='/etc/sysctl.conf is not a regular file.')
+                record.update(status='unreadable', reason=reason)
             else:
                 record.update(status='not_read_by_systemd_sysctl', reason='not_linked_from_sysctl_d',
                               sha256=_sha(decoded))
