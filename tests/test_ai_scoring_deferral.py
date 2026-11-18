@@ -3,10 +3,10 @@ import time
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app import ai, ai_admission, ai_provider_backoff, ai_runs, update_scores
-from app.db import Host, Package, Session, Setting
+from app.db import Host, Package, Session, Setting, engine
 from app.security import seal
 
 
@@ -31,6 +31,78 @@ def success(*args, **kwargs):
     return httpx.Response(200, json={'status':'completed', 'output':[{'content':[
         {'type':'output_text', 'text':json.dumps(result)}]}]},
         request=httpx.Request('POST', ai.URL))
+
+
+def seed_interrupted_scoring():
+    seed()
+    attempted = time.time() - 60
+    with Session() as session:
+        host = session.get(Host, 'score-host')
+        package = session.get(Package, 'score-host:fixture')
+        key = update_scores.identity(host, package)
+        session.add(ai_runs.AIRun(id='old-run', purpose='update_scoring', started=attempted + 1))
+        for identifier, state, when, run_id in (
+            (key, 'running', attempted, 'old-run'),
+            ('a' * 64, 'running', attempted + 2, 'old-run'),  # previous link on a newer attempt
+            ('b' * 64, 'complete', attempted, 'old-run'),
+            ('c' * 64, 'running', attempted, ''),            # no reliable link
+        ):
+            session.add(update_scores.UpdateScore(
+                id=identifier, host_id=host.id, name=package.name, installed='1', candidate='2',
+                state=state, attempted=when, run_id=run_id,
+            ))
+        session.commit()
+    return key, attempted
+
+
+def test_scoring_recovery_updates_exact_scores_even_while_disabled(admin, monkeypatch):
+    key, attempted = seed_interrupted_scoring()
+    with Session() as session:
+        setting = session.get(Setting, 'config')
+        setting.value = {**setting.value, 'ai_updates_enabled': False}
+        session.commit()
+    monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: pytest.fail('recovery sent a provider request'))
+
+    update_scores.run_one()
+
+    with Session() as session:
+        assert session.get(ai_runs.AIRun, 'old-run').state == 'interrupted'
+        recovered = session.get(update_scores.UpdateScore, key)
+        assert (recovered.state, recovered.attempted, recovered.run_id) == ('error', attempted, 'old-run')
+        assert 'interrupted' in recovered.explanation.lower()
+        for identifier, state in (('a', 'running'), ('b', 'complete'), ('c', 'running')):
+            assert session.get(update_scores.UpdateScore, identifier * 64).state == state
+        setting = session.get(Setting, 'config')
+        setting.value = {**setting.value, 'ai_updates_enabled': True}
+        session.commit()
+
+    monkeypatch.setattr(update_scores.time, 'time', lambda: attempted + 3599)
+    update_scores.run_one()
+    monkeypatch.setattr(update_scores.time, 'time', lambda: attempted + 3600)
+    monkeypatch.setattr(ai.transport, 'post', success)
+    update_scores.run_one()
+    with Session() as session:
+        recovered = session.get(update_scores.UpdateScore, key)
+        assert recovered.state == 'complete' and recovered.run_id != 'old-run'
+
+
+def test_scoring_recovery_rolls_back_run_if_score_update_fails(admin):
+    key, _ = seed_interrupted_scoring()
+
+    def fail_score_update(_conn, _cursor, statement, _parameters, _context, _many):
+        if statement.lstrip().upper().startswith('UPDATE UPDATE_SCORES'):
+            raise RuntimeError('fixture rejects score update')
+
+    event.listen(engine, 'before_cursor_execute', fail_score_update)
+    try:
+        with pytest.raises(RuntimeError, match='fixture rejects score update'):
+            update_scores.run_one()
+    finally:
+        event.remove(engine, 'before_cursor_execute', fail_score_update)
+
+    with Session() as session:
+        assert session.get(ai_runs.AIRun, 'old-run').state == 'running'
+        assert session.get(update_scores.UpdateScore, key).state == 'running'
 
 
 def test_rate_refusal_is_durably_deferred_and_resumes_at_exact_eligibility(admin, monkeypatch):

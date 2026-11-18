@@ -1,3 +1,7 @@
+## 1.75.43 — 2026-11-18
+
+1. [PR #1141](https://github.com/StealthCat/MrPatchy/pull/1141): When scoring recovers an abandoned update-scoring run, it now marks exactly linked running package scores as failed in the same transaction while retaining their attempt timestamps and existing one-hour retry boundary. Newer attempts, completed scores and rows without a reliable run link remain untouched. Compatibility: no schema, API, provider-charge, scheduling, client or response-authorization change; already-interrupted rows and crashes before a reliable run link retain existing recovery behavior.
+
 ## 1.75.42 — 2026-11-18
 
 1. [PR #1118](https://github.com/StealthCat/MrPatchy/pull/1118): Shared AI provider backoff now preserves the newest failure timestamp when parallel failures are recorded out of order, so a success from a request already in flight at the newer failure cannot clear that retry floor. A later successful request can still clear it. Compatibility: no schema, API, role, client, or response-authorization change; timestamp ordering assumes synchronized worker clocks, and matched production throughput remains outside this slice.
