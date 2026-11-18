@@ -3348,6 +3348,13 @@ def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id)
         return auto_plan_status.status(s,host_id)
 
+@app.get('/api/security/auto-plan-status')
+def fleet_security_auto_plan_status(user=Depends(admin_user)):
+    """Read-only automatic AI plan status for opted-in servers (#936). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        return auto_plan_status.fleet(s)
+
 @app.get('/api/hosts/{host_id}/security/auto-plan-failed')
 def security_auto_plan_failed(host_id:str,user=Depends(admin_user)):
     """Count this server's incidents whose one automatic AI plan attempt failed (#1036). Read-only."""

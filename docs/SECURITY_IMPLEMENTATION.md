@@ -10862,6 +10862,7 @@ reused or revoked candidates. It has escaped names, paging, Retry and a stale-re
 guard, and states that linkage grants no approval and authorizes no response. This
 does not complete roadmap B: complete context collection, the canonical fingerprint
 over full evidence and SQLite/MySQL runtime acceptance remain open.
+
 ### Shared AI start gates on Activity → Workers — worker checkpoint #930
 
 Roadmap A requires worker health to show the blocked reason and next eligible start. The #914 checkpoint recorded that worker-health surfaces still showed no shared gate state, so administrators could misread a worker's idle `AI tasks` capacity as a worker fault while the fleet-wide gates were holding new provider calls.
@@ -10869,3 +10870,14 @@ Roadmap A requires worker health to show the blocked reason and next eligible st
 - **Unchanged:** the API, schema, roles, admission, reservations, pause, lifecycle and response authorization. Viewers still get the access-required page and never request the snapshot. The snapshot is fleet-wide, so it says nothing about any individual worker.
 - **Validation:** the new `tests/ui_worker_ai_control_gates.cjs` times out on main `68887ce` (no card) and passes after the change. It covers the finite, open, malformed (injection) and error/retry states, placement, refresh, pagination, a slow snapshot with a discarded late response, the viewer case, and no horizontal scroll at 320, 768 and 1440 px. `ui_workers.cjs` and `ui_ai_control_gates.cjs` still pass.
 - **Remaining:** the card is display-only and promises no start. Per-worker gate state and full queue/spend dashboard acceptance remain open.
+
+### Fleet automatic AI plan status — worker checkpoint #936
+
+This closes the #922 limitation that automatic AI plan status was readable only one server at a time.
+
+- **API:** admin-only `GET /api/security/auto-plan-status` (`auto_plan_status.fleet()`). It lists every non-deleted server whose scan policy enables automatic AI plans, ordered by name then ID. Each row has the same fields as the per-server status: state, awaiting count, truncation, oldest awaiting time, active plan job and latest automatic attempt. Disabled servers stay listed as `inactive`. Opted-out servers, deleted servers and malformed policies are omitted.
+- **Totals:** listed servers, ready servers, the awaiting count (marked as a lower bound when any row is truncated) and plan jobs queued or running. Pacing is reported once, using the per-server rules: the legacy fleet allowance, or no plan-specific cap in other modes.
+- **Bounds:** at most `FLEET_LIMIT` (100) servers, with `truncated` set when more opted-in servers exist. Totals count only the listed rows. Each row keeps the per-server `AWAITING_LIMIT` window.
+- **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
+- **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
+- **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
