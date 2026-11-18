@@ -7,9 +7,14 @@ module.exports=async page=>{
   assert.equal(await dialog.evaluate(d=>d.open),true);
  };
  const noPrompt=async()=>assert.equal(await dialog.evaluate(d=>d.open),false,'unexpected unsaved-changes prompt');
- const hash=()=>page.evaluate(()=>location.hash);
  // A held move is undone through session history, which settles asynchronously.
- const expectHash=async(expected,message)=>{await page.waitForFunction(h=>location.hash===h,expected,{timeout:3000}).catch(()=>{});assert.equal(await hash(),expected,message);};
+ // Node 26 rejects an explicit undefined assertion message with ERR_INVALID_ARG_TYPE, which hid the
+ // real hash (issue #1083), so the message is always a string and records the history position.
+ const expectHash=async(expected,message)=>{
+  await page.waitForFunction(h=>location.hash===h,expected,{timeout:3000}).catch(()=>{});
+  const seen=await page.evaluate(()=>({hash:location.hash,index:window.navigation?.currentEntry?.index??null,length:history.length,prompt:document.getElementById('modal').open}));
+  assert.equal(seen.hash,expected,`${message||'unexpected address'}: expected ${expected}, saw ${seen.hash} (entry ${seen.index} of ${seen.length}, prompt ${seen.prompt?'open':'closed'})`);
+ };
  const unloadBlocked=()=>page.evaluate(()=>{const e=new Event('beforeunload',{cancelable:true});dispatchEvent(e);return e.defaultPrevented;});
 
  await page.locator('[href="#settings/history"]').first().click();
