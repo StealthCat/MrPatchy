@@ -1,3 +1,7 @@
+## 1.75.40 — 2026-11-18
+
+1. [PR #1096](https://github.com/StealthCat/MrPatchy/pull/1096): The optional MySQL AI benchmark verifies the original session still owns its advisory lock before cleanup DDL; when ownership cannot be verified, cleanup is skipped and operators are told to inspect the disposable database. Successful reports follow cleanup. Compatibility: production runtime, workload and report schema are unchanged; refused cleanup can leave fixture tables for inspection.
+
 ## 1.75.39 — 2026-11-18
 
 1. [PR #1100](https://github.com/StealthCat/MrPatchy/pull/1100): Resolved-notification history cleanup now runs with the existing hourly leader maintenance and fresh retention cutoff, rather than on each five-second AI dispatch tick. Followers no longer issue retention scans or log the unbound-cutoff error; arrival and resolved cleanup failures remain isolated. Compatibility: retention policy, API, schema and response authorization are unchanged.
