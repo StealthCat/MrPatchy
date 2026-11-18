@@ -2363,6 +2363,27 @@ diagnostic is logged without affecting the verdict. The events are ordinary
 pruned AI-log diagnostics. Durable miss counters, saved-call estimates and
 matched production acceptance remain open.
 
+Worker checkpoint #1027 covers the "log retention" acceptance item. The worker's
+hourly history cleanup now lives in `worker.prune_history(s, cutoff)`. It deletes
+the same rows as before (observations, inventory revisions, and finished AI runs
+with their events, call receipts and host links), at the same time, from the
+same leader loop. `tests/test_known_good_retention.py` runs that real pruning
+against a candidate published from a worker-driven provider assessment:
+- After the source run's history is pruned, another server still reuses the
+  candidate with zero provider calls. The retained assessment, candidate and
+  per-host observations survive. The avoided-work estimate counts the reuse as
+  unattributable rather than free or priced.
+- Pruning keeps still-running runs, recent runs and every assessment and
+  known-good row.
+- If the origin assessment is missing, lookup fails closed. The miss is
+  explained as `candidate_unverified`, and the worker pays for a fresh
+  assessment instead of reusing.
+
+Lookup, publication, revocation, pause, budget, role and response
+authorization are unchanged. MySQL coverage comes from the hosted `mysql`
+job. Concurrency, role isolation and matched production acceptance for
+roadmap B are covered elsewhere or remain open.
+
 Additional user requirement (2026-10-30): once an item has completed triage and is
 known good/safe, reuse that assessment on another server when it is **the exact
 same item and relevant context**. Do not pay for another AI investigation unless
@@ -2553,6 +2574,20 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Unchanged:** retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits an evidence-size block, which is then refused locally again), admission, reservations and authorization.
 - **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
 - **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
+
+#### Retry failed automatic AI plans — worker checkpoint #1036
+
+Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
+
+- **Change:** `app/auto_plan_retry.py` counts a server's open, non-YARA, unplanned incidents whose only unreleased automatic attempts for their current scan are `failed`. Attempts the worker skipped because the evidence changed are not counted.
+  - Admin-only `GET /api/hosts/{id}/security/auto-plan-failed` returns `{failed}`. Unknown servers return 404.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and marks up to 200 incidents' failed `security-plan` jobs with `retry_released` (plus who and when). It returns `{released, remaining}` and writes one audit row when anything was released. A disabled or deleted server releases nothing.
+  - `incidents.awaiting_auto_plan` ignores released attempts, so the ordinary `auto_plan_tick` plans the incident again.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The tick still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. A new failure blocks the incident again until another release. The failed job's state and output are kept.
+- **UI:** the Security tab's scheduled-scanning card shows **Retry failed automatic plans** to administrators only, when the count is above 0. It says to fix the cause first, that no provider request is sent now, and that the gates still apply; it refreshes the status afterwards. Operators cannot open the Security tab, so they never request the count.
+- **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
+- **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
 
 ### Throttling, daily cap and unthrottled operation
 
@@ -3204,6 +3239,33 @@ releasing another owner's claim on exit. No runtime change was needed. SQLite on
 MySQL-native runs, contention/fairness and measured performance remain open in
 milestone 4.
 
+### Current-window spend by activity — worker checkpoint #982
+
+Settings → AI → *Current window spend by activity* shows which AI activity the
+daily spend cap is currently counting. The admin-only
+`GET /api/settings/ai-spend-by-purpose` groups exactly the ledger rows capped
+admission counts (the current window, plus a window a timezone change left
+open) by the purpose of the linked AI run: process triage, update importance
+scoring, incident/startup response plans, release configuration reviews and
+connection tests. The groups sum to the counted total in the budget status.
+- **Attribution:** the purpose comes from retained AI run history. A call whose
+  run was pruned, or that had no run, is reported as *Not attributed*. A stored
+  purpose outside the fixed list is reported as *Other*. Nothing is dropped or
+  guessed, and an unrecognized ledger status still counts its ceiling.
+- **Bounded:** one grouped SQL aggregate with at most seven result rows. No
+  ledger or run row is loaded.
+- **Payload:** fixed activity codes, call counts and USD amounts only. No model
+  ID, subject, host, run/call identifier, pricing source or evidence.
+- **Uncapped modes:** the endpoint reports that no cap applies and returns no
+  groups.
+- **Unchanged:** admission, reservations, reconciliation, the shared budget
+  lock, schema, roles and response authorization. The read writes nothing and
+  sends no provider request.
+- **Limitations:** this is a point-in-time read of the current window only.
+  Per-activity history for earlier windows, per-server attribution and
+  per-activity caps are not provided. Amounts remain local public-price
+  estimates, not provider invoices. The wider roadmap A acceptance remains open.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
@@ -3465,6 +3527,49 @@ unavailable and never implies a plan will start.
 - **Limitations:** this is a point-in-time read for one server. A fleet-wide
   plan queue view and startup-change plans (never automatic) are not covered.
 
+### Per-server process-triage queue breakdown — worker checkpoint #975
+
+`GET /api/investigation-status` reports fleet-wide totals only. When the queue
+was not draining, an administrator could not see which servers held the backlog
+or why each one was waiting. Update scoring (#917) and automatic plans (#922)
+already had queue summaries; process triage had no per-server view.
+
+The admin-only `GET /api/investigation-status/servers` lists each active server
+with unapproved `pending`/`error` behaviors. Each pending investigation is
+placed in exactly one class:
+- **active:** an unexpired claim holds it;
+- **eligible:** retry-eligible under the saved model/key and unclaimed;
+- **blocked:** needs configuration review or an explicit retry;
+- **retry wait:** waiting out a finite retry or provider wait, with the
+  server's earliest such time.
+
+Each row also reports the pending total, the oldest pending observation,
+whether AI is paused for the server, its per-server investigation limit (a
+corrupt stored limit is shown as the fail-closed minimum), `active_leases` and
+whether those leases have reached the limit. `active_leases` is the admission
+count: every unexpired claim on the server, including one whose behavior was
+approved while it runs, so the limit flag matches what `ai_claims.acquire`
+enforces. The list holds at most 50 servers, largest backlog
+first, and states the number of servers with a backlog and whether it was
+truncated.
+
+The classes use the predicates of `ai_runs.status()` and the claim query, so
+per-server pending, paused, eligible-unclaimed and active counts add up to the
+fleet totals. One difference is deliberate: a running claim takes precedence,
+so an investigation on its last attempt is `active` here while the fleet
+`blocked` total counts it until it ends.
+
+- **Unchanged:** the payload holds server IDs and names, counts, limits and
+  timestamps only: no evidence, paths, command lines, analysis, provider text or
+  key material. It sends no provider request and writes nothing. Admission,
+  claims, pause, budget, schema, roles and response authorization are unchanged.
+- **Limitations:** this is a point-in-time read, and "eligible" is not a promise
+  to start: shared start gates, worker capacity, the per-server limit and pause
+  still apply. Pause is read as the fleet status reads it, so a manually
+  corrupted per-server AI policy is not shown as paused although provider calls
+  for that server are refused. No page shows the breakdown yet; the UI panel, servers beyond the
+  first 50 and matched production acceptance remain open.
+
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
 The administrator's Investigations queue notice now names the admission control
@@ -3528,7 +3633,51 @@ only the fixture database URL. Three matched eight-subject pairs retained the
 same evidence fingerprint, 12 provider calls and four follow-ups per execution.
 Peak simultaneous provider handling rose from one to four in all three pairs.
 Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
-The CLI has no MySQL mode, and matched production measurements remain open.
+At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
+one. Matched production measurements remain open.
+
+### Native MySQL mode for the triage benchmark — worker checkpoint #976
+
+`tools/benchmark_ai.py --database mysql` runs the same disposable fixture on a
+MySQL database, so a serial/parallel pair can be repeated natively:
+
+```bash
+export AI_BENCHMARK_MYSQL_URL='mysql+pymysql://USER:PASSWORD@HOST:3306/EMPTY_DATABASE?charset=utf8mb4'
+python tools/benchmark_ai.py --database mysql --runs 8 --concurrency 1 --provider-delay-ms 150 > serial.json
+python tools/benchmark_ai.py --database mysql --runs 8 --concurrency 4 --provider-delay-ms 150 > parallel.json
+python tools/compare_ai_benchmarks.py serial.json parallel.json
+```
+
+- **Disposable only:** the URL is read from `AI_BENCHMARK_MYSQL_URL`, never from
+  the command line or `DATABASE_URL`. It must be a `mysql+pymysql` URL that names
+  a host and a database. The tool refuses to start unless that database has no
+  tables or views, and changes nothing in a refused database. Never point it at
+  a Mr Patchy deployment database.
+- **One run at a time:** the run holds a MySQL advisory lock named after the
+  database from before the empty check until cleanup. A second run against the
+  same database is refused and changes nothing.
+- **Cleanup:** on success and on failure it drops only the application's own
+  tables, so the next run can reuse the database. A table or view that someone
+  else created during the run is left in place and reported as a count on
+  stderr; the database is then no longer empty.
+- **No secrets in output:** refusals before the run starts are fixed text. A
+  connection failure reports only the error class. The report never contains
+  the URL. A failure inside the fixture itself is an ordinary Python traceback.
+- **Report:** `database` is `sqlite` or `mysql`, and `database_version` is the
+  server (or SQLite library) version. The comparator reads older reports as
+  SQLite, refuses a pair measured on different backends and states the backend.
+  Server versions are informational and may differ.
+- **Unchanged:** SQLite stays the default. The workload, assertions, provider and
+  SSH stubs, admission, budget, pause and response authorization are the same on
+  both backends; no application code changed.
+
+One matched eight-subject pair on a local MySQL 8.0.46 server (150 ms provider
+delay) kept the same evidence fingerprint and 12 provider calls. Peak
+simultaneous provider handling rose from one to four and throughput from 2.222
+to 5.590 subjects per second. These are loopback fixture numbers on one
+machine, not a production claim. The CI `mysql` job runs a four-subject pair on
+MySQL 8.4. Multi-process workers against MySQL and matched production
+measurements remain open.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -4221,6 +4370,39 @@ classify entries or authorize any response. Agent collection, inventory/UI
 wiring, provenance, AI classification and native acceptance remain open, so
 roadmap F is still incomplete.
 
+Worker checkpoint (issue #844): a pure, I/O-free contract (`app/udev_rules.py`)
+parses one captured udev `*.rules` file and a captured listing of the rules
+directories. Rules follow udev(7) and systemd's token validation: leading
+whitespace is stripped from each physical line, `#` lines are ignored even
+inside a continuation, blank lines are skipped, backslash continuations are
+joined, and each rule's
+comma-separated `KEY[{attr}]OP"value"` pairs become match and assignment records
+with `LABEL`/`GOTO`, its file and starting line. Plain strings honour only
+`\"` (any other backslash, including `\\`, is literal); `e"..."` strings use C
+escapes. A physical line of 16384 bytes or more (`UDEV_LINE_SIZE`) stops the
+file as udev does, and a joined line of that size is ignored; both are gaps. `RUN` (default `{program}`), `PROGRAM`
+and `IMPORT{program}` become execution records with a bounded command, the
+full-command SHA-256, the program token, the `/usr/lib/udev` and `/lib/udev`
+paths udev searches for a relative name and a flag for `$`/`%` substitutions.
+`RUN{builtin}` and `IMPORT{builtin}` are builtins with no external program, and
+`IMPORT{file|db|cmdline|parent}` are not executions. `PROGRAM`, `IMPORT` and
+`TEST` written with `=`/`+=`/`:=` are recorded as the `==` match udev runs, with
+the written operator kept. Unknown keys, missing or unexpected attributes,
+unknown `RUN`/`IMPORT` types, operators a key does not accept (such as `RUN==`
+or `MODE-=`), quoting and escape errors are line-numbered gaps and the rule is
+skipped, as udev skips it. A `GOTO` with no matching `LABEL` is a gap.
+Effective files apply `/etc/udev/rules.d` > `/run/udev/rules.d` >
+`/usr/local/lib/udev/rules.d` > `/usr/lib/udev/rules.d` > `/lib/udev/rules.d`
+precedence in lexical name order, list shadowed copies as overridden, report a
+`/dev/null` symlink as masking and list hidden (`.`-prefixed) and non-`.rules`
+names as ignored. Unknown
+directories and malformed, duplicate or unreadable entries are gaps.
+Over-limit, non-UTF-8 or NUL input yields no partial records, every record
+keeps `origin: not_assessed`, and no rule or command is ever executed. Agent
+collection, catalog `parse`-level wiring, persistence, UI, provenance, AI
+classification and native acceptance remain open, so roadmap F is still
+incomplete.
+
 Worker checkpoint (issue #711): a pure, I/O-free contract
 (`app/scheduled_jobs.py`) parses captured anacrontab text and individual at
 spool jobs into typed records. For anacrontab it returns jobs with numeric or
@@ -4262,6 +4444,33 @@ generated or transient), and `package_verified` is always false. Uncollected sea
 directories, unreadable, oversized or malformed input, invalid names, unresolved,
 dangling or foreign links, missing trigger targets and over-cap input all become
 explicit coverage gaps. The result carries a deterministic digest. Runtime unit state, read-only collection wiring, package provenance, UI and AI classification remain open, so roadmap F is not complete. Fixed systemd specifiers are covered by the #702 checkpoint below; host/boot/environment-dependent specifiers and `$VAR` substitution remain explicit gaps.
+
+Worker checkpoint (issue #702, account enumeration): this is contract-only, so
+roadmap F remains incomplete. The new pure module `app/systemd_user_accounts.py`
+decides which accounts' `systemd --user` managers to resolve, from captured
+read-only observations. `parse_login_defs()` reads `UID_MIN`/`UID_MAX` from
+`/etc/login.defs`. Absent keys use the documented `login.defs(5)` defaults
+(1000/60000) and are listed as `defaulted`. A non-decimal value (including the
+octal and hexadecimal forms shadow-utils also accepts), an inverted range or an
+uncollected file falls back to those defaults with a gap. Duplicate keys follow
+shadow-utils (last value wins) and are reported. `parse_passwd()` reads `getent
+passwd` output into name, UID, GID, home and shell. It never carries the password
+or GECOS fields forward, and a malformed line is identified only by its line
+number. Malformed lines, invalid names or IDs, and over-cap input (4 MiB or
+50,000 lines) become gaps. A name that appears more than once is dropped as
+ambiguous. `candidate_accounts()` combines these with a validated lingering
+list. The candidates are root, regular accounts in the UID range and every
+lingering account. Each one has a `default_runtime_dir` of `/run/user/<uid>` (the
+logind convention, not an observation) and an `interactive_shell` flag.
+Non-interactive accounts are kept, because lingering or `su -s` sessions still
+start their manager. Lingering names missing from passwd, unusable homes, and
+incomplete or uncollected upstream observations are reported as gaps. Because a
+user manager runs per UID, candidates whose UID is shared by more than one passwd
+name are dropped and reported as `passwd_duplicate_uid`. A vendor
+`/usr/etc/login.defs` is not merged, and `getent passwd` does not enumerate every
+NSS backend (for example sssd/LDAP with `enumerate = false`), so such directory
+accounts can be missing from a complete result. Running the collection commands, observed
+runtime directories, runtime unit state, UI and AI classification remain open.
 
 Worker checkpoint (issue #702, per-user units): the same contract adds
 `resolve_user(observations, home, runtime_dir, account, collected_roots)` for one
@@ -4343,6 +4552,31 @@ environment. It can carry `config_home`, `data_home` and `cache_home`, plus
   are `local`. `%E`/`%C` follow valid config/cache homes.
 - **Still open:** manager-environment collection, lingering/runtime state,
   account enumeration, collection wiring, UI and AI classification.
+
+### systemd version-gated specifiers — worker checkpoint #702
+
+Contract-only; roadmap F remains incomplete. This settles the earlier
+limitation that system `%u`/`%U`/`%h`/`%s` were assumed to follow current
+`systemd.unit(5)` because the systemd version was unknown.
+
+- **Parser:** `parse_systemd_version(text)` reads the first line of
+  `systemctl --version` (`systemd N` with an optional `(package-version)`).
+  Missing, oversized, NUL, leading-zero, out-of-range or trailing-text input
+  returns no version and a `systemd_version_*` gap; nothing is guessed.
+- **Gating:** `resolve()` and `resolve_user()` take an optional
+  `systemd_version`. From upstream NEWS, `SPECIFIER_MIN_VERSION` records the
+  first release that gave each specifier its current meaning: 228 for
+  `%u %U %h %s` (earlier releases resolved them from `User=`), 236 for
+  `%S %C %L`, 239 for `%E %j %J` and 240 for `%g %G`. An older release leaves
+  those specifiers raw with the existing `unexpanded_specifier` gap. For
+  example, EL7's systemd 219 never gets `%h`=/root.
+- **Invalid version:** a supplied value that is not an integer in 1–9999
+  withholds every version-dependent specifier and adds `systemd_version_invalid`.
+- **Compatibility:** omitting the version keeps the earlier output, limitation
+  text and digest exactly. When a version is supplied, results carry
+  `systemd_version`, and the limitations name whether it was applied.
+- **Still open:** running `systemctl --version` in the collector, collection
+  wiring, runtime state, UI and AI classification.
 
 ### Individual cron jobs from crontab files — worker checkpoint #664
 
@@ -5438,6 +5672,33 @@ attention only: they assess no HTTP/TLS readiness, grant no failover, serving or
 response authority, and read/dismiss stays separate from acknowledgement. Still
 planned for this requirement: endpoint-agent resource metrics and readiness,
 GCP-node inventory, HTTPS/Caddy checks and unified dashboard acceptance.
+
+### Unified deployment-health summary — worker checkpoint #843
+
+Activity → Workers now opens with an admin-only **Deployment health** card, backed by
+`GET /api/operations/deployment-health` (`app/deployment_health.py`). The card combines
+controllers, workers and endpoint agents into one shared state vocabulary.
+
+- **States:** offline, degraded, unknown, maintenance and healthy. The overall state is
+  the worst state present, in that order. A deployment with nothing counted is
+  `unknown`, never healthy.
+- **Workers:** these reuse expected workers, whether configured or inferred.
+  - missing, stale or stopped → offline
+  - version mismatch → degraded
+  - unknown → unknown
+  - draining or drained → maintenance
+  - reporting → healthy
+  - An invalid expectation makes the component unknown.
+- **Controllers:** with `MRPATCHY_EXPECTED_CONTROLLER_IDS` configured, the same
+  mapping applies to the expected list. Without it, only currently reporting
+  controllers are counted. A gap states that a missing controller cannot be
+  detected, and retained stopped or stale history is never shown as offline.
+- **Endpoint agents:** these reuse the existing `agent_fleet_health` counts.
+- **Unchanged:** responses carry counts, sources and fixed-text reasons and gaps only.
+  The summary runs no checks and changes no state. Notifications, roles and failover,
+  drain, repair and response authority are unchanged.
+- **Limitations:** HTTP/TLS readiness, resource metrics and GCP-node inventory remain
+  planned for this requirement, as does the unified dashboard's full acceptance.
 
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
@@ -9884,6 +10145,17 @@ also still required before delivery.
 
 The bell panel and the notification center each offer **Mark shown read**. The client sends `POST /api/notifications/read-batch` with the exact `{id, revision}` pairs it displayed, at most 100 per request. Each pair follows the single-item `mark_read` revision rule, so an event escalated or reopened after the page loaded stays unread at its newer revision. Events that no longer exist or are hidden from the user's current role are counted as unavailable and are never written, and the response does not say which reason applied. Malformed, duplicate, empty, oversized or above-current-revision batches are rejected before any write. One audit row records each batch that marks anything. The route is self-service with the existing session, CSRF and role filtering. Read state remains per-account and never acknowledges alerts, resolves incidents, approves AI output or runs remediation. There are no schema changes. Remaining: a filter-wide "mark all matching" across pages is intentionally not offered, because it cannot bind the revisions the user actually saw.
 
+### Restore a dismissed notification — worker checkpoint #833
+
+Dismissing a notification can now be undone for the same account. In the notification center, **Include dismissed** marks each dismissed item as *dismissed* and offers **Restore** in place of Dismiss.
+- **API:** the client sends `POST /api/notifications/{id}/restore` with the revision it displayed. When that revision is the event's current revision and this account dismissed it, the account's dismissal is cleared and the item returns to the default history.
+- **Read state is kept**, so restoring never inflates the unread badge.
+- **Idempotent:** a stale revision, an undismissed event or a repeated restore changes nothing, and an event this account never touched gets no state row.
+- **Same checks as read/dismiss:** session, CSRF and current-role checks apply. A hidden or malformed event returns 404 and an above-current revision returns 400.
+- **Audit and sync:** each effective restore writes one `restore notification` audit row. Restore changes the account's stream cursor, so the account's other tabs refresh.
+- **Focus:** keyboard focus stays on the same card after Dismiss or Restore, even though the clicked button is briefly disabled.
+- **Unchanged:** restore is per-account only. It never acknowledges an alert, resolves an incident, approves AI output, runs remediation or changes another user's state, and there are no schema changes.
+
 ### Shared AI start gates in the worker status card — worker checkpoint #727
 
 The administrator Investigations page now reads the #546 snapshot and shows a
@@ -10258,6 +10530,43 @@ The startup catalog listed `/etc/xdg/autostart` and `~/.config/autostart` as met
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. A `system` origin is not a verified package default.
 - **Validation:** `tests/test_xdg_autostart.py` has 17 tests. They cannot run on main, where the module does not exist, and they pass on the branch. Four review-follow-up regressions fail on the earlier head `78168b5`: `sh -c '…'`, an unquoted backslash, each reserved character, and `AutostartCondition`.
 - **Remaining:** collection wiring into the startup inventory, per-user directory enumeration, provenance and UI.
+
+### Fleet known-good candidate list — worker checkpoint #928
+
+Roadmap B slice: administrators can now find a candidate without already knowing
+an assessment that links to it. `GET /api/ai/known-good/candidates?state=active|revoked|all`
+(administrator only, read-only, 1–50 per page) returns candidates newest first, with
+a fingerprint tie-break. Each item gives the fingerprint, version, model,
+classification source, origin assessment and subject, and the origin server (with
+whether it is still active). It also gives the revocation time, actor and reason,
+and per-page counts of linked observations and exact-match reuses, using two
+grouped queries. It never returns the canonical contract, saved result, snapshot,
+observation JSON or evidence. It takes no locks, writes nothing and makes no audit
+or provider calls.
+
+The Fleet known-good cache panel in AI activity adds an on-demand **Candidates**
+list with an Active/Revoked/All filter, paging, escaped text, an **Origin
+assessment** link (where Revoke and Linked servers already live), Retry, and a
+stale-response guard. Viewers never request it. Lookup, publication, revocation,
+approval, budget, pause, role and response boundaries are unchanged. Search by
+hash, bulk revocation and matched SQLite/MySQL production acceptance remain open.
+### Linked servers for a fleet known-good candidate — worker checkpoint #891
+
+Roadmap B slice: explain cache hits and retain visible per-host observations.
+`GET /api/ai/known-good/{fingerprint}/observations` (administrator only, read-only)
+pages the retained observations bound to one durable candidate, newest first with
+an assessment-ID tie-break. Each item has a role: `origin` (the assessment that
+published the candidate), `reuse` (exact-match reuse with no provider call) or `linked`
+(an independent AI assessment with the same fingerprint), plus the server, whether
+that server is still active, and links. It returns identifiers and timestamps only,
+never observation JSON, snapshots, evidence or results. It takes no locks, writes
+nothing and makes no audit or provider calls.
+
+On the assessment page, a "Linked servers" section loads lazily below published,
+reused or revoked candidates. It has escaped names, paging, Retry and a stale-response
+guard, and states that linkage grants no approval and authorizes no response. This
+does not complete roadmap B: complete context collection, the canonical fingerprint
+over full evidence and SQLite/MySQL runtime acceptance remain open.
 
 ### dhclient hook contract — worker checkpoint #1063 (roadmap F)
 

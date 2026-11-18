@@ -17,6 +17,8 @@ MAX_STAGE_MS = MAX_ELAPSED_SECONDS * 1000
 MAX_QUEUE_AGE_SECONDS = 86_400
 LEGACY_QUEUE_AGE_SECONDS = 2
 MAX_SINGLE_SERVER_SLOTS = 4
+DATABASES = ('sqlite', 'mysql')
+MAX_DATABASE_VERSION_CHARS = 64
 REPORT_ROUNDING_RADIUS = Decimal('0.0005')
 STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
@@ -221,7 +223,17 @@ def _validate(report, label):
                                      f'{label}.retained_history_rows')
     if retained_history_rows > 50_000:
         raise ComparisonError(f'{label}.retained_history_rows must be between 0 and 50000')
+    # Older fixtures could only measure their temporary SQLite file.
+    database = report.get('database', 'sqlite')
+    if database not in DATABASES:
+        raise ComparisonError(f'{label}.database must be sqlite or mysql')
+    database_version = report.get('database_version')
+    if database_version is not None and (
+            not isinstance(database_version, str) or not database_version.isprintable()
+            or not 1 <= len(database_version) <= MAX_DATABASE_VERSION_CHARS):
+        raise ComparisonError(f'{label}.database_version must be a short printable string')
     return {
+        'database': database, 'database_version': database_version,
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'fixture_hosts': fixture_hosts, 'single_server_slots': single_server_slots,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
@@ -258,7 +270,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     if (base['execution'], base['concurrency']) == (current['execution'], current['concurrency']):
         raise ComparisonError('candidate must use a distinct execution configuration')
     controls = (
-        'runs', 'fixture_hosts', 'single_server_slots',
+        'database', 'runs', 'fixture_hosts', 'single_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
         'queue_age_seconds', 'retained_history_rows',
         'provider_calls', 'input_tokens', 'output_tokens',
@@ -287,6 +299,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'queue_age_seconds': base['queue_age_seconds'],
             'queue_age_source': base['queue_age_source'],
             'retained_history_rows': base['retained_history_rows'],
+            'database': base['database'], 'database_version': base['database_version'],
             'cost_status': base['cost_status'],
         },
         'candidate': {
@@ -301,6 +314,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'queue_age_seconds': current['queue_age_seconds'],
             'queue_age_source': current['queue_age_source'],
             'retained_history_rows': current['retained_history_rows'],
+            'database': current['database'], 'database_version': current['database_version'],
             'cost_status': current['cost_status'],
         },
         'capability': {
@@ -324,6 +338,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'latency': 'Negative elapsed/stage deltas indicate lower fixture latency.',
             'throughput': 'Positive throughput deltas indicate higher fixture throughput.',
             'scope': 'Disposable loopback fixture only; this comparison does not establish production performance.',
+            'database': 'Both reports measured the same database backend; server versions are informational and may differ.',
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
         },
     }
