@@ -5222,6 +5222,60 @@ collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
 `entries_parsed` wiring, persistence, UI, provenance and AI classification. No
 schema, API, auth or response-authorization change.
 
+### initramfs-tools build-hook contract — worker checkpoint #1074
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/initramfs_hooks.py` is a pure, versioned contract for which executables in
+`/usr/share/initramfs-tools/hooks` and `/etc/initramfs-tools/hooks` run as root
+on every initramfs build. A build happens on every `update-initramfs`,
+including the one `/etc/kernel/postinst.d/initramfs-tools` starts after each
+kernel package install, so these hooks fire on routine patching. It takes
+captured entry metadata and never reads a hook's contents.
+
+- **Source.** The rules come from the shipped `initramfs-tools-core
+  0.142ubuntu25.8` `mkinitramfs` and `hook-functions` (`set_initlist`,
+  `get_prereq_pairs`, `call_scripts`, `run_scripts_optional`), extracted from
+  the Ubuntu 24.04 package, not from recollection.
+- **Two passes.** Packaged hooks run first (with
+  `STAGE_KERNEL_MODULE_COPYING=1`), then local hooks. A same-named local hook
+  does not replace the packaged one; both run. A missing directory is skipped.
+- **Listing.** The `"$dir"/*` glob skips dot-names. Names matching
+  `*[![:alnum:]._-]*` are ignored, so a `.dpkg-old` backup still runs.
+  Directories (followed), dangling symlinks, entries without any execute bit,
+  `noexec` mounts and hooks `sh -n` rejects are ignored. Non-ASCII names depend
+  on the build locale and are unresolved. `set_initlist`'s empty-directory
+  check also matches a real entry named `*`, which stops the listing when the
+  glob reaches it (in the C locale, before every hook). Such an entry is a
+  blocking `glob_literal_entry` gap, and that pass's listable hooks are
+  unresolved.
+- **Invocations.** Every listed hook runs as root once with `prereqs` while
+  `tsort` computes the order, even when an `OPTION=` gate later disables it,
+  then once with no arguments. The order within a pass is not established.
+  `call_scripts` runs any regular file another hook names as a prerequisite,
+  including files `set_initlist` ignored, and that is reported as a gap: an
+  executable one runs as root, and one without an execute bit or on a `noexec`
+  mount fails to execute and aborts the build. A failing hook aborts the
+  build.
+- **OPTION= gates.** The value follows `sed '/^OPTION=/!d;$d;…'`, so an
+  `OPTION=` on the file's last line is dropped. The hook runs only when the
+  named variable is non-empty and not `n`. An unsupplied value is
+  `gate_unknown`, and a multi-line or non-identifier value is `gate_invalid`.
+  Both are listed as `conditional`.
+- **Fail closed.** An unobserved family, generator, directory, mount or `sh -n`
+  result, an unreadable or truncated listing, malformed entries and over-limit
+  input are gaps, and `complete`/`covered` are false. RPM (dracut) and Debian
+  installs without initramfs-tools are `applicable: false` and not covered.
+  `action_authorized` is always false, and no result is a safety verdict.
+- **Validation.** `tests/test_initramfs_hooks.py` pins the name rule against
+  dash, and a live test runs the shipped functions verbatim under dash as root
+  and compares the hooks actually invoked with the contract's output. Five
+  independent mutations are each caught.
+
+**Not covered:** boot-time `scripts/` that run inside the initramfs, dracut,
+`mkinitramfs -d`, agent collection of this metadata, catalog wiring,
+persistence, UI, provenance and AI classification. No schema, API, auth or
+response-authorization change.
+
 ### ifupdown interface hook contract — worker checkpoint #1052
 
 Contract increment only; the startup-awareness requirement remains incomplete.
