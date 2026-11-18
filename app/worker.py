@@ -1079,10 +1079,21 @@ def _loop(reporter):
                     # waits. Alternate purposes even with a serial pool. Only the
                     # coordinator scores; any supported worker may claim triage.
                     owner=(reporter.id,reporter.boot) if hasattr(reporter,'id') else None
+                    open_slots = capacity['ai'] - len(ai_tasks)
+                    scoring_available = is_leader and 'scoring' not in ai_tasks.values()
+                    scoring_turn = open_slots > 1 or (open_slots == 1 and next_ai == 'scoring')
+                    if scoring_available and scoring_turn:
+                        try:
+                            with Session() as s:
+                                scoring_available = update_scores.needs_dispatch(s)
+                        except Exception:
+                            # Keep normal dispatch if the optional hint fails. The
+                            # scoring worker still checks settings and recovery.
+                            log.exception('Update scoring dispatch check failed')
                     while len(ai_tasks)<capacity['ai']:
-                        scoring=is_leader and next_ai=='scoring' and 'scoring' not in ai_tasks.values()
-                        if scoring:
+                        if scoring_available and next_ai == 'scoring':
                             ai_tasks[ai.submit(update_scores.run_one)]='scoring';next_ai='triage'
+                            scoring_available = False
                         else:
                             ai_tasks[ai.submit(investigate_one,owner)]='triage';next_ai='scoring'
                     last_ai=now

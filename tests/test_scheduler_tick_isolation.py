@@ -5,7 +5,7 @@ import time
 
 import pytest
 from app import worker, persistence, response_monitor, service_monitor, execution_scans, plan_notifications, release_notifications
-from app.db import Session, Host, Job
+from app.db import Session, Host, Job, Setting
 
 TICKS = (
     ('patch schedules', worker.scheduling, 'tick'),
@@ -25,6 +25,9 @@ def test_failed_tick_does_not_skip_other_ticks_or_dispatch(admin, monkeypatch, c
     with Session() as s:
         s.add(Host(id='tick-host', name='Tick fixture', address='192.0.2.2', fingerprint=''))
         s.add(Job(id='tick-job', host_id='tick-host', action='refresh'))
+        s.merge(Setting(key='config', value={'ai_enabled': True, 'ai_updates_enabled': True,
+                                             'ai_model': 'fixture-model'}))
+        s.merge(Setting(key='openai_key', value={'encrypted': 'fixture'}))
         s.commit()
     offsets = [0, 1, 2, 30, 31, 60, 61, 90, 91]
     step = [-1]
@@ -117,3 +120,61 @@ def test_optional_producer_import_failure_does_not_skip_other_producers(monkeypa
     worker.periodic_ticks(101, state)
     assert called == [name for name, _, _ in TICKS if name != 'startup schedules']
     assert attempts == ['.persistence']
+
+
+@pytest.mark.parametrize(('enabled', 'recover', 'expected'), [
+    (False, False, ['triage', 'triage', 'triage', 'triage']),
+    (True, False, ['scoring', 'triage', 'scoring', 'triage']),
+    (False, True, ['scoring', 'triage', 'triage', 'triage']),
+])
+def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatch, enabled, recover, expected):
+    with Session() as s:
+        s.merge(Setting(key='config', value={'ai_enabled': True, 'ai_updates_enabled': enabled,
+                                             'ai_model': 'fixture-model'}))
+        s.merge(Setting(key='openai_key', value={'encrypted': 'fixture'}))
+        if recover:
+            s.add(worker.ai_runs.AIRun(id='orphan-score', purpose='update_scoring', state='running'))
+        s.commit()
+
+    offsets = iter((0, 5, 10, 15))
+    now = base = time.time()
+    dispatched = []
+
+    def wait(_):
+        nonlocal now
+        offset = next(offsets, None)
+        if offset is None:
+            return True
+        now = base + offset
+        return False
+
+    class Pool:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def submit(self, fn, *args):
+            if fn is worker.investigate_one:
+                dispatched.append('triage')
+            elif fn is worker.update_scores.run_one:
+                dispatched.append('scoring')
+                if recover:
+                    fn(*args)
+            future = Future()
+            future.set_result(None)
+            return future
+
+    monkeypatch.setattr(worker.concurrent.futures, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(worker.stop, 'wait', wait)
+    monkeypatch.setattr(worker, 'time', SimpleNamespace(time=lambda: now, sleep=lambda _: None))
+    monkeypatch.setattr(worker, 'periodic_ticks', lambda *_: None)
+    monkeypatch.setattr(worker, 'reconcile_interrupted_advisory_jobs', lambda: None)
+    monkeypatch.setattr(worker, 'prune_history', lambda *_: None)
+    monkeypatch.setattr(worker.operations, 'collect_alerts', lambda **_: None)
+    reporter = SimpleNamespace(capacity={'polls': 1, 'jobs': 1, 'ai': 1}, heartbeat=lambda *args: False)
+    worker._loop(reporter)
+
+    assert dispatched == expected
+    if recover:
+        with Session() as s:
+            recovered = s.get(worker.ai_runs.AIRun, 'orphan-score')
+            assert recovered.state == 'interrupted' and recovered.calls == 0

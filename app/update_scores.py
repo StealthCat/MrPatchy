@@ -192,6 +192,17 @@ def _batch_scores(s, ids):
     return {row.id:row for row in s.scalars(select(UpdateScore).where(UpdateScore.id.in_(ids)))}
 
 
+def needs_dispatch(session):
+    """Schedule enabled scoring or recovery of a previously started run."""
+    settings = config(session)
+    if settings['ai_enabled'] and settings['ai_updates_enabled']:
+        return True
+    run = ai_runs.AIRun
+    return session.scalar(select(run.id).where(
+        run.purpose == 'update_scoring', run.state == 'running',
+    ).limit(1)) is not None
+
+
 def run_one():
     lock=Lock('ai-update-scoring')
     if not lock.acquire(False):return
