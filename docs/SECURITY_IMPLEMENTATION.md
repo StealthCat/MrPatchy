@@ -10538,6 +10538,48 @@ checkpoint changes no runtime, schema, admission, provider call or response
 authority.
 
 
+### AI control mode in triage benchmark reports — worker checkpoint #1061
+
+Before this change, `tools/benchmark_ai.py` stored a fixture config without
+`ai_control_mode`. The application therefore read it as the implicit `legacy`
+mode, which uses separate rolling-hour limits. Reports did not say which mode
+they measured, and the comparator could not detect a mixed pair.
+
+- **`--control-mode {legacy,unthrottled}`:** the default is `legacy`, which keeps
+  the earlier behavior. The chosen mode is now stored explicitly.
+  `unthrottled` removes only Mr Patchy's own pacing and spend cap.
+- **What is recorded:** the report's `ai_control_mode` is read back from the
+  application's effective config during the run, not copied from the flag.
+- **Comparator:**
+  - A report without the field is read as `legacy`, with
+    `ai_control_mode_source: legacy implicit default`.
+  - An unknown value is refused.
+  - A pair measured under different modes is refused with
+    `capability mismatch: ai_control_mode differs`.
+  - Both summaries state the mode.
+- **Retained records:** the raw reports in `docs/benchmarks/ai-equivalence-c86141a/`
+  are unchanged. Their two `*-comparison.json` files were regenerated with the
+  comparator, and the only difference is the added mode fields
+  (`legacy implicit default`). `tests/test_ai_benchmark_records.py` still
+  requires an exact match.
+- **Validation:** `tests/test_ai_benchmark_control_mode.py` has 24 tests. All 24
+  fail against main's tools. Removing the mismatch refusal makes 5 of them fail.
+  An unthrottled 4-subject serial/parallel pair compares as equivalent and keeps
+  the legacy run's workload fingerprint. Local 8-subject runs with a 40 ms
+  provider delay gave the following, on loopback fixtures only:
+
+  | Mode | Serial | Parallel (4) |
+  | --- | --- | --- |
+  | legacy | 7.04/s | 11.02/s |
+  | unthrottled | 7.21/s | 10.41/s |
+
+- **Still open:** `rate`, `daily_cap` and `rate_and_daily` benchmark modes. Rate
+  pacing deliberately spaces starts, and a capped mode needs a priced fixture
+  model. MySQL records (#976) and production measurements are also open.
+- **Unchanged:** no runtime, admission, provider, schema or
+  response-authorization behavior.
+
+
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
 The server Overview now reports a read-only lifecycle assessment for reviewed
