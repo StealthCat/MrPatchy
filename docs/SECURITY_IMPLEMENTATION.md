@@ -11531,3 +11531,25 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+### systemd-tmpfiles kernel-hook and startup-file contract — worker checkpoint #1097 (roadmap F)
+
+`systemd-tmpfiles-setup.service` applies `tmpfiles.d` as root at every boot. A `w /proc/sys/kernel/core_pattern - - - - |/tmp/x` line sets a program that the kernel itself runs, without going through `sysctl.d` (#1088). A line such as `f /etc/cron.d/job …`, `L+ /etc/ld.so.preload - - - - …` or `C /etc/systemd/system/x.service …` creates a startup file. No contract covered `tmpfiles.d`.
+
+- **Change:** a new pure module, `app/tmpfiles_exec.py`. From captured `tmpfiles.d` text it reports two things:
+  - the effective lines that write `kernel.core_pattern`, `kernel.modprobe`, the uevent helper (`kernel.hotplug` or `/sys/kernel/uevent_helper`), `kernel.poweroff_cmd` or `fs.binfmt_misc.register`, in apply order with the last writer and the program it names;
+  - every effective `f`/`L`/`C`/`w` line that creates, replaces, writes or links into a listed startup location, with its condition (`if_absent`, `replace`, `write_if_present` or `append_if_present`).
+
+  Each entry gives the source file and line, the type, the modifiers (`!` boot only, `-` ignore errors) and the argument, bounded to 512 bytes, with its SHA-256.
+- **Reference:** systemd 255 (255.4-1ubuntu8.18). The rules were derived by running the compiled `systemd-tmpfiles --root … --create --boot` on fixture trees:
+  - Precedence is `/etc` → `/run` → `/usr/local/lib` → `/usr/lib`. Only `*.conf` files are read, in name order, and a link to `/dev/null` masks a file.
+  - Field quoting and C escapes are applied. In the argument, quotes are kept, `%%` becomes `%` and escapes are decoded. `~` means base64.
+  - Duplicate-line rules: the first `f`/`L`/`C`/`d`/`p`/… line for a path wins unless the later one is identical. A `w` line conflicts with a `w`/`x`/`X`/`r`/`R` line for the same path, except that `w+` lines after a `w+` all apply.
+  - Map order: all non-glob-type lines apply before the glob-type map (`w`, `x`, `z`, …), and each map applies in the order its paths first appeared. So `f+` runs before `w`, and among `w` lines a later-appearing path or pattern is written later.
+  - `f` writes only when it creates the file, so it never changes a kernel setting. `f+` truncates and writes. `w` writes only to an existing file. Only `w` expands globs, and `*` does not match `/` or hidden names.
+  - Rejected lines include relative paths, `w` without an argument, invalid base64, and modifiers unknown to v255 (such as `$`).
+  - A seeded random comparison of 10,000 fixture trees found no difference in any stand-in kernel value or in the set of created startup files. It simulates regular-file overwrite and append, and covers precedence, masking, duplicate and conflict rules, globs, modifiers, escapes, base64 and simplified paths.
+- **Fail-closed gaps, which mark the result incomplete:** unreadable, over-limit, invalid UTF-8 or NUL input; an unfollowed symlink, which never falls back to a lower-priority file; malformed or duplicate input; host-dependent specifiers in the path of a writing line or in a relevant argument; credential (`^`) values; modifiers newer releases may accept; and arguments or fields this parser cannot unescape. `multiple_writers` is non-blocking: every writer is listed.
+- **Unobserved, stated in every result:** `--user` tmpfiles; the live `/proc/sys` value and kernel write failures or truncation; later `sysctl.d` or runtime writes; credential and `/usr/share/factory` contents; whether a target already exists; startup locations outside the fixed list; and removal, mode and ACL lines.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and nothing is labelled safe.
+- **Validation:** `tests/test_tmpfiles_exec.py` has 20 tests, and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
+- **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
