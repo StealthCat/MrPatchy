@@ -1,3 +1,7 @@
+## 1.75.38 — 2026-11-18
+
+1. [PR #1113](https://github.com/StealthCat/MrPatchy/pull/1113): Daily-cap refusals preserve the reset boundary observed during admission, so a retry recorded after that boundary can be reconsidered immediately. Rate pacing follows only rate waiters; cap and provider-backoff waits do not delay that queue. Attempt refunds and authoritative admission remain. Compatibility: no schema change; previously deferred rows keep saved deadlines until re-evaluation, and rows recorded before #1015 may retain the old rate-wait reason until then.
+
 ## 1.75.37 — 2026-11-18
 
 1. [PR #1087](https://github.com/StealthCat/MrPatchy/pull/1087): Fleet AI activity adds an administrator-only **Servers holding the triage backlog** panel showing which servers hold pending process investigations and why each is waiting (active, eligible, retry wait, blocked, AI paused or at the investigation limit), with links to each server's Investigations tab (#975). Display-only; uses the existing read-only `GET /api/investigation-status/servers`. Compatibility: UI only.

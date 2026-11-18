@@ -3176,13 +3176,23 @@ the feature remains outstanding until runtime behavior and acceptance are delive
 A triage subject refused by the authoritative `ai_budget.reserve()` because the
 daily spend cap had no safe reservation was stored with the reason "Waiting for
 shared AI rate eligibility". `ai_retry.failed()` picked that text whenever the
-refusal carried `retry_after`, and the cap refusal does. The cap refusal now marks
-itself with `budget_wait`, and the deferred reason reads "Waiting for the daily AI
+refusal carried `retry_after`, and the cap refusal does. That change identified cap
+refusals explicitly so the deferred reason reads "Waiting for the daily AI
 spend cap to reset; no provider request was sent.". Rate-throttle, provider-backoff
 and pause waits keep their existing reasons. Deferral state, attempt refund and next
 eligibility are unchanged. `tests/test_ai_retry_deferral_reason.py`: the two cap
 cases (`daily_cap`, `rate_and_daily`) fail on main `c86141a` and pass after; the three
 other-wait cases pass on both.
+
+### Triage retry eligibility for the daily cap and rate throttle (#1112)
+
+A spend refusal records the absolute reset reported by reservation admission.
+If the reset has passed before the worker records the refusal, the observation
+is eligible for a fresh check. Rate spacing only follows other rate waiters.
+Provider floors, attempt refunds and authoritative budget checks still apply.
+Existing deferred records keep their saved dates until their next evaluation.
+Focused cases cover both capped modes, recording on either side of reset and
+rate spacing alongside cap and provider waiters.
 
 ### Rate throttle paces smoothly and defers without a charged attempt — worker checkpoint #1021
 
