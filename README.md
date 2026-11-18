@@ -537,8 +537,10 @@ explicit `true` or `false` override; sending `null` or omitting that field from 
 per-server update restores inheritance. Agent-health responses identify the global
 values and whether each effective value is inherited or overridden. Global saves
 use the supplied expected values and return HTTP 409 when another save wins or the
-coordination lock cannot be obtained, rather than replacing a newer policy. The
-Settings and per-server inheritance controls are not yet exposed in the web UI.
+coordination lock cannot be obtained, rather than replacing a newer policy.
+**Settings → Agent maintenance** edits the fleet defaults, and each server's
+**Agent health** tab offers Use global default / On / Off for each option with
+inherited and override indicators.
 
 Scanner incidents now offer **Related evidence** to pivot across stored scanner,
 process, startup/custom-file and package-integrity records on that server. Exact

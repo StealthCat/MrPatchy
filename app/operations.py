@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_budget,ai_credential_notifications,ai_pricing,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
+from . import ai_budget,ai_credential_notifications,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -162,6 +162,9 @@ REPOSITORY_REFRESH_MESSAGE=('Repository metadata refresh is failing and no refre
 # server disabled) stay SMTP/webhook-only so endpoint text and polling noise
 # never reach the bell.
 OPERATIONAL_NOTIFICATIONS={
+    # Notification-only (no outbox Alert): published by deadline_notifications with fixed
+    # text naming the highest overdue priority; severity follows that priority.
+    'patch deadline':('patch-deadline','medium','patching'),
     'recovery':('recovery-required','high','history'),
     'disabled server recovery':('disabled-server-recovery','high','security'),
     'file response hold':('file-response-hold','high','security'),
@@ -170,6 +173,9 @@ OPERATIONAL_NOTIFICATIONS={
     'service hold':('service-hold','high','security'),
     'response integrity':('response-integrity','high','security'),
     'response verification':('response-verification','medium','security'),
+    # Notification-only (no outbox Alert): agent_integrity_notifications classifies controller-written
+    # managed-file findings into counts, so raw endpoint text never reaches the bell.
+    'agent integrity':('agent-integrity','high','agent'),
     'service health':('service-health','medium','security'),
     'service coverage':('service-coverage','medium','security'),
     'execution scan coverage':('execution-scan-coverage','medium','security'),
@@ -206,9 +212,10 @@ TELEMETRY_LOST_MESSAGE=telemetry_lost_message(TELEMETRY_LOST_DEFAULT_MINUTES)
 OPERATIONAL_NOTIFICATION_SOURCE='operations'
 OPERATIONAL_NOTIFICATION_SUBJECT='server'
 
-def _operational_notification(s,host_id,kind,message,now):
+def _operational_notification(s,host_id,kind,message,now,severity=None):
     """Publish one allowlisted server alert as a durable active notification."""
-    notification_kind,severity,tab=OPERATIONAL_NOTIFICATIONS[kind]
+    notification_kind,default_severity,tab=OPERATIONAL_NOTIFICATIONS[kind]
+    severity=severity or default_severity
     notifications.publish(s,source=OPERATIONAL_NOTIFICATION_SOURCE,kind=notification_kind,
         subject_type=OPERATIONAL_NOTIFICATION_SUBJECT,subject_id=host_id,host_id=host_id,
         subject_revision='message-sha256:'+hashlib.sha256(message.encode()).hexdigest(),
@@ -263,6 +270,7 @@ def collect_alerts(now=None,observing_since=None):
         ai_budget.publish_unpriced_model_notification(s,cfg,now)
         _pricing_catalog_alert(s,cfg,record,now)
         ai_budget.publish_cap_notification(s,cfg,now)
+        budget_headroom_notifications.publish(s,cfg,now)
         # In-app only: blocked triage already shows on the Investigations status card.
         triage_block_notifications.publish(s,cfg,now)
         scoring_block_notifications.publish(s,cfg,now)
@@ -291,6 +299,8 @@ def collect_alerts(now=None,observing_since=None):
             overdue_hosts.update(s.scalars(select(Package.host_id).where(Package.host_id.in_(chunk),Package.candidate!='',Package.available_since>0,
                 Package.available_since<now- min(cfg['deadlines'].values())*3600).distinct()))
         settings={row.key:row for row in s.scalars(select(Setting).where(Setting.key.in_([prefix+owner for owner in ids for prefix in ('agent-status:','persistence-baseline:')])))} if ids else {}
+        from . import agent_integrity_notifications
+        agent_integrity_notifications.publish(hosts,now,lambda *args:_operational_notification(s,*args),published)
         lost_minutes=telemetry_lost_minutes(cfg);lost_seconds=lost_minutes*60;lost_message=telemetry_lost_message(lost_minutes)
         for host in hosts:
             if not host_lifecycle.active(host):
@@ -371,6 +381,8 @@ def collect_alerts(now=None,observing_since=None):
         # In-app only: the shared provider floor never had an SMTP/webhook alert.
         from . import ai_provider_backoff
         ai_provider_backoff.publish_notification(s,cfg,now)
+        from . import deadline_notifications
+        deadline_notifications.publish(s,hosts,cfg,now,lambda *args:_operational_notification(s,*args),published)
         for alert in s.scalars(select(Alert).where(Alert.state!='resolved')):
             if alert.id not in active:alert.state='resolved'
         _resolve_operational_notifications(s,published,now)

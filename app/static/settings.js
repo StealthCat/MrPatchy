@@ -5,6 +5,7 @@ const SETTINGS_SECTIONS={
  database:['Database','MySQL connection details and offline migrations.','mysql sqlite connection migration host port password'],
  https:['HTTPS & certificates','Internal and external TLS profiles.','tls ssl certificate acme lets encrypt local ca domain port'],
  history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup'],
+ agents:['Agent maintenance','Fleet defaults for automatic agent upgrade and repair.','agent health maintenance automatic upgrade repair helper collector drift default override inherit'],
  malware:['Malware response','Fleet automatic-response policy for detected malware. Recorded only; not enforced yet.','malware quarantine terminate containment automatic response exclusions signature unknown policy']
 };
 function settingsMatches(query,sections=SETTINGS_SECTIONS){
@@ -18,6 +19,88 @@ function settingsHubCards(query){
 function settingsNav(section){
  return `<div class="settings-nav" role="navigation" aria-label="Settings sections">${[['','All settings'],...Object.entries(SETTINGS_SECTIONS).map(([key,value])=>[key,value[0]])].map(([key,label])=>`<a href="#settings${key?'/'+key:''}" ${key===section?'aria-current="page" class="active"':''}>${esc(label)}</a>`).join('')}</div>`;
 }
+/* Unsaved-change guard. Each Settings form keeps a snapshot of the values it
+ loaded or last saved successfully; leaving with a different value asks first.
+ View filters (Settings search, spend-history period) are not tracked. */
+const trackedSettingsForms=new Set();
+function settingsFormState(form){
+ return JSON.stringify([...form.elements].filter(e=>/^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName)&&!['submit','button','reset'].includes(e.type)&&(e.name||e.id))
+  .map(e=>[e.name||e.id,e.type==='checkbox'||e.type==='radio'?e.checked:e.value]));
+}
+function trackSettingsForm(form){if(form){form.dataset.savedState=settingsFormState(form);trackedSettingsForms.add(form);}}
+function settingsFormSaved(form){if(form&&form.isConnected)form.dataset.savedState=settingsFormState(form);}
+function settingsHasUnsavedChanges(){
+ for(const form of [...trackedSettingsForms]){
+  if(!form.isConnected){trackedSettingsForms.delete(form);continue;}
+  if(form.dataset.savedState!==settingsFormState(form))return true;
+ }
+ return false;
+}
+function discardSettingsChanges(){trackedSettingsForms.clear();}
+// Leaving with unsaved edits asks first. settings.js loads before app.js, so these
+// listeners run before the shell's navigation and Refresh handlers and can hold
+// them. A hashchange cannot be cancelled, so it is undone by moving back through
+// session history (never by rewriting an entry, which would drop the page the
+// user came from) and redone with the same move on Discard changes. Entry
+// positions come from the Navigation API, or else from an index kept in
+// history.state that replaceState preserves.
+const SETTINGS_HISTORY_KEY='mrpatchyHistoryIndex';
+// Where the Navigation API reports entry positions, nothing is written to history:
+// stamping every entry adds a same-document navigation per hashchange, and a reload
+// issued right after a hash navigation could then restore an older entry.
+const navigationIndex=()=>{const entry=window.navigation?.currentEntry;return entry&&Number.isInteger(entry.index)&&entry.index>=0?entry.index:null;};
+const stampsHistory=navigationIndex()===null;
+const stampedIndex=()=>{const s=history.state;return s&&typeof s==='object'&&Number.isInteger(s[SETTINGS_HISTORY_KEY])?s[SETTINGS_HISTORY_KEY]:null;};
+const historyIndex=()=>stampsHistory?stampedIndex():navigationIndex();
+const nativeReplaceState=history.replaceState.bind(history);
+const stampHistory=(state,index)=>index===null||(state!==null&&typeof state!=='object')?state:{...(state||{}),[SETTINGS_HISTORY_KEY]:index};
+if(stampsHistory){
+ history.replaceState=function(state,...rest){const s=state&&typeof state==='object'&&SETTINGS_HISTORY_KEY in state?state:stampHistory(state,historyIndex());return nativeReplaceState(s,...rest);};
+ if(historyIndex()===null)nativeReplaceState(stampHistory(history.state,0),'');
+}
+let settledSettingsHash=location.hash,settledHistoryIndex=historyIndex();
+// Set only while the guard's own history.go undo is in flight. Entries can share
+// an index (rapid back-to-back hash changes settle the newer entry first), so
+// arriving on the settled index is not by itself evidence of an undo.
+let pendingHistoryUndo=null;
+function settleHistory(){
+ let index=historyIndex();
+ if(index===null&&stampsHistory){index=(settledHistoryIndex??-1)+1;nativeReplaceState(stampHistory(history.state,index),'');}
+ settledSettingsHash=location.hash;settledHistoryIndex=index;
+}
+function unsavedSettingsPending(){return !document.getElementById('shell').classList.contains('hidden')&&settingsHasUnsavedChanges();}
+function confirmLeaveUnsaved(proceed){
+ modal('Leave without saving?','<p>You have unsaved Settings changes. Leaving this page discards them.</p><div class="actions"><button type="button" id="unsaved-stay">Stay on this page</button><button type="button" id="unsaved-discard" class="danger">Discard changes</button></div>');
+ const dialog=modalRevision,box=document.getElementById('modal');
+ document.getElementById('unsaved-stay').onclick=()=>{if(dialog===modalRevision)box.close();};
+ document.getElementById('unsaved-discard').onclick=()=>{if(dialog!==modalRevision)return;discardSettingsChanges();box.close();proceed();};
+ document.getElementById('unsaved-stay').focus();
+}
+window.addEventListener('hashchange',event=>{
+ const index=historyIndex(),undo=pendingHistoryUndo;pendingHistoryUndo=null;
+ // Landing back on the settled entry after the guard's own undo: restore it without rendering.
+ if(undo!==null&&index===undo&&location.hash===settledSettingsHash){event.stopImmediatePropagation();return;}
+ if(!unsavedSettingsPending()){settleHistory();return;}
+ event.stopImmediatePropagation();
+ // Without a measurable move (no index, or an entry sharing the settled index) the
+ // address is restored in place; history.go(0) would reload and drop the edits.
+ if(settledHistoryIndex===null||index===settledHistoryIndex){
+  const target=event.newURL;
+  nativeReplaceState(history.state,'',settledSettingsHash||location.pathname+location.search);
+  confirmLeaveUnsaved(()=>{location.href=target;});
+  return;
+ }
+ // A new entry (link, typed address) sits right after the settled one; Back/Forward reports its own position.
+ const delta=index===null?1:index-settledHistoryIndex;
+ pendingHistoryUndo=settledHistoryIndex;history.go(-delta);
+ confirmLeaveUnsaved(()=>history.go(delta));
+});
+document.addEventListener('click',event=>{
+ if(!event.target.closest?.('#refresh-page')||!unsavedSettingsPending())return;
+ event.preventDefault();event.stopImmediatePropagation();
+ confirmLeaveUnsaved(()=>render());
+},true);
+window.addEventListener('beforeunload',event=>{if(unsavedSettingsPending()){event.preventDefault();event.returnValue='';}});
 async function settings(revision=renderRevision){
  const data=await api('/settings');
  if(!currentView(revision,'settings'))return;
@@ -33,6 +116,7 @@ async function settings(revision=renderRevision){
   input.oninput=draw;draw();return;
  }
  if(section==='ai'){renderAISettings(data,revision,container);return;}
+ if(section==='agents'){container.innerHTML='<div class="card" id="agent-defaults"><p class="help">Loading agent maintenance defaults…</p></div>';await agentMaintenanceDefaults(revision);return;}
  if(section==='malware'){container.innerHTML='<div class="card" id="malware-policy"><p class="help">Loading malware response policy…</p></div>';await malwarePolicySettings(revision);return;}
  if(section==='database'){container.innerHTML='<div class="card" id="database-settings"><p class="help">Loading database settings…</p></div>';await databaseSettings(revision);return;}
  if(section==='https'){
@@ -42,11 +126,12 @@ async function settings(revision=renderRevision){
  if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><label>OS support-end advance warning · days<input name="os_lifecycle_warning_days" type="number" min="0" max="730" value="${esc(data.os_lifecycle_warning_days??90)}" required></label><p class="help">Administrators get an in-app notice this many days before a server's verified release leaves standard support or verified Debian LTS coverage. 0 turns the advance notice off; notices after support ends are unchanged.</p><label>Telemetry-loss notice after · minutes<input name="telemetry_lost_minutes" type="number" min="5" max="1440" step="1" value="${esc(data.telemetry_lost_minutes??15)}" required></label><p class="help">Administrators get an in-app notice when an enabled server sends no telemetry for this long. Shorter values report outages sooner but can flag brief network interruptions. The two-minute stale alert and email or webhook delivery are unchanged.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  if(section==='history')container.innerHTML=`<form id="history-settings-form" class="card"><h2>History retention</h2><fieldset><label>Days to retain observations and inventory revisions<input name="history_days" type="number" min="1" max="3650" value="${data.history_days}" required></label><p class="help">The worker uses this period for observation, inventory revision and completed AI log cleanup. Package change history is retained separately.</p><button type="submit" class="primary">Save history retention</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  const form=container.querySelector('form'),result=$('#section-save-result');
+ trackSettingsForm(form);
  form.onsubmit=async event=>{
   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
   const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),os_lifecycle_warning_days:+f.get('os_lifecycle_warning_days'),telemetry_lost_minutes:+f.get('telemetry_lost_minutes'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
   fieldset.disabled=true;result.textContent='Saving…';
-  try{await api('/settings/'+section,'PUT',body);if(currentView(revision,'settings')&&result.isConnected)result.textContent=section==='patching'?'Patch policy saved.':'History retention saved.';}
+  try{await api('/settings/'+section,'PUT',body);settingsFormSaved(form);if(currentView(revision,'settings')&&result.isConnected)result.textContent=section==='patching'?'Patch policy saved.':'History retention saved.';}
   catch(error){if(currentView(revision,'settings')&&result.isConnected)result.textContent=error.message;}
   finally{if(fieldset.isConnected)fieldset.disabled=false;}
  };
@@ -82,9 +167,7 @@ function renderAISettings(data,revision,container){
  container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend','<div class="notice" id="scoring-queue" role="status" aria-live="polite"><strong>Scoring queue</strong> · Loading…</div>');
  (async()=>{const target=$('#scoring-queue');if(!target)return;let q;try{q=await api('/update-scores/status');}catch{q=null;}
   if(!currentView(revision,'settings')||!target.isConnected)return;
-  if(!q||!q.counts){target.innerHTML='<strong>Scoring queue</strong> · Unavailable right now. This never means scoring may start; shared start gates and pause still apply.';return;}
-  const c=q.counts,stopped={ai_disabled:'Central AI provider calls are disabled, so no scoring batch starts.',scoring_disabled:'Automatic update scoring is off, so no scoring batch starts.',not_configured:'A saved model and API key are required before scoring can start.'}[q.scheduler];
-  target.innerHTML=`<strong>Scoring queue</strong> · ${esc(q.current_updates)} current pending update${q.current_updates===1?'':'s'}: ${esc(c.complete)} scored · ${esc(c.running)} running · ${esc(c.eligible)} eligible now · ${esc(c.deferred)} deferred by shared admission · ${esc(c.retry_wait)} waiting for the hourly retry · ${esc(c.blocked)} blocked${q.paused_server_updates?' · '+esc(q.paused_server_updates)+' on AI-paused servers (not queued)':''}.${q.unscored?'<br>Oldest unscored since '+esc(date(q.oldest_waiting_since))+(q.next_eligible_at?' · next timed eligibility '+esc(date(q.next_eligible_at)):''):''}${stopped?'<br>'+esc(stopped):''}<br><span class="help">Shared start gates, per-server pause and the daily cap still decide when a batch starts. Scores are advisory.</span>`;})();
+  target.innerHTML=scoringQueueSummary(q);})();
  // Inserted after the budget notice lookup so this notice never receives budget details.
  if(data.ai_scoring_blocked>0)container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend',`<div class="notice" id="scoring-blocked"><strong>${esc(data.ai_scoring_blocked)} update ${data.ai_scoring_blocked===1?'score is':'scores are'} blocked</strong> by a non-transient AI provider failure under the saved model and key. No automatic retry is scheduled. After resolving the cause (for example restored quota or access), retry them; changing the saved model or key also makes them eligible.<br><button type="button" id="scoring-blocked-retry">Retry blocked scores</button><span id="scoring-blocked-result" class="help" role="status"></span></div>`);
  const retryScoring=$('#scoring-blocked-retry');
@@ -172,7 +255,7 @@ function renderAISettings(data,revision,container){
  const chosen=()=>select.value==='__manual__'?manual.value.trim():select.value;
  const toggleManual=()=>{const enabled=select.value==='__manual__';$('#ai-manual-label').hidden=!enabled;manual.required=enabled;manual.disabled=!enabled;};
  const markChanged=()=>{saveResult.textContent='Unsaved changes.';testResult.textContent='';toggleManual();};
- form.addEventListener('input',markChanged);form.addEventListener('change',markChanged);toggleManual();
+ form.addEventListener('input',markChanged);form.addEventListener('change',markChanged);toggleManual();trackSettingsForm(keyForm);trackSettingsForm(form);
  const setBusy=value=>{busy=value;keyForm.querySelector('fieldset').disabled=value;form.querySelector('fieldset').disabled=value;};
  // Effects of this change (#871): read-only preview of admission/spend ceilings before save.
  $('#ai-test-result').insertAdjacentHTML('afterend','<div class="notice ai-control-effects" id="ai-control-effects" role="status" aria-live="polite" hidden></div>');
@@ -233,7 +316,7 @@ function renderAISettings(data,revision,container){
   try{
    const response=await api('/settings/ai-key','PUT',{api_key:secret});if(!alive())return;
    keyRevision=response.api_key_revision;input.value='';$('#ai-key-state').textContent='· saved';
-   keyResult.textContent='API key saved. Your model selection is unchanged.';saved=true;
+   keyResult.textContent='API key saved. Your model selection is unchanged.';saved=true;settingsFormSaved(keyForm);
   }catch(error){if(alive())keyResult.textContent='API key was not saved. '+error.message;}
   finally{if(alive()){setBusy(false);if(saved)load();}}
  };
@@ -253,7 +336,7 @@ function renderAISettings(data,revision,container){
    keyRevision=response.api_key_revision;if(response.ai_controls_revision)controlsRevision=response.ai_controls_revision;
    effectsPanel.hidden=true;effectsPanel.textContent='';
    $('#ai-saved-model').textContent='Saved model: '+(response.ai_model||'None');
-   saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';
+   saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';settingsFormSaved(form);
    if(test){
     testResult.textContent='Testing saved model '+response.ai_model+'…';
     try{
@@ -281,7 +364,7 @@ docker compose run --rm --no-deps app python -m app.database_migrate --confirm-o
 docker compose up -d app worker</pre><p class="help">The offline command copies all application tables and verifies row counts and content fingerprints before activation. The original database stays intact. Failed verification leaves the active database unchanged; inspect the destination before retrying. An activated profile overrides DATABASE_URL for both app and workers. Do not restart against the old copy after using the new database.</p></details>`;
   const form=$('#database-form'),result=$('#database-result');
   const toggle=()=>{for(const name of ['mysql','sqlite']){const section=$('#database-'+name),enabled=form.elements.backend.value===name;section.hidden=!enabled;for(const input of section.querySelectorAll('input'))input.disabled=!enabled;}};
-  form.elements.backend.onchange=toggle;toggle();
+  form.elements.backend.onchange=toggle;toggle();trackSettingsForm(form);
   const testButton=$('#database-test'),testResult=$('#database-test-result');
   let testing=false,testRevision=0;
   const syncTest=()=>{testRevision++;$('#database-test-group').hidden=form.elements.backend.value!=='mysql';testResult.textContent='';};
@@ -308,6 +391,7 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
     await api('/settings/database','PUT',body);
     if(!currentView(revision,'settings')||!result.isConnected)return;
     form.elements.password.value='';form.elements.clear_password.checked=false;
+    settingsFormSaved(form);
     syncTest();
     result.textContent='Destination saved. Active database unchanged. Follow the offline migration steps below.';
     $('#database-migration-steps').open=true;
@@ -315,6 +399,33 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
    finally{if(button.isConnected)button.disabled=false;}
   };
  }catch(error){if(currentView(revision,'settings')&&container.isConnected)container.innerHTML=PatchyUI.error('Could not load database settings',esc(error.message));}
+}
+
+/* Fleet-wide defaults for the per-server Agent health options (#621). Servers
+ inherit each option unless they hold an explicit override; this form never
+ changes an override. */
+const AGENT_MAINTENANCE_OPTIONS=[
+ ['auto_upgrade','Automatically upgrade outdated enrolled helpers'],
+ ['auto_repair','Automatically repair collector/helper drift and inactive services']
+];
+async function agentMaintenanceDefaults(revision){
+ const box=$('#agent-defaults');if(!box)return;
+ const live=()=>currentView(revision,'settings')&&box.isConnected;
+ let saved;
+ try{saved=await api('/settings/agent-maintenance');}
+ catch(error){if(live()){box.innerHTML='<h2>Agent maintenance defaults</h2><p class="help" role="alert">Agent maintenance defaults are unavailable: '+esc(error.message)+'</p><button type="button" id="agent-defaults-retry">Retry</button>';$('#agent-defaults-retry').onclick=()=>agentMaintenanceDefaults(revision);}return;}
+ if(!live())return;
+ const value=key=>saved&&saved[key]===true;
+ box.innerHTML=`<form id="agent-defaults-form"><h2>Agent maintenance defaults</h2><p class="help">Servers use these defaults for each option unless the server has its own override. Changing a default updates every inheriting server and keeps every server override. Reset an override from the server's <strong>Agent health</strong> page with <strong>Use global default</strong>.</p><fieldset>${AGENT_MAINTENANCE_OPTIONS.map(([key,label])=>`<label class="check"><input name="${key}" type="checkbox" ${value(key)?'checked':''}>${esc(label)}</label>`).join('')}<p class="help">Off by default. Checks run about every five minutes while a server is idle. Automatic updates are limited to two attempts per day, at least one hour apart, and active patch or recovery work blocks them. Changes to SSH keys, sudo policy, bridge identity, unsafe directories or unexpected systemd overrides still need trusted-console recovery. No operating-system packages, cloud permissions or malware quarantine are changed.</p><button type="submit" class="primary">Save agent maintenance defaults</button></fieldset><p class="help" role="status" id="agent-defaults-result"></p></form>`;
+ const form=$('#agent-defaults-form'),result=$('#agent-defaults-result');
+ form.onsubmit=async event=>{
+  event.preventDefault();const fieldset=form.querySelector('fieldset');
+  const body={...Object.fromEntries(AGENT_MAINTENANCE_OPTIONS.map(([key])=>[key,form.elements[key].checked])),expected:saved};
+  fieldset.disabled=true;result.textContent='Saving…';
+  try{const value=await api('/settings/agent-maintenance','PUT',body);saved=value;if(live())result.textContent='Agent maintenance defaults saved. Inheriting servers now use them.';}
+  catch(error){if(live())result.textContent=error.message;}
+  finally{if(fieldset.isConnected)fieldset.disabled=false;}
+ };
 }
 const MALWARE_ACTION_LABELS={quarantine_file:'Quarantine the verified file',terminate_process:'Terminate the verified process'};
 const MALWARE_MODE_LABELS={disabled:'Disabled',monitor_only:'Monitor only (record what would happen)',enforce:'Enforce (unavailable)'};
@@ -337,12 +448,34 @@ ${data.stored_invalid?`<div class="notice" id="malware-invalid-notice" role="ale
 <p class="help">Path exclusions also match a process's verified executable path. At most ${esc(l.max_exclusions)} of each.</p>
 <button type="submit" class="primary">Save malware response policy</button></fieldset><p class="help" role="status" id="malware-policy-result"></p></form>`;
 }
+const MALWARE_CAP_LABELS={inherit:'Follows the fleet policy',monitor_only:'At most Monitor only',disabled:'Disabled'};
+const malwarePlural=(n,one,many)=>`${n} ${n===1?one:many}`;
+function malwareOverrideRows(data){
+ if(!data.servers.length)return `<p class="help" id="malware-overrides-empty">No server restricts the fleet policy. Every server follows it${data.inheriting_rows?` (${esc(malwarePlural(data.inheriting_rows,'saved override','saved overrides'))} set back to follow the fleet policy)`:''}.</p>`;
+ const row=r=>{
+  const name=r.server_exists?`<a href="${serverLink(r.server_id,'security')}">${esc(r.server_name||r.server_id)}</a>`:`<span>${esc(r.server_id)}</span><small>Server no longer exists · override retained</small>`;
+  const state=r.stored_invalid?`<strong>Invalid, treated as Disabled</strong><small>${esc(r.stored_invalid_reason||'')}</small>`:r.effective_invalid_reason?`<strong>Treated as Disabled</strong><small>${esc(r.effective_invalid_reason)}</small>`:'';
+  return `<tr><td data-label="Server">${name}</td><td data-label="Mode cap">${esc(MALWARE_CAP_LABELS[r.mode_cap]||r.mode_cap)}</td><td data-label="Effective mode">${state||esc(MALWARE_MODE_LABELS[r.effective_mode]||r.effective_mode)}</td><td data-label="Extra exclusions">${esc(malwarePlural(r.excluded_paths,'path','paths'))}<small>${esc(malwarePlural(r.excluded_sha256,'hash','hashes'))}</small></td></tr>`;
+ };
+ return `<div class="table-wrap"><table class="malware-override-table" id="malware-overrides-table"><thead><tr><th>Server</th><th>Mode cap</th><th>Effective mode</th><th>Extra exclusions</th></tr></thead><tbody>${data.servers.map(row).join('')}</tbody></table></div>`
+  +(data.inheriting_rows?`<p class="help">${esc(malwarePlural(data.inheriting_rows,'other saved override','other saved overrides'))} follow${data.inheriting_rows===1?'s':''} the fleet policy and restrict${data.inheriting_rows===1?'s':''} nothing.</p>`:'')
+  +(data.truncated?`<p class="notice" role="status">Only the first ${esc(data.scan_limit)} stored overrides were read. More exist and are not listed here.</p>`:'');
+}
+async function malwareOverrideList(revision){
+ const body=$('#malware-overrides-body'),alive=()=>currentView(revision,'settings')&&body?.isConnected;
+ if(!body)return;
+ try{
+  const data=await api('/settings/malware-response/overrides');if(!alive())return;
+  body.innerHTML=`<p class="help">Server overrides can only lower the mode or add exclusions; they never add actions or relax thresholds. Exclusion paths and hashes are shown on each server's Security tab. Nothing here is enforced.</p>`+malwareOverrideRows(data);
+ }catch(error){if(alive())body.innerHTML=PatchyUI.error('Could not load server overrides',esc(error.message));}
+}
 async function malwarePolicySettings(revision){
  const container=$('#malware-policy'),alive=()=>currentView(revision,'settings')&&container.isConnected;
  try{
   let data=await api('/settings/malware-response');if(!alive())return;
-  container.outerHTML=malwarePolicyForm(data);
+  container.outerHTML=malwarePolicyForm(data)+'<section class="card" id="malware-overrides" aria-labelledby="malware-overrides-title"><h2 id="malware-overrides-title">Servers with overrides</h2><div id="malware-overrides-body"><p class="help">Loading server overrides…</p></div></section>';
   const form=$('#malware-policy-form'),result=$('#malware-policy-result'),ok=()=>currentView(revision,'settings')&&result.isConnected;
+  malwareOverrideList(revision);
   const lines=v=>String(v||'').split('\n').map(x=>x.trim()).filter(Boolean);
   form.onsubmit=async event=>{
    event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
@@ -350,7 +483,7 @@ async function malwarePolicySettings(revision){
     min_ai_confidence:+f.get('min_ai_confidence'),min_corroborating_kinds:+f.get('min_corroborating_kinds'),max_signature_age_seconds:+f.get('max_signature_age_seconds'),
     excluded_paths:lines(f.get('excluded_paths')),excluded_sha256:lines(f.get('excluded_sha256')).map(h=>h.toLowerCase())};
    fieldset.disabled=true;result.textContent='Saving…';
-   try{data=await api('/settings/malware-response','PUT',{policy,expected_revision:data.revision});if(ok()){result.textContent='Malware response policy saved. It is recorded only and not enforced.';$('#malware-invalid-notice')?.remove();}}
+   try{data=await api('/settings/malware-response','PUT',{policy,expected_revision:data.revision});if(ok()){result.textContent='Malware response policy saved. It is recorded only and not enforced.';$('#malware-invalid-notice')?.remove();malwareOverrideList(revision);}}
    catch(error){if(ok())result.textContent='Malware response policy was not saved. '+error.message+(error.status===409&&/refresh/i.test(error.message)?' Your entries are still in the form; reload Settings to see the current saved policy.':'');}
    finally{if(fieldset.isConnected)fieldset.disabled=false;}
   };

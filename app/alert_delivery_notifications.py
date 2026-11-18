@@ -28,13 +28,15 @@ CHANNELS = {
 }
 MESSAGE = ('External {channel} alert delivery keeps failing: at least one open alert has failed {attempts} or more '
            'delivery attempts and has not been delivered. Administrators may not be receiving server alerts outside '
-           'Mr Patchy. Review Account → Operations for the per-alert delivery error and the delivery configuration. '
+           'Mr Patchy. Review Activity → Alert delivery for the per-alert delivery error and the delivery configuration. '
            'Delivery is still retried with backoff; this notice does not send, acknowledge or resolve any alert.')
 UNREADABLE = ('The saved external alert delivery configuration cannot be read (for example after the encryption key '
               'changed), so Mr Patchy cannot tell whether SMTP/webhook delivery is enabled and makes no delivery '
               'attempts. At least one open alert has not been delivered outside Mr Patchy. Re-save or remove the '
-              'delivery configuration in Account → Operations. This notice does not send, acknowledge or resolve any alert.')
+              'delivery configuration from Activity → Alert delivery. This notice does not send, acknowledge or resolve any alert.')
 RESOLVED = 'External alert delivery no longer has repeatedly failing undelivered alerts.'
+# Admin-only Activity page listing undelivered alerts and opening the delivery settings.
+DEEP_LINK = '#activity/delivery'
 
 
 def delivery_channel(session):
@@ -73,12 +75,12 @@ def publish(session, now):
         # is then enough: none of them can be delivered until the configuration is fixed.
         if undelivered_count(session):
             notifications.publish(session, **IDENTITY, subject_revision='unreadable', severity='high',
-                                  reason=UNREADABLE, minimum_role='admin', now=now)
+                                  reason=UNREADABLE, deep_link=DEEP_LINK, minimum_role='admin', now=now)
             return True
     elif channel is not None and failing_count(session):
         notifications.publish(session, **IDENTITY, subject_revision='failing:' + channel,
                               severity='high', reason=MESSAGE.format(channel=CHANNELS[channel], attempts=FAILED_ATTEMPTS),
-                              minimum_role='admin', now=now)
+                              deep_link=DEEP_LINK, minimum_role='admin', now=now)
         return True
     event = session.scalar(select(notifications.NotificationEvent).where(
         *(getattr(notifications.NotificationEvent, key) == value for key, value in IDENTITY.items())))
@@ -86,5 +88,5 @@ def publish(session, now):
         current = session.get(notifications.NotificationRevision, (event.id, event.revision))
         if current is None or current.lifecycle != 'resolved':
             notifications.publish(session, **IDENTITY, subject_revision='resolved', severity='info',
-                                  reason=RESOLVED, minimum_role='admin', lifecycle='resolved', now=now)
+                                  reason=RESOLVED, deep_link=DEEP_LINK, minimum_role='admin', lifecycle='resolved', now=now)
     return False
