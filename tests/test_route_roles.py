@@ -15,6 +15,7 @@ PASSWORD = os.environ['ADMIN_PASSWORD']
 EXPECTED_ROLES = {
     ('GET','/'):'public',
     ('GET','/api/ai/known-good/summary'):'admin',
+    ('GET','/api/ai/known-good/lookups'):'admin',
     ('GET','/api/ai/known-good/candidates'):'admin',
     ('POST','/api/ai/known-good/{fingerprint}/revoke'):'admin',
     ('POST','/api/ai/provider-backoff/clear'):'admin',
