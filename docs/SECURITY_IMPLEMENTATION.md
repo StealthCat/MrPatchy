@@ -3878,10 +3878,13 @@ python tools/compare_ai_benchmarks.py serial.json parallel.json
 - **One run at a time:** the run holds a MySQL advisory lock named after the
   database from before the empty check until cleanup. A second run against the
   same database is refused and changes nothing.
-- **Cleanup:** on success and on failure it drops only the application's own
-  tables, so the next run can reuse the database. A table or view that someone
-  else created during the run is left in place and reported as a count on
-  stderr; the database is then no longer empty.
+- **Cleanup:** on success and on workload failure it drops only the
+  application's own tables while the original session still owns the lock
+  (#1095). If the session disconnected or ownership cannot be verified, the
+  benchmark skips cleanup and asks the operator to inspect the disposable
+  database before reusing it. A successful JSON report is emitted after
+  cleanup. A table or view outside the benchmark's table set is left in place
+  and reported as a count on stderr.
 - **No secrets in output:** refusals before the run starts are fixed text. A
   connection failure reports only the error class. The report never contains
   the URL. A failure inside the fixture itself is an ordinary Python traceback.
@@ -3900,6 +3903,11 @@ to 5.590 subjects per second. These are loopback fixture numbers on one
 machine, not a production claim. The CI `mysql` job runs a four-subject pair on
 MySQL 8.4. Multi-process workers against MySQL and matched production
 measurements remain open.
+
+Cleanup validation for #1095 covers a disconnected session, an absent lock
+and a lock assigned to another session. The native MySQL fixture verifies that
+stale cleanup leaves the subsequent holder's table intact. This is fixture
+cleanup acceptance. Production failover and throughput acceptance remain open.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
