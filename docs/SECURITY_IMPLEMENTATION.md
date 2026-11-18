@@ -2319,6 +2319,19 @@ This telemetry is read-only: it does not renew, reconcile, cancel, retry or
 otherwise alter a claim. Full multi-controller failover and production
 recovery acceptance remain open.
 
+### Atomic recovery of interrupted package scores — Roadmap A checkpoint #1140
+
+The scoring worker now commits the interruption event and the failures of its
+linked running package scores together under the existing scoring lock. A
+score with a newer attempt timestamp, completed result or missing run link is
+left alone. The recovered score keeps its attempt time, so the existing
+one-hour retry interval still applies. Recovery can run with scoring disabled
+and makes no provider call or spend change.
+
+The regression verifies rollback when the score write fails and confirms
+successful scoring at the original eligibility boundary. A crash before
+linking the run and independent scoring admission remain open.
+
 ### Update-scoring schedule-state reads
 
 The scheduler reads only identity, state and eligibility fields from retained
