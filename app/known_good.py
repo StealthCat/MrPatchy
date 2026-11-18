@@ -428,6 +428,31 @@ def lookup(s, snapshot, model, policy_hashes, bypass=False):
     return None
 
 
+
+def exact_hit_available(s, behavior, model):
+    """Read-only admission probe: would the worker's exact lookup reuse a candidate now?
+
+    It derives evidence as the worker does, without persisting trust state, and
+    honours an administrator Refresh and an authenticated ``changed`` artifact
+    exactly as the worker does. The result only lets a subject be claimed past a
+    closed spend gate. It never approves anything, and the worker's own lookup
+    and the atomic budget reservation still decide what happens next. Any
+    failure answers ``False``, which keeps today's deferral.
+    """
+    try:
+        from . import ai, ai_assessments
+        from .file_status import before_ai
+        if s.get(ai_assessments.Refresh, behavior.id) is not None:
+            return False
+        evidence = before_ai(s, behavior, persist=False)
+        if evidence.get('file_assessment', {}).get('status') == 'changed':
+            return False
+        policy = ai.investigation_policy()
+        policy_hashes = [ai_assessments.digest([policy]), ai_assessments.digest([policy, policy])]
+        return lookup(s, evidence, model, policy_hashes) is not None
+    except Exception:
+        return False
+
 MISS_TEXT = {
     'bypassed_refresh': 'Administrator re-triage bypassed the fleet known-good cache.',
     'bypassed_changed': 'Authenticated artifact change bypassed the fleet known-good cache.',
