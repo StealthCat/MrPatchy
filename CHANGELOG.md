@@ -1,3 +1,7 @@
+## 1.75.32 — 2026-11-18
+
+1. [PR #803](https://github.com/StealthCat/MrPatchy/pull/803): Fleet AI logs add a **Cache lookup outcomes** panel with durable daily counts of process-triage known-good cache hits and misses by fixed reason for the last 30 UTC days, retained independently of AI-log pruning and containing no evidence or identifiers, served by admin-only `GET /api/ai/known-good/lookups` (#802). Compatibility: one additive table created automatically; the worker preflight schema digest includes it, so upgrade the controller schema before remote workers. Counting starts at upgrade with no backfill.
+
 ## 1.75.31 — 2026-11-18
 
 1. [PR #1051](https://github.com/StealthCat/MrPatchy/pull/1051): Exact fleet known-good matches are now reused while the daily AI spend cap is exhausted, or when a subject's quote exceeds the remaining headroom or the whole cap; these hits make no provider call and reserve nothing, so they no longer wait for the reset. Work that would call the provider is still deferred, and server pause, global disable, Re-triage and revocation still apply (#1030). Compatibility: no schema, API, UI, role or response-authorization change; `before_ai()` gains a keyword-only `persist=True` argument. Limits: while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is found only once those clear; the rate gate and provider backoff still hold back free hits.
