@@ -185,6 +185,10 @@ def test_pruning_keeps_running_and_recent_runs_and_ignores_unlinked_ledger_rows(
 
 def test_scheduler_cleanup_uses_the_tested_prune_function():
     source = inspect.getsource(worker._loop)
-    assert 'ai_runs.prune_history(s,cutoff)' in source
+    assert 'prune_history(s,cutoff)' in source
     # No second, untested copy of the run-history deletion remains in the scheduler.
     assert 'delete(ai_runs.' not in source
+    # The scheduler's history pruning delegates AI run deletion to the tested function.
+    helper = inspect.getsource(worker.prune_history)
+    assert 'ai_runs.prune_history(s,cutoff)' in helper
+    assert 'delete(ai_runs.' not in helper

@@ -739,6 +739,18 @@ def validate_patch(s,h,specs,cfg=None):
             raise ValueError('Queued patch is no longer valid; review package '+name)
 
 
+def prune_history(s,cutoff):
+    """Delete diagnostic history older than ``cutoff`` in the caller's transaction.
+
+    Removes observations, inventory revisions and finished AI runs with their
+    events, call receipts and host links. Running AI runs, retained AI
+    assessments, the fleet known-good cache and the spend ledger are kept.
+    """
+    s.execute(delete(Observation).where(Observation.received<cutoff))
+    s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
+    ai_runs.prune_history(s,cutoff)
+
+
 def investigate_one(owner=None):
     from . import ai_claims
     admission_started=time.perf_counter()
@@ -1030,9 +1042,7 @@ def _loop(reporter):
                 if is_leader and now-last_cleanup>3600:
                     with Session() as s:
                         cutoff=now-config(s)['history_days']*86400
-                        s.execute(delete(Observation).where(Observation.received<cutoff))
-                        s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
-                        ai_runs.prune_history(s,cutoff)
+                        prune_history(s,cutoff)
                         for entry in s.scalars(select(Setting).where(Setting.key.like('session:%') | Setting.key.like('enroll:%') | Setting.key.like('oidc-state:%'))):
                             if entry.value.get('expires',now+1)<now: s.delete(entry)
                         s.commit()
