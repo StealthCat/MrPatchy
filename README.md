@@ -56,7 +56,7 @@ Select **Available patches** in the navigation, or the **Updates available** car
 
 Security scan forms use cards, related evidence and pager actions have consistent spacing, and the File integrity startup-browser action appears below its baseline heading.
 
-Under **Servers → a server → Security → Scheduled scanning**, administrators can inspect a read-only **Automatic AI plans** status for that server: the current policy state, open incidents awaiting an automatic attempt, queued/running plan status, latest automatic attempt, and applicable pacing. Legacy mode shows the fleet ten-per-hour allowance; other modes use the shared AI start gates. This point-in-time view reads at most 500 eligible incidents (and marks a larger backlog as truncated); it does not enqueue or approve plans, which remain manual-only.
+Under **Servers → a server → Security → Scheduled scanning**, administrators can inspect a read-only **Automatic AI plans** status for that server: the current policy state, open incidents awaiting an automatic attempt, queued/running plan status, latest automatic attempt, and applicable pacing. Legacy mode shows the fleet ten-per-hour allowance; other modes use the shared AI start gates. This point-in-time view reads at most 500 eligible incidents (and marks a larger backlog as truncated); it does not enqueue or approve plans, which remain manual-only. The fleet **Security** page lists every server opted into automatic AI response proposals, with its readiness, pending detections and the pacing that applies, from the administrator-only, read-only `GET /api/security/auto-plan-status`.
 
 Startup → Files also lists individual Debian-family `at` jobs from hashed `/var/spool/cron/atjobs` files, showing the queue, scheduled time, owner and bounded, redacted commands. Older agents show “not reported.” The view does not evaluate whether atd is running, inspect referenced scripts or cover the RHEL-family `/var/spool/at` spool.
 
@@ -537,8 +537,10 @@ explicit `true` or `false` override; sending `null` or omitting that field from 
 per-server update restores inheritance. Agent-health responses identify the global
 values and whether each effective value is inherited or overridden. Global saves
 use the supplied expected values and return HTTP 409 when another save wins or the
-coordination lock cannot be obtained, rather than replacing a newer policy. The
-Settings and per-server inheritance controls are not yet exposed in the web UI.
+coordination lock cannot be obtained, rather than replacing a newer policy.
+**Settings → Agent maintenance** edits the fleet defaults, and each server's
+**Agent health** tab offers Use global default / On / Off for each option with
+inherited and override indicators.
 
 Scanner incidents now offer **Related evidence** to pivot across stored scanner,
 process, startup/custom-file and package-integrity records on that server. Exact

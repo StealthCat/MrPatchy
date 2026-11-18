@@ -131,8 +131,11 @@ def reserve(payload):
             now=time.time();enabled,name,start,reset,groups,counted,cap,_reconciliation=_state(session,cfg,now)
             amount=quote['amount_usd']
             if counted+amount>cap:
-                raise AIError('The configured daily AI spend cap has no remaining safe reservation. No provider request was sent.',
+                error=AIError('The configured daily AI spend cap has no remaining safe reservation. No provider request was sent.',
                     policy_wait=True,retry_after=max(0,reset-now))
+                # Lets durable retry state name the cap rather than the rate throttle (#1015).
+                error.budget_wait=True
+                raise error
             from . import ai_runs
             row=BudgetEntry(id=str(uuid.uuid4()),run_id=ai_runs.active.get() or '',created=now,updated=now,
                 reset_at=reset,timezone=name,model=quote['model'],reservation_usd=amount,
@@ -216,8 +219,22 @@ def status(session,now=None):
 
 DAILY_CAP_NOTIFICATION=dict(source='ai-budget',kind='daily-cap',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
 DAILY_CAP_WARNING_NOTIFICATION=dict(source='ai-budget',kind='daily-cap-warning',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
-# Fixed advance-warning fraction of the cap; configurable thresholds are not yet offered.
-DAILY_CAP_WARNING_FRACTION=Decimal('0.8')
+# Default advance-warning percent of the cap. Administrators can change it with
+# `ai_daily_cap_warning_percent` (0 turns the warning off, #810).
+DAILY_CAP_WARNING_DEFAULT_PERCENT=80
+DAILY_CAP_WARNING_FRACTION=Decimal(DAILY_CAP_WARNING_DEFAULT_PERCENT)/100
+
+
+def warning_percent(cfg):
+    """Return the configured advance-warning percent, or 0 when it is off.
+
+    A stored value outside 0-99 or of the wrong type (for example a hand-edited
+    row) falls back to the documented default rather than silencing the warning.
+    """
+    value=cfg.get('ai_daily_cap_warning_percent',DAILY_CAP_WARNING_DEFAULT_PERCENT)
+    if isinstance(value,bool) or not isinstance(value,int) or not 0<=value<=99:
+        return DAILY_CAP_WARNING_DEFAULT_PERCENT
+    return value
 
 
 def _resolve_notification(session,spec,reason,now):
@@ -235,9 +252,10 @@ def _resolve_notification(session,spec,reason,now):
 def publish_cap_notification(session,cfg,now):
     """Publish admin attention while the current capped window has no remaining spend.
 
-    A separate advance warning is active while counted spend is at least
-    DAILY_CAP_WARNING_FRACTION of the cap but below it, and resolves once the
-    cap is reached so only the exhausted notification remains active.
+    A separate advance warning is active while counted spend is at least the
+    configured warning percent of the cap (default 80, 0 turns it off) but below
+    it, and resolves once the cap is reached so only the exhausted notification
+    remains active.
 
     The revision is bound to the budget window (timezone and reset) and cap. The
     warning records counted and remaining amounts when it is raised and is not
@@ -254,10 +272,14 @@ def publish_cap_notification(session,cfg,now):
     if capped:
         _enabled,name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,cfg,now)
         reset_text=datetime.fromtimestamp(reset,timezone.utc).isoformat().replace('+00:00','Z')
-        if counted<cap and counted>=cap*DAILY_CAP_WARNING_FRACTION:
+        percent=warning_percent(cfg)
+        if percent and counted<cap and counted>=cap*Decimal(percent)/100:
             # Advance warning only: admission is unchanged and still decides each call.
             warning=True
             subject_revision='nearing:'+name+':'+repr(float(reset))+':'+_money(cap)
+            # The default keeps the pre-#810 fingerprint so upgrading does not
+            # republish an active warning; another threshold is a new observation.
+            if percent!=DAILY_CAP_WARNING_DEFAULT_PERCENT:subject_revision+=':threshold:'+str(percent)
             event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
                 for key,value in DAILY_CAP_WARNING_NOTIFICATION.items())))
             current=session.get(NotificationRevision,(event.id,event.revision)) if event is not None else None
@@ -268,7 +290,7 @@ def publish_cap_notification(session,cfg,now):
             if current is None or current.lifecycle!='active' or current.subject_revision!=subject_revision:
                 remaining=max(cap-counted,Decimal(0))
                 message=('Counted AI spend reached $'+_money(counted)+' of the shared daily cap of $'+_money(cap)+
-                    ' ('+name+' day), at least '+str(int(DAILY_CAP_WARNING_FRACTION*100))+'% of the cap, leaving $'+
+                    ' ('+name+' day), at least '+str(percent)+'% of the cap, leaving $'+
                     _money(remaining)+' before the reset at '+reset_text+'. These amounts were recorded when the '
                     'warning was raised; Settings shows current totals. When a call\'s conservative reservation no longer fits, new paid AI work, including triage, scoring '
                     'and plans, is deferred, not discarded. Review the cap or mode in Settings if that is not intended. Counted spend '
@@ -278,8 +300,8 @@ def publish_cap_notification(session,cfg,now):
                     severity='low',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
     if not warning:
         _resolve_notification(session,DAILY_CAP_WARNING_NOTIFICATION,
-            'Shared daily AI spend is no longer approaching the cap: the window reset, the cap or mode changed, AI was '
-            'disabled, or the cap was reached and its own notification applies.',now)
+            'Shared daily AI spend is no longer approaching the cap: the window reset, the cap, mode or warning threshold '
+            'changed, AI was disabled, or the cap was reached and its own notification applies.',now)
     if capped:
         if counted>=cap:
             message=('The shared daily AI spend cap of $'+_money(cap)+' ('+name+' day) has no remaining safe reservation. '
@@ -378,6 +400,57 @@ def history(session,days=30,now=None,*,timezone_name=None):
             'counted_usd':_money(row['counted_usd'])})
     return {'days':days,'generated_at':now,'cutoff':cutoff,'max_windows':max_windows,
         'truncated':truncated,'windows':windows}
+
+
+# Fixed activity codes for the current-window breakdown. They mirror the purposes
+# ai_runs.track() records; anything else retained in run history is "other".
+SPEND_PURPOSES=('triage','update_scoring','security_plan','release_configuration','connection_test')
+SPEND_PURPOSE_ORDER=SPEND_PURPOSES+('other','unattributed')
+SPEND_PURPOSE_LIMITATIONS=[
+    'Amounts are local public-price estimates and conservative reservations, not provider invoices.',
+    'Attribution follows each call\'s link to retained AI run history. Calls whose run was pruned or '
+    'that had no run are counted under "Not attributed" and are never guessed.',
+]
+
+
+def by_purpose(session,now=None):
+    """Split the spend capped admission currently counts by AI activity.
+
+    Read-only and bounded: one grouped aggregate over exactly the rows
+    ``_state`` counts, joined to retained run history for the purpose only.
+    At most ``len(SPEND_PURPOSE_ORDER)`` result rows; no ledger entry, model,
+    subject, host or identifier is loaded or returned.
+    """
+    from .ai_runs import AIRun
+    now=time.time() if now is None else now;cfg=config(session)
+    mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
+    name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
+    result={'generated_at':now,'mode':mode,'enabled':enabled,'timezone':name if enabled else None,
+        'window_start':start if enabled else None,'next_reset':reset if enabled else None,
+        'call_count':0,'counted_usd':'0','groups':[],'limitations':SPEND_PURPOSE_LIMITATIONS}
+    if not enabled:return result
+    amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
+        else_=BudgetEntry.reservation_usd)
+    zero=Decimal(0)
+    def bucket(*statuses):
+        return _aggregate(session,case((BudgetEntry.status.in_(statuses),amount),else_=zero))
+    purpose=case((AIRun.id.is_(None),'unattributed'),(AIRun.purpose.in_(SPEND_PURPOSES),AIRun.purpose),else_='other')
+    query=(select(purpose,func.count(BudgetEntry.id),bucket('settled'),bucket('reserved'),
+        bucket('sent','uncertain'),_aggregate(session,amount))
+        .select_from(BudgetEntry).outerjoin(AIRun,AIRun.id==BudgetEntry.run_id)
+        # Same predicate as _state so the groups sum to the counted total.
+        .where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
+        .group_by(purpose))
+    groups={};total=Decimal(0);calls=0
+    for key,count,settled,reserved,uncertain,counted in session.execute(query):
+        counted=Decimal(counted or 0);total+=counted;calls+=count
+        groups[key]={'purpose':key,'call_count':count,'settled_usd':_money(Decimal(settled or 0)),
+            'reserved_usd':_money(Decimal(reserved or 0)),'uncertain_usd':_money(Decimal(uncertain or 0)),
+            'counted_usd':_money(counted)}
+    result.update(call_count=calls,counted_usd=_money(total),
+        groups=[groups[key] for key in SPEND_PURPOSE_ORDER if key in groups])
+    return result
 
 
 HISTORY_CSV_COLUMNS=('window_start_utc','reset_at_utc','timezone','calls','settled_usd','reserved_usd',

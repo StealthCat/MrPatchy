@@ -27,13 +27,21 @@ parser (``auth-options.c``):
   line for the same key is ``shadowed``; when the earlier line carries a
   ``from=`` restriction the later line may still apply to other sources and is
   reported as ``conditional`` precedence instead, as it is when the earlier
-  line's expiry or ``permitopen``/``permitlisten`` syntax is uncertain.
+  line's expiry or ``permitopen``/``permitlisten`` port is uncertain.
+* ``permitopen``/``permitlisten`` values are validated like ``handle_permit``
+  (#1041): a ``permitlisten`` value with no ``:`` gets an implicit ``*:``
+  host; ``hpdelim2`` splits the host at the first ``:`` or ``/`` (or after a
+  closing ``]``); a missing ``]``, text after ``]``, a host of ``NI_MAXHOST``
+  characters or more, or a missing port refuses the line. Port ``*`` and
+  decimal 1-65535 are valid and 0 is refused. Any other port is a
+  ``getservbyname`` lookup in the server's services database, which is not
+  observed, so it stays an explicit gap.
 
 It performs no I/O, never runs a command and never authorizes a response
 action. Anything it cannot resolve exactly (unreadable, oversized or over-cap
 input, an unknown key type, expiry without a timezone close to the observation
 time, ``environment=`` whose effect depends on ``PermitUserEnvironment``,
-unvalidated ``permitopen``/``permitlisten`` syntax) is an
+a ``permitopen``/``permitlisten`` service-name port) is an
 explicit coverage gap and is never reported as covered.
 """
 from __future__ import annotations
@@ -47,7 +55,7 @@ import struct
 from datetime import datetime
 from typing import Any, Iterable
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 MAX_FILES = 64
 MAX_FILE_BYTES = 256 * 1024
 MAX_LINES = 4096
@@ -96,6 +104,10 @@ _OPTION_NAME_RE = re.compile(r'[A-Za-z0-9-]+')
 _EXPIRY_RE = re.compile(r'^(\d{8})(\d{4}(\d{2})?)?(Z)?$')
 _ENV_NAME_RE = re.compile(r'^[A-Za-z0-9_]+=')
 _BASE64_RE = re.compile(r'^[A-Za-z0-9+/]+={0,2}$')
+# OpenSSH ``NI_MAXHOST``; ``handle_permit`` refuses hosts at or above it.
+_NI_MAXHOST = 1025
+# ``strtonum`` uses ``strtoll``: optional leading C whitespace and one sign.
+_STRTONUM_RE = re.compile(r'[ \t\n\v\f\r]*([+-]?[0-9]+)\Z')
 
 
 class _Reject(Exception):
@@ -162,10 +174,48 @@ def _parse_expiry(value: str) -> dict[str, Any]:
     return {'value': value, 'utc': bool(match.group(4)), 'epoch': calendar.timegm(moment.timetuple())}
 
 
+def _hpdelim2(value: str) -> tuple[str | None, str | None]:
+    """OpenSSH ``hpdelim2``: return ``(host, rest)``; ``host`` is None on a syntax error."""
+    if value.startswith('['):
+        close = value.find(']')
+        if close < 0:
+            return None, None
+        split = close + 1
+    else:
+        found = [i for i in (value.find(':'), value.find('/')) if i >= 0]
+        split = min(found) if found else len(value)
+    if split == len(value):
+        return value, None
+    if value[split] not in ':/':
+        return None, None
+    return value[:split], value[split + 1:]
+
+
+def _check_permit(name: str, value: str) -> bool:
+    """Validate one value like ``handle_permit``; return True when the port is a service name."""
+    if name == 'permitlisten' and ':' not in value:
+        value = '*:' + value  # A bare permitlisten port means any listen host.
+    host, port = _hpdelim2(value)
+    if host is None or len(host.encode('utf-8', 'surrogateescape')) >= _NI_MAXHOST:
+        raise _Reject('invalid_permission_host', f'sshd refuses {name}="{value[:64]}": invalid permission hostname.')
+    if port is None:
+        raise _Reject('invalid_permission_port', f'sshd refuses {name}="{value[:64]}": no port.')
+    if port == '*':
+        return False
+    number = _STRTONUM_RE.match(port)
+    if number and 0 <= int(number.group(1)) <= 65535:
+        if int(number.group(1)) == 0:
+            raise _Reject('invalid_permission_port', f'sshd refuses {name}="{value[:64]}": port 0.')
+        return False
+    if not port:
+        raise _Reject('invalid_permission_port', f'sshd refuses {name}="{value[:64]}": empty port.')
+    return True
+
+
 def _parse_options(text: str) -> dict[str, Any]:
     perms = dict.fromkeys(PERMISSIONS, True)
     opts: dict[str, Any] = {'order': [], 'command': None, 'principals': None, 'tunnel': None,
-                            'expiry': None, **{k: [] for k in _LIST_VALUES},
+                            'expiry': None, 'permit_service_ports': [], **{k: [] for k in _LIST_VALUES},
                             **dict.fromkeys(_MARKERS.values(), False), 'restrict': False}
     pos = 0
     while pos < len(text):
@@ -197,6 +247,8 @@ def _parse_options(text: str) -> dict[str, Any]:
             else:
                 if name == 'environment' and not _ENV_NAME_RE.match(value):
                     raise _Reject('invalid_environment', 'environment must be NAME=value.')
+                if name in ('permitopen', 'permitlisten') and _check_permit(name, value):
+                    opts['permit_service_ports'].append(f'{name}="{value[:64]}"')
                 opts[name].append(value)
         elif name == 'restrict':
             opts['restrict'] = True
@@ -296,10 +348,11 @@ def parse_line(line: str, *, now: float | None = None) -> dict[str, Any]:
     if opts['environment']:
         record['gaps'].append(_gap('environment_requires_sshd_config',
                                    'environment= only applies when sshd PermitUserEnvironment allows it.'))
-    if opts['permitopen'] or opts['permitlisten']:
-        record['gaps'].append(_gap('forwarding_spec_unvalidated',
-                                   'permitopen/permitlisten host:port syntax is not validated here; sshd '
-                                   'refuses the line if a value is malformed.'))
+    if opts['permit_service_ports']:
+        record['gaps'].append(_gap('forwarding_port_service_name',
+                                   'A permitopen/permitlisten port is a service name that sshd resolves from the '
+                                   "server's services database, which is not observed; sshd refuses the line if "
+                                   'it does not resolve.', values=opts['permit_service_ports'][:8]))
     if expiry and now is not None:
         delta = now - expiry['epoch']
         if expiry['utc'] or abs(delta) > _LOCAL_EXPIRY_MARGIN_SECONDS:
@@ -320,8 +373,8 @@ def _expiry_uncertain(record: dict[str, Any]) -> bool:
 
 def _forwarding_spec_uncertain(record: dict[str, Any]) -> bool:
     # sshd refuses the whole line (and keeps reading) when a permitopen or
-    # permitlisten value is malformed, so such a line may not shadow at all.
-    return any(gap['kind'] == 'forwarding_spec_unvalidated' for gap in record['gaps'])
+    # permitlisten port does not resolve, so such a line may not shadow at all.
+    return any(gap['kind'] == 'forwarding_port_service_name' for gap in record['gaps'])
 
 
 def parse_text(text: str, *, now: float | None = None) -> dict[str, Any]:
@@ -363,8 +416,8 @@ def parse_text(text: str, *, now: float | None = None) -> dict[str, Any]:
                                                line=earlier['line']))
                 if _forwarding_spec_uncertain(earlier):
                     record['gaps'].append(_gap('precedence_depends_on_forwarding_spec',
-                                               'An earlier line for this key has unvalidated permitopen/'
-                                               'permitlisten values; sshd skips it if one is malformed.',
+                                               'An earlier line for this key has a permitopen/permitlisten '
+                                               'service-name port; sshd skips it if the name does not resolve.',
                                                line=earlier['line']))
             else:
                 record['precedence'] = 'shadowed'

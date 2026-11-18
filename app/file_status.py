@@ -74,11 +74,16 @@ def resolve(path, checksum, proofs):
             'Recorded SHA-256 differs from the latest authenticated artifact for this path.'}
 
 
-def before_ai(s, row):
-    """Always replace any target-supplied claim with controller-derived evidence."""
+def before_ai(s, row, *, persist=True):
+    """Always replace any target-supplied claim with controller-derived evidence.
+
+    ``persist=False`` derives the same evidence without recording trust state,
+    for read-only admission probes.
+    """
     evidence = copy.deepcopy(row.evidence or {})
     from .file_trust import assess
-    evidence['file_assessment'] = assess(s, row.host_id, evidence.get('executable'), evidence.get('sha256'))
+    evidence['file_assessment'] = assess(s, row.host_id, evidence.get('executable'), evidence.get('sha256'),
+                                         persist=persist)
     evidence['file_assessment']['behavior_note'] = (
         'File authenticity does not resolve process behavior. Check the exact known-good '
         'database next; AI may investigate only the remaining behavior uncertainty.')

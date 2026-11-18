@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from decimal import Decimal
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
@@ -106,6 +107,62 @@ def record_turn(s,host_id):
     else:s.add(HostTurn(host_id=host_id,last_turn=turn))
 
 
+FREE_HIT_SCAN=50
+
+
+def _elect_host(s,election_filters,live_counts,signature,now):
+    # Balance live occupancy first. Ties use the durable least-recent host
+    # turn; a host with no turn sorts ahead of one already served. Project each
+    # eligible verdict as its own equality range so host election reads the
+    # admission index instead of scanning retained completed history.
+    eligible=union_all(*(select(Behavior.host_id,Behavior.first_seen).outerjoin(
+        ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+        *election_filters,Behavior.verdict==verdict) for verdict in ('pending','error'))).subquery()
+    return s.scalar(select(eligible.c.host_id).outerjoin(
+        live_counts,live_counts.c.host_id==eligible.c.host_id).outerjoin(
+        HostTurn,HostTurn.host_id==eligible.c.host_id).group_by(
+        eligible.c.host_id,live_counts.c.live_count,HostTurn.last_turn).order_by(
+        func.coalesce(live_counts.c.live_count,0),func.coalesce(HostTurn.last_turn,0),
+        func.min(eligible.c.first_seen),eligible.c.host_id).limit(1))
+
+
+def _oldest(s,host_id,signature,now):
+    # Within the elected host, keep each verdict as an equality range so the
+    # admission index can skip retained completed history and satisfy
+    # oldest-first ordering; the oldest member of either range is the host's
+    # oldest eligible pending/error candidate.
+    filters=(Behavior.host_id==host_id,Behavior.approved==False,
+        Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
+    oldest=[]
+    for verdict in ('pending','error'):
+        candidate=select(Behavior.id,Behavior.first_seen).outerjoin(
+            ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+            *filters,Behavior.verdict==verdict).order_by(Behavior.first_seen,Behavior.id).limit(1).subquery()
+        oldest.append(select(candidate.c.id,candidate.c.first_seen))
+    candidates=union_all(*oldest).subquery()
+    return s.scalar(select(Behavior).join(candidates,candidates.c.id==Behavior.id).order_by(
+        candidates.c.first_seen,candidates.c.id).limit(1))
+
+
+def _free_hit(s,model,election_filters):
+    """Oldest eligible subject, among a bounded oldest window, with an exact known-good hit.
+
+    Used only while the daily cap is closed. The same pause, lifecycle,
+    saturation, claim and retry filters as normal election apply.
+    """
+    from . import known_good
+    window=[]
+    for verdict in ('pending','error'):
+        window.extend(s.scalars(select(Behavior).outerjoin(
+            ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+            *election_filters,Behavior.verdict==verdict).order_by(
+            Behavior.first_seen,Behavior.id).limit(FREE_HIT_SCAN)))
+    window.sort(key=lambda row:(row.first_seen,row.id))
+    for row in window[:FREE_HIT_SCAN]:
+        if known_good.exact_hit_available(s,row,model):return row
+    return None
+
+
 def acquire(owner=None):
     lock=Lock('ai-triage')
     lock_started=perf_counter()
@@ -122,9 +179,12 @@ def acquire(owner=None):
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
             # Read-only gate: do not create runs/attempts for work that the shared
             # rate gate, provider backoff or daily budget cannot admit right now.
-            from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing
-            if (ai_admission.waiting(s,now,settings=cfg) or ai_provider_backoff.waiting(s,now) or
-                ai_budget.waiting(s,now,settings=cfg)):return None
+            from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing,known_good
+            if ai_admission.waiting(s,now,settings=cfg) or ai_provider_backoff.waiting(s,now):return None
+            # An exhausted daily cap defers paid work only. A subject whose exact
+            # known-good match makes no provider call and reserves nothing is
+            # still claimed (#1030); every other subject keeps waiting.
+            budget_closed=bool(ai_budget.waiting(s,now,settings=cfg))
             signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
             # Active claims are globally bounded by worker capacity. Resolve
             # each occupied host's revisioned policy under this admission lock
@@ -135,41 +195,18 @@ def acquire(owner=None):
                 .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
             saturated_hosts=[host_id for host_id,count,key,policy in occupancy
                 if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
-            # Balance live occupancy first. Ties use the durable least-recent
-            # host turn; a host with no turn sorts ahead of one already served.
-            # Project each eligible verdict as its own equality range so host
-            # election reads the admission index instead of scanning retained
-            # completed history through the host index; the union keeps every
-            # input to each host's oldest eligible first_seen.
             election_filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
                 Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
-            eligible=union_all(*(select(Behavior.host_id,Behavior.first_seen).outerjoin(
-                ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
-                *election_filters,Behavior.verdict==verdict) for verdict in ('pending','error'))).subquery()
-            host_id=s.scalar(select(eligible.c.host_id).outerjoin(
-                live_counts,live_counts.c.host_id==eligible.c.host_id).outerjoin(
-                HostTurn,HostTurn.host_id==eligible.c.host_id).group_by(
-                eligible.c.host_id,live_counts.c.live_count,HostTurn.last_turn).order_by(
-                func.coalesce(live_counts.c.live_count,0),func.coalesce(HostTurn.last_turn,0),
-                func.min(eligible.c.first_seen),eligible.c.host_id).limit(1))
-            if not host_id:return None
-            # Within the elected host, keep each verdict as an equality range so
-            # the admission index can skip retained completed history and
-            # satisfy oldest-first ordering; the oldest member of either range is
-            # the host's oldest eligible pending/error candidate.
-            filters=(Behavior.host_id==host_id,Behavior.approved==False,
-                Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
-            oldest=[]
-            for verdict in ('pending','error'):
-                candidate=select(Behavior.id,Behavior.first_seen).outerjoin(
-                    ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
-                    *filters,Behavior.verdict==verdict).order_by(Behavior.first_seen,Behavior.id).limit(1).subquery()
-                oldest.append(select(candidate.c.id,candidate.c.first_seen))
-            candidates=union_all(*oldest).subquery()
-            row=s.scalar(select(Behavior).join(candidates,candidates.c.id==Behavior.id).order_by(
-                candidates.c.first_seen,candidates.c.id).limit(1))
-            if not row:return None
+            if budget_closed:
+                row=_free_hit(s,cfg['ai_model'],election_filters)
+                if not row:return None
+                host_id=row.host_id
+            else:
+                host_id=_elect_host(s,election_filters,live_counts,signature,now)
+                if not host_id:return None
+                row=_oldest(s,host_id,signature,now)
+                if not row:return None
             # Approval writes use this host queue gate. Re-read after acquiring
             # it, including on MySQL repeatable-read connections.
             subject=row.id;host_id=row.host_id
@@ -181,10 +218,40 @@ def acquire(owner=None):
                     # only a present host can carry a lifecycle transition.
                     host=s.get(Host,host_id)
                     if host is not None and not host_lifecycle.active(host):return None
-                    if cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
+                    if budget_closed:
+                        # Re-check under the host queue gate: only a subject that
+                        # still has an exact hit is claimed past a closed cap. If
+                        # its evidence changes before the worker's own lookup,
+                        # the atomic reservation still refuses the provider call.
+                        if not known_good.exact_hit_available(s,row,cfg['ai_model']):return None
+                    elif cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
                         try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
-                        except ai.AIError:return None
-                        if ai_budget.waiting(s,now,payload):return None
+                        except ai.AIError as error:
+                            # This subject's own evidence cannot be shared (for
+                            # example over the 64 KB limit). Record the outcome an
+                            # uncapped attempt records instead of leaving it at the
+                            # head of the queue, where it would stall every host.
+                            # Nothing is reserved or sent.
+                            ai_retry.begin(s,row,signature,now)
+                            retry=ai_retry.failed(s,row,error,now)
+                            row.verdict='error';row.attempted=now
+                            row.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(error)
+                            s.commit();return None
+                        # A subject whose own conservative reservation exceeds the
+                        # whole cap can never be admitted, even after a reset.
+                        # Block it with an explained reason instead of leaving it at
+                        # the head of the queue, where it would stall every host
+                        # (#1003). Nothing is reserved or sent; ordinary exhaustion
+                        # below still defers the whole fleet until the reset.
+                        # An exact known-good hit spends nothing, so neither refusal
+                        # holds it back (#1030).
+                        quote=ai_pricing.reservation(payload)
+                        cap=Decimal(str(cfg['ai_daily_cap_usd']))
+                        over=quote['ok'] and quote['amount_usd']>cap
+                        if ((over or ai_budget.waiting(s,now,payload)) and
+                            not known_good.exact_hit_available(s,row,cfg['ai_model'])):
+                            if over:ai_retry.over_cap(s,row,signature,quote['amount_usd'],cap);s.commit()
+                            return None
                     row.attempted=now;ai_retry.begin(s,row,signature,now)
                     run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
                     s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))

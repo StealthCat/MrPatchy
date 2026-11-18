@@ -25,7 +25,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes, reboot_status
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.13"
+APP_VERSION = "1.75.34"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -447,11 +447,11 @@ def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:st
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
                       severity:str='',source:str='',host_id:str='',
-                      limit:int=50,offset:int=0,user=Depends(self_user)):
+                      lifecycle:str='',limit:int=50,offset:int=0,user=Depends(self_user)):
     """Return a bounded, current-role-filtered page for the signed-in user."""
     with Session() as s:
         try:
-            filters={'severity':severity,'source':source,'host_id':host_id}
+            filters={'severity':severity,'source':source,'host_id':host_id,'lifecycle':lifecycle}
             items=notification_events.list_for_user(
                 s,user['username'],unread_only=unread_only,
                 include_dismissed=include_dismissed,limit=limit,offset=offset,
@@ -584,6 +584,11 @@ def notification_read_batch(body:NotificationReadBatchInput,user=Depends(self_us
 @app.post('/api/notifications/{event_id}/dismiss')
 def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
     return _notification_state(event_id,body,user,notification_events.dismiss)
+
+@app.post('/api/notifications/{event_id}/restore')
+def notification_restore(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    """Undo this account's dismissal; never acknowledges or resolves anything."""
+    return _notification_state(event_id,body,user,notification_events.restore)
 
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
@@ -737,7 +742,7 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None,
-                'lifecycle':lifecycle}
+                'lifecycle':lifecycle,'reboot':reboot_status.evaluate(h.inventory)}
 
 @app.get('/api/spool-health')
 def fleet_spool_health(user=Depends(viewer_user)):
@@ -1094,6 +1099,12 @@ class RevokeKnownGoodInput(BaseModel):
     reason:str=Field(min_length=10,max_length=1000)
 
 
+class ReviewKnownGoodInput(BaseModel):
+    expected_version:int=Field(ge=1,le=1_000_000,strict=True)
+    expected_revoked_at:float=Field(gt=0)
+    note:str=Field(min_length=10,max_length=1000)
+
+
 @app.post('/api/investigations/{behavior_id}/retriage')
 def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin_user)):
     from . import ai_assessments,ai_claims
@@ -1172,6 +1183,24 @@ def known_good_summary(user=Depends(admin_user)):
         return known_good.summary(s)
 
 
+@app.get('/api/ai/known-good/lookups')
+def known_good_lookups_summary(user=Depends(admin_user)):
+    from . import known_good_lookups
+    with Session() as s:
+        return known_good_lookups.summary(s)
+
+
+@app.get('/api/ai/known-good/candidates')
+def known_good_candidates(state:str='active',offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_candidates as candidates
+    if state not in candidates.STATES:
+        raise HTTPException(400,'Invalid known-good candidate state')
+    if offset<0 or not 1<=limit<=candidates.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid known-good candidate pagination')
+    with Session() as s:
+        return candidates.page(s,state,offset,limit)
+
+
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
 def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
@@ -1187,8 +1216,31 @@ def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(adm
             try:result=known_good.revoke(s,fingerprint,body.expected_version,user['username'],reason)
             except LookupError as error:raise HTTPException(404,str(error)) from None
             except ValueError as error:raise HTTPException(409,str(error)) from None
+            from . import known_good_notifications
+            known_good_notifications.publish_revocation(s,result,user['username'])
             s.commit()
             return {**result,'detail':f'Candidate revoked across the fleet. {result["linked_assessments"]} linked assessment(s) require review.'}
+    finally:lock.release()
+
+
+@app.post('/api/ai/known-good/{fingerprint}/review')
+def review_known_good(fingerprint:str,body:ReviewKnownGoodInput,user=Depends(admin_user)):
+    """Record review of a revoked candidate's linked assessments; changes no trust or response state."""
+    from . import known_good_review
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    note=body.note.strip()
+    if len(note)<10:raise HTTPException(400,'Provide a meaningful review note')
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):
+        raise HTTPException(409,'An investigation is updating known-good state. Reopen the assessment when it finishes.')
+    try:
+        with Session() as s:
+            try:result=known_good_review.record(s,fingerprint,body.expected_version,body.expected_revoked_at,user['username'],note)
+            except LookupError as error:raise HTTPException(404,str(error)) from None
+            except ValueError as error:raise HTTPException(409,str(error)) from None
+            s.commit()
+            return {**result,'detail':f'Review recorded for {result["linked_assessments"]} linked assessment(s). The candidate stays revoked.'}
     finally:lock.release()
 
 
@@ -1215,6 +1267,18 @@ def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',us
         if not behavior or not row or row.subject!=behavior.id or row.host_id!=behavior.host_id or (host_id and row.host_id!=host_id):raise HTTPException(404,'Assessment not found in this scope')
         result=object_dict(row);result['known_good']=known_good.assessment(row,s)
         return result
+@app.get('/api/ai/known-good/{fingerprint}/observations')
+def known_good_observations(fingerprint:str,offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_links
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    if offset<0 or not 1<=limit<=known_good_links.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid linked-assessment pagination')
+    with Session() as s:
+        try:return known_good_links.page(s,fingerprint,offset,limit)
+        except LookupError as error:raise HTTPException(404,str(error)) from None
+
+
 @app.get('/api/operations/workers')
 def registered_workers(offset:int=0,user=Depends(admin_user)):
     from .worker_registry import page
@@ -1231,6 +1295,11 @@ def endpoint_agent_health(offset:int=0,user=Depends(admin_user)):
     from .agent_fleet_health import page
     try:return page(offset)
     except ValueError as error:raise HTTPException(400,str(error))
+
+@app.get('/api/operations/deployment-health')
+def deployment_health_summary(user=Depends(admin_user)):
+    from .deployment_health import summary
+    return summary()
 
 class WorkerControlInput(BaseModel):
     worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
@@ -1315,6 +1384,11 @@ def ai_spend_history_csv(days:int=30,timezone:str|None=None,user=Depends(admin_u
         'Cache-Control':'no-store','X-MrPatchy-Spend-History-Truncated':'true' if result['truncated'] else 'false',
         'X-MrPatchy-Spend-History-Max-Windows':str(result['max_windows'])})
 
+@app.get('/api/settings/ai-spend-by-purpose')
+def ai_spend_by_purpose(user=Depends(admin_user)):
+    from . import ai_budget
+    with Session() as s:return ai_budget.by_purpose(s)
+
 @app.get('/api/settings/ai-control-status')
 def ai_control_status(user=Depends(admin_user)):
     from . import ai_control_status
@@ -1332,6 +1406,8 @@ class ConfigInput(BaseModel):
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
+    # Notification-only advance warning for the daily cap; 0 turns it off (#810).
+    ai_daily_cap_warning_percent:int=Field(default=80,ge=0,le=99,strict=True)
     history_days:int=Field(default=30,ge=1,le=3650)
     os_lifecycle_warning_days:int=Field(default=90,ge=0,le=730)
     api_key:str=Field(default='',max_length=1000)
@@ -1360,7 +1436,11 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
             if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
             if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
             if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
+            if previous['ai_daily_cap_warning_percent']!=merged['ai_daily_cap_warning_percent']:detail+='; daily AI cap warning changed from '+_warning_text(previous['ai_daily_cap_warning_percent'])+' to '+_warning_text(merged['ai_daily_cap_warning_percent'])
             audit(s,'update settings',detail); s.commit(); return {'ok':True,'ai_controls_revision':ai_controls_revision(merged)}
+
+def _warning_text(percent):
+    return 'off' if not percent else str(percent)+'%'
 
 AI_CONTROL_FIELDS=('ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone',
     'ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled')
@@ -1399,6 +1479,8 @@ class AISettingsInput(BaseModel):
     ai_rate_per_hour:int=Field(default=20,ge=1,le=1000)
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
+    # Notification-only advance warning for the daily cap; 0 turns it off (#810).
+    ai_daily_cap_warning_percent:int=Field(default=80,ge=0,le=99,strict=True)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
     confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 
@@ -1446,6 +1528,8 @@ def save_settings_section(values,section,expected_ai_controls_revision=None,conf
                     detail+='; telemetry-loss notification threshold changed from '+str(before)+' to '+str(values['telemetry_lost_minutes'])+' minutes'
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
+            if section=='ai' and previous['ai_daily_cap_warning_percent']!=values['ai_daily_cap_warning_percent']:
+                detail+='; daily AI cap warning changed from '+_warning_text(previous['ai_daily_cap_warning_percent'])+' to '+_warning_text(values['ai_daily_cap_warning_percent'])
             audit(s,'update '+section+' settings',detail)
             s.commit()
             result={'ok':True,**values,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key'))}
@@ -1717,6 +1801,17 @@ def investigation_status(user=Depends(viewer_user)):
         if user.get('role')=='admin':
             return ai_runs.status(s)
         return ai_runs.viewer_status(s)
+
+@app.get('/api/investigation-status/servers')
+def investigation_status_servers(user=Depends(admin_user)):
+    """Per-server process-triage queue breakdown (#975). Read-only.
+
+    Server IDs/names, counts, limits and timestamps only; shared AI start
+    gates, worker capacity and pause still decide when an investigation starts.
+    """
+    from . import triage_queue_servers
+    with Session() as s:
+        return triage_queue_servers.status(s)
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
@@ -2082,7 +2177,7 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
         from .advisories import retained,history
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
-        return {**result,'exposure_history':history(s,host_id)}
+        return {**result,'exposure_history':history(s,host_id,latest=result)}
 
 @app.get('/api/cve-exposure/fleet')
 def fleet_cve_exposure(user=Depends(admin_user)):
@@ -3299,6 +3394,32 @@ def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id)
         return auto_plan_status.status(s,host_id)
 
+@app.get('/api/security/auto-plan-status')
+def fleet_security_auto_plan_status(user=Depends(admin_user)):
+    """Read-only automatic AI plan status for opted-in servers (#936). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        return auto_plan_status.fleet(s)
+
+@app.get('/api/hosts/{host_id}/security/auto-plan-failed')
+def security_auto_plan_failed(host_id:str,user=Depends(admin_user)):
+    """Count this server's incidents whose one automatic AI plan attempt failed (#1036). Read-only."""
+    from . import auto_plan_retry
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'failed':auto_plan_retry.failed_count(s,host_id)}
+
+@app.post('/api/hosts/{host_id}/security/auto-plan-failed/retry')
+def security_auto_plan_failed_retry(host_id:str,user=Depends(admin_user)):
+    """Release failed automatic plan attempts so the automatic tick retries them (#1036). Sends nothing now."""
+    from . import auto_plan_retry
+    with worker.Lock('security-plan-queue'):
+        with Session() as s:
+            host_or_404(s,host_id)
+            result=auto_plan_retry.release(s,host_id,user['username'])
+            s.commit()
+            return result
+
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False
@@ -3503,6 +3624,12 @@ class MalwarePolicyInput(BaseModel):
 def malware_policy_read(user=Depends(admin_user)):
     from . import malware_policy
     with Session() as s:return malware_policy.state(s)
+
+@app.get('/api/settings/malware-response/overrides')
+def malware_policy_overrides(user=Depends(admin_user)):
+    """Read-only fleet list of restrict-only server overrides (#1033); counts only, never paths or hashes."""
+    from . import malware_policy
+    with Session() as s:return malware_policy.overrides(s)
 
 @app.put('/api/settings/malware-response')
 def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):

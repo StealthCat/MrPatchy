@@ -428,6 +428,31 @@ def lookup(s, snapshot, model, policy_hashes, bypass=False):
     return None
 
 
+
+def exact_hit_available(s, behavior, model):
+    """Read-only admission probe: would the worker's exact lookup reuse a candidate now?
+
+    It derives evidence as the worker does, without persisting trust state, and
+    honours an administrator Refresh and an authenticated ``changed`` artifact
+    exactly as the worker does. The result only lets a subject be claimed past a
+    closed spend gate. It never approves anything, and the worker's own lookup
+    and the atomic budget reservation still decide what happens next. Any
+    failure answers ``False``, which keeps today's deferral.
+    """
+    try:
+        from . import ai, ai_assessments
+        from .file_status import before_ai
+        if s.get(ai_assessments.Refresh, behavior.id) is not None:
+            return False
+        evidence = before_ai(s, behavior, persist=False)
+        if evidence.get('file_assessment', {}).get('status') == 'changed':
+            return False
+        policy = ai.investigation_policy()
+        policy_hashes = [ai_assessments.digest([policy]), ai_assessments.digest([policy, policy])]
+        return lookup(s, evidence, model, policy_hashes) is not None
+    except Exception:
+        return False
+
 MISS_TEXT = {
     'bypassed_refresh': 'Administrator re-triage bypassed the fleet known-good cache.',
     'bypassed_changed': 'Authenticated artifact change bypassed the fleet known-good cache.',
@@ -562,6 +587,8 @@ def summary(s):
     ).where(Assessment.source == 'known_good').subquery()
     statement = select(entries, reuse).select_from(entries.join(reuse, true()))
     counts = dict(s.execute(statement).mappings().one())
+    from . import known_good_review
+    counts['reuse_assessments_pending_review'] = known_good_review.pending_reuse(s)
     counts['avoided_estimate'] = avoided_estimate(s)
     return counts
 
@@ -725,14 +752,18 @@ def assessment(row, s=None):
             linked = s.scalar(select(func.count(Observation.assessment_id)).where(
                 Observation.fingerprint == saved.fingerprint)) or 0
             contradiction = _contradiction(s, saved) if not active else None
+            from . import known_good_review
+            review = known_good_review.current(s, saved, linked) if not active else None
             status = {**status, 'active': active,
-                'review_required': not active,
+                'review_required': not active and review is None,
                 'linked_assessments': linked,
                 'revoked_at': saved.revoked_at if not active else 0,
                 'revoked_by': ('AI assessment' if contradiction else saved.revoked_by) if not active else '',
                 'revoked_reason': saved.revoked_reason if not active else ''}
             if contradiction:
                 status = {**status, **contradiction}
+            if review:
+                status = {**status, **review}
         if row.source == 'known_good':
             metadata = row.result.get('known_good_reuse') if isinstance(row.result, dict) else None
             local_observation = s.get(Observation, row.id)
@@ -798,3 +829,7 @@ def bind_vendor_provenance(s, host_id, evidence, collected):
         'followup':followup,
         'coverage':{'version':CONTEXT_VERSION,'complete':False,'gaps':remaining},'observation':observation}
     return value
+
+
+# Register the durable lookup-outcome counters with the shared metadata.
+from . import known_good_lookups as _lookup_counts  # noqa: E402,F401

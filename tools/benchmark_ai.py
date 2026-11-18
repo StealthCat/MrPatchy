@@ -1,5 +1,6 @@
 """Disposable serial/parallel triage fixture; no external provider or SSH target."""
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -7,6 +8,7 @@ import os
 from pathlib import Path
 import statistics
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -17,6 +19,119 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+MYSQL_URL_ENV = 'AI_BENCHMARK_MYSQL_URL'
+
+
+class DatabaseRefused(Exception):
+    """Fixed-text refusal; never carries the URL, credentials or driver text."""
+
+
+def mysql_target(environ):
+    """Return the validated disposable MySQL URL from the environment.
+
+    The URL is read only from MYSQL_URL_ENV so its password never appears in the
+    process arguments, and DATABASE_URL is deliberately ignored.
+    """
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    raw = environ.get(MYSQL_URL_ENV, '').strip()
+    if not raw:
+        raise DatabaseRefused(f'--database mysql requires {MYSQL_URL_ENV} to hold the disposable database URL')
+    try:
+        url = make_url(raw)
+        url.port  # a malformed port raises here
+    except (ArgumentError, ValueError):
+        raise DatabaseRefused(f'{MYSQL_URL_ENV} is not a valid database URL') from None
+    if url.drivername != 'mysql+pymysql':
+        raise DatabaseRefused(f'{MYSQL_URL_ENV} must be a mysql+pymysql:// URL')
+    if not url.host or not url.database:
+        raise DatabaseRefused(f'{MYSQL_URL_ENV} must name a host and a database')
+    return url
+
+
+def _mysql_tables(connection):
+    from sqlalchemy import text
+
+    return [(name, kind) for name, kind in connection.execute(text('SHOW FULL TABLES'))]
+
+
+def _mysql_lock_name(url):
+    # Advisory lock names are server-wide and limited to 64 characters.
+    return 'mrpatchy-ai-benchmark:' + hashlib.sha256(url.database.encode()).hexdigest()[:32]
+
+
+class MySQLClaim:
+    """An empty database held by one benchmark run through a MySQL advisory lock."""
+
+    def __init__(self, engine, connection, lock_name, version):
+        self.engine, self.connection, self.lock_name, self.version = engine, connection, lock_name, version
+        # Only the application's own tables are dropped. The metadata is read at release
+        # time because models keep registering until init() has run.
+        self.fixture_tables = set()
+        self.metadata = None
+
+    def release(self):
+        """Drop the fixture's own tables, report anything else, and release the lock."""
+        from sqlalchemy import text
+        from sqlalchemy.exc import SQLAlchemyError
+
+        try:
+            try:
+                self.connection.execute(text('SELECT 1'))
+                connection = self.connection
+            except SQLAlchemyError:
+                # The lock died with its connection; cleanup of our own tables is still safe.
+                connection = self.engine.connect()
+            foreign = 0
+            owned = self.fixture_tables | set(self.metadata.tables if self.metadata is not None else ())
+            connection.execute(text('SET FOREIGN_KEY_CHECKS=0'))
+            for name, kind in _mysql_tables(connection):
+                if kind == 'VIEW' or name not in owned:
+                    foreign += 1
+                    continue
+                connection.execute(text('DROP TABLE `' + name.replace('`', '``') + '`'))
+            connection.execute(text('SET FOREIGN_KEY_CHECKS=1'))
+            connection.execute(text('SELECT RELEASE_LOCK(:name)'), {'name': self.lock_name})
+            connection.commit()
+            connection.close()
+            if foreign:
+                print(f'warning: left {foreign} table(s) or view(s) the benchmark did not create in the '
+                      'MySQL database; it is no longer empty', file=sys.stderr)
+        finally:
+            self.engine.dispose()
+
+
+def claim_empty_mysql(url):
+    """Lock the database for this run and refuse it unless it has no tables.
+
+    An empty schema is the tool's evidence that the target is disposable. The
+    advisory lock stops two benchmark runs from sharing one database. Nothing
+    is written before both checks pass.
+    """
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.exc import SQLAlchemyError
+
+    engine = create_engine(url, pool_pre_ping=True)
+    lock_name = _mysql_lock_name(url)
+    try:
+        connection = engine.connect()
+        version = str(connection.execute(text('SELECT VERSION()')).scalar_one())[:64]
+        locked = connection.execute(text('SELECT GET_LOCK(:name, 0)'), {'name': lock_name}).scalar_one() == 1
+        occupied = locked and bool(_mysql_tables(connection))
+        if occupied:
+            connection.execute(text('SELECT RELEASE_LOCK(:name)'), {'name': lock_name})
+        connection.commit()
+    except SQLAlchemyError as error:
+        engine.dispose()
+        raise DatabaseRefused(f'cannot inspect the benchmark MySQL database ({type(error).__name__})') from None
+    if not locked or occupied:
+        connection.close(); engine.dispose()
+        raise DatabaseRefused(
+            'the benchmark MySQL database already has tables; use an empty disposable database '
+            '(nothing was changed)' if occupied else
+            'another benchmark run holds the benchmark MySQL database; wait for it to finish (nothing was changed)')
+    return MySQLClaim(engine, connection, lock_name, version)
 
 def workload_fingerprint(provider_requests, ssh_requests):
     """Hash the observed synthetic requests independently of dispatch order."""
@@ -47,10 +162,16 @@ def main():
     parser.add_argument('--persistence-delay-ms', type=int, default=0)
     parser.add_argument('--ssh-delay-ms', type=int, default=10,
                         help='simulated latency of a follow-up SSH evidence request (default: 10)')
+    parser.add_argument('--control-mode', choices=('legacy', 'unthrottled'), default='legacy',
+                        help='AI control mode stored for the fixture: legacy (separate rolling-hour limits, '
+                             'the pre-flag behavior) or unthrottled (no Mr Patchy pacing or spend cap) (default: legacy)')
     parser.add_argument('--queue-age-seconds', type=int, default=2,
                         help='synthetic age of queued observations without a real wait (default: 2)')
     parser.add_argument('--retained-history-rows', type=int, default=0,
                         help='number of older completed observations to seed (default: 0)')
+    parser.add_argument('--database', choices=('sqlite', 'mysql'), default='sqlite',
+                        help='sqlite: temporary file (default). mysql: the EMPTY disposable database named by '
+                             f'the {MYSQL_URL_ENV} environment variable; its tables are removed afterwards')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
     if args.follow_up_runs is not None and not 0 <= args.follow_up_runs <= args.runs:
@@ -73,14 +194,29 @@ def main():
         parser.error('--retained-history-rows must be between 0 and 50000')
     begin=ContextVar('benchmark_begin');two_stage=ContextVar('benchmark_two_stage',default=False)
     # Set before importing runtime modules; never inherit a deployment database.
-    with tempfile.TemporaryDirectory(prefix='mrpatchy-ai-benchmark-') as directory:
-        os.environ.update(DATA_DIR=directory, DATABASE_URL='sqlite:///'+directory+'/bench.db', DISABLE_SCHEDULER='1')
+    with tempfile.TemporaryDirectory(prefix='mrpatchy-ai-benchmark-') as directory, contextlib.ExitStack() as cleanup:
+        database_url = 'sqlite:///'+directory+'/bench.db'; database_version = sqlite3.sqlite_version
+        if args.database == 'mysql':
+            try:
+                target = mysql_target(os.environ)
+                claim = claim_empty_mysql(target)
+            except DatabaseRefused as refusal:
+                parser.error(str(refusal))
+            # Registered only after the lock and empty check; drops only the application's own tables.
+            cleanup.callback(claim.release)
+            database_version = claim.version
+            database_url = target.render_as_string(hide_password=False)
+        os.environ.pop(MYSQL_URL_ENV, None)
+        os.environ.update(DATA_DIR=directory, DATABASE_URL=database_url, DISABLE_SCHEDULER='1')
         for name in list(os.environ):
             if name.lower().endswith('_proxy'):os.environ.pop(name)
         from sqlalchemy import insert
         from app import ai, ai_policy, worker, ai_runs
-        from app.db import init, Session, Host, Setting, Behavior, engine
+        from app.db import init, Session, Host, Setting, Behavior, engine, config
         from app.security import seal
+        if args.database == 'mysql':
+            from app.db import Base
+            claim.metadata = Base.metadata
         single_server_slots = ai_policy.MAX_CONCURRENCY if args.same_server else None
         if single_server_slots is not None and args.concurrency > single_server_slots:
             parser.error(f'--same-server requires --concurrency at most {single_server_slots}')
@@ -153,7 +289,8 @@ def main():
             expected_hosts = {subject: f'fixture-host-{0 if args.same_server else index}'
                               for index, subject in enumerate(subjects)}
             with Session() as s:
-                s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model','ai_hourly_limit':100}))
+                s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model','ai_hourly_limit':100,
+                                                  'ai_control_mode':args.control_mode}))
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
                 for host_id in dict.fromkeys(expected_hosts.values()):
                     s.add(Host(id=host_id,name='Fixture only',address='192.0.2.1',fingerprint=''))
@@ -200,6 +337,9 @@ def main():
                 receipts = ai_runs.call_receipts(s, [run.id for run in runs])
                 assert all(len(receipts[run.id]) == run.calls for run in runs)
                 costs = [ai_runs.cost_summary(run, receipts[run.id]) for run in runs]
+                # Report the mode the application actually applied, not only the flag.
+                control_mode = config(s)['ai_control_mode']
+                assert control_mode == args.control_mode, control_mode
             persisted_timings={}
             with Session() as s:
                 for event in s.query(ai_runs.AIEvent).filter(ai_runs.AIEvent.stage.like('timing_%')):
@@ -214,9 +354,11 @@ def main():
             print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
                 'fixture_hosts':len(set(observed_hosts.values())), 'single_server_slots':single_server_slots,
                 'peak_provider_requests':peak_provider_requests,
+                'database':args.database, 'database_version':database_version,
                 'retained_history_rows':retained_history_rows,'connections':len(connections),
                 'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
+                'ai_control_mode':control_mode,
                 'stages':{k:summary(v) for k,v in samples.items()},
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
                 'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'completed_subjects':completed_subjects,'approved_subjects':approved_subjects,

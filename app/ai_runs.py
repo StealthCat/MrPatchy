@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, func, and_, or_, case, literal
+from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, or_, case, literal
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -65,6 +65,21 @@ class AIRunHost(Base):
     __tablename__ = 'ai_run_hosts'
     run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     host_id: Mapped[str] = mapped_column(String(36), primary_key=True, index=True)
+
+
+def prune_history(s, cutoff):
+    """Delete finished run diagnostics started before ``cutoff``; ``running`` runs stay.
+
+    Only run history is touched. The daily spend ledger (``ai_budget_entries``)
+    keeps its own rows and is never joined or deleted here, so capped admission,
+    reconciliation and retained spend history do not depend on this retention.
+    The caller owns the transaction and commits.
+    """
+    expired = select(AIRun.id).where(AIRun.started < cutoff, AIRun.state != 'running')
+    s.execute(delete(AIEvent).where(AIEvent.run_id.in_(expired)))
+    s.execute(delete(AICall).where(AICall.run_id.in_(expired)))
+    s.execute(delete(AIRunHost).where(AIRunHost.run_id.in_(expired)))
+    s.execute(delete(AIRun).where(AIRun.started < cutoff, AIRun.state != 'running'))
 
 
 def run_hosts(s, run_ids):
