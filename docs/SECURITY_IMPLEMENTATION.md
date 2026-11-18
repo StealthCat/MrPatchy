@@ -2363,6 +2363,15 @@ cover exact score identities, multi-version and multi-architecture RPM payloads,
 and superseding a result after a committed inventory change. Compact per-host
 state still scales with the eligible fleet. Production throughput remains open.
 
+Worker checkpoint #1150 adds a single read-only idle scoring probe. A cold
+scoring pass takes the existing lock only when an active unpaused server has a
+candidate or a scoring run needs recovery. The locked pass opens a fresh
+session and rechecks the work. Warm passes can still prune absent memo entries,
+and recovery still runs when scoring is disabled. The empty, paused-only and
+inactive-only fixtures each use one query and no scoring lock per poll. Busy
+cold passes add the probe; production throughput and independent scoring
+admission remain open.
+
 ### Fleet-wide exact-match known-good cache
 
 The administrator-only `GET /api/ai/known-good/summary` endpoint counts active and
