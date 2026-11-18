@@ -4446,6 +4446,34 @@ Remaining: group overrides,
 fleet-level visibility of overridden servers, and every runtime item under
 #682.
 
+### Fleet list of servers with malware response overrides — worker checkpoint #1033
+
+Status: **bounded read-only slice; requirement E remains planned/incomplete.**
+Settings → Malware response now lists the servers whose #940 override changes
+something, so an administrator does not have to open each server's Security tab.
+
+- **API:** admin-only `GET /api/settings/malware-response/overrides` returns the
+  fleet mode and, for each stored override that restricts anything, the server id
+  and name, mode cap, effective mode, and path/hash exclusion counts. Paths and
+  hashes are never returned. The route writes nothing and adds no audit entry.
+- **Fail-closed reporting:** a stored override that no longer validates is listed
+  as invalid and Disabled, the same as `malware_policy.effective`. Combined
+  exclusions over the contract limit report the effective-invalid reason.
+- **Not hidden:** a row whose server no longer exists is listed as orphaned,
+  after the existing servers, because server deletion does not remove override
+  rows. Rows equal to the default (follow the fleet, no exclusions) are counted,
+  not listed. The scan reads at most 5,000 rows and reports truncation.
+- **UI:** a "Servers with overrides" table under the fleet form links each server
+  to its Security tab. It refreshes after a fleet save, because effective modes
+  depend on the fleet mode, escapes untrusted text, explains a load failure
+  without disabling the form, and stacks into labelled rows below 640 px.
+  `tests/ui_settings_malware_overrides.cjs` covers these cases at 320/768/1440 px.
+- **Unchanged:** no executor, detector, provider call, schema change or response
+  authorization; `enforce` stays unavailable.
+
+Remaining: group overrides, cleanup of orphaned override rows, and every runtime
+item under #682.
+
 ## Planned: comprehensive startup and scheduled-task awareness
 
 Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse

@@ -448,12 +448,34 @@ ${data.stored_invalid?`<div class="notice" id="malware-invalid-notice" role="ale
 <p class="help">Path exclusions also match a process's verified executable path. At most ${esc(l.max_exclusions)} of each.</p>
 <button type="submit" class="primary">Save malware response policy</button></fieldset><p class="help" role="status" id="malware-policy-result"></p></form>`;
 }
+const MALWARE_CAP_LABELS={inherit:'Follows the fleet policy',monitor_only:'At most Monitor only',disabled:'Disabled'};
+const malwarePlural=(n,one,many)=>`${n} ${n===1?one:many}`;
+function malwareOverrideRows(data){
+ if(!data.servers.length)return `<p class="help" id="malware-overrides-empty">No server restricts the fleet policy. Every server follows it${data.inheriting_rows?` (${esc(malwarePlural(data.inheriting_rows,'saved override','saved overrides'))} set back to follow the fleet policy)`:''}.</p>`;
+ const row=r=>{
+  const name=r.server_exists?`<a href="${serverLink(r.server_id,'security')}">${esc(r.server_name||r.server_id)}</a>`:`<span>${esc(r.server_id)}</span><small>Server no longer exists · override retained</small>`;
+  const state=r.stored_invalid?`<strong>Invalid, treated as Disabled</strong><small>${esc(r.stored_invalid_reason||'')}</small>`:r.effective_invalid_reason?`<strong>Treated as Disabled</strong><small>${esc(r.effective_invalid_reason)}</small>`:'';
+  return `<tr><td data-label="Server">${name}</td><td data-label="Mode cap">${esc(MALWARE_CAP_LABELS[r.mode_cap]||r.mode_cap)}</td><td data-label="Effective mode">${state||esc(MALWARE_MODE_LABELS[r.effective_mode]||r.effective_mode)}</td><td data-label="Extra exclusions">${esc(malwarePlural(r.excluded_paths,'path','paths'))}<small>${esc(malwarePlural(r.excluded_sha256,'hash','hashes'))}</small></td></tr>`;
+ };
+ return `<div class="table-wrap"><table class="malware-override-table" id="malware-overrides-table"><thead><tr><th>Server</th><th>Mode cap</th><th>Effective mode</th><th>Extra exclusions</th></tr></thead><tbody>${data.servers.map(row).join('')}</tbody></table></div>`
+  +(data.inheriting_rows?`<p class="help">${esc(malwarePlural(data.inheriting_rows,'other saved override','other saved overrides'))} follow${data.inheriting_rows===1?'s':''} the fleet policy and restrict${data.inheriting_rows===1?'s':''} nothing.</p>`:'')
+  +(data.truncated?`<p class="notice" role="status">Only the first ${esc(data.scan_limit)} stored overrides were read. More exist and are not listed here.</p>`:'');
+}
+async function malwareOverrideList(revision){
+ const body=$('#malware-overrides-body'),alive=()=>currentView(revision,'settings')&&body?.isConnected;
+ if(!body)return;
+ try{
+  const data=await api('/settings/malware-response/overrides');if(!alive())return;
+  body.innerHTML=`<p class="help">Server overrides can only lower the mode or add exclusions; they never add actions or relax thresholds. Exclusion paths and hashes are shown on each server's Security tab. Nothing here is enforced.</p>`+malwareOverrideRows(data);
+ }catch(error){if(alive())body.innerHTML=PatchyUI.error('Could not load server overrides',esc(error.message));}
+}
 async function malwarePolicySettings(revision){
  const container=$('#malware-policy'),alive=()=>currentView(revision,'settings')&&container.isConnected;
  try{
   let data=await api('/settings/malware-response');if(!alive())return;
-  container.outerHTML=malwarePolicyForm(data);
+  container.outerHTML=malwarePolicyForm(data)+'<section class="card" id="malware-overrides" aria-labelledby="malware-overrides-title"><h2 id="malware-overrides-title">Servers with overrides</h2><div id="malware-overrides-body"><p class="help">Loading server overrides…</p></div></section>';
   const form=$('#malware-policy-form'),result=$('#malware-policy-result'),ok=()=>currentView(revision,'settings')&&result.isConnected;
+  malwareOverrideList(revision);
   const lines=v=>String(v||'').split('\n').map(x=>x.trim()).filter(Boolean);
   form.onsubmit=async event=>{
    event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
@@ -461,7 +483,7 @@ async function malwarePolicySettings(revision){
     min_ai_confidence:+f.get('min_ai_confidence'),min_corroborating_kinds:+f.get('min_corroborating_kinds'),max_signature_age_seconds:+f.get('max_signature_age_seconds'),
     excluded_paths:lines(f.get('excluded_paths')),excluded_sha256:lines(f.get('excluded_sha256')).map(h=>h.toLowerCase())};
    fieldset.disabled=true;result.textContent='Saving…';
-   try{data=await api('/settings/malware-response','PUT',{policy,expected_revision:data.revision});if(ok()){result.textContent='Malware response policy saved. It is recorded only and not enforced.';$('#malware-invalid-notice')?.remove();}}
+   try{data=await api('/settings/malware-response','PUT',{policy,expected_revision:data.revision});if(ok()){result.textContent='Malware response policy saved. It is recorded only and not enforced.';$('#malware-invalid-notice')?.remove();malwareOverrideList(revision);}}
    catch(error){if(ok())result.textContent='Malware response policy was not saved. '+error.message+(error.status===409&&/refresh/i.test(error.message)?' Your entries are still in the form; reload Settings to see the current saved policy.':'');}
    finally{if(fieldset.isConnected)fieldset.disabled=false;}
   };
