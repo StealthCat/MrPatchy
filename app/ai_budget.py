@@ -131,8 +131,11 @@ def reserve(payload):
             now=time.time();enabled,name,start,reset,groups,counted,cap,_reconciliation=_state(session,cfg,now)
             amount=quote['amount_usd']
             if counted+amount>cap:
-                raise AIError('The configured daily AI spend cap has no remaining safe reservation. No provider request was sent.',
+                error=AIError('The configured daily AI spend cap has no remaining safe reservation. No provider request was sent.',
                     policy_wait=True,retry_after=max(0,reset-now))
+                # Lets durable retry state name the cap rather than the rate throttle (#1015).
+                error.budget_wait=True
+                raise error
             from . import ai_runs
             row=BudgetEntry(id=str(uuid.uuid4()),run_id=ai_runs.active.get() or '',created=now,updated=now,
                 reset_at=reset,timezone=name,model=quote['model'],reservation_usd=amount,
@@ -378,3 +381,85 @@ def history(session,days=30,now=None,*,timezone_name=None):
             'counted_usd':_money(row['counted_usd'])})
     return {'days':days,'generated_at':now,'cutoff':cutoff,'max_windows':max_windows,
         'truncated':truncated,'windows':windows}
+
+
+# Fixed activity codes for the current-window breakdown. They mirror the purposes
+# ai_runs.track() records; anything else retained in run history is "other".
+SPEND_PURPOSES=('triage','update_scoring','security_plan','release_configuration','connection_test')
+SPEND_PURPOSE_ORDER=SPEND_PURPOSES+('other','unattributed')
+SPEND_PURPOSE_LIMITATIONS=[
+    'Amounts are local public-price estimates and conservative reservations, not provider invoices.',
+    'Attribution follows each call\'s link to retained AI run history. Calls whose run was pruned or '
+    'that had no run are counted under "Not attributed" and are never guessed.',
+]
+
+
+def by_purpose(session,now=None):
+    """Split the spend capped admission currently counts by AI activity.
+
+    Read-only and bounded: one grouped aggregate over exactly the rows
+    ``_state`` counts, joined to retained run history for the purpose only.
+    At most ``len(SPEND_PURPOSE_ORDER)`` result rows; no ledger entry, model,
+    subject, host or identifier is loaded or returned.
+    """
+    from .ai_runs import AIRun
+    now=time.time() if now is None else now;cfg=config(session)
+    mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
+    name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
+    result={'generated_at':now,'mode':mode,'enabled':enabled,'timezone':name if enabled else None,
+        'window_start':start if enabled else None,'next_reset':reset if enabled else None,
+        'call_count':0,'counted_usd':'0','groups':[],'limitations':SPEND_PURPOSE_LIMITATIONS}
+    if not enabled:return result
+    amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
+        else_=BudgetEntry.reservation_usd)
+    zero=Decimal(0)
+    def bucket(*statuses):
+        return _aggregate(session,case((BudgetEntry.status.in_(statuses),amount),else_=zero))
+    purpose=case((AIRun.id.is_(None),'unattributed'),(AIRun.purpose.in_(SPEND_PURPOSES),AIRun.purpose),else_='other')
+    query=(select(purpose,func.count(BudgetEntry.id),bucket('settled'),bucket('reserved'),
+        bucket('sent','uncertain'),_aggregate(session,amount))
+        .select_from(BudgetEntry).outerjoin(AIRun,AIRun.id==BudgetEntry.run_id)
+        # Same predicate as _state so the groups sum to the counted total.
+        .where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
+        .group_by(purpose))
+    groups={};total=Decimal(0);calls=0
+    for key,count,settled,reserved,uncertain,counted in session.execute(query):
+        counted=Decimal(counted or 0);total+=counted;calls+=count
+        groups[key]={'purpose':key,'call_count':count,'settled_usd':_money(Decimal(settled or 0)),
+            'reserved_usd':_money(Decimal(reserved or 0)),'uncertain_usd':_money(Decimal(uncertain or 0)),
+            'counted_usd':_money(counted)}
+    result.update(call_count=calls,counted_usd=_money(total),
+        groups=[groups[key] for key in SPEND_PURPOSE_ORDER if key in groups])
+    return result
+
+
+HISTORY_CSV_COLUMNS=('window_start_utc','reset_at_utc','timezone','calls','settled_usd','reserved_usd',
+    'sent_usd','uncertain_usd','other_usd','counted_usd')
+
+
+def _csv_time(value):
+    if value is None:return ''
+    try:return datetime.fromtimestamp(value,timezone.utc).isoformat().replace('+00:00','Z')
+    except (ValueError,OverflowError,OSError):return ''
+
+
+def _csv_cell(value):
+    text='' if value is None else str(value)
+    # Retained timezone names are persisted text. Neutralise spreadsheet formulas.
+    if text and text[0] in '=+-@\t\r':text="'"+text
+    return text
+
+
+def history_csv(result):
+    """Serialize a history() result without reading the ledger again."""
+    import csv
+    import io
+    buffer=io.StringIO()
+    writer=csv.writer(buffer,lineterminator='\r\n')
+    writer.writerow(HISTORY_CSV_COLUMNS)
+    for row in result['windows']:
+        writer.writerow([_csv_cell(value) for value in (_csv_time(row['window_start']),_csv_time(row['reset_at']),
+            row['timezone'],row['call_count'],row['settled_usd'],row['reserved_usd'],row['sent_usd'],
+            row['uncertain_usd'],row['other_usd'],row['counted_usd'])])
+    return buffer.getvalue()

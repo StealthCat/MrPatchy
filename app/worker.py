@@ -739,6 +739,22 @@ def validate_patch(s,h,specs,cfg=None):
             raise ValueError('Queued patch is no longer valid; review package '+name)
 
 
+def prune_history(s,cutoff):
+    """Delete diagnostic history older than ``cutoff`` in the caller's transaction.
+
+    Removes observations, inventory revisions and finished AI runs with their
+    events, call receipts and host links. Running AI runs, retained AI
+    assessments, the fleet known-good cache and the spend ledger are kept.
+    """
+    s.execute(delete(Observation).where(Observation.received<cutoff))
+    s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
+    expired=select(ai_runs.AIRun.id).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running')
+    s.execute(delete(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id.in_(expired)))
+    s.execute(delete(ai_runs.AICall).where(ai_runs.AICall.run_id.in_(expired)))
+    s.execute(delete(ai_runs.AIRunHost).where(ai_runs.AIRunHost.run_id.in_(expired)))
+    s.execute(delete(ai_runs.AIRun).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running'))
+
+
 def investigate_one(owner=None):
     from . import ai_claims
     admission_started=time.perf_counter()
@@ -833,8 +849,12 @@ def _assess_active_behavior(s,row,cfg,secret):
             s.commit();return
     _explain_known_good_miss(missed,cfg['ai_model'],policy_hashes)
     inputs=[]
-    def assess(evidence):
-        prepared=ai.investigation_input(evidence)
+    def assess(evidence,follow_up=False):
+        try:prepared=ai.investigation_input(evidence)
+        except ai.AIError as error:
+            # The first-stage call already went out, so say so (#1007 review).
+            if follow_up and error.cause==ai.EVIDENCE_SIZE:error.cause=ai.FOLLOW_UP_EVIDENCE_SIZE
+            raise
         inputs.append({'evidence':prepared,'policy':policy})
         return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
     result=assess(row.evidence)
@@ -868,7 +888,7 @@ def _assess_active_behavior(s,row,cfg,secret):
                     saved.evidence=updated
                 row.evidence=copy.deepcopy(saved.evidence)
             else:row.evidence=updated;s.commit()
-        result=assess(row.evidence)
+        result=assess(row.evidence,follow_up=True)
     with ai_runs.measure('result_persistence'):
         def save(write,saved):
             saved.verdict=result['risk'];saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
@@ -923,7 +943,7 @@ def _loop(reporter):
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
-        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; last_cleanup=0; notification_task=None; tick_state={}; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
+        active_polls={}; active_jobs={}; ai_tasks={}; last_poll=0; leader_since=0; last_cleanup=0; notification_task=None; tick_state={}; last_ai=0; last_advisory_reconcile=0; next_ai='scoring'
         shutting_down=False
         while True:
             shutting_down=stop.wait(1) or shutting_down
@@ -953,7 +973,10 @@ def _loop(reporter):
                 draining=reporter.heartbeat(is_leader,[key for key,(future,_) in active_jobs.items() if not future.done()],sum(future.running() for future in active_polls.values()),sum(not future.done() for future in ai_tasks),sum(not future.running() and not future.done() for future in active_polls.values()),notification_task is not None and not notification_task.done())
                 worker_health.touch()
                 if draining and is_leader:leader.release();is_leader=False
-                if not draining and not is_leader:is_leader=leader.acquire(False)
+                if not draining and not is_leader:
+                    is_leader=leader.acquire(False)
+                    # Telemetry silence before this point is the coordinator's own gap, not the servers'.
+                    if is_leader:leader_since=now
                 if is_leader:
                     ai_runs.heartbeat()
                     if now-last_advisory_reconcile>=5:
@@ -989,7 +1012,7 @@ def _loop(reporter):
                                     try:enqueue(s,h.id,'refresh')
                                     except host_lifecycle.QueueFull:log.warning('Refresh not queued for host %s: server queue is full',h.id)
                         last_poll=now
-                        operations.collect_alerts()
+                        operations.collect_alerts(observing_since=leader_since)
                         # In-app only; a failure must not stop the coordinator tick.
                         try:
                             from . import worker_registry
@@ -1023,13 +1046,7 @@ def _loop(reporter):
                 if is_leader and now-last_cleanup>3600:
                     with Session() as s:
                         cutoff=now-config(s)['history_days']*86400
-                        s.execute(delete(Observation).where(Observation.received<cutoff))
-                        s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
-                        expired=select(ai_runs.AIRun.id).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running')
-                        s.execute(delete(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id.in_(expired)))
-                        s.execute(delete(ai_runs.AICall).where(ai_runs.AICall.run_id.in_(expired)))
-                        s.execute(delete(ai_runs.AIRunHost).where(ai_runs.AIRunHost.run_id.in_(expired)))
-                        s.execute(delete(ai_runs.AIRun).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running'))
+                        prune_history(s,cutoff)
                         for entry in s.scalars(select(Setting).where(Setting.key.like('session:%') | Setting.key.like('enroll:%') | Setting.key.like('oidc-state:%'))):
                             if entry.value.get('expires',now+1)<now: s.delete(entry)
                         s.commit()

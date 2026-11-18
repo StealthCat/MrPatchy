@@ -423,7 +423,7 @@ def test_scheduler_bounds_slots_alternates_purposes_and_drains(admin,monkeypatch
     for module in (worker.scheduling,worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
         monkeypatch.setattr(module,'tick' if module is worker.scheduling else 'schedule_tick',lambda *a:None)
     monkeypatch.setattr(worker.incidents,'auto_plan_tick',lambda *a:None)
-    monkeypatch.setattr(worker.operations,'collect_alerts',lambda:None)
+    monkeypatch.setattr(worker.operations,'collect_alerts',lambda **_:None)
     pending=[];submitted=[];tick=[0];now=time.time()
     class Pool:
         def __init__(self,**kwargs):pass
@@ -547,7 +547,12 @@ def test_insufficient_safe_budget_does_not_create_triage_attempts(admin,monkeypa
     for _ in range(2):worker.investigate_one()
     with Session() as s:
         assert not list(s.scalars(select(ai_runs.AIRun)))
-        assert not list(s.scalars(select(ai_retry.TriageRetry)))
+        retries=list(s.scalars(select(ai_retry.TriageRetry)))
+        if spent:assert not retries  # ordinary exhaustion defers the queue until the reset
+        else:
+            # Each quote alone exceeds the whole cap (#1003): blocked with an explained
+            # reason so it cannot stall the queue, with no attempt counted.
+            assert retries and all(r.state=='blocked' and r.attempts==0 and 'daily spend cap' in r.reason for r in retries)
         assert all(row.attempted==0 for row in s.scalars(select(Behavior)))
 
 

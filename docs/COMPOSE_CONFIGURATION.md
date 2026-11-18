@@ -81,8 +81,9 @@ controller data-volume name. It leaves `MRPATCHY_EXPECTED_WORKER_IDS` empty,
 because role-file worker replicas do not take fixed IDs. `.env.example` remains
 the template for the complete installation. Tests check its variables and values,
 ensure no worker-only keys or credentials appear, and compare rendered
-configuration. This is a template only; remote-machine provisioning and
-controller-only/join-worker installer modes remain open.
+configuration. This is a template only. `install-gcp.sh --mode controller` (below)
+sets up a GCP controller-only installation; remote-machine provisioning and a
+join-worker installer mode remain open.
 
 The worker file requires `MRPATCHY_CONTROLLER_DATA_VOLUME`. Compose refuses to render
 without it and marks the volume external, so it never creates an empty replacement.
@@ -143,14 +144,99 @@ options take precedence over the `COMPOSE_FILE` line that `install-gcp.sh` write
 `docker compose`, once you move to the role files; otherwise a later command would
 start the complete installation again. The workers reuse the controller's gcloud
 configuration in `/data/gcloud` on the shared data volume, so an attached GCE
-service account works without separate worker sign-in. The overlays don't carry the
-Workload Identity Federation mount from `compose.gcp-auth.json`, which also names both
-services. Keep WIF installations on `compose.yaml` with `./gcp-compose.sh` for now.
+service account works without separate worker sign-in.
+
+For Workload Identity Federation, don't layer `compose.gcp-auth.json` onto a role
+file: it names both services and adds a partial service for the other role.
+`./install-gcp.sh --credential-dir DIRECTORY` also writes
+`compose.controller.gcp-auth.json` (app only) and `compose.worker.gcp-auth.json`
+(worker only). Each carries the same validated read-only `/gcp` bind mount, has mode
+0600, and is ignored by Git and Docker builds. Add the matching file last:
+
+```sh
+docker compose --env-file .env -p mrpatchy -f compose.controller.yaml \
+  -f compose.controller.gcp.yaml -f compose.controller.gcp-auth.json up -d --build --wait --remove-orphans
+MRPATCHY_CONTROLLER_DATA_VOLUME=mrpatchy_app-data docker compose --env-file .env -p mrpatchy-workers \
+  -f compose.worker.yaml -f compose.worker.gcp.yaml -f compose.worker.gcp-auth.json up -d --build --scale worker=3
+```
+
+In the default complete mode the installer signs in and checks access through the
+complete installation (`./gcp-compose.sh`), which stores the gcloud configuration in
+`/data/gcloud` for both roles. The role overlays only mount the referenced credential files, so every
+role keeps reading them on the same host. Re-run the installer with
+`--credential-dir` to regenerate all three files.
+
+### Controller-only installer mode
+
+`./install-gcp.sh --mode controller` sets up only the app and Caddy, using
+`compose.controller.yaml` and `compose.controller.gcp.yaml` (plus
+`compose.controller.gcp-auth.json` with `--credential-dir`). The default is
+`--mode complete`, which is unchanged.
+
+- **Recorded mode:** the installer writes `MRPATCHY_GCP_MODE=controller` to
+  `.env.gcp` and the controller files to `COMPOSE_FILE` in `.env`. `./gcp-compose.sh`
+  and plain `docker compose` then both select the controller files, so a later
+  command cannot start the complete installation again.
+- **Builds and checks:** it builds only `app`, never creates a worker service, and
+  runs no one-off `app` container (it would take the running app's fixed control
+  address). It starts the controller, then signs in (WIF only) and checks the gcloud
+  version, an access token (discarded) and instance-read access inside the running
+  `app` as the service user. A failed check exits non-zero with the controller left
+  running for diagnosis.
+- **No mode switching:** an installation recorded in the other mode is refused
+  before any file is written. Installations from releases before `--mode` count as
+  complete. A `.env` prepared from `.env.controller.example` without `COMPOSE_FILE`
+  is accepted; an unrecognized `COMPOSE_FILE` is refused in controller mode. To move
+  an existing complete installation, follow the migration steps above instead.
+
+No worker runs in this mode, and background jobs wait until you start workers. Start
+them on the same Docker host with the worker commands above. The controller's data
+volume is `<project>_app-data`, where the project is the checkout directory name
+unless `.env` sets `COMPOSE_PROJECT_NAME`; `docker volume ls` lists it.
+
+### Join-worker installer mode
+
+`./install-gcp.sh --mode worker [--workers N]` starts `N` worker replicas (1–16, default
+1) on the same Docker host and joins them to the controller installed in the same
+checkout with `--mode controller`. Pass the same `--project`, `--zone` and
+`--instance` that you used for the controller.
+
+- **Joins only a recorded controller:** the installer refuses a fresh checkout, a
+  complete or legacy installation (it already runs its bundled worker), a different
+  project or zone, `--public-url` and `--credential-dir`. The worker reuses the
+  controller's identity: with WIF it adds `compose.worker.gcp-auth.json`, and the
+  sign-in stored in `/data/gcloud` on the shared volume. To change the identity,
+  re-run `--mode controller --credential-dir`. `.env`, `.env.gcp` and the controller
+  project are never changed, stopped or recreated.
+- **Shared state from the rendered controller:** it renders the controller with
+  `./gcp-compose.sh config`, reads its `app-data` volume name and effective
+  `DATABASE_URL`, and requires the volume to exist. Start the controller first.
+- **`.env.worker`:** when absent, it is created from `.env.worker.example` with
+  `COMPOSE_PROJECT_NAME=<controller project>-workers`, the controller volume and the
+  controller's `DATABASE_URL` (single-quoted, so `$` stays literal). It is mode 0600
+  and git- and docker-ignored. An existing `.env.worker` is kept. The run is refused
+  if the file has no `COMPOSE_PROJECT_NAME`, reuses the controller project name, or
+  renders a different volume or `DATABASE_URL` than the controller. A newly written
+  file that fails this check is removed.
+- **Builds, checks and starts only workers:** it builds `worker`. It then runs the
+  gcloud version, access-token (discarded) and instance-read checks in one-off worker
+  containers, which take a dynamic management address rather than the app's control
+  IP. Finally it runs `up -d --wait --scale worker=N` in the worker project.
+  Re-running with another `--workers` value rescales the same project.
+
+Use `./gcp-compose.sh --workers …` for later worker operations, for example
+`./gcp-compose.sh --workers ps` or `./gcp-compose.sh --workers up -d --scale worker=4`.
+Plain `./gcp-compose.sh` keeps operating the controller. Every `--workers` call first
+renders the controller configuration and refuses (exit 2, before any worker Compose
+command) when `.env.worker` names the controller's effective Compose project or the
+controller cannot be rendered, so a later edit to `.env.worker` cannot point worker
+lifecycle commands at the controller project. Drain workers in the UI
+before planned maintenance, as above. This mode does not provision workers on
+another machine.
 
 ### Unsupported in this increment
 
 - Workers on another machine: a Docker volume name doesn't share the encryption key, SSH identities, artifacts or locking state across hosts.
-- Role files with the WIF credential mount from `compose.gcp-auth.json`.
 - Network-mounted SQLite.
 
 Use `compose.yaml` (optionally with `compose.gcp.yaml` through `./gcp-compose.sh`) for those installations.

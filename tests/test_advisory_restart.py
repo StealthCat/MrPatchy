@@ -79,7 +79,7 @@ def test_recovery_failure_keeps_scheduler_admitting_work_and_waits_five_seconds(
     for module in (worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
         monkeypatch.setattr(module,'schedule_tick',lambda *a:None)
     monkeypatch.setattr(worker.incidents,'auto_plan_tick',lambda *a:None)
-    monkeypatch.setattr(worker.operations,'collect_alerts',lambda:None)
+    monkeypatch.setattr(worker.operations,'collect_alerts',lambda **_:None)
     scheduled=[];admitted=[];recoveries=[];tick=[0];now=time.time()
     monkeypatch.setattr(worker.scheduling,'tick',lambda *a:scheduled.append(tick[0]))
     monkeypatch.setattr(worker,'submit_job',lambda *a:admitted.append(tick[0]) or False)

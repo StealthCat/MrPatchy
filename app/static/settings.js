@@ -1,10 +1,11 @@
 /* Separate settings routes. Persistence never depends on a provider test. */
 const SETTINGS_SECTIONS={
  ai:['AI & models','Save your API key, choose a model, and test it.','openai api key model investigations budget spend rate limit scoring'],
- patching:['Patch policy','Repository checks and priority deadlines.','repository checks interval deadlines critical high normal low priority overdue'],
+ patching:['Patch policy','Repository checks and priority deadlines.','repository checks interval deadlines critical high normal low priority overdue telemetry lost offline notification'],
  database:['Database','MySQL connection details and offline migrations.','mysql sqlite connection migration host port password'],
  https:['HTTPS & certificates','Internal and external TLS profiles.','tls ssl certificate acme lets encrypt local ca domain port'],
- history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup']
+ history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup'],
+ malware:['Malware response','Fleet automatic-response policy for detected malware. Recorded only; not enforced yet.','malware quarantine terminate containment automatic response exclusions signature unknown policy']
 };
 function settingsMatches(query,sections=SETTINGS_SECTIONS){
  const terms=String(query||'').toLowerCase().split(/\s+/).filter(Boolean);
@@ -114,18 +115,19 @@ async function settings(revision=renderRevision){
   input.oninput=draw;draw();return;
  }
  if(section==='ai'){renderAISettings(data,revision,container);return;}
+ if(section==='malware'){container.innerHTML='<div class="card" id="malware-policy"><p class="help">Loading malware response policy…</p></div>';await malwarePolicySettings(revision);return;}
  if(section==='database'){container.innerHTML='<div class="card" id="database-settings"><p class="help">Loading database settings…</p></div>';await databaseSettings(revision);return;}
  if(section==='https'){
   container.innerHTML=`<div class="card"><h2>HTTPS profiles</h2><p>Configure independent internal and external profiles with uploaded certificates, ACME, or the built-in local CA.</p><p>${Object.entries(data.tls.profiles||{}).filter(([,p])=>p.enabled).map(([name,p])=>esc(name+': '+p.domain+' · browser port '+p.effective_https_port)+' · '+badge(p.mode)).join('<br>')||'Initial HTTPS configured by deployment'}</p><button type="button" id="tls-button">Configure HTTPS →</button></div>`;
   $('#tls-button').onclick=tlsModal;return;
  }
- if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
+ if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><label>OS support-end advance warning · days<input name="os_lifecycle_warning_days" type="number" min="0" max="730" value="${esc(data.os_lifecycle_warning_days??90)}" required></label><p class="help">Administrators get an in-app notice this many days before a server's verified release leaves standard support or verified Debian LTS coverage. 0 turns the advance notice off; notices after support ends are unchanged.</p><label>Telemetry-loss notice after · minutes<input name="telemetry_lost_minutes" type="number" min="5" max="1440" step="1" value="${esc(data.telemetry_lost_minutes??15)}" required></label><p class="help">Administrators get an in-app notice when an enabled server sends no telemetry for this long. Shorter values report outages sooner but can flag brief network interruptions. The two-minute stale alert and email or webhook delivery are unchanged.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  if(section==='history')container.innerHTML=`<form id="history-settings-form" class="card"><h2>History retention</h2><fieldset><label>Days to retain observations and inventory revisions<input name="history_days" type="number" min="1" max="3650" value="${data.history_days}" required></label><p class="help">The worker uses this period for observation, inventory revision and completed AI log cleanup. Package change history is retained separately.</p><button type="submit" class="primary">Save history retention</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  const form=container.querySelector('form'),result=$('#section-save-result');
  trackSettingsForm(form);
  form.onsubmit=async event=>{
   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
-  const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
+  const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),os_lifecycle_warning_days:+f.get('os_lifecycle_warning_days'),telemetry_lost_minutes:+f.get('telemetry_lost_minutes'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
   fieldset.disabled=true;result.textContent='Saving…';
   try{await api('/settings/'+section,'PUT',body);settingsFormSaved(form);if(currentView(revision,'settings')&&result.isConnected)result.textContent=section==='patching'?'Patch policy saved.':'History retention saved.';}
   catch(error){if(currentView(revision,'settings')&&result.isConnected)result.textContent=error.message;}
@@ -135,11 +137,16 @@ async function settings(revision=renderRevision){
 function modelPicker(data){
  return `<label>Model ID<select name="ai_model" id="ai-model"><option value="">Choose an available model</option>${data.ai_model?`<option value="${esc(data.ai_model)}" selected>${esc(data.ai_model)} · saved, not verified</option>`:''}<option value="__manual__">Enter a model ID manually…</option></select></label><label id="ai-manual-label" hidden>Exact model ID<input id="ai-model-manual" maxlength="100" autocomplete="off" placeholder="API model ID, not a ChatGPT display label"></label><button type="button" id="ai-model-refresh">Refresh available models</button><p id="ai-model-status" class="help" role="status">Load models using your saved API key, or enter an exact model ID manually. Discovery and test failures do not prevent saving.</p>`;
 }
+function migrationNotice(m){
+ const rate=n=>n?`${esc(n)}/hour`:'off',legacy=m.legacy_hourly_starts||{};
+ return `<div class="notice ai-migration" id="ai-migration"><strong>Admission migration review required.</strong> Existing separate limits remain active until saved. Suggested shared rate: ${esc(m.suggested_rate_per_hour)} work starts/hour, no accumulated burst.<br><small>Current hidden allowances: process triage ${rate(legacy.triage)} · update scoring ${rate(legacy.update_scoring)} · automatic incident/startup plans ${rate(legacy.automatic_plans)}. ${m.proposal_expands?'This suggestion would raise an allowance; review the effects before saving.':'The suggested rate is the lowest enabled allowance, so no purpose can start more work per hour than it does now. All purposes then share it.'}</small><br><button type="button" id="ai-migration-apply">Use suggested shared rate</button> <small>Fills the form only. Review “Effects of this change”, then save.</small></div>`;
+}
 function renderAISettings(data,revision,container){
  const migration=data.ai_control_migration?.required;
  const budget=data.ai_budget||{},catalog=budget.pricing_catalog||{},providerBackoff=data.ai_provider_backoff||{};
- container.innerHTML=`<form class="card" id="ai-key-form"><h2>1. API key</h2><p class="help">Save your key independently—even if the old model is invalid. Saving does not call OpenAI.</p><fieldset><label>OpenAI API key <span id="ai-key-state">${data.api_key_configured?'· saved':'· not configured'}</span><input name="api_key" type="password" autocomplete="new-password" placeholder="Enter a new key to replace the saved key" required maxlength="1000"></label><button class="primary" type="submit">Save API key</button></fieldset><p id="ai-key-result" class="help" role="status"></p></form><form class="card" id="ai-settings-form"><h2>2. Model &amp; investigations</h2><p id="ai-saved-model" class="settings-saved">Saved model: ${esc(data.ai_model||'None')}</p><fieldset>${modelPicker(data)}<div class="actions ai-save-actions"><button type="submit" class="primary">Save AI settings</button><button type="submit" id="ai-test">Save and test selected model</button></div><p id="ai-save-result" class="help" role="status"></p><p id="ai-test-result" class="help" role="status"></p><p class="help">Save and test first saves the selected model, then sends one small structured-output request. No server evidence is included. The result identifies the exact model tested. An accessible model may still lack Responses API or JSON-schema support.</p><label class="check"><input name="ai_enabled" type="checkbox" ${data.ai_enabled?'checked':''}>Enable central OpenAI API investigations</label><p class="help">Sends executable paths, SHA-256 hashes, UIDs, and network endpoint metadata. Investigations may request fixed read-only package, executable and service checks. Arguments, environment variables and arbitrary file contents are excluded. Each investigation uses up to two calls. Responses use store: false; your API organization’s data policies still apply.</p>${migration?`<div class="notice"><strong>Admission migration review required.</strong> Existing separate limits remain active until saved. Suggested shared rate: ${esc(data.ai_control_migration.suggested_rate_per_hour)} work starts/hour, no accumulated burst.</div>`:''}<label>Mr Patchy admission mode<select name="ai_control_mode"><option value="legacy" ${data.ai_control_mode==='legacy'?'selected':''}>Legacy separate hourly limits</option><option value="rate" ${data.ai_control_mode==='rate'?'selected':''}>Shared smooth rate throttle</option><option value="daily_cap" ${data.ai_control_mode==='daily_cap'?'selected':''}>Daily spend cap</option><option value="rate_and_daily" ${data.ai_control_mode==='rate_and_daily'?'selected':''}>Rate throttle + daily spend cap</option><option value="unthrottled" ${data.ai_control_mode==='unthrottled'?'selected':''}>Unthrottled by Mr Patchy</option></select></label><label>Shared AI work starts per hour<input name="ai_rate_per_hour" type="number" min="1" max="1000" value="${data.ai_rate_per_hour}" required></label><div class="form-grid"><label>Daily AI cap · USD<input name="ai_daily_cap_usd" type="number" min="0.01" max="1000000" step="0.01" value="${esc(data.ai_daily_cap_usd)}" required></label><label>Budget reset · IANA timezone<input name="ai_budget_timezone" maxlength="64" value="${esc(data.ai_budget_timezone)}" required placeholder="America/New_York"></label></div><div class="notice"><strong>Current budget window</strong><br>Counted $${esc(budget.counted_usd||'0')} · settled $${esc(budget.settled_usd||'0')} · reserved $${esc(budget.reserved_usd||'0')} · uncertain $${esc(budget.uncertain_usd||'0')} · remaining $${esc(budget.remaining_usd||data.ai_daily_cap_usd)}${budget.next_reset?' · resets '+date(budget.next_reset):''}${providerBackoff.blocked?`<br><strong>Provider backoff active</strong> · ${esc(providerBackoff.failures)} consecutive transient failure(s) · recorded ${date(providerBackoff.updated_at)} · next eligible ${date(providerBackoff.next_at)}<br>${esc(providerBackoff.reason)}<br><button type="button" id="provider-backoff-clear">Review and clear provider backoff</button>`:''}</div><p class="help">Capped modes reserve a conservative ceiling before every provider call and reconcile valid usage receipts. Unknown model/tier pricing is blocked, never treated as free. Sent calls without reliable usage retain the full reservation after timeout or restart. Provider Retry-After and transient backoff are shared across workers and purposes. Clearing a reviewed provider floor sends no request and does not bypass rate, budget, retry, pause, lifecycle or concurrency controls. Estimates use a versioned public price catalog and are not provider invoices. Unthrottled removes Mr Patchy rate/spend controls only; finite concurrency, provider limits, global/per-server pause, roles and data sharing still apply.</p><label>Legacy maximum investigations per hour<input name="ai_hourly_limit" type="number" min="1" max="1000" value="${data.ai_hourly_limit}" required></label><label class="check"><input name="ai_updates_enabled" type="checkbox" ${data.ai_updates_enabled?'checked':''}>Automatically score pending updates</label><p class="help">Sends package names, versions, OS release and priority classification. Scores are advisory estimates, not verified CVSS ratings, and never authorize installation.</p><label>Legacy maximum scoring batches per hour · up to 5 updates each<input name="ai_update_hourly_limit" type="number" min="1" max="1000" value="${data.ai_update_hourly_limit}" required></label></fieldset><a class="mint" href="#ai-logs">Inspect AI run logs →</a></form>`;
- container.insertAdjacentHTML('beforeend',`<section class="card" id="ai-spend-history" aria-labelledby="ai-spend-history-title"><h2 id="ai-spend-history-title">3. Retained spend history</h2><form id="ai-spend-history-filter" class="form-grid"><label>Period<select id="ai-spend-history-days" aria-describedby="ai-spend-history-help"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label><label>Budget timezone<input id="ai-spend-history-timezone" maxlength="64" placeholder="America/New_York" aria-describedby="ai-spend-history-timezone-help"></label><div class="actions full"><button type="submit">Apply timezone filter</button></div></form><p class="help" id="ai-spend-history-timezone-help">Use the recorded IANA timezone. Clear the field and apply to show all timezones.</p><p class="help" id="ai-spend-history-help">Settled amounts are local public-price estimates based on retained usage—not provider invoices. Transmitted, uncertain and unrecognized unreleased calls retain their conservative ceiling.</p><div id="ai-spend-history-results"><p class="help" role="status">Loading retained AI spend history…</p></div></section>`);
+ container.innerHTML=`<form class="card" id="ai-key-form"><h2>1. API key</h2><p class="help">Save your key independently—even if the old model is invalid. Saving does not call OpenAI.</p><fieldset><label>OpenAI API key <span id="ai-key-state">${data.api_key_configured?'· saved':'· not configured'}</span><input name="api_key" type="password" autocomplete="new-password" placeholder="Enter a new key to replace the saved key" required maxlength="1000"></label><button class="primary" type="submit">Save API key</button></fieldset><p id="ai-key-result" class="help" role="status"></p></form><form class="card" id="ai-settings-form"><h2>2. Model &amp; investigations</h2><p id="ai-saved-model" class="settings-saved">Saved model: ${esc(data.ai_model||'None')}</p><fieldset>${modelPicker(data)}<div class="actions ai-save-actions"><button type="submit" class="primary">Save AI settings</button><button type="submit" id="ai-test">Save and test selected model</button></div><p id="ai-save-result" class="help" role="status"></p><p id="ai-test-result" class="help" role="status"></p><p class="help">Save and test first saves the selected model, then sends one small structured-output request. No server evidence is included. The result identifies the exact model tested. An accessible model may still lack Responses API or JSON-schema support.</p><label class="check"><input name="ai_enabled" type="checkbox" ${data.ai_enabled?'checked':''}>Enable central OpenAI API investigations</label><p class="help">Sends executable paths, SHA-256 hashes, UIDs, and network endpoint metadata. Investigations may request fixed read-only package, executable and service checks. Arguments, environment variables and arbitrary file contents are excluded. Each investigation uses up to two calls. Responses use store: false; your API organization’s data policies still apply.</p>${migration?migrationNotice(data.ai_control_migration):''}<label>Mr Patchy admission mode<select name="ai_control_mode"><option value="legacy" ${data.ai_control_mode==='legacy'?'selected':''}>Legacy separate hourly limits</option><option value="rate" ${data.ai_control_mode==='rate'?'selected':''}>Shared smooth rate throttle</option><option value="daily_cap" ${data.ai_control_mode==='daily_cap'?'selected':''}>Daily spend cap</option><option value="rate_and_daily" ${data.ai_control_mode==='rate_and_daily'?'selected':''}>Rate throttle + daily spend cap</option><option value="unthrottled" ${data.ai_control_mode==='unthrottled'?'selected':''}>Unthrottled by Mr Patchy</option></select></label><label>Shared AI work starts per hour<input name="ai_rate_per_hour" type="number" min="1" max="1000" value="${data.ai_rate_per_hour}" required></label><div class="form-grid"><label>Daily AI cap · USD<input name="ai_daily_cap_usd" type="number" min="0.01" max="1000000" step="0.01" value="${esc(data.ai_daily_cap_usd)}" required></label><label>Budget reset · IANA timezone<input name="ai_budget_timezone" maxlength="64" value="${esc(data.ai_budget_timezone)}" required placeholder="America/New_York"></label></div><div class="notice"><strong>Current budget window</strong><br>Counted $${esc(budget.counted_usd||'0')} · settled $${esc(budget.settled_usd||'0')} · reserved $${esc(budget.reserved_usd||'0')} · uncertain $${esc(budget.uncertain_usd||'0')} · remaining $${esc(budget.remaining_usd||data.ai_daily_cap_usd)}${budget.next_reset?' · resets '+date(budget.next_reset):''}${providerBackoff.blocked?`<br><strong>Provider backoff active</strong> · ${esc(providerBackoff.failures)} consecutive transient failure(s) · recorded ${date(providerBackoff.updated_at)} · next eligible ${date(providerBackoff.next_at)}<br>${esc(providerBackoff.reason)}<br><button type="button" id="provider-backoff-clear">Review and clear provider backoff</button>`:''}</div><p class="help">Capped modes reserve a conservative ceiling before every provider call and reconcile valid usage receipts. Unknown model/tier pricing is blocked, never treated as free. Sent calls without reliable usage retain the full reservation after timeout or restart. Provider Retry-After and transient backoff are shared across workers and purposes. Clearing a reviewed provider floor sends no request and does not bypass rate, budget, retry, pause, lifecycle or concurrency controls. Estimates use a versioned public price catalog and are not provider invoices. Unthrottled removes Mr Patchy rate/spend controls only; finite concurrency, provider limits, global/per-server pause, roles and data sharing still apply.</p><label>Legacy maximum investigations per hour<input name="ai_hourly_limit" type="number" min="1" max="1000" value="${data.ai_hourly_limit}" required></label><label class="check"><input name="ai_updates_enabled" type="checkbox" ${data.ai_updates_enabled?'checked':''}>Automatically score pending updates</label><p class="help">Sends package names, versions, OS release and priority classification. Scores are advisory estimates, not verified CVSS ratings, and never authorize installation.</p><label>Legacy maximum scoring batches per hour · up to 5 updates each<input name="ai_update_hourly_limit" type="number" min="1" max="1000" value="${data.ai_update_hourly_limit}" required></label></fieldset><a class="mint" href="#ai-logs">Inspect AI run logs →</a></form>`;
+ container.insertAdjacentHTML('beforeend',`<section class="card" id="ai-spend-history" aria-labelledby="ai-spend-history-title"><h2 id="ai-spend-history-title">3. Retained spend history</h2><form id="ai-spend-history-filter" class="form-grid"><label>Period<select id="ai-spend-history-days" aria-describedby="ai-spend-history-help"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label><label>Budget timezone<input id="ai-spend-history-timezone" maxlength="64" placeholder="America/New_York" aria-describedby="ai-spend-history-timezone-help"></label><div class="actions full"><button type="submit">Apply timezone filter</button><button type="button" id="ai-spend-history-download">Download CSV</button></div></form><p class="help" id="ai-spend-history-download-status" role="status"></p><p class="help" id="ai-spend-history-timezone-help">Use the recorded IANA timezone. Clear the field and apply to show all timezones.</p><p class="help" id="ai-spend-history-help">Settled amounts are local public-price estimates based on retained usage—not provider invoices. Transmitted, uncertain and unrecognized unreleased calls retain their conservative ceiling. The CSV download uses the selected period and applied timezone filter and contains only these window totals, for comparison with your provider’s billing records.</p><div id="ai-spend-history-results"><p class="help" role="status">Loading retained AI spend history…</p></div></section>`);
+ container.insertAdjacentHTML('beforeend',`<section class="card" id="ai-spend-purpose" aria-labelledby="ai-spend-purpose-title"><h2 id="ai-spend-purpose-title">4. Current window spend by activity</h2><p class="help" id="ai-spend-purpose-help">Shows which AI activity the daily spend cap is currently counting. This is read-only: it does not change admission, reservations or the cap.</p><div id="ai-spend-purpose-results"><p class="help" role="status">Loading current-window AI spend by activity…</p></div><div class="actions"><button type="button" id="ai-spend-purpose-refresh" aria-describedby="ai-spend-purpose-help">Refresh</button></div></section>`);
  const notices=container.querySelectorAll('.notice'),budgetNotice=notices[notices.length-1];
  if(budget.enabled&&Number.isInteger(budget.unreconciled_call_count)){
   const count=budget.unreconciled_call_count;
@@ -153,6 +160,14 @@ function renderAISettings(data,revision,container){
  const keyForm=$('#ai-key-form'),form=$('#ai-settings-form'),select=$('#ai-model'),manual=$('#ai-model-manual');
  const keyResult=$('#ai-key-result'),saveResult=$('#ai-save-result'),testResult=$('#ai-test-result'),status=$('#ai-model-status'),refresh=$('#ai-model-refresh');
  const alive=()=>currentView(revision,'settings')&&container.isConnected;
+ // Read-only scoring queue summary (#917), fetched separately so its exact-identity pass never delays Settings.
+ // Counts and times only; never a promise that a batch starts now.
+ container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend','<div class="notice" id="scoring-queue" role="status" aria-live="polite"><strong>Scoring queue</strong> · Loading…</div>');
+ (async()=>{const target=$('#scoring-queue');if(!target)return;let q;try{q=await api('/update-scores/status');}catch{q=null;}
+  if(!currentView(revision,'settings')||!target.isConnected)return;
+  if(!q||!q.counts){target.innerHTML='<strong>Scoring queue</strong> · Unavailable right now. This never means scoring may start; shared start gates and pause still apply.';return;}
+  const c=q.counts,stopped={ai_disabled:'Central AI provider calls are disabled, so no scoring batch starts.',scoring_disabled:'Automatic update scoring is off, so no scoring batch starts.',not_configured:'A saved model and API key are required before scoring can start.'}[q.scheduler];
+  target.innerHTML=`<strong>Scoring queue</strong> · ${esc(q.current_updates)} current pending update${q.current_updates===1?'':'s'}: ${esc(c.complete)} scored · ${esc(c.running)} running · ${esc(c.eligible)} eligible now · ${esc(c.deferred)} deferred by shared admission · ${esc(c.retry_wait)} waiting for the hourly retry · ${esc(c.blocked)} blocked${q.paused_server_updates?' · '+esc(q.paused_server_updates)+' on AI-paused servers (not queued)':''}.${q.unscored?'<br>Oldest unscored since '+esc(date(q.oldest_waiting_since))+(q.next_eligible_at?' · next timed eligibility '+esc(date(q.next_eligible_at)):''):''}${stopped?'<br>'+esc(stopped):''}<br><span class="help">Shared start gates, per-server pause and the daily cap still decide when a batch starts. Scores are advisory.</span>`;})();
  // Inserted after the budget notice lookup so this notice never receives budget details.
  if(data.ai_scoring_blocked>0)container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend',`<div class="notice" id="scoring-blocked"><strong>${esc(data.ai_scoring_blocked)} update ${data.ai_scoring_blocked===1?'score is':'scores are'} blocked</strong> by a non-transient AI provider failure under the saved model and key. No automatic retry is scheduled. After resolving the cause (for example restored quota or access), retry them; changing the saved model or key also makes them eligible.<br><button type="button" id="scoring-blocked-retry">Retry blocked scores</button><span id="scoring-blocked-result" class="help" role="status"></span></div>`);
  const retryScoring=$('#scoring-blocked-retry');
@@ -187,6 +202,50 @@ function renderAISettings(data,revision,container){
   }catch(error){if(alive()&&ticket===historyGeneration){historyResults.innerHTML=PatchyUI.error('Retained spend history could not be loaded',esc(error.message));}}
  };
  historyDays.onchange=loadHistory;
+ const historyDownload=$('#ai-spend-history-download'),historyDownloadStatus=$('#ai-spend-history-download-status');
+ historyDownload.onclick=async()=>{
+  const session=sessionRevision,days=historyDays.value,timezone=appliedTimezone;
+  historyDownload.disabled=true;historyDownloadStatus.textContent='Preparing retained spend history CSV…';
+  try{
+   const params=new URLSearchParams({days});if(timezone)params.set('timezone',timezone);
+   const response=await fetch('/api/settings/ai-spend-history.csv?'+params,{headers:{'X-CSRF-Token':csrf}});
+   if(session!==sessionRevision||!alive())return;
+   if(!response.ok){
+    let detail;try{detail=(await response.json()).detail;}catch{}
+    if(response.status===401)showLogin(csrf?'Session expired. Sign in again.':'');
+    throw Error(apiErrorMessage(detail)||`Spend history download failed (HTTP ${response.status})`);
+   }
+   const truncated=response.headers.get('X-MrPatchy-Spend-History-Truncated')==='true';
+   const limit=response.headers.get('X-MrPatchy-Spend-History-Max-Windows')||'';
+   const blob=await response.blob();
+   if(session!==sessionRevision||!alive())return;
+   const url=URL.createObjectURL(new Blob([blob],{type:'text/csv'})),link=document.createElement('a');
+   link.href=url;link.download=`mrpatchy-ai-spend-${Number(days)}d${timezone?'-'+timezone.replace(/[^A-Za-z0-9_+-]+/g,'_'):''}.csv`;
+   document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+   historyDownloadStatus.textContent=truncated?`Downloaded the newest ${limit} accounting windows. Additional reset/timezone groups exist in this period and are not in the file.`:'Retained spend history CSV downloaded. Amounts are local public-price estimates, not provider invoices.';
+  }catch(error){if(session===sessionRevision&&alive())historyDownloadStatus.textContent='Download failed: '+error.message;}
+  finally{if(historyDownload.isConnected)historyDownload.disabled=false;}
+ };
+
+ const SPEND_PURPOSE_LABELS={triage:'Process triage',update_scoring:'Update importance scoring',security_plan:'Incident and startup response plans',release_configuration:'Release configuration reviews',connection_test:'AI connection tests',other:'Other recorded activity',unattributed:'Not attributed (run history pruned or no run)'};
+ const purposeResults=$('#ai-spend-purpose-results'),purposeRefresh=$('#ai-spend-purpose-refresh');let purposeGeneration=0;
+ const loadSpendByPurpose=async()=>{
+  const ticket=++purposeGeneration;purposeRefresh.disabled=true;
+  purposeResults.innerHTML='<p class="help" role="status">Loading current-window AI spend by activity…</p>';
+  try{
+   const result=await api('/settings/ai-spend-by-purpose');
+   if(!alive()||ticket!==purposeGeneration)return;
+   const notes=(Array.isArray(result.limitations)?result.limitations:[]).map(text=>`<li>${esc(text)}</li>`).join('');
+   const caveats=notes?`<ul class="help">${notes}</ul>`:'';
+   if(!result.enabled){purposeResults.innerHTML='<p class="help" role="status">No daily spend cap applies in the current control mode, so no spend is being counted against a cap.</p>';return;}
+   const windowText=`Budget window resets ${date(result.next_reset)} · ${esc(result.timezone)}`;
+   if(!result.groups.length){purposeResults.innerHTML=`<p class="help" role="status">No billable AI calls are counted in the current budget window. ${windowText}.</p>`+caveats;return;}
+   const rows=result.groups.map(row=>`<tr><th scope="row">${esc(SPEND_PURPOSE_LABELS[row.purpose]||'Other recorded activity')}</th><td>${esc(row.call_count)}</td><td>$${esc(row.settled_usd)}</td><td>$${esc(row.reserved_usd)}</td><td>$${esc(row.uncertain_usd)}</td><td><strong>$${esc(row.counted_usd)}</strong></td></tr>`).join('');
+   purposeResults.innerHTML=`<p class="help">${windowText}</p><div class="table-wrap"><table><caption>AI spend counted against the daily cap, by activity</caption><thead><tr><th scope="col">Activity</th><th scope="col">Calls</th><th scope="col">Settled estimate</th><th scope="col">Reserved</th><th scope="col">Sent or uncertain</th><th scope="col">Counted</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><th scope="row">All activity</th><td>${esc(result.call_count)}</td><td colspan="3"></td><td><strong>$${esc(result.counted_usd)}</strong></td></tr></tfoot></table></div>`+caveats;
+  }catch(error){if(alive()&&ticket===purposeGeneration){purposeResults.innerHTML=PatchyUI.error('Current-window spend by activity could not be loaded',esc(error.message));}}
+  finally{if(ticket===purposeGeneration&&purposeRefresh.isConnected)purposeRefresh.disabled=false;}
+ };
+ purposeRefresh.onclick=loadSpendByPurpose;
  $('#ai-spend-history-filter').onsubmit=event=>{
   event.preventDefault();
   appliedTimezone=historyTimezone.value.trim();
@@ -198,6 +257,42 @@ function renderAISettings(data,revision,container){
  const markChanged=()=>{saveResult.textContent='Unsaved changes.';testResult.textContent='';toggleManual();};
  form.addEventListener('input',markChanged);form.addEventListener('change',markChanged);toggleManual();trackSettingsForm(keyForm);trackSettingsForm(form);
  const setBusy=value=>{busy=value;keyForm.querySelector('fieldset').disabled=value;form.querySelector('fieldset').disabled=value;};
+ // Effects of this change (#871): read-only preview of admission/spend ceilings before save.
+ $('#ai-test-result').insertAdjacentHTML('afterend','<div class="notice ai-control-effects" id="ai-control-effects" role="status" aria-live="polite" hidden></div>');
+ const effectsPanel=$('#ai-control-effects'),CONTROL_KEYS=['ai_enabled','ai_control_mode','ai_rate_per_hour','ai_daily_cap_usd','ai_budget_timezone','ai_hourly_limit','ai_update_hourly_limit','ai_updates_enabled'];
+ const controlBody=()=>{const f=new FormData(form);return {ai_enabled:f.has('ai_enabled'),ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:String(f.get('ai_budget_timezone')||'').trim(),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled')};};
+ const controlsValid=()=>CONTROL_KEYS.every(name=>{const field=form.elements[name];return !field||field.checkValidity();});
+ const effectsHtml=result=>result.changed?`<strong>Effects of this change</strong><ul class="ai-control-effects-list">${result.effects.map(item=>`<li${item.expands?' class="expands"':''}>${item.expands?'<strong>Expands:</strong> ':''}${esc(item.text)}</li>`).join('')}</ul><small>${esc(result.limitation)}</small>`:'<strong>Effects of this change</strong><br>No change to Mr Patchy admission or spend ceilings.';
+ let effectsGeneration=0,effectsTimer=0;
+ const refreshEffects=()=>{
+  clearTimeout(effectsTimer);const ticket=++effectsGeneration;
+  if(!controlsValid()){effectsPanel.hidden=false;effectsPanel.textContent='Effects of this change: correct the highlighted control values to preview them.';return;}
+  effectsTimer=setTimeout(async()=>{
+   try{const result=await api('/settings/ai/preview','POST',controlBody());if(!alive()||ticket!==effectsGeneration)return;effectsPanel.hidden=false;effectsPanel.innerHTML=effectsHtml(result);}
+   catch(error){if(alive()&&ticket===effectsGeneration){effectsPanel.hidden=false;effectsPanel.textContent='Effects could not be previewed. '+error.message;}}
+  },250);
+ };
+ const onControlEdit=event=>{if(CONTROL_KEYS.includes(event.target?.name))refreshEffects();};
+ form.addEventListener('input',onControlEdit);form.addEventListener('change',onControlEdit);
+ $('#ai-migration-apply')?.addEventListener('click',()=>{const proposal=data.ai_control_migration?.proposal;if(!proposal)return;form.elements.ai_control_mode.value=proposal.ai_control_mode;form.elements.ai_rate_per_hour.value=proposal.ai_rate_per_hour;form.elements.ai_control_mode.dispatchEvent(new Event('change',{bubbles:true}));form.elements.ai_rate_per_hour.dispatchEvent(new Event('input',{bubbles:true}));form.elements.ai_rate_per_hour.focus();});
+ const confirmExpansion=async body=>{
+  const controls=Object.fromEntries(CONTROL_KEYS.map(key=>[key,body[key]]));
+  let result;
+  try{result=await api('/settings/ai/preview','POST',controls);}
+  catch(error){if(alive())saveResult.textContent='AI settings were not saved. Effects could not be previewed: '+error.message;return false;}
+  if(!alive())return false;
+  if(!result.expands)return {};
+  // The server refuses an unconfirmed expansion (#881); send back the confirmation bound to what was shown.
+  const confirmation={confirm_ai_expansion:result.expansion_confirmation};
+  return new Promise(resolve=>{
+   modal('Confirm expanded AI admission or spend',`<p>Saving these AI settings lets Mr Patchy start more AI work or spend more than the saved controls allow:</p><ul id="ai-expansion-list">${result.expansions.map(text=>`<li>${esc(text)}</li>`).join('')}</ul><p class="help">${esc(result.limitation)}</p><div class="actions"><button type="button" class="primary" id="ai-expansion-confirm">Save with these expansions</button><button type="button" id="ai-expansion-cancel">Cancel</button></div>`);
+   const dialog=$('#modal'),dialogRevision=modalRevision;let settled=false;
+   const finish=value=>{if(settled)return;settled=true;dialog.removeEventListener('close',onClose);if(dialog.open&&dialogRevision===modalRevision)dialog.close();resolve(value);};
+   const onClose=()=>finish(false);dialog.addEventListener('close',onClose);
+   $('#ai-expansion-confirm').onclick=()=>finish(confirmation);$('#ai-expansion-cancel').onclick=()=>finish(false);
+   $('#ai-expansion-cancel').focus();
+  });
+ };
  const load=async()=>{
   if(busy)return;const ticket=++listGeneration,version=keyRevision;
   refresh.disabled=true;status.textContent='Loading models using the saved API key…';
@@ -232,10 +327,14 @@ function renderAISettings(data,revision,container){
   if(test&&!model){saveResult.textContent='Select or enter a model to test.';return;}
   const body={ai_model:model,ai_enabled:f.has('ai_enabled'),ai_hourly_limit:+f.get('ai_hourly_limit'),ai_updates_enabled:f.has('ai_updates_enabled'),ai_update_hourly_limit:+f.get('ai_update_hourly_limit'),ai_control_mode:f.get('ai_control_mode'),ai_rate_per_hour:+f.get('ai_rate_per_hour'),ai_daily_cap_usd:+f.get('ai_daily_cap_usd'),ai_budget_timezone:f.get('ai_budget_timezone').trim()};
   if(controlsRevision)body.expected_ai_controls_revision=controlsRevision;
+  const confirmed=await confirmExpansion(body);
+  if(!confirmed){if(alive()&&!saveResult.textContent.startsWith('AI settings were not saved'))saveResult.textContent='Save cancelled. Nothing was saved; your entries are still in the form.';return;}
+  Object.assign(body,confirmed);
   ++listGeneration;refresh.disabled=false;setBusy(true);saveResult.textContent='Saving AI settings…';testResult.textContent='';
   try{
    const response=await api('/settings/ai','PUT',body);if(!alive())return;
    keyRevision=response.api_key_revision;if(response.ai_controls_revision)controlsRevision=response.ai_controls_revision;
+   effectsPanel.hidden=true;effectsPanel.textContent='';
    $('#ai-saved-model').textContent='Saved model: '+(response.ai_model||'None');
    saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';settingsFormSaved(form);
    if(test){
@@ -248,7 +347,7 @@ function renderAISettings(data,revision,container){
   }catch(error){if(alive())saveResult.textContent='AI settings were not saved. '+error.message+(error.status===409?' Your entries are still in the form; reload Settings to compare them with the current saved controls.':'');}
   finally{if(alive())setBusy(false);}
  };
- loadHistory();if(data.api_key_configured)load();
+ loadHistory();loadSpendByPurpose();if(data.api_key_configured)load();
 }
 async function databaseSettings(revision){
  const container=$('#database-settings');
@@ -300,4 +399,44 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
    finally{if(button.isConnected)button.disabled=false;}
   };
  }catch(error){if(currentView(revision,'settings')&&container.isConnected)container.innerHTML=PatchyUI.error('Could not load database settings',esc(error.message));}
+}
+const MALWARE_ACTION_LABELS={quarantine_file:'Quarantine the verified file',terminate_process:'Terminate the verified process'};
+const MALWARE_MODE_LABELS={disabled:'Disabled',monitor_only:'Monitor only (record what would happen)',enforce:'Enforce (unavailable)'};
+function malwarePolicyForm(data){
+ const p=data.policy,l=data.limits,actions=(name,chosen)=>data.actions.map(a=>`<label class="check"><input type="checkbox" name="${name}" value="${esc(a)}" ${chosen.includes(a)?'checked':''}><span>${esc(MALWARE_ACTION_LABELS[a]||a)}<br><small class="help">${esc(data.effects[a]||'')}</small></span></label>`).join('');
+ const modes=data.modes.map(m=>{const off=m==='enforce'&&!data.enforcement_available;return `<option value="${esc(m)}" ${m===p.mode?'selected':''} ${off?'disabled':''}>${esc(MALWARE_MODE_LABELS[m]||m)}</option>`;}).join('');
+ return `<form id="malware-policy-form" class="card"><h2>Fleet malware automatic response</h2>
+<div class="notice" id="malware-enforcement-notice"><strong>Not enforced.</strong> No containment executor exists yet, so this policy is recorded and audited but never quarantines a file or terminates a process. Enforce stays unavailable until an executor is delivered and reviewed.</div>
+${data.stored_invalid?`<div class="notice" id="malware-invalid-notice" role="alert"><strong>The stored policy is invalid and is treated as Disabled.</strong> ${esc(data.stored_invalid_reason||'')}. Saving replaces it.</div>`:''}
+<p class="help">A detection qualifies only under the contract's checks: authenticated, fresh signatures bound to the artifact hash, or a bound AI malicious verdict with independent corroborating evidence. AI output alone never authorizes an action. Unknown-malware responses also need AI to be available and unpaused for that server; signature matches do not.</p>
+<fieldset><label>Mode<select name="mode">${modes}</select></label>
+<p class="help" id="malware-enforce-help">Enforce is shown for clarity but disabled: saving it is refused while no executor exists.</p>
+<fieldset class="malware-actions"><legend>Known malware (signature or indicator match)</legend>${actions('known_actions',p.known_actions)}</fieldset>
+<fieldset class="malware-actions"><legend>Unknown malware (evidence-supported AI discovery)</legend><label class="check"><input type="checkbox" name="allow_unknown" ${p.allow_unknown?'checked':''}> Allow responses to evidence-supported unknown malware</label>${actions('unknown_actions',p.unknown_actions)}</fieldset>
+<div class="form-grid"><label>Minimum AI confidence<input name="min_ai_confidence" type="number" min="${l.min_ai_confidence}" max="1" step="0.01" value="${esc(p.min_ai_confidence)}" required></label>
+<label>Corroborating evidence kinds<input name="min_corroborating_kinds" type="number" min="${l.min_corroborating_kinds}" max="${l.max_corroborating_kinds}" step="1" value="${esc(p.min_corroborating_kinds)}" required></label>
+<label>Maximum signature age · seconds<input name="max_signature_age_seconds" type="number" min="1" max="${l.max_signature_age_seconds}" step="1" value="${esc(p.max_signature_age_seconds)}" required></label></div>
+<label>Excluded paths · one absolute path per line<textarea name="excluded_paths" rows="3" spellcheck="false" autocomplete="off">${esc(p.excluded_paths.join('\n'))}</textarea></label>
+<label>Excluded SHA-256 hashes · one per line<textarea name="excluded_sha256" rows="3" spellcheck="false" autocomplete="off">${esc(p.excluded_sha256.join('\n'))}</textarea></label>
+<p class="help">Path exclusions also match a process's verified executable path. At most ${esc(l.max_exclusions)} of each.</p>
+<button type="submit" class="primary">Save malware response policy</button></fieldset><p class="help" role="status" id="malware-policy-result"></p></form>`;
+}
+async function malwarePolicySettings(revision){
+ const container=$('#malware-policy'),alive=()=>currentView(revision,'settings')&&container.isConnected;
+ try{
+  let data=await api('/settings/malware-response');if(!alive())return;
+  container.outerHTML=malwarePolicyForm(data);
+  const form=$('#malware-policy-form'),result=$('#malware-policy-result'),ok=()=>currentView(revision,'settings')&&result.isConnected;
+  const lines=v=>String(v||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  form.onsubmit=async event=>{
+   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
+   const policy={mode:f.get('mode'),known_actions:f.getAll('known_actions'),unknown_actions:f.getAll('unknown_actions'),allow_unknown:f.has('allow_unknown'),
+    min_ai_confidence:+f.get('min_ai_confidence'),min_corroborating_kinds:+f.get('min_corroborating_kinds'),max_signature_age_seconds:+f.get('max_signature_age_seconds'),
+    excluded_paths:lines(f.get('excluded_paths')),excluded_sha256:lines(f.get('excluded_sha256')).map(h=>h.toLowerCase())};
+   fieldset.disabled=true;result.textContent='Saving…';
+   try{data=await api('/settings/malware-response','PUT',{policy,expected_revision:data.revision});if(ok()){result.textContent='Malware response policy saved. It is recorded only and not enforced.';$('#malware-invalid-notice')?.remove();}}
+   catch(error){if(ok())result.textContent='Malware response policy was not saved. '+error.message+(error.status===409&&/refresh/i.test(error.message)?' Your entries are still in the form; reload Settings to see the current saved policy.':'');}
+   finally{if(fieldset.isConnected)fieldset.disabled=false;}
+  };
+ }catch(error){if(alive())container.innerHTML=PatchyUI.error('Could not load the malware response policy',esc(error.message));}
 }

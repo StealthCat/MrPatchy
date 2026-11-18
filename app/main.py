@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse, Str
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update, case, or_, not_, text, String, LargeBinary, cast
-from sqlalchemy.orm import defer, load_only
+from sqlalchemy.orm import aliased, defer, load_only
 from sqlalchemy.exc import IntegrityError, OperationalError
 from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, InventoryRevision, Observation, init, config, audit
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.60.0"
+APP_VERSION = "1.75.26"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -583,6 +583,11 @@ def notification_read_batch(body:NotificationReadBatchInput,user=Depends(self_us
 def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
     return _notification_state(event_id,body,user,notification_events.dismiss)
 
+@app.post('/api/notifications/{event_id}/restore')
+def notification_restore(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    """Undo this account's dismissal; never acknowledges or resolves anything."""
+    return _notification_state(event_id,body,user,notification_events.restore)
+
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
@@ -592,7 +597,14 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             path='$."%s"'%key
             kind=func.json_type(Host.inventory if engine.dialect.name=='sqlite' else func.json_extract(Host.inventory,path),*((path,) if engine.dialect.name=='sqlite' else ()))
             cols+=[Host.inventory[key].as_string(),kind]
-        rows=s.execute(select(Host,*cols,Setting.value).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+        # Per-server AI policy is administrator-only (see server_ai_policy), so other roles get no field.
+        # It joins the same bounded host query instead of adding a statement (#147 query budget).
+        admin=user['role']=='admin';ai=aliased(Setting)
+        from . import ai_policy
+        extra=(ai.key,ai.value) if admin else ()
+        query=select(Host,*cols,Setting.value,*extra).outerjoin(Setting,Setting.key==os_upgrade.PREFIX+Host.id)
+        if admin:query=query.outerjoin(ai,ai.key==ai_policy.PREFIX+Host.id)
+        rows=s.execute(query
             .options(defer(Host.inventory),defer(Host.telemetry),defer(Host.baseline))
             .where(Host.deleted_at>0 if deleted else Host.deleted_at==0).order_by(Host.name)).all()
         def meta(value,kind,default):
@@ -600,7 +612,8 @@ def hosts(deleted:bool=False,user=Depends(viewer_user)):
             return None if str(kind).lower()=='null' else value
         return [object_dict(h,('inventory','telemetry','baseline'))|{'architecture':meta(a,ak,''),
             'os':meta(o,ok,''),'package_manager':meta(m,mk,'apt'),'os_upgrade':os_upgrade.status(h,saved=saved)}
-            for h,a,ak,o,ok,m,mk,saved in rows]
+            |({'ai_paused':ai_policy.stored_paused(policy[1],policy[0] is not None)} if admin else {})
+            for h,a,ak,o,ok,m,mk,saved,*policy in rows]
 
 def saved_query_or_404(s,query_id):
     row=s.get(fleet_queries.SavedFleetQuery,query_id)
@@ -1013,18 +1026,23 @@ def key_upload(host_id:str,body:KeyInput,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id); return {'job_id':worker.enqueue(s,host_id,'key',body.model_dump())}
 @app.get('/api/investigations')
-def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer_user)):
+def investigations(host_id:str='',offset:int=0,limit:int=500,cached:bool=False,user=Depends(viewer_user)):
     if offset<0 or not 1<=limit<=500:raise HTTPException(400,'Invalid investigation pagination')
     with Session() as s:
-        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
+        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id)
         if host_id:
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
         from . import ai_retry,ai_policy,ai_claims,ai_assessments
-        rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
+        # cached=true lists only rows whose current state is an exact known-good reuse:
+        # the same rows that carry the list badge. Pagination counts filtered rows.
+        if cached:rows=ai_assessments.reused_page(s,stmt.where(Behavior.verdict.in_(ai_assessments.COMPLETE)),Behavior.id,offset,limit)
+        else:rows=list(s.scalars(stmt.offset(offset).limit(limit)))
+        signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
+        reused=ai_assessments.current_reuse(s,rows,include_source=user.get('role')=='admin')
         result=[];now=time.time()
         for row in rows:
             retry=None
@@ -1032,7 +1050,7 @@ def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer
                 retry=ai_retry.summary(retries.get(row.id),signature,now,row.attempted)
                 if row.id in claimed:retry={**retry,'state':'running','next_at':0,'reason':'A worker owns this investigation. Its result must still pass ownership and evidence checks.'}
                 if row.host_id in paused:retry={**retry,'state':'paused','next_at':0,'reason':'AI integration is paused for this server. Historical results remain available.'}
-            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row)})
+            result.append(object_dict(row)|{'retry':retry,'revision':ai_assessments.revision(row),'known_good_reuse':reused.get(row.id)})
         return result
 class ApproveInput(BaseModel):
     approved:bool
@@ -1057,6 +1075,22 @@ class RetriageInput(BaseModel):
     reason:str=Field(min_length=10,max_length=4000)
     withdraw_approval:bool=False
 
+
+class RetriageItem(BaseModel):
+    id:str=Field(min_length=1,max_length=64)
+    expected_revision:str=Field(pattern=r'^[a-f0-9]{64}$')
+
+
+class BulkRetriageInput(BaseModel):
+    items:list[RetriageItem]=Field(min_length=1,max_length=50)
+    reason:str=Field(min_length=10,max_length=4000)
+    withdraw_approval:bool=False
+
+
+def _retriage_refused(problems):
+    shown='; '.join(f'{label}: {problem}' for label,problem in problems[:5])
+    more=f'; and {len(problems)-5} more' if len(problems)>5 else ''
+    return HTTPException(409,f'Nothing was queued. {len(problems)} selected investigation(s) cannot be re-triaged — {shown}{more}. Refresh the list and select again.')
 
 class RevokeKnownGoodInput(BaseModel):
     expected_version:int=Field(ge=1,le=1_000_000,strict=True)
@@ -1090,11 +1124,66 @@ def retriage_investigation(behavior_id:str,body:RetriageInput,user=Depends(admin
     finally:lock.release()
 
 
+@app.post('/api/investigations/retriage')
+def retriage_investigations(body:BulkRetriageInput,user=Depends(admin_user)):
+    """Queue fresh triage for several completed investigations, all or nothing."""
+    from . import ai_assessments,ai_claims
+    reason=body.reason.strip()
+    if len(reason)<10:raise HTTPException(400,'Provide a meaningful re-triage reason')
+    ids=[item.id for item in body.items]
+    if len(set(ids))!=len(ids):raise HTTPException(400,'Each investigation can be selected only once')
+    expected={item.id:item.expected_revision for item in body.items}
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Select again when it finishes.')
+    try:
+        with Session() as s:
+            rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(ids)))}
+            missing=[id for id in ids if id not in rows]
+            if missing:raise HTTPException(404,f'{len(missing)} selected investigation(s) were not found. Refresh the list and select again.')
+            host_ids={id:rows[id].host_id for id in ids}
+            hosts={host.id:host for host in s.scalars(select(Host).where(Host.id.in_(set(host_ids.values()))))}
+            problems=[]
+            for id in ids:
+                claim=s.get(ai_claims.Claim,id)
+                label=rows[id].evidence.get('executable') or id
+                if claim and claim.expires>time.time():problems.append((label,'investigation is running'))
+                elif not host_lifecycle.active(hosts.get(host_ids[id])):problems.append((label,'server management is unavailable'))
+            if problems:raise _retriage_refused(problems)
+            with host_lifecycle.activity(list(host_ids.values()),'queue'):
+                # Approval mutations use these host locks. Drop the pre-lock
+                # read transaction so MySQL repeatable-read cannot hide them.
+                s.rollback()
+                rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(ids)))}
+                for id in ids:
+                    row=rows.get(id)
+                    if not row or row.host_id!=host_ids[id]:problems.append((id,'investigation identity changed'))
+                    else:
+                        problem=ai_assessments.refusal(s,row,expected[id],body.withdraw_approval)
+                        if problem:problems.append((row.evidence.get('executable') or id,problem))
+                if problems:raise _retriage_refused(problems)
+                requests=[ai_assessments.queue(s,rows[id],expected[id],reason,user['username'],body.withdraw_approval) for id in ids]
+                audit(s,'request bulk AI re-triage',f"{user['username']} {len(requests)} investigation(s) "+' '.join(request.id for request in requests))
+                s.commit()
+            return {'ok':True,'queued':len(requests),'request_ids':[request.id for request in requests],
+                'detail':f'Fresh triage queued for {len(requests)} investigation(s). Prior assessments retained; AI pause, model settings and admission limits still apply.'}
+    finally:lock.release()
+
 @app.get('/api/ai/known-good/summary')
 def known_good_summary(user=Depends(admin_user)):
     from . import known_good
     with Session() as s:
         return known_good.summary(s)
+
+
+@app.get('/api/ai/known-good/candidates')
+def known_good_candidates(state:str='active',offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_candidates as candidates
+    if state not in candidates.STATES:
+        raise HTTPException(400,'Invalid known-good candidate state')
+    if offset<0 or not 1<=limit<=candidates.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid known-good candidate pagination')
+    with Session() as s:
+        return candidates.page(s,state,offset,limit)
 
 
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
@@ -1140,6 +1229,18 @@ def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',us
         if not behavior or not row or row.subject!=behavior.id or row.host_id!=behavior.host_id or (host_id and row.host_id!=host_id):raise HTTPException(404,'Assessment not found in this scope')
         result=object_dict(row);result['known_good']=known_good.assessment(row,s)
         return result
+@app.get('/api/ai/known-good/{fingerprint}/observations')
+def known_good_observations(fingerprint:str,offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_links
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    if offset<0 or not 1<=limit<=known_good_links.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid linked-assessment pagination')
+    with Session() as s:
+        try:return known_good_links.page(s,fingerprint,offset,limit)
+        except LookupError as error:raise HTTPException(404,str(error)) from None
+
+
 @app.get('/api/operations/workers')
 def registered_workers(offset:int=0,user=Depends(admin_user)):
     from .worker_registry import page
@@ -1156,6 +1257,11 @@ def endpoint_agent_health(offset:int=0,user=Depends(admin_user)):
     from .agent_fleet_health import page
     try:return page(offset)
     except ValueError as error:raise HTTPException(400,str(error))
+
+@app.get('/api/operations/deployment-health')
+def deployment_health_summary(user=Depends(admin_user)):
+    from .deployment_health import summary
+    return summary()
 
 class WorkerControlInput(BaseModel):
     worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
@@ -1203,14 +1309,14 @@ def audit_detail(entry_id:int,user=Depends(admin_user)):
         return object_dict(row)
 @app.get('/api/settings')
 def settings(user=Depends(admin_user)):
-    from . import ai_budget,ai_provider_backoff,scoring_block_notifications
+    from . import ai_budget,ai_control_preview,ai_provider_backoff,scoring_block_notifications
     with Session() as s:
-        cfg=config(s);legacy=cfg['ai_control_mode']=='legacy'
+        cfg=config(s)
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
-            'ai_control_migration':{'required':legacy,'suggested_rate_per_hour':min(cfg['ai_hourly_limit'],cfg['ai_update_hourly_limit']),
-                'legacy_investigations_per_hour':cfg['ai_hourly_limit'],'legacy_scoring_batches_per_hour':cfg['ai_update_hourly_limit']}}
+            'ai_control_migration':ai_control_preview.legacy_migration(cfg),
+            'telemetry_lost_minutes':operations.telemetry_lost_minutes(cfg)}
 
 @app.get('/api/settings/ai-connections')
 def ai_connection_inventory(user=Depends(admin_user)):
@@ -1227,6 +1333,23 @@ def ai_spend_history(days:int=30,timezone:str|None=None,user=Depends(admin_user)
     if timezone is not None and not ai_budget.valid_timezone(timezone):
         raise HTTPException(400,'Select a valid IANA budget timezone.')
     with Session() as s:return ai_budget.history(s,days,timezone_name=timezone)
+
+@app.get('/api/settings/ai-spend-history.csv')
+def ai_spend_history_csv(days:int=30,timezone:str|None=None,user=Depends(admin_user)):
+    from . import ai_budget
+    if not 1<=days<=90:raise HTTPException(400,'AI spend history must cover 1 to 90 days')
+    if timezone is not None and not ai_budget.valid_timezone(timezone):
+        raise HTTPException(400,'Select a valid IANA budget timezone.')
+    with Session() as s:result=ai_budget.history(s,days,timezone_name=timezone)
+    return PlainTextResponse(ai_budget.history_csv(result),media_type='text/csv; charset=utf-8',headers={
+        'Content-Disposition':f'attachment; filename="mrpatchy-ai-spend-{days}d.csv"',
+        'Cache-Control':'no-store','X-MrPatchy-Spend-History-Truncated':'true' if result['truncated'] else 'false',
+        'X-MrPatchy-Spend-History-Max-Windows':str(result['max_windows'])})
+
+@app.get('/api/settings/ai-spend-by-purpose')
+def ai_spend_by_purpose(user=Depends(admin_user)):
+    from . import ai_budget
+    with Session() as s:return ai_budget.by_purpose(s)
 
 @app.get('/api/settings/ai-control-status')
 def ai_control_status(user=Depends(admin_user)):
@@ -1246,8 +1369,10 @@ class ConfigInput(BaseModel):
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     history_days:int=Field(default=30,ge=1,le=3650)
+    os_lifecycle_warning_days:int=Field(default=90,ge=0,le=730)
     api_key:str=Field(default='',max_length=1000)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
+    confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 @app.put('/api/settings')
 def settings_save(body:ConfigInput,user=Depends(admin_user)):
     from . import ai_budget
@@ -1258,14 +1383,16 @@ def settings_save(body:ConfigInput,user=Depends(admin_user)):
     if body.api_key and not re.fullmatch(r'[!-~]+',body.api_key):raise HTTPException(400,'The API key contains whitespace or unsupported characters')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
     # Merge only the fields the client sent: omitted history, AI admission or limits must keep their stored values.
-    sent=body.model_dump(exclude={'api_key','expected_ai_controls_revision'},include=supplied)
+    sent=body.model_dump(exclude={'api_key','expected_ai_controls_revision','confirm_ai_expansion'},include=supplied)
     with worker.Lock('settings-config'):
         with Session() as s:
             previous=config(s);check_ai_controls_revision(previous,body.expected_ai_controls_revision);merged=previous|sent
+            check_ai_expansion_confirmed(previous,merged,body.confirm_ai_expansion)
             if merged['ai_enabled'] and (not merged['ai_model'] or not (body.api_key or s.get(Setting,'openai_key'))): raise HTTPException(400,'AI requires a model and an API key')
             raw=s.get(Setting,'config');s.merge(Setting(key='config',value=(dict(raw.value) if raw else {})|sent))
             if body.api_key: s.merge(Setting(key='openai_key',value={'encrypted':seal(body.api_key)}))
             detail='Patch policy, cadence or AI configuration changed ('+(', '.join(sorted(k for k in sent if previous.get(k)!=sent[k])) or 'no stored values changed')+')'
+            from . import ai_control_preview;detail+=ai_control_preview.audit_suffix(previous,merged)
             if previous['ai_control_mode']!=merged['ai_control_mode']:detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+merged['ai_control_mode']
             if previous['ai_daily_cap_usd']!=merged['ai_daily_cap_usd']:detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(merged['ai_daily_cap_usd'])
             if previous['ai_budget_timezone']!=merged['ai_budget_timezone']:detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+merged['ai_budget_timezone']
@@ -1283,6 +1410,16 @@ def check_ai_controls_revision(cfg,expected):
     if expected is not None and expected!=ai_controls_revision(cfg):
         raise HTTPException(409,'AI admission or spend controls changed since you loaded Settings. Reload, review the current values and save again.')
 
+def check_ai_expansion_confirmed(previous,proposed,confirmation):
+    # No silent spend expansion (#881): an expanding save must carry the confirmation the preview returned
+    # for exactly these expansions against the controls stored now. Refusals write nothing.
+    from . import ai_control_preview
+    expansions=ai_control_preview.compare(previous,proposed)['expansions']
+    expected=ai_control_preview.expansion_confirmation(ai_controls_revision(previous),expansions)
+    if expected is not None and confirmation!=expected:
+        raise HTTPException(409,'These AI settings expand admission or spend and were not confirmed: '+' '.join(expansions)+
+            ' Nothing was saved. Preview the change and resend the save with confirm_ai_expansion set to the expansion_confirmation the preview returns.')
+
 def ai_key_revision(secret):
     # An opaque version of randomized ciphertext, not a fingerprint of the key.
     return hashlib.sha256(secret.value['encrypted'].encode()).hexdigest()[:32] if secret else ''
@@ -1299,6 +1436,7 @@ class AISettingsInput(BaseModel):
     ai_daily_cap_usd:float=Field(default=10.0,gt=0,le=1_000_000,validate_default=True)
     ai_budget_timezone:str=Field(default='UTC',min_length=1,max_length=64)
     expected_ai_controls_revision:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
+    confirm_ai_expansion:str|None=Field(default=None,pattern=r'^[0-9a-f]{64}$')
 
 class AIKeyInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1308,12 +1446,16 @@ class PatchSettingsInput(BaseModel):
     model_config={'extra':'forbid'}
     repo_minutes:int=Field(ge=5,le=10080)
     deadlines:dict[str,int]
+    # Optional so older clients that omit it keep the stored window.
+    os_lifecycle_warning_days:int|None=Field(default=None,ge=0,le=730)
+    # Optional for the same reason; whole minutes before the in-app telemetry-lost notice (#948).
+    telemetry_lost_minutes:int|None=Field(default=None,ge=5,le=1440,strict=True)
 
 class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
     history_days:int=Field(ge=1,le=3650)
 
-def save_settings_section(values,section,expected_ai_controls_revision=None):
+def save_settings_section(values,section,expected_ai_controls_revision=None,confirm_ai_expansion=None):
     with worker.Lock('settings-config'):
         with Session() as s:
             previous=config(s)
@@ -1321,15 +1463,23 @@ def save_settings_section(values,section,expected_ai_controls_revision=None):
                 check_ai_controls_revision(previous,expected_ai_controls_revision)
                 # Omitted AI fields keep their stored values instead of silently reverting to defaults (#708).
                 values=previous|values
-                values={key:values[key] for key in AISettingsInput.model_fields if key!='expected_ai_controls_revision'}
+                values={key:values[key] for key in AISettingsInput.model_fields if key not in ('expected_ai_controls_revision','confirm_ai_expansion')}
+                check_ai_expansion_confirmed(previous,values,confirm_ai_expansion)
             if section=='ai' and values['ai_enabled'] and (not values['ai_model'] or not s.get(Setting,'openai_key')):
                 raise HTTPException(400,'Save an API key and select a model before enabling AI. You can save a key independently above.')
             s.merge(Setting(key='config',value=previous|values))
             detail='Saved '+section+' configuration; no provider test was performed'
+            from . import ai_control_preview;detail+=ai_control_preview.audit_suffix(previous,values) if section=='ai' else ''
             if section=='ai' and previous['ai_control_mode']!=values['ai_control_mode']:
                 detail+='; AI admission changed from '+previous['ai_control_mode']+' to '+values['ai_control_mode']
             if section=='ai' and previous['ai_daily_cap_usd']!=values['ai_daily_cap_usd']:
                 detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(values['ai_daily_cap_usd'])
+            if section=='patching' and previous['os_lifecycle_warning_days']!=values.get('os_lifecycle_warning_days',previous['os_lifecycle_warning_days']):
+                detail+='; OS lifecycle advance warning changed from '+str(previous['os_lifecycle_warning_days'])+' to '+str(values['os_lifecycle_warning_days'])+' days'
+            if section=='patching' and 'telemetry_lost_minutes' in values:
+                before=operations.telemetry_lost_minutes(previous)
+                if before!=values['telemetry_lost_minutes']:
+                    detail+='; telemetry-loss notification threshold changed from '+str(before)+' to '+str(values['telemetry_lost_minutes'])+' minutes'
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
             audit(s,'update '+section+' settings',detail)
@@ -1353,18 +1503,29 @@ def ai_key_save(body:AIKeyInput,user=Depends(admin_user)):
 @app.put('/api/settings/ai')
 def ai_settings_save(body:AISettingsInput,user=Depends(admin_user)):
     from . import ai_budget
-    supplied=set(body.model_fields_set)-{'expected_ai_controls_revision'}  # capture before normalizing marks ai_model as sent
+    supplied=set(body.model_fields_set)-{'expected_ai_controls_revision','confirm_ai_expansion'}  # capture before normalizing marks ai_model as sent
     body.ai_model=body.ai_model.strip()
     if body.ai_model and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}',body.ai_model):
         raise HTTPException(400,'Enter an API model ID without whitespace, not a ChatGPT display label')
     if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
-    return save_settings_section(body.model_dump(include=supplied),'ai',body.expected_ai_controls_revision)
+    return save_settings_section(body.model_dump(include=supplied),'ai',body.expected_ai_controls_revision,body.confirm_ai_expansion)
+
+@app.post('/api/settings/ai/preview')
+def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
+    # Read-only: compares the posted controls with stored values; no settings, audit or provider call.
+    from . import ai_budget,ai_control_preview
+    if not ai_budget.valid_timezone(body.ai_budget_timezone):raise HTTPException(400,'Enter a valid IANA timezone for the daily AI budget reset')
+    proposed=body.model_dump(include=set(body.model_fields_set)&set(ai_control_preview.PREVIEW_FIELDS))
+    with Session() as s:
+        previous=config(s)
+        result=ai_control_preview.compare(previous,proposed);revision=ai_controls_revision(previous)
+        return result|{'ai_controls_revision':revision,'expansion_confirmation':ai_control_preview.expansion_confirmation(revision,result['expansions'])}
 
 @app.put('/api/settings/patching')
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):
     if set(body.deadlines)!={'critical','high','normal','low'} or any(v<1 or v>8760 for v in body.deadlines.values()):
         raise HTTPException(400,'Provide four priority deadlines, 1–8760 hours')
-    return save_settings_section(body.model_dump(),'patching')
+    return save_settings_section(body.model_dump(exclude_none=True),'patching')
 
 @app.put('/api/settings/history')
 def history_settings_save(body:HistorySettingsInput,user=Depends(admin_user)):
@@ -1395,6 +1556,17 @@ def blocked_update_scores(user=Depends(admin_user)):
     from . import scoring_block_notifications
     with Session() as s:
         return {'blocked':scoring_block_notifications.blocked_count(s,config(s))[0]}
+
+@app.get('/api/update-scores/status')
+def update_score_queue_status(user=Depends(admin_user)):
+    """Summarize the update-importance scoring queue (#917). Read-only.
+
+    Counts and timestamps only; shared AI start gates and pause still decide
+    when a scoring batch starts.
+    """
+    from . import scoring_queue_status
+    with Session() as s:
+        return scoring_queue_status.status(s,config(s))
 
 @app.post('/api/update-scores/blocked/retry')
 def retry_blocked_update_scores(user=Depends(admin_user)):
@@ -1581,6 +1753,17 @@ def investigation_status(user=Depends(viewer_user)):
         if user.get('role')=='admin':
             return ai_runs.status(s)
         return ai_runs.viewer_status(s)
+
+@app.get('/api/investigation-status/servers')
+def investigation_status_servers(user=Depends(admin_user)):
+    """Per-server process-triage queue breakdown (#975). Read-only.
+
+    Server IDs/names, counts, limits and timestamps only; shared AI start
+    gates, worker capacity and pause still decide when an investigation starts.
+    """
+    from . import triage_queue_servers
+    with Session() as s:
+        return triage_queue_servers.status(s)
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
@@ -1948,6 +2131,11 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
         return {**result,'exposure_history':history(s,host_id)}
 
+@app.get('/api/cve-exposure/fleet')
+def fleet_cve_exposure(user=Depends(admin_user)):
+    from .advisories import fleet_open
+    with Session() as s:return fleet_open(s)
+
 class SSOBinding(BaseModel):
     subject:str=Field(min_length=1,max_length=500)
     username:str=Field(min_length=1,max_length=64)
@@ -2276,6 +2464,57 @@ def ai_run_detail(run_id:str,host_id:str='',user=Depends(admin_user)):
         receipts=ai_runs.call_receipts(s,[row.id])[row.id]
         return object_dict(row)|{'shared_batch':len(ai_runs.run_hosts(s,[row.id])[row.id])>1,'cost':ai_runs.cost_summary(row,receipts), 'api_calls':[object_dict(r) for r in receipts],
             'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
+
+@app.post('/api/investigations/blocked/retry')
+def retry_blocked_investigations(user=Depends(admin_user)):
+    """Re-queue investigations blocked under the current AI configuration (#934).
+
+    Uses the ``ai-triage``/``configuration-blocked`` notification predicate and
+    single-item retry semantics. Sends no provider request: the scheduler still
+    applies enablement, pause, lifecycle, data sharing and shared admission.
+    """
+    return _retry_blocked_investigations(user)
+
+@app.get('/api/hosts/{host_id}/investigations/blocked')
+def host_blocked_investigations(host_id:str,user=Depends(admin_user)):
+    """Count one server's investigations blocked under the current AI configuration (#946)."""
+    from . import triage_block_notifications as blocked
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'blocked':blocked.blocked_count(s,time.time(),host_id)[0] if config(s).get('ai_enabled') else 0}
+
+@app.post('/api/hosts/{host_id}/investigations/blocked/retry')
+def retry_host_blocked_investigations(host_id:str,user=Depends(admin_user)):
+    """Re-queue one server's blocked investigations with the fleet action's semantics (#946)."""
+    with Session() as s:host_or_404(s,host_id)
+    return _retry_blocked_investigations(user,host_id)
+
+def _retry_blocked_investigations(user,host_id=None):
+    from . import triage_block_notifications as blocked
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Retry when it finishes.')
+    try:
+        with Session() as s:
+            now=time.time()
+            candidates=blocked.retry_candidates(s,now,host_id=host_id) if config(s).get('ai_enabled') else []
+            retried=0
+            if candidates:
+                try:
+                    with host_lifecycle.activity([host for _,host in candidates],'queue'):
+                        # Drop the pre-lock read transaction so MySQL repeatable-read
+                        # cannot hide a concurrent approval or retry.
+                        s.rollback()
+                        retried=blocked.retry(s,[row_id for row_id,_ in candidates],time.time())
+                        if retried:audit(s,'retry blocked AI investigations',user['username']+' re-queued '+str(retried)+' blocked investigation(s)'+(' on '+host_id if host_id else ''))
+                        s.commit()
+                except (host_lifecycle.Busy,host_lifecycle.Inactive) as error:raise HTTPException(409,str(error)) from None
+            remaining=blocked.blocked_count(s,time.time(),host_id)[0] if config(s).get('ai_enabled') else 0
+        plural='' if retried==1 else 's'
+        detail=(f'{retried} blocked investigation{plural} queued. AI pause, data sharing, shared rate and daily-cap admission still apply.' if retried
+            else 'No investigation can be retried now under the current AI configuration.')
+        if remaining:detail+=f' {remaining} still blocked (running, waiting for provider Retry-After, or beyond this batch).'
+        return {'retried':retried,'remaining':remaining,'detail':detail}
+    finally:lock.release()
 
 @app.post('/api/investigations/{behavior_id}/retry')
 def retry_investigation(behavior_id:str,user=Depends(admin_user)):
@@ -3099,6 +3338,33 @@ def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user
             audit(s,'security plan approved for manual response',plan.id+' '+user['username']);s.commit()
             return {'ok':True,'expires':plan.expires,'execution':'manual_only'}
 
+@app.get('/api/hosts/{host_id}/security/auto-plan-status')
+def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
+    """Read-only automatic AI plan status and pacing for this server (#922). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        host_or_404(s,host_id)
+        return auto_plan_status.status(s,host_id)
+
+@app.get('/api/hosts/{host_id}/security/auto-plan-failed')
+def security_auto_plan_failed(host_id:str,user=Depends(admin_user)):
+    """Count this server's incidents whose one automatic AI plan attempt failed (#1036). Read-only."""
+    from . import auto_plan_retry
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'failed':auto_plan_retry.failed_count(s,host_id)}
+
+@app.post('/api/hosts/{host_id}/security/auto-plan-failed/retry')
+def security_auto_plan_failed_retry(host_id:str,user=Depends(admin_user)):
+    """Release failed automatic plan attempts so the automatic tick retries them (#1036). Sends nothing now."""
+    from . import auto_plan_retry
+    with worker.Lock('security-plan-queue'):
+        with Session() as s:
+            host_or_404(s,host_id)
+            result=auto_plan_retry.release(s,host_id,user['username'])
+            s.commit()
+            return result
+
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False
@@ -3125,7 +3391,8 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_
                 kept=previous.get('enabled') is True and type(since) in (int,float) and math.isfinite(since) and since<=time.time()
                 # Whole microseconds keep the decimal form at <=16 significant digits (an exact double below 2**53),
                 # so MySQL's JSON parser stores the same double the API returns instead of one bit off.
-                value['enabled_since']=since if kept else math.floor(time.time()*1_000_000)/1_000_000
+                from .scan_coverage_notifications import whole_microseconds
+                value['enabled_since']=since if kept else whole_microseconds(time.time())
             s.merge(Setting(key='security-policy:'+host_id,value=value))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
     return value
@@ -3292,6 +3559,47 @@ def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_us
     except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
     if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
     return value
+
+class MalwarePolicyInput(BaseModel):
+    model_config={'extra':'forbid'}
+    policy:dict
+    expected_revision:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.get('/api/settings/malware-response')
+def malware_policy_read(user=Depends(admin_user)):
+    from . import malware_policy
+    with Session() as s:return malware_policy.state(s)
+
+@app.put('/api/settings/malware-response')
+def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):
+    # Stores policy only: no detector, executor, provider call or response authorization runs here.
+    from . import malware_policy,malware_response
+    try:return malware_policy.save(body.policy,body.expected_revision,user['username'])
+    except malware_response.Invalid as exc:raise HTTPException(400,'Invalid malware response policy: '+str(exc))
+    except malware_policy.EnforcementUnavailable:raise HTTPException(409,'Enforce mode is unavailable until a containment executor exists; choose Disabled or Monitor only')
+    except malware_policy.StalePolicy:raise HTTPException(409,'The malware response policy changed; refresh before saving')
+    except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
+
+class ServerMalwareOverrideInput(BaseModel):
+    model_config={'extra':'forbid'}
+    override:dict
+    expected_revision:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.get('/api/hosts/{host_id}/malware-response')
+def server_malware_policy_read(host_id:str,user=Depends(admin_user)):
+    from . import malware_policy
+    with Session() as s:
+        host_or_404(s,host_id);return malware_policy.server_state(s,host_id)
+
+@app.put('/api/hosts/{host_id}/malware-response')
+def server_malware_policy_update(host_id:str,body:ServerMalwareOverrideInput,user=Depends(admin_user)):
+    """Save a restrict-only server override (#940); it never adds response authority."""
+    from . import malware_policy,malware_response
+    with Session() as s:host_or_404(s,host_id)
+    try:return malware_policy.save_server(host_id,body.override,body.expected_revision,user['username'])
+    except malware_response.Invalid as exc:raise HTTPException(400,'Invalid server malware response override: '+str(exc))
+    except malware_policy.StalePolicy:raise HTTPException(409,'The server malware response override changed; refresh before saving')
+    except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
 
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):

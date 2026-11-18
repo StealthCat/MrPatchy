@@ -100,7 +100,7 @@ async function serverOverview(revision,{root,hostId}){
 async function serverPatching(revision,context){
  if(location.hash.slice(1).split('/')[3]==='jobs')return operationDetail(revision,context,location.hash.slice(1).split('/')[4]||'');
  const {root,hostId}=context;let cursor=new Date();cursor.setHours(0,0,0,0);
- root.innerHTML=`<section class="card"><div class="toolbar"><div><h3>Scheduled start windows</h3><p class="help">Times use ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. These are allowed start windows, not promised completion times.</p></div><div class="actions"><button id="server-period-prev">← Previous month</button><button id="server-period-today">Today</button><button id="server-period-next">Next month →</button></div></div><p id="server-period" class="help"></p><div id="server-calendar"></div></section><div id="server-patch-policies"></div><section class="card"><h3>Pending updates &amp; expected installation</h3><div id="server-patch-forecast"></div></section><section id="server-operations"><h3>Operations for this server</h3><div id="server-job-list"></div></section>`;
+ root.innerHTML=`<section class="card"><div class="toolbar"><div><h3>Scheduled start windows</h3><p class="help">Times use ${esc(Intl.DateTimeFormat().resolvedOptions().timeZone)}. These are allowed start windows, not promised completion times.</p></div><div class="actions"><button id="server-period-prev">← Previous month</button><button id="server-period-today">Today</button><button id="server-period-next">Next month →</button></div></div><p id="server-period" class="help"></p><div id="server-calendar"></div></section><div id="server-patch-policies"></div><section class="card"><h3>Pending updates &amp; expected installation</h3><div id="server-patch-forecast"></div></section>${isAdmin()?'<section class="card" id="server-exposure-history" aria-labelledby="server-exposure-history-title"><h3 id="server-exposure-history-title">CVE exposure history</h3><div class="exposure-history-body"></div></section>':''}<section id="server-operations"><h3>Operations for this server</h3><div id="server-job-list"></div></section>`;
  const calendar=$('#server-calendar'),policies=$('#server-patch-policies'),forecast=$('#server-patch-forecast'),jobsRoot=$('#server-job-list');let ticket=0;
  const load=async()=>{
   const turn=++ticket,start=new Date(cursor.getFullYear(),cursor.getMonth(),1),end=new Date(cursor.getFullYear(),cursor.getMonth()+1,1);
@@ -115,7 +115,53 @@ async function serverPatching(revision,context){
  };
  $('#server-period-prev').onclick=()=>{cursor=new Date(cursor.getFullYear(),cursor.getMonth()-1,1);load();};$('#server-period-next').onclick=()=>{cursor=new Date(cursor.getFullYear(),cursor.getMonth()+1,1);load();};$('#server-period-today').onclick=()=>{cursor=new Date();load();};
  const pending=async()=>{try{const rows=await api('/hosts/'+hostId+'/packages?updates=true');if(!root.isConnected)return;forecast.innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>Package</th><th>Candidate</th><th>Priority / deadline</th><th>Expected installation</th></tr></thead><tbody>${rows.map(p=>`<tr><td>${esc(p.name)}${p.held?'<small>Held by target policy</small>':''}</td><td>${esc(p.candidate)}</td><td>${badge(p.priority)}<small>${date(p.due)}</small></td><td>${installationCell(p.installation)}</td></tr>`).join('')}</tbody></table></div><a href="${serverLink(hostId,'packages')}" class="button">Review &amp; install updates</a>`:'<p class="help">No pending updates in the latest repository results.</p>';}catch(error){if(root.isConnected)forecast.innerHTML=PatchyUI.error('Unable to load forecast',esc(error.message));}};
- await Promise.all([load(),pending(),activity(revision,{hostId,root:jobsRoot})]);
+ await Promise.all([load(),pending(),exposureHistory(revision,root,hostId),activity(revision,{hostId,root:jobsRoot})]);
+}
+
+// Stored advisory-scan ledger only (#858): version applicability, never exploitation evidence, a clean-host verdict
+// or verified patch activation. Administrators only; the endpoint is admin-only and the card makes no outbound call.
+async function exposureHistory(revision,root,hostId){
+ const card=root.querySelector('#server-exposure-history');if(!card)return;
+ const body=card.querySelector('.exposure-history-body');let ticket=0;
+ const load=async()=>{
+  const turn=++ticket,current=()=>turn===ticket&&body.isConnected&&currentView(revision,'servers');
+  body.innerHTML='<p role="status">Loading exposure history…</p>';
+  try{
+   const data=await api('/operations/'+encodeURIComponent(hostId)+'/advisories');
+   if(!current())return;
+   body.innerHTML=exposureHistoryContent(data?.exposure_history);
+  }catch(error){
+   if(!current())return;
+   body.innerHTML='<div class="notice" role="alert"><p>Exposure history is unavailable. The rest of this page is unaffected.</p><button type="button" class="exposure-history-retry">Retry exposure history</button></div>';
+  }
+  const retry=body.querySelector('.exposure-history-retry');if(retry)retry.onclick=load;
+  const refresh=body.querySelector('.exposure-history-refresh');if(refresh)refresh.onclick=load;
+ };
+ await load();
+}
+
+function exposureHistoryContent(history){
+ const time=value=>typeof value==='number'&&Number.isFinite(value)&&value>0?date(value):'Unknown';
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unknown';
+ const text=value=>typeof value==='string'&&value?esc(value):'Unknown';
+ const reasons={fixed:'a fixed version was observed',unaffected:'an unaffected version was observed','not-listed':'the advisory was no longer listed for the installed version'};
+ const limits='<p class="help">This is version applicability recorded by administrator-run advisory scans. It is not exploitation evidence, not a clean-host verdict and does not verify that a patch took effect: required restarts and reboots are not confirmed.</p>';
+ const refresh='<div class="actions"><button type="button" class="exposure-history-refresh">Refresh exposure history</button></div>';
+ if(!history||typeof history!=='object'||!Array.isArray(history.items))return '<div class="notice" role="status"><p>Exposure history is unavailable in this response.</p></div>'+limits+refresh;
+ const items=history.items,coverage=typeof history.coverage==='string'?'<p class="help exposure-history-coverage">'+esc(history.coverage)+'</p>':'';
+ const summary='<div class="status-facts" role="status"><span><strong>'+count(history.open)+'</strong>Open exposures</span><span><strong>'+count(items.length)+'</strong>Records shown</span></div>';
+ const truncated=history.truncated===true?'<div class="notice">Only the first '+count(items.length)+' records are shown. Open exposures are listed first, and the open total above counts every record for this server.</div>':'';
+ if(!items.length)return summary+'<p>No affected advisory has been recorded for this server. A server that has never had an advisory scan also shows no records, so this is not a clean-host verdict.</p>'+limits+coverage+refresh;
+ const rows=items.map(item=>{
+  const row=item&&typeof item==='object'?item:{},open=row.state==='open',resolved=row.state==='resolved'&&typeof row.resolved_at==='number'&&Number.isFinite(row.resolved_at)&&row.resolved_at>0;
+  const state=open?'<span class="badge high">Open</span>':resolved?'<span class="badge complete">Resolved</span>':'<span class="badge pending">Unknown state</span>';
+  const cves=Array.isArray(row.cve_ids)&&row.cve_ids.length?' · '+esc(row.cve_ids.filter(c=>typeof c==='string').join(', ')):'';
+  const fixed=typeof row.fixed_version==='string'&&row.fixed_version?' · Vendor fix '+esc(row.fixed_version):'';
+  const reopened=Number.isSafeInteger(row.reopened)&&row.reopened>0?' · Reopened '+row.reopened.toLocaleString()+' time'+(row.reopened===1?'':'s'):'';
+  const resolution=resolved?'<div>Resolved '+esc(time(row.resolved_at))+' at version '+text(row.resolved_version)+': '+esc(reasons[row.resolved_status]||'unknown reason')+'.</div>':'';
+  return '<li><div>'+state+' <strong>'+text(row.advisory_id)+'</strong>'+cves+'</div><div class="help">Package '+text(row.package)+fixed+reopened+'</div><div class="help">First affected '+esc(time(row.first_affected_at))+' at version '+text(row.first_affected_version)+' · Last affected '+esc(time(row.last_affected_at))+' at version '+text(row.last_affected_version)+'</div>'+resolution+'</li>';
+ }).join('');
+ return summary+truncated+'<ul class="advisory-applicability exposure-history-list">'+rows+'</ul>'+limits+coverage+refresh;
 }
 
 function serverWindowText(windows){
@@ -193,22 +239,105 @@ function isolatedPanel(root,current,title,render,hostId){
  return run();
 }
 
+// Restrict-only per-server malware automatic-response override (#940). It can only lower the fleet
+// mode for this server and add exclusions; it never adds response authority and nothing enforces it yet.
+const SERVER_MALWARE_CAP_LABELS={inherit:'Follow the fleet policy',monitor_only:'At most Monitor only',disabled:'Disabled for this server'};
+const SERVER_MALWARE_MODE_LABELS={disabled:'Disabled',monitor_only:'Monitor only',enforce:'Enforce'};
+function serverMalwareOverrideForm(data){
+ const o=data.override,fleet=data.fleet_policy,eff=data.effective_policy,max=data.limits.max_exclusions;
+ const mode=m=>esc(SERVER_MALWARE_MODE_LABELS[m]||m);
+ const caps=data.mode_caps.map(c=>`<option value="${esc(c)}" ${c===o.mode_cap?'selected':''}>${esc(SERVER_MALWARE_CAP_LABELS[c]||c)}</option>`).join('');
+ const count=(n,word)=>`${esc(n)} ${word}${n===1?'':'s'}`;
+ return `<h3 id="server-malware-override-title">Automatic malware response for this server</h3>
+<div class="notice" id="server-malware-enforcement-notice"><strong>Not enforced.</strong> No containment executor exists yet, so this override is recorded and audited but never quarantines a file or terminates a process.</div>
+${data.stored_invalid?`<div class="notice" id="server-malware-invalid-notice" role="alert"><strong>The stored override is invalid, so this server is treated as Disabled.</strong> ${esc(data.stored_invalid_reason||'')}. Saving replaces it.</div>`:''}
+${data.fleet_stored_invalid?'<div class="notice" role="alert">The stored fleet policy is invalid and is treated as Disabled. Fix it in <a href="#settings/malware">Settings → Malware response</a>.</div>':''}
+<p class="help">Restrict-only: this override can lower the fleet mode for this server and add exclusions. It can never raise the mode, add actions, allow unknown-malware responses or relax thresholds. Edit the fleet policy in <a href="#settings/malware">Settings → Malware response</a>.</p>
+<dl class="server-facts" id="server-malware-summary"><div><dt>Fleet mode</dt><dd id="server-malware-fleet-mode">${mode(fleet.mode)} · ${count(fleet.excluded_paths.length,'path exclusion')} · ${count(fleet.excluded_sha256.length,'hash exclusion')}</dd></div>
+<div><dt>Effective for this server</dt><dd id="server-malware-effective">${mode(eff.mode)} · ${count(eff.excluded_paths.length,'path exclusion')} · ${count(eff.excluded_sha256.length,'hash exclusion')}${data.effective_invalid_reason?` <span class="notice" role="alert">Treated as Disabled: ${esc(data.effective_invalid_reason)}.</span>`:''}</dd></div></dl>
+<form id="server-malware-override-form"><fieldset><label>Mode cap<select name="mode_cap">${caps}</select></label>
+<label>Additional excluded paths · one absolute path per line<textarea name="excluded_paths" rows="3" spellcheck="false" autocomplete="off">${esc(o.excluded_paths.join('\n'))}</textarea></label>
+<label>Additional excluded SHA-256 hashes · one per line<textarea name="excluded_sha256" rows="3" spellcheck="false" autocomplete="off">${esc(o.excluded_sha256.join('\n'))}</textarea></label>
+<p class="help">These are added to the fleet exclusions. At most ${esc(max)} of each, counting the fleet's; if the combined lists exceed that, this server is treated as Disabled.</p>
+<button type="submit" class="primary">Save server override</button></fieldset><p class="help" role="status" id="server-malware-override-result"></p></form>`;
+}
+async function serverMalwareOverride(revision,root,hostId){
+ const target=root.querySelector('#server-malware-override');if(!target)return;
+ const alive=()=>root.isConnected&&target.isConnected&&currentView(revision,'servers');
+ const url='/hosts/'+encodeURIComponent(hostId)+'/malware-response';
+ const lines=v=>String(v||'').split('\n').map(x=>x.trim()).filter(Boolean);
+ const load=async()=>{
+  target.innerHTML='<h3 id="server-malware-override-title">Automatic malware response for this server</h3>'+PatchyUI.loading();
+  let data;try{data=await api(url);}catch(error){if(alive())panelError(target,'Automatic malware response for this server',error,load);return;}
+  if(!alive())return;
+  const render=message=>{
+   target.innerHTML=serverMalwareOverrideForm(data);
+   const form=target.querySelector('#server-malware-override-form'),result=target.querySelector('#server-malware-override-result');
+   if(message)result.textContent=message;
+   form.onsubmit=async event=>{
+    event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
+    const override={mode_cap:f.get('mode_cap'),excluded_paths:lines(f.get('excluded_paths')),excluded_sha256:lines(f.get('excluded_sha256')).map(h=>h.toLowerCase())};
+    fieldset.disabled=true;result.textContent='Saving…';
+    try{data=await api(url,'PUT',{override,expected_revision:data.revision});if(alive())render('Server override saved. It is recorded only and not enforced.');}
+    catch(error){if(alive()&&result.isConnected)result.textContent='Server override was not saved. '+error.message+(error.status===409&&/refresh/i.test(error.message)?' Your entries are still in the form; reload this tab to see the current saved override.':'');}
+    finally{if(fieldset.isConnected)fieldset.disabled=false;}
+   };
+  };
+  render('');
+ };
+ return load();
+}
 async function serverSecurity(revision,context){
  const {root,hostId}=context;let offset=0,historyOffset=0,ticket=0;
- root.innerHTML=scannerRecordControls()+'<p class="notice">Security findings are evidence for investigation, not proof of compromise. Coverage gaps remain explicit. AI plans require review and are manual-only; approval does not execute actions.</p><section class="card"><form id="security-scan-form"><label>Absolute directories, one per line<textarea name="paths">/usr/local/bin\n/var/www\n/tmp</textarea></label><button>Queue security scan</button></form></section><section class="card"><form id="yara-scan-form"><h3>Authenticated YARA scan</h3><label>Offline signed rule bundle ID<input name="bundle_id" required pattern="[A-Za-z0-9_-]{1,64}" maxlength="64"></label><label>Absolute directories, one per line<textarea name="paths" required>/tmp</textarea></label><p class="help">Requires YARA on the target and independently trusted rule keys/bundle on the controller. Read-only, bounded file scanning; no automatic AI upload or remediation.</p><button>Queue YARA scan</button></form></section><section class="card"><form id="security-policy-form"><h3>Scheduled scanning</h3><label class="check"><input name="enabled" type="checkbox">Enable recurring scans</label><label>Interval in hours<input name="interval_hours" type="number" min="1" max="720" value="24"></label><label>Scheduled directories, one per line<textarea name="paths"></textarea></label><label class="check"><input name="auto_ai_plan" type="checkbox">Automatically request AI plans for new detections</label><p class="help">Sends scanner evidence to the configured AI provider. At most ten plan requests per hour across the fleet; one automatic attempt per incident scan. Plans remain manual-only.</p><button>Save scan policy</button><p class="help">Uses the same bounded scan limits. Incomplete scans are not proof of coverage. Pending scans are not duplicated.</p></form></section><section class="card" id="execution-scan-panel"></section><div class="actions"><button id="security-refresh">Refresh security records</button></div><div id="security-latest"></div><section><h3>Incidents &amp; response plans</h3><div id="security-incidents"></div><div class="actions"><button id="incident-prev">Previous incidents</button><button id="incident-next">Next incidents</button></div></section><section><h3>Scan history</h3><div id="security-history"></div><div class="actions"><button id="scan-prev">Previous scans</button><button id="scan-next">Next scans</button></div></section>';
+ root.innerHTML=scannerRecordControls()+'<p class="notice">Security findings are evidence for investigation, not proof of compromise. Coverage gaps remain explicit. AI plans require review and are manual-only; approval does not execute actions.</p><section class="card"><form id="security-scan-form"><label>Absolute directories, one per line<textarea name="paths">/usr/local/bin\n/var/www\n/tmp</textarea></label><button>Queue security scan</button></form></section><section class="card"><form id="yara-scan-form"><h3>Authenticated YARA scan</h3><label>Offline signed rule bundle ID<input name="bundle_id" required pattern="[A-Za-z0-9_-]{1,64}" maxlength="64"></label><label>Absolute directories, one per line<textarea name="paths" required>/tmp</textarea></label><p class="help">Requires YARA on the target and independently trusted rule keys/bundle on the controller. Read-only, bounded file scanning; no automatic AI upload or remediation.</p><button>Queue YARA scan</button></form></section><section class="card"><form id="security-policy-form"><h3>Scheduled scanning</h3><label class="check"><input name="enabled" type="checkbox">Enable recurring scans</label><label>Interval in hours<input name="interval_hours" type="number" min="1" max="720" value="24"></label><label>Scheduled directories, one per line<textarea name="paths"></textarea></label><label class="check"><input name="auto_ai_plan" type="checkbox">Automatically request AI plans for new detections</label><p class="help">Sends scanner evidence to the configured AI provider. One automatic attempt per incident scan and one plan at a time per server. Legacy AI control mode also limits plan requests to ten per hour across the fleet; other modes are paced by the shared AI start gates. Plans remain manual-only.</p><div class="notice" id="auto-plan-status" role="status" aria-live="polite"><strong>Automatic AI plans</strong> · Loading…</div><button>Save scan policy</button><p class="help">Uses the same bounded scan limits. Incomplete scans are not proof of coverage. Pending scans are not duplicated.</p></form><div id="auto-plan-retry" class="notice" hidden></div></section>'+(isAdmin()?'<section class="card" id="server-malware-override" aria-labelledby="server-malware-override-title"></section>':'')+'<section class="card" id="execution-scan-panel"></section><div class="actions"><button id="security-refresh">Refresh security records</button></div><div id="security-latest"></div><section><h3>Incidents &amp; response plans</h3><div id="security-incidents"></div><div class="actions"><button id="incident-prev">Previous incidents</button><button id="incident-next">Next incidents</button></div></section><section><h3>Scan history</h3><div id="security-history"></div><div class="actions"><button id="scan-prev">Previous scans</button><button id="scan-next">Next scans</button></div></section>';
  root.querySelector('#scanner-record-export').onclick=()=>exportResponseRecord(hostId,null,()=>root.isConnected&&currentView(revision,'servers'),true);
  const policyForm=root.querySelector('#security-policy-form');
  const policyTemplate=policyForm.innerHTML;let policyTicket=0;
  const policyCurrent=()=>root.isConnected&&policyForm.isConnected&&currentView(revision,'servers');
+ // Read-only automatic AI plan status (#922): fixed codes, counts and times only. It never enqueues a plan
+ // and never implies one will start; shared start gates, pause and holds still decide.
+ const autoPlanStates={off:'Automatic AI plans are off for this server.',ai_disabled:'Central AI provider calls are disabled, so no automatic plan is requested.',
+  not_configured:'A saved model and API key are required before automatic plans can be requested.',paused:'AI is paused for this server, so no automatic plan is requested.',
+  held:'A response or quarantine hold is active on this server, so no automatic plan is requested.',inactive:'This server is disabled or removed, so no automatic plan is requested.',
+  ready:'Automatic plans can be requested for new detections on this server.'};
+ const loadAutoPlanStatus=async request=>{const target=policyForm.querySelector('#auto-plan-status');if(!target)return;let q;if(isAdmin())loadAutoPlanRetry(request);
+  try{q=await api('/hosts/'+hostId+'/security/auto-plan-status');}catch{q=null;}
+  if(!policyCurrent()||request!==policyTicket||!target.isConnected)return;
+  if(!q||!q.pacing||!Object.hasOwn(autoPlanStates,q.state)){target.innerHTML='<strong>Automatic AI plans</strong> · Status unavailable right now. This never means a plan will start; pause, holds and shared start gates still apply.';return;}
+  const p=q.pacing,parts=[];
+  if(q.awaiting||q.awaiting_truncated)parts.push(`${esc(q.awaiting)}${q.awaiting_truncated?' or more':''} open incident${q.awaiting===1&&!q.awaiting_truncated?'':'s'} awaiting an automatic attempt${q.oldest_awaiting_since?' (oldest updated '+esc(date(q.oldest_awaiting_since))+')':''}`);
+  else parts.push('No open incidents await an automatic attempt');
+  if(q.active_plan)parts.push(`A plan has been ${q.active_plan.state==='running'?'running':'queued'} for this server since ${esc(date(q.active_plan.created))}; the next one waits for it`);
+  if(q.latest_automatic)parts.push(`Latest automatic attempt: ${esc(q.latest_automatic.state)} at ${esc(date(q.latest_automatic.created))}`);
+  const pacing=p.mode==='legacy'?`Legacy fleet allowance: ${esc(p.used)} of ${esc(p.limit)} plan requests used this hour${p.next_at?' · next free '+esc(date(p.next_at)):''}.`
+   :'No plan-specific hourly limit; the shared AI start gates (rate throttle, daily cap, provider backoff) pace each plan.';
+  target.innerHTML=`<strong>Automatic AI plans</strong> · ${esc(autoPlanStates[q.state])}<br>${parts.join(' · ')}.<br><span class="help">${pacing} Plans are proposals for review and never execute automatically.</span>`;};
+ // Failed automatic attempts (#1036): admin-only count and release. Releasing sends no provider request; the
+ // automatic schedule retries each incident once more through the same pause, hold and shared start gates.
+ const loadAutoPlanRetry=async request=>{const box=root.querySelector('#auto-plan-retry');if(!box)return;let q;
+  try{q=await api('/hosts/'+hostId+'/security/auto-plan-failed');}catch{q=null;}
+  if(!policyCurrent()||request!==policyTicket||!box.isConnected)return;
+  const failed=q&&Number.isSafeInteger(q.failed)&&q.failed>0?q.failed:0;
+  if(!failed){box.hidden=true;box.innerHTML='';return;}
+  box.innerHTML=`<p><strong>${esc(failed)} open incident${failed===1?'':'s'}</strong> on this server ${failed===1?'had its':'had their'} automatic AI plan attempt fail and will not be tried again automatically.</p><p class="help">Fix the cause first, such as the saved key, model or provider quota; the failed operations in Activity show the error. Retrying sends no provider request now: it lets the automatic schedule try each incident once more, one plan at a time, and AI pause, response holds and the shared AI start gates still apply.</p><div class="actions"><button type="button" id="auto-plan-retry-run">Retry failed automatic plans</button></div>`;
+  box.hidden=false;
+  box.querySelector('#auto-plan-retry-run').onclick=async e=>{const b=e.currentTarget;b.disabled=true;
+   try{const r=await api('/hosts/'+hostId+'/security/auto-plan-failed/retry','POST');if(!policyCurrent())return;
+    const released=Number.isSafeInteger(r?.released)?r.released:0,left=Number.isSafeInteger(r?.remaining)?r.remaining:0;
+    toast(released?`Released ${released} failed automatic plan attempt${released===1?'':'s'} for retry${left?`; ${left} still waiting, run it again`:''}`:'Nothing was released; this server may be disabled or the attempts changed');
+    loadAutoPlanStatus(policyTicket);}
+   catch(error){if(policyCurrent())toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};};
  const loadPolicy=async()=>{const request=++policyTicket;
   policyForm.innerHTML=policyTemplate;policyForm.onsubmit=e=>e.preventDefault();policyForm.querySelector('button').disabled=true;
   try{const policy=await api('/hosts/'+hostId+'/security/policy');
    if(!policyCurrent()||request!==policyTicket)return;
+   loadAutoPlanStatus(request);
    policyForm.elements.enabled.checked=policy.enabled;policyForm.elements.auto_ai_plan.checked=!!policy.auto_ai_plan;policyForm.elements.interval_hours.value=policy.interval_hours;policyForm.elements.paths.value=policy.paths.join('\n');policyForm.querySelector('button').disabled=false;
-   policyForm.onsubmit=async e=>{e.preventDefault();const b=policyForm.querySelector('button');b.disabled=true;try{const f=new FormData(policyForm);await api('/hosts/'+hostId+'/security/policy','PUT',{enabled:f.has('enabled'),auto_ai_plan:f.has('auto_ai_plan'),interval_hours:Number(f.get('interval_hours')),paths:f.get('paths').split('\n').map(x=>x.trim()).filter(Boolean)});if(policyCurrent())toast('Scan policy saved');}catch(error){if(policyCurrent())toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};
+   policyForm.onsubmit=async e=>{e.preventDefault();const b=policyForm.querySelector('button');b.disabled=true;try{const f=new FormData(policyForm);await api('/hosts/'+hostId+'/security/policy','PUT',{enabled:f.has('enabled'),auto_ai_plan:f.has('auto_ai_plan'),interval_hours:Number(f.get('interval_hours')),paths:f.get('paths').split('\n').map(x=>x.trim()).filter(Boolean)});if(policyCurrent()){toast('Scan policy saved');loadAutoPlanStatus(policyTicket);}}catch(error){if(policyCurrent())toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};
   }catch(error){if(policyCurrent()&&request===policyTicket)panelError(policyForm,'Scheduled scanning',error,loadPolicy);}
  };
  const policyTask=loadPolicy();
+ const malwareOverrideTask=isAdmin()?serverMalwareOverride(revision,root,hostId):null;
  const load=async()=>{const request=++ticket;
  const [latest,items,history]=await Promise.all([api('/hosts/'+hostId+'/security'),api('/hosts/'+hostId+'/security/incidents?offset='+offset),api('/hosts/'+hostId+'/security/history?offset='+historyOffset)]);
  if(!root.isConnected||!currentView(revision,'servers')||request!==ticket)return;
@@ -233,7 +362,7 @@ async function serverSecurity(revision,context){
  const latest=root.querySelector('#security-latest');
  // A failure renders only while its request still owns the panel, so a stale initial failure never overwrites a newer refresh.
  const first=()=>{const task=load(),request=ticket;return task.catch(error=>{if(alive()&&request===ticket)panelError(latest,'Latest scan coverage and incidents',error,first);});};
- const panels=[policyTask,first(),renderExecutionScans(root,hostId,alive)];
+ const panels=[policyTask,...(malwareOverrideTask?[malwareOverrideTask]:[]),first(),renderExecutionScans(root,hostId,alive)];
  for(const [title,render] of [['Evidence copies',renderEvidenceVault],['Evidence archives',renderEvidenceArchives],['Quarantines',renderQuarantines],['Process responses',renderProcessResponses],['Repair preparations',renderRepairPreparations],['Repair stages',renderRepairStages],['Repair publications',renderRepairPublications]])panels.push(isolatedPanel(root,alive,title,render,hostId));
  await Promise.allSettled(panels);
 }

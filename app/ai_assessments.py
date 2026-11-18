@@ -8,7 +8,7 @@ import hashlib
 import json
 import time
 import uuid
-from sqlalchemy import String, Text, Double, JSON, Index, select
+from sqlalchemy import String, Text, Double, JSON, Index, select, exists
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, audit
 
@@ -88,12 +88,22 @@ def refresh_info(row):
         'previous':row.previous,'withdrew_approval':row.withdrew_approval,'bypass_cache':True}
 
 
+def refusal(s,row,expected,withdraw_approval):
+    """Return why Re-triage cannot be queued for this exact revision, or ''."""
+    if revision(row)!=expected:return 'Assessment or approval changed; reopen Re-triage before submitting'
+    if row.verdict not in COMPLETE:return 'Re-triage requires a completed assessment; use Retry for failed or pending work'
+    if s.get(Refresh,row.id):return 'A re-triage request already exists'
+    if row.approved and not withdraw_approval:return 'Explicitly confirm withdrawal of the current approval before re-triage'
+    from .ai_retry import TriageRetry
+    retry=s.get(TriageRetry,row.id)
+    if retry and retry.provider_until>time.time():return 'Provider Retry-After is still active; retry after the displayed eligibility time.'
+    return ''
+
+
 def queue(s,row,expected,reason,actor,withdraw_approval):
     from . import ai_retry
-    if revision(row)!=expected:raise ValueError('Assessment or approval changed; reopen Re-triage before submitting')
-    if row.verdict not in COMPLETE:raise ValueError('Re-triage requires a completed assessment; use Retry for failed or pending work')
-    if s.get(Refresh,row.id):raise ValueError('A re-triage request already exists')
-    if row.approved and not withdraw_approval:raise ValueError('Explicitly confirm withdrawal of the current approval before re-triage')
+    problem=refusal(s,row,expected,withdraw_approval)
+    if problem:raise ValueError(problem)
     ai_retry.manual(s,row)
     saved=s.scalar(exact_history_query(row.id,state_hash(row)).limit(1))
     if not saved:
@@ -138,3 +148,60 @@ def record_reuse(s, row, hit):
         inputs=[],refresh={})
     s.add(saved)
     return saved
+
+
+REUSE_SCAN_CHUNK=200
+
+
+def reused_page(s, stmt, subject, offset, limit):
+    """Return one page of rows whose current state came from an exact known-good reuse.
+
+    ``stmt`` is the caller's ordered, already-authorized Behavior query without
+    offset or limit, and ``subject`` is its Behavior ID column. A SQL EXISTS
+    prefilter keeps the scan to completed rows with a retained known-good
+    assessment; current_reuse then confirms each chunk, so the result matches the
+    list badge exactly. offset/limit count confirmed rows, and the scan walks at
+    most the prefiltered rows needed to fill the requested page.
+    """
+    stmt=stmt.where(exists().where(Assessment.subject==subject,Assessment.source=='known_good'))
+    page=[];skipped=0;scanned=0
+    while len(page)<limit:
+        chunk=list(s.scalars(stmt.offset(scanned).limit(REUSE_SCAN_CHUNK)))
+        if not chunk:break
+        scanned+=len(chunk)
+        marked=current_reuse(s,chunk)
+        for row in chunk:
+            if row.id not in marked:continue
+            if skipped<offset:skipped+=1;continue
+            page.append(row)
+            if len(page)==limit:break
+    return page
+
+
+def current_reuse(s, rows, include_source=False):
+    """Map behavior IDs whose current state came from an exact known-good reuse.
+
+    Only the newest retained assessment for each row's exact current state counts,
+    so a later provider result, re-triage request or changed evidence clears the
+    mark. One column-projected query serves the whole page. Non-administrators
+    receive only the flag: source identifiers may belong to another server.
+    """
+    states={row.id:state_hash(row) for row in rows if row.verdict in COMPLETE}
+    if not states:return {}
+    newest={}
+    query=(select(Assessment.id,Assessment.subject,Assessment.state_hash,Assessment.created,Assessment.source)
+        .where(Assessment.subject.in_(list(states)),Assessment.state_hash.in_(set(states.values())))
+        .order_by(Assessment.created.desc(),Assessment.id.desc()))
+    for item in s.execute(query):
+        if states.get(item.subject)==item.state_hash and item.subject not in newest:newest[item.subject]=item
+    reused={subject:item.id for subject,item in newest.items() if item.source=='known_good'}
+    if not include_source:return {subject:{'cached':True} for subject in reused}
+    result={}
+    for saved in s.scalars(select(Assessment).where(Assessment.id.in_(list(reused.values())))):
+        link=saved.result.get('known_good_reuse') if isinstance(saved.result,dict) else None
+        link=link if isinstance(link,dict) else {}
+        result[saved.subject]={'cached':True,'assessment_id':saved.id,'created':saved.created,
+            'source_assessment_id':link.get('source_assessment_id') if isinstance(link.get('source_assessment_id'),str) else None,
+            'source_subject':link.get('source_subject') if isinstance(link.get('source_subject'),str) else None,
+            'source_created':link.get('source_created') if isinstance(link.get('source_created'),(int,float)) else None}
+    return result
