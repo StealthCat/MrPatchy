@@ -47,7 +47,7 @@ module.exports=async(page,capture)=>{
   assert.equal(removals.length,0,'Removal requires confirmation');await capture('worker-remove-review-desktop');
   await page.locator('#worker-remove-form button').evaluate(button=>{button.click();button.click();});
   await page.locator('#modal').waitFor({state:'hidden'});
-  assert.equal(removals.length,1);assert.equal(removals[0].worker_id,'worker-two');assert.equal(removals[0].boot_id,'a'.repeat(32));assert.ok(calls>callsBeforeRemove,'Workers refresh after removal');
+  assert.equal(removals.length,1);assert.equal(removals[0].worker_id,'worker-two');assert.equal(removals[0].boot_id,'a'.repeat(32));for(let n=0;n<50&&calls<=callsBeforeRemove;n++)await page.waitForTimeout(100);assert.ok(calls>callsBeforeRemove,'Workers refresh after removal');
   await page.getByRole('button',{name:'Drain worker',exact:true}).click();
   await page.locator('#worker-control-form textarea').fill('Planned maintenance window');
   await capture('worker-drain-review-desktop');
