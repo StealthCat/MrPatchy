@@ -25,7 +25,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes, reboot_status
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.27"
+APP_VERSION = "1.75.28"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -740,7 +740,7 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'investigations':len(behaviors),'unapproved':sum(not r.approved for r in behaviors),
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None,
-                'lifecycle':lifecycle}
+                'lifecycle':lifecycle,'reboot':reboot_status.evaluate(h.inventory)}
 
 @app.get('/api/spool-health')
 def fleet_spool_health(user=Depends(viewer_user)):
@@ -3571,6 +3571,12 @@ class MalwarePolicyInput(BaseModel):
 def malware_policy_read(user=Depends(admin_user)):
     from . import malware_policy
     with Session() as s:return malware_policy.state(s)
+
+@app.get('/api/settings/malware-response/overrides')
+def malware_policy_overrides(user=Depends(admin_user)):
+    """Read-only fleet list of restrict-only server overrides (#1033); counts only, never paths or hashes."""
+    from . import malware_policy
+    with Session() as s:return malware_policy.overrides(s)
 
 @app.put('/api/settings/malware-response')
 def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):

@@ -272,7 +272,7 @@ Package checks use `dpkg --verify-format=rpm --verify` or `rpm --verify --noscri
 
 This is not the independent trusted-vendor verification milestone. Dpkg's local checksum coverage is limited to metadata it has recorded; local databases, binaries and a compromised root/kernel are not independently trusted. A discrepancy may be a legitimate administrative change, and no reported differences is not a clean-host verdict. Exact installed-version artifacts authenticated through repository signatures, approved custom baselines, and broader RPM-native platform validation remain required.
 
-The optional startup inventory covers `/etc/systemd/system`, system cron directories and `/var/spool/cron`, `/etc/init.d`, `/etc/profile.d`, `/etc/crontab`, `/etc/rc.local` and `/etc/ld.so.preload`. It retains paths, ownership, permissions, modification time, symlink targets, and SHA-256 for regular files up to 1 MiB. It does not collect file contents, follow symlinks, or execute startup entries. It uses the descriptor-based traversal and identity checks from the scanner, with a 15-second budget and at most 256 recorded entries. Missing roots are explicit; inaccessible paths, special files, races and limits are gaps. This is an inventory, not a detector that declares startup entries malicious. User home startup files, transient units, kernel mechanisms, runtime injection and other persistence locations remain outside its scope. History permits manual comparison; automatic persistence-change alerts and incident linkage are not yet implemented.
+The optional startup inventory covers `/etc/systemd/system`, system cron directories and `/var/spool/cron`, `/etc/init.d`, `/etc/profile.d`, `/etc/crontab`, `/etc/rc.local`, `/etc/ld.so.preload` and `/etc/anacrontab`. It retains paths, ownership, permissions, modification time, symlink targets, and SHA-256 for regular files up to 1 MiB. It does not collect file contents, follow symlinks, or execute startup entries. It uses the descriptor-based traversal and identity checks from the scanner, with a 15-second budget and at most 256 recorded entries. Missing roots are explicit; inaccessible paths, special files, races and limits are gaps. This is an inventory, not a detector that declares startup entries malicious. User home startup files, transient units, kernel mechanisms, runtime injection and other persistence locations remain outside its scope. History permits manual comparison; automatic persistence-change alerts and incident linkage are not yet implemented.
 
 Redeploy the collector and bridge with **Finish / verify installation** before using this feature. Older helpers reject the new action rather than returning a fabricated successful report. Unit tests cover native output parsing, safe argument selection, RPM script suppression, deadlines/limits, symlink handling, report immutability, roles and host scoping. A native read-only dpkg check is exercised where available; RPM behavior also requires validation on a real RPM target.
 
@@ -306,6 +306,28 @@ repairs. See [Agent maintenance](AGENT_MAINTENANCE.md) for the trust boundary,
 blocked access-path changes, verification and retry limits. This maintains the
 Mr Patchy installation; it is not arbitrary malware remediation or independent
 attestation of a compromised root/kernel.
+
+### Global defaults with per-server overrides — worker checkpoint #621
+
+The backend slice (#622) stores a global default for `auto_upgrade` and
+`auto_repair` and resolves each option per server as an explicit override when
+present, otherwise the current default. Legacy per-server rows stay explicit
+overrides. The UI slice adds:
+
+- **Settings → Agent maintenance:** an administrator form for both defaults
+  using the existing compare-and-set `PUT /api/settings/agent-maintenance`; a
+  stale editor is refused with a refresh message.
+- **Server Agent health:** each option is a choice of **Use global default
+  (current value)**, **On for this server** or **Off for this server**. It shows
+  the effective value, an Inherited/Override badge and the current global
+  default. Saving sends `null` for inherited options, so an unchanged save no
+  longer turns inherited options into overrides, and then reloads the resolved
+  state.
+
+Milestones: (1) resolver, global API and override reset — delivered by #622;
+(2) Settings and server inheritance UI with responsive browser coverage —
+this checkpoint; (3) MySQL run of the existing resolver suite. No schema,
+route, role, audit, queueing or trust-path change.
 
 ## Startup inventory comparison
 
@@ -2865,6 +2887,31 @@ Worker checkpoint #926 shows the same summary on the fleet AI activity page
 - **Limitation:** Investigations and worker-health surfaces still do not show
   the scoring queue.
 
+Worker checkpoint #806 covers failed advisory-plan work. Before this checkpoint,
+a `security-plan` or `startup-plan` job that ended `failed` published nothing.
+That covers rejected keys, unsupported models, declined or invalid structured
+results, and evidence or validation refusals. A failed automatic proposal
+disappeared because automatic planning tries once per incident evidence revision.
+- **Notification:** `job_notifications` now publishes one admin-only
+  `operations`/`<action>` event per plan incident when such a job fails. The
+  event subject is the incident (`incident` for `security-plan`,
+  `startup-incident` for `startup-plan`), with `host_id` kept for
+  authorization, so a plan for one incident never resolves or overwrites
+  another incident's failure. It links to `#activity/jobs/<id>`. The reason is
+  fixed text saying no plan was proposed and nothing ran; no provider message,
+  error or evidence is copied. A later failure for the same incident appends a
+  revision; a later `complete` plan for the same incident resolves it.
+- **Not published:** controlled AI waits (budget, pacing, provider backoff,
+  pause) keep the job queued. Automatic proposals the worker skips before any
+  AI call, because the policy was turned off or the evidence changed, are
+  superseded attempts, not failures.
+- **Unchanged:** routes, roles, admission, spend reservation, plan approval and
+  response authorization. Nothing is retried and no SMTP/webhook alert is
+  added. Existing operation-failure events keep their `operator` audience.
+- **Limitation:** failed jobs are not blocked under a configuration signature as
+  scoring and triage are, so a new incident revision under a rejected
+  configuration still makes one automatic attempt.
+
 - Separate concurrency (simultaneous work), pacing (work/calls/tokens per time) and cost budget in the API/UI. A throttle is an upper pacing target, not guaranteed throughput or a lifetime total. Unthrottled never disables global/per-server AI pause, feature opt-ins, data-sharing controls, finite resource bounds, provider restrictions, authorization or response safeguards.
 - Apply one distributed admission/accounting layer to every billable provider path: process triage and follow-ups, retries, scoring batches, manual/automatic scanner and startup plans, release configuration/planning and saved-settings model tests. Remove or explicitly migrate hidden hard allowances, including incident plans; preserve separate anti-abuse protections and deduplication with explained states. Background and manual work cannot bypass the selected mode.
 - Migrate existing hourly settings to an explicit, reviewable pacing policy with conservative defaults and an administrator preview/audit. Do not silently switch an installation to unthrottled operation, reinterpret zero ambiguously or increase spending through an unnoticed change of accounting units. Treat budget/rate deferral as queued work, not a failed attempt or a reason to discard evidence.
@@ -3977,6 +4024,21 @@ until the corresponding detection and response milestones are completed.
 - Deliver applicability/exposure tracking, CVE-specific detectors, typed automatic containment and UI/audit integration as coherent milestones. Include SQLite/MySQL migration support where needed and document supported platforms, detectors and coverage limits.
 - Validate with controlled exploitation simulations and benign lookalikes, vendor backports, patch/reboot/rollback transitions, delayed/offline telemetry, false positives, process reuse/file replacement races, policy changes, AI pause, duplicate events, helper failures and quarantine recovery. Add real-target acceptance and response drills before claiming supported automatic protection. Missing detections never certify an endpoint as unexploited.
 
+### Pending-reboot visibility — worker checkpoint #828
+
+The read-only agent inventory now reports whether installed updates await a
+reboot: the Debian `/var/run/reboot-required` flag with up to 50 validated
+package names from `reboot-required.pkgs`, or the RPM marker only when it names
+the current boot (the same rule the bridge health check uses). The controller
+validates this untrusted value strictly; malformed or absent reports (older
+agents) are `not_reported`, never `not_required`. The flag alone does not retain
+a new inventory revision or reset repository refresh state. Server Overview and
+Patching show the state, report time and requesting packages as escaped text.
+This is visibility only: nothing reboots the server, and patch, release and
+response authorization are unchanged. Remaining for roadmap D: running-process
+use of replaced libraries without a reboot flag, binding reboot completion to
+CVE exposure closure, and notifications.
+
 ### Applicability and exposure-window contract — worker checkpoint #672
 
 The first bounded increment adds the pure `app/cve_exposure.py` contract. It has
@@ -4384,6 +4446,34 @@ Remaining: group overrides,
 fleet-level visibility of overridden servers, and every runtime item under
 #682.
 
+### Fleet list of servers with malware response overrides — worker checkpoint #1033
+
+Status: **bounded read-only slice; requirement E remains planned/incomplete.**
+Settings → Malware response now lists the servers whose #940 override changes
+something, so an administrator does not have to open each server's Security tab.
+
+- **API:** admin-only `GET /api/settings/malware-response/overrides` returns the
+  fleet mode and, for each stored override that restricts anything, the server id
+  and name, mode cap, effective mode, and path/hash exclusion counts. Paths and
+  hashes are never returned. The route writes nothing and adds no audit entry.
+- **Fail-closed reporting:** a stored override that no longer validates is listed
+  as invalid and Disabled, the same as `malware_policy.effective`. Combined
+  exclusions over the contract limit report the effective-invalid reason.
+- **Not hidden:** a row whose server no longer exists is listed as orphaned,
+  after the existing servers, because server deletion does not remove override
+  rows. Rows equal to the default (follow the fleet, no exclusions) are counted,
+  not listed. The scan reads at most 5,000 rows and reports truncation.
+- **UI:** a "Servers with overrides" table under the fleet form links each server
+  to its Security tab. It refreshes after a fleet save, because effective modes
+  depend on the fleet mode, escapes untrusted text, explains a load failure
+  without disabling the form, and stacks into labelled rows below 640 px.
+  `tests/ui_settings_malware_overrides.cjs` covers these cases at 320/768/1440 px.
+- **Unchanged:** no executor, detector, provider call, schema change or response
+  authorization; `enforce` stays unavailable.
+
+Remaining: group overrides, cleanup of orphaned override rows, and every runtime
+item under #682.
+
 ## Planned: comprehensive startup and scheduled-task awareness
 
 Requested roadmap expansion (2026-10-29); not yet implemented end to end. Reuse
@@ -4495,6 +4585,23 @@ response. Agent collection of `/etc/anacrontab` and the at spool
 (`/var/spool/cron/atjobs`, `/var/spool/at`), inventory/UI wiring, provenance, AI
 classification and native acceptance remain open, so roadmap F is still
 incomplete.
+
+Worker checkpoint (issue #826): the agent's built-in startup scope now includes
+`/etc/anacrontab`. Inventories hash it like the other built-in files, or list it
+as a missing root. `persistence.compare` accepts an additive built-in scope
+change only when the later scope equals the earlier scope plus paths from the
+fixed, reviewed `ADDITIVE_BUILTIN_SCOPE` list. In that case it compares within
+the earlier scope and lists the newly covered paths in `newly_in_scope`, rather
+than reporting their files as added. Existing administrator-reviewed baselines
+therefore keep comparing after the agent upgrade. Removals, unknown or custom
+additions and agent downgrades still return "scope changed". The Startup
+inventory labels such files `not_in_baseline` until a new baseline is collected.
+A stored custom path equal to a promoted built-in path stays valid and is covered
+once by built-in scope, so saved monitoring policies do not start failing. The
+file's jobs are not parsed yet, and `/var/spool/anacron` timestamps are excluded
+because they change daily. Agent anacron job parsing using the #711 contract,
+the at spool, provenance, AI classification and native acceptance remain open,
+so roadmap F is still incomplete.
 
 Worker checkpoint (issue #702): a pure, I/O-free contract
 (`app/systemd_units.py`) resolves captured read-only observations of the system
@@ -4686,6 +4793,28 @@ hashes, and it never executes or sources anything.
 
 Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
 
+
+### System crontab loading rules — worker checkpoint #771
+
+View increment only; the startup-awareness requirement remains incomplete.
+`app/cron_loading.py` is pure and I/O-free. For each stored `/etc/crontab` and
+`/etc/cron.d/*` entry, it uses the existing receipt metadata (kind, owner uid,
+permission bits) and the host's package family to decide whether the
+distribution's default cron rules would load the file.
+
+- **Debian/Ubuntu/Raspberry Pi OS cron:** the file must be owned by root and must not be group- or other-writable. `/etc/cron.d` names may contain only letters, digits, `_` and `-`.
+- **cronie (RPM):** `/etc/cron.d` names starting with `.` or `#`, ending with `~`, `.rpmsave`, `.rpmorig` or `.rpmnew`, or of 255 bytes or more are skipped. The file must be owned by root and satisfy `(mode & 07533) == 0400`.
+- **Unknown family, symlink or malformed metadata:** the result is `unknown`, never guessed.
+
+The Startup files view shows "Cron would skip this file" with the reasons, and
+Coverage counts skipped and unassessed files. Receipts, comparisons, baselines,
+incident evidence, AI payloads and the agent are unchanged. **Not evaluated:**
+which cron implementation is installed (apt hosts are assessed as Debian cron
+and RPM hosts as cronie, so an apt host running cronie can be shown the wrong
+result), daemon options such as cronie `-p` or Debian `cron -l`, patched
+daemons, hard-link counts (Debian cron skips files with more than one link),
+whether cron runs, user spool crontab owner/mode rules, run-parts directories,
+anacron and at.
 
 ### Startup-entry provenance classification contract — worker checkpoint #720
 
@@ -5472,6 +5601,18 @@ provenance/AI classifications, CVE monitoring, automatic containment and retenti
 remain unfinished as tracked above.
 
 
+### Cron job SHELL and PATH — worker checkpoint #837
+
+Newer agents report, for each parsed cron job, the `SHELL` and `PATH` that the same
+crontab file assigned above that job line (`null` when the file sets none, meaning
+the daemon default applies and is not evaluated). Values follow cron's quote and
+blank trimming, are bounded to 512 characters with a truncation flag, have control
+characters escaped and pass through the existing command redaction. Every other
+environment value is still only counted. The controller accepts jobs from older
+agents unchanged and rejects malformed new fields; comparisons and incident evidence
+remain metadata-only. Still open for this slice: showing the values on Startup
+Files (sequenced after #772 and #832) and updating the coverage-gap text.
+
 ## Planned: separate controller and remote-worker deployments
 
 Requested roadmap addition (2026-10-29); not yet implemented as a supported
@@ -5890,6 +6031,24 @@ belongs to an active server.
   queues nothing. The GO route keeps its digest, blocker, expiry and pending-job
   checks, and read/dismiss grants nothing. Resolution can lag by about one
   scheduler tick (~30 seconds). Per-user targeting remains open.
+
+### Patch-deadline notifications — worker checkpoint #775
+
+The SMTP/webhook `overdue` alert stays outbox-only because its package count
+changes with every arriving or installed update. A separate producer publishes
+one admin-only `operations`/`patch-deadline` event per active, non-enrolling
+server that has a pending update past its configured priority deadline. It reads
+the highest overdue priority with one grouped query per 500-server chunk. The
+reason text is fixed and names only that priority, with no counts, package names
+or endpoint text. Severity maps critical→critical, high→high, normal→medium and
+low→low. Count changes are no-ops, and a change of the highest overdue priority
+appends one revision. The event deep-links to the server Patching timeline and
+resolves through the shared operational path once nothing is overdue, a deadline
+is extended, or the server is disabled, deleted or enrolling. A rejected publish
+keeps any existing event active. Nothing installs packages, acknowledges alerts,
+changes deadlines or authorizes responses. Holds, freezes and failed operations
+are not distinguished in the text. Coordinator integration and exact-head checks
+remain required.
 
 ### Asynchronous delivery and access control
 
