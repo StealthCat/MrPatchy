@@ -5235,6 +5235,60 @@ collection of this metadata, `/etc/network/if-up.d` and logrotate hooks, catalog
 `entries_parsed` wiring, persistence, UI, provenance and AI classification. No
 schema, API, auth or response-authorization change.
 
+### initramfs-tools build-hook contract — worker checkpoint #1074
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/initramfs_hooks.py` is a pure, versioned contract for which executables in
+`/usr/share/initramfs-tools/hooks` and `/etc/initramfs-tools/hooks` run as root
+on every initramfs build. A build happens on every `update-initramfs`,
+including the one `/etc/kernel/postinst.d/initramfs-tools` starts after each
+kernel package install, so these hooks fire on routine patching. It takes
+captured entry metadata and never reads a hook's contents.
+
+- **Source.** The rules come from the shipped `initramfs-tools-core
+  0.142ubuntu25.8` `mkinitramfs` and `hook-functions` (`set_initlist`,
+  `get_prereq_pairs`, `call_scripts`, `run_scripts_optional`), extracted from
+  the Ubuntu 24.04 package, not from recollection.
+- **Two passes.** Packaged hooks run first (with
+  `STAGE_KERNEL_MODULE_COPYING=1`), then local hooks. A same-named local hook
+  does not replace the packaged one; both run. A missing directory is skipped.
+- **Listing.** The `"$dir"/*` glob skips dot-names. Names matching
+  `*[![:alnum:]._-]*` are ignored, so a `.dpkg-old` backup still runs.
+  Directories (followed), dangling symlinks, entries without any execute bit,
+  `noexec` mounts and hooks `sh -n` rejects are ignored. Non-ASCII names depend
+  on the build locale and are unresolved. `set_initlist`'s empty-directory
+  check also matches a real entry named `*`, which stops the listing when the
+  glob reaches it (in the C locale, before every hook). Such an entry is a
+  blocking `glob_literal_entry` gap, and that pass's listable hooks are
+  unresolved.
+- **Invocations.** Every listed hook runs as root once with `prereqs` while
+  `tsort` computes the order, even when an `OPTION=` gate later disables it,
+  then once with no arguments. The order within a pass is not established.
+  `call_scripts` runs any regular file another hook names as a prerequisite,
+  including files `set_initlist` ignored, and that is reported as a gap: an
+  executable one runs as root, and one without an execute bit or on a `noexec`
+  mount fails to execute and aborts the build. A failing hook aborts the
+  build.
+- **OPTION= gates.** The value follows `sed '/^OPTION=/!d;$d;…'`, so an
+  `OPTION=` on the file's last line is dropped. The hook runs only when the
+  named variable is non-empty and not `n`. An unsupplied value is
+  `gate_unknown`, and a multi-line or non-identifier value is `gate_invalid`.
+  Both are listed as `conditional`.
+- **Fail closed.** An unobserved family, generator, directory, mount or `sh -n`
+  result, an unreadable or truncated listing, malformed entries and over-limit
+  input are gaps, and `complete`/`covered` are false. RPM (dracut) and Debian
+  installs without initramfs-tools are `applicable: false` and not covered.
+  `action_authorized` is always false, and no result is a safety verdict.
+- **Validation.** `tests/test_initramfs_hooks.py` pins the name rule against
+  dash, and a live test runs the shipped functions verbatim under dash as root
+  and compares the hooks actually invoked with the contract's output. Five
+  independent mutations are each caught.
+
+**Not covered:** boot-time `scripts/` that run inside the initramfs, dracut,
+`mkinitramfs -d`, agent collection of this metadata, catalog wiring,
+persistence, UI, provenance and AI classification. No schema, API, auth or
+response-authorization change.
+
 ### ifupdown interface hook contract — worker checkpoint #1052
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -5292,6 +5346,84 @@ downloaded binary was not permitted in the authoring session), agent collection
 of this metadata, ifupdown2/ifupdown-ng/netplan, catalog `entries_parsed`
 wiring, persistence, UI, provenance and AI classification. No schema, API,
 auth or response-authorization change.
+### systemd-binfmt registration contract — worker checkpoint #1081
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/binfmt_rules.py` is a pure, versioned contract for the binfmt_misc
+handlers `systemd-binfmt` registers at boot. A handler's interpreter runs on
+every matching `execve` by any user, so a registration is a boot-time
+persistence and interception point. The contract takes supplied
+`binfmt.d/*.conf` metadata and text, performs no I/O and never reads
+interpreter files.
+
+- **Source.** The rules were read from systemd v255 (`src/binfmt/binfmt.c`,
+  `src/basic/conf-files.c`, `fileio.c` and `path-util.c`) and Linux v6.8
+  (`fs/binfmt_misc.c`), not recalled.
+- **File selection.** Files come from `/etc`, `/run`, `/usr/local/lib` and
+  `/usr/lib/binfmt.d`, in that precedence. They apply in `strcmp` order of
+  basename. A `.conf` name that is not hidden or a backup name
+  (`hidden_or_backup_file`) is taken from the first directory that holds it.
+  `systemd-binfmt` lists files with no flags, so nothing is stat-ed:
+  - a directory, dangling symlink, empty file or `/dev/null` link still claims
+    the name and shadows lower copies
+  - an empty file or `/dev/null` link masks the name
+  - a dangling link is ignored
+  - a directory fails to read
+- **Lines.** Lines end at `\n`, `\r` or NUL and are stripped of spaces and
+  tabs. Lines starting with `#` or `;` are skipped.
+- **Registration.** All existing handlers are flushed first. For each rule line,
+  the name is the text up to the second occurrence of the first character.
+  `systemd-binfmt` refuses invalid names and `register`/`status`. Otherwise it
+  deletes any handler with that name, then writes the line and a newline to
+  `register`. A later same-named rule therefore replaces an earlier one, and a
+  rejected later rule still deletes it.
+- **Kernel parser.** `kernel_parse` mirrors `create_entry`:
+  - the register string is 11–1920 bytes, with any delimiter
+  - type is `M` or `E`
+  - the `M` offset is checked with `kstrtoint`, rejecting negative values and
+    hex
+  - `scanarg` requires two hex digits after each `\x`
+  - the decoded mask length must equal the magic length
+  - `offset + size <= 256`
+  - for `E` rules, the offset and mask fields are skipped and the extension
+    must be non-empty and contain no `/`
+  - the interpreter must be non-empty
+  - flags are only `P`, `O`, `C` and `F`, followed by nothing else
+- **Handler attributes.** Each handler reports the following, and the list is
+  in kernel match order, newest registration first:
+  - `credentials_from_binary` (`C`): the interpreter gets the matched binary's
+    setuid credentials
+  - `open_binary` (`O`, implied by `C`)
+  - `interpreter_opened_at_registration` (`F`): registration is conditional on
+    the interpreter opening at boot
+  - `interpreter_relative`
+  - whether every ELF executable, every `#!` script or every file matches. This
+    is computed with the mask, and bytes past the prefix must be masked out, so
+    qemu-user rules that pin the ELF class or machine do not count. binfmt_misc
+    is added with `insert_binfmt`, ahead of the native ELF and script loaders,
+    so these matches really do intercept native execution.
+- **Fail closed.** These are blocking gaps, and `complete` is false:
+  - an unobserved, unreadable or incomplete directory listing
+  - missing, truncated or over-limit file text
+  - a FIFO, socket or device without observed content
+  - an unobserved symlink target
+  - malformed or duplicate entries
+  - over-limit rules
+
+  An unresolved winning file never falls back to a lower copy. `origin` is
+  always `not_assessed` and no result is a safety verdict. 74 unit tests pin
+  these rules, and seven mutations (replacement, match order, trailing-text
+  check, precedence, size boundary, `C` flag, truncated content) are each
+  caught. binfmt_misc was not mounted in the validation sandbox, so there is no
+  live kernel differential test.
+
+**Not covered:** agent collection, whether `systemd-binfmt.service` runs, Debian
+`binfmt-support`/`update-binfmts` (`/usr/share/binfmts`, `/var/lib/binfmts`),
+handlers added by container runtimes, live `/proc/sys/fs/binfmt_misc` state,
+interpreter existence and contents, per-user-namespace instances, catalog
+wiring, persistence, UI, provenance and AI classification. No schema, API, auth
+or response-authorization change.
+
 ### update-motd.d login script contract — worker checkpoint #1047
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -5376,6 +5508,62 @@ This is a contract increment only. The startup-awareness requirement is still in
 
 There is no schema, API, authentication or response-authorization change.
 
+### Debian kernel package hook contract — worker checkpoint #1072
+
+This is a contract increment only. The startup-awareness requirement remains
+incomplete. `app/kernel_hooks.py` is a pure, versioned contract for the
+`/etc/kernel/*.d` hook directories that Debian-family kernel packages run as
+root from their maintainer scripts. It takes supplied directory-entry metadata,
+performs no I/O and never reads a script's contents. The startup catalog does
+not list these directories yet.
+
+- **Source.** The rules were checked against shipped artifacts, not recalled:
+  the maintainer scripts of the Ubuntu 24.04 `linux-image`, `linux-modules` and
+  `linux-headers` 6.8.0-71 packages, and debianutils 5.17 `run-parts`. Each hook
+  is guarded by `[ -d DIR ]` and runs `DEB_MAINT_PARAMS="$*" run-parts --report
+  --exit-on-error --arg=VERSION [--arg=IMAGE_PATH] DIR`:
+  - `preinst.d` runs on every image preinst call except `abort-upgrade`.
+  - `postinst.d` runs after image or modules `configure`. It is deferred
+    through the `linux-update-VERSION` dpkg trigger.
+  - `prerm.d` runs on `remove` only.
+  - `postrm.d` runs on every postrm call.
+  - `header_postinst.d` runs on headers `configure`, with the version only.
+- **Name rule.** Without `--lsbsysinit`, run-parts considers only names that
+  match `^[A-Za-z0-9_-]+$`. Dots, `~` backups and hidden names never run. The
+  tests pin this rule against `LC_ALL=C run-parts --list` output for a seeded
+  corpus plus real hook names.
+- **Walk.** Symlinks are followed. A regular file runs as root when it has any
+  execute bit and is not on a `noexec` mount. Directories and non-executable
+  files are skipped silently.
+  - A failed `stat` stops the walk under `--exit-on-error` (`stops_early`, with
+    `stops_at`). Later entries are reported `not_reached`.
+  - Another file type is reported, later scripts still run, and run-parts then
+    exits non-zero (`fails_after_run`).
+  - Either failure fails the maintainer script and so the dpkg operation.
+  - Every script after the first runs only if all earlier ones exit zero.
+  - A script after an entry with unknown metadata has `reached: unknown`.
+  - A live test compares the real binary's run order and stop point with the
+    contract when `run-parts` is available as root.
+- **Fail closed.** The following are blocking gaps, and `complete` is false:
+  - an unobserved family or hook directory;
+  - an unreadable or truncated directory;
+  - malformed, duplicate or unknown input;
+  - missing metadata or an unobserved symlink target;
+  - over-limit input.
+
+  RPM-family kernels use `kernel-install` plugins, so that family is
+  `not_applicable`. Order is reported as byte (C locale) order, and a non-C
+  `strcoll` order is a listed limitation. `origin` is always `not_assessed`,
+  and no result is a safety verdict.
+
+**Not covered:**
+- agent collection;
+- which kernel packages are installed;
+- `kernel-install` plugins;
+- catalog locations (adding them needs a baseline-preserving change like #826);
+- `entries_parsed` wiring, persistence, UI, provenance and AI classification.
+
+There is no schema, API, auth or response-authorization change.
 
 ### logrotate scripts and command directives — worker checkpoint #980
 
@@ -5748,6 +5936,61 @@ Open: collection wiring, file contents (Debian's `~/.profile` sources
 `~/.bashrc` for bash), `/etc/bash.bashrc`, the RPM family, home-directory search
 permission, persistence, UI, provenance and AI classification. No schema, API,
 auth or response-authorization change.
+
+### acpid event-rule contract — worker checkpoint #1079
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/acpid_events.py` is a pure, versioned contract for acpid, which runs a
+rule file's `action` as root through `/bin/sh -c` whenever an ACPI event
+(power button, lid, AC adapter and so on) matches the rule's `event` regular
+expression. It takes a captured listing, captured rule-file text and the
+`OPTIONS` value from `/etc/default/acpid`, and performs no I/O.
+
+- **Source.** `event.c` and `acpid.c` in acpid 2.0.28, 2.0.32, 2.0.33 and
+  2.0.34 (Ubuntu 26.04 `acpid_2.0.34-1ubuntu3`). Their rule-loading, matching
+  and command code is identical apart from a renamed debug variable. The rules
+  come from reading that source; no compiled acpid was run.
+- **Files.** Only names matching `^[a-zA-Z0-9_-]+$` load, so `power.conf`,
+  `x~` and dotfiles are `ignored`. A regular file or a symlink to one loads; a
+  directory, other file type, dangling link or link to a non-file is
+  `skipped_non_file`. Load order follows `readdir` and is unspecified, so files
+  are reported in byte order with that limit named.
+- **Lines.** `fgets` reads 510-byte pieces, so a longer line is parsed as
+  several lines and a later piece can set the action. Leading whitespace is
+  skipped and `#` lines are comments. The `%63[^=\n]=%255[^\n]` split keeps
+  whitespace in the key (`event =` is an unknown key) and in the value
+  (a CRLF file's value ends in `\r`), and truncates a value at 255 bytes; the
+  manual's 511 is not what the code does. A later `event` or `action` replaces
+  an earlier one. Unparsable lines and unknown keys are skipped and recorded.
+- **Outcomes.** A file is `loads`, `drop`, `skipped_incomplete` (no event or
+  no action), `rejected` (any `%` escape other than `%e` or `%%` on any
+  `action` line, even one a later line replaces) or `unresolved`. Each loaded
+  rule reports its event regex and flags, its action, the action SHA-256,
+  truncation and whether the action substitutes the event text with `%e`.
+- **Drop rules.** An action equal to the drop action (`<drop>`, or
+  `-r`/`--dropaction`) is a drop rule. Drop rules are checked before every
+  other rule and stop all later rules and client notifications for that event.
+- **Options.** `-c`/`--confdir`, `-r`/`--dropaction` and `-L`/`--lockfile` are
+  read from the whitespace-split `OPTIONS` words using `getopt_long` rules,
+  including unique long-option prefixes, clustered short options and `--`.
+  An unknown, ambiguous or argument-less option, `-v` or `-h` means acpid exits
+  instead of running. A missing configuration directory also means acpid
+  exits at startup and runs no rules.
+- **Fail closed.** An unobserved `OPTIONS` value, directory listing, entry
+  type, symlink target or rule text, a listing for a directory other than the
+  effective one, a relative `--confdir`, invalid UTF-8, NUL bytes, duplicate or
+  malformed entries and over-limit input mark the result incomplete. Every
+  result names what it cannot observe: whether each regex compiles under the
+  host C library (a file whose regex does not compile is reported as loaded),
+  whether acpid runs and whether a service override changes its command line,
+  which events occur, the lock file, the programs an action runs and the
+  directory order. `origin` is always `not_assessed` and no result is a
+  safety verdict.
+
+**Not covered:** agent collection of the directory, rule text and `OPTIONS`,
+catalog `entries_parsed` wiring, persistence, baselines and alerts, UI,
+provenance and AI classification. No schema, API, auth or
+response-authorization change.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
