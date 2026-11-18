@@ -429,3 +429,48 @@ def test_cli_uses_strict_json(monkeypatch, tmp_path, capsys):
     finally:
         monkeypatch.setattr(compare_ai_benchmarks, '_delta', original)
     assert 'output is not strict JSON' in capsys.readouterr().err
+
+
+def test_legacy_reports_are_read_as_sqlite_and_the_backend_is_stated():
+    result = compare_ai_benchmarks.compare(report(), report('parallel', 4))
+    assert result['baseline']['database'] == result['candidate']['database'] == 'sqlite'
+    assert result['baseline']['database_version'] is None
+    assert 'same database backend' in result['interpretation']['database']
+
+
+def test_reports_from_one_backend_compare_and_keep_their_versions():
+    baseline, candidate = report(), report('parallel', 4)
+    baseline.update(database='mysql', database_version='8.4.13')
+    candidate.update(database='mysql', database_version='8.4.14')
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['capability_equivalent'] is True
+    assert result['baseline']['database'] == result['candidate']['database'] == 'mysql'
+    assert (result['baseline']['database_version'], result['candidate']['database_version']) == ('8.4.13', '8.4.14')
+
+
+@pytest.mark.parametrize('baseline_database, candidate_database', [
+    ('sqlite', 'mysql'), ('mysql', 'sqlite'), (None, 'mysql'),
+])
+def test_reports_from_different_backends_are_refused(baseline_database, candidate_database):
+    baseline, candidate = report(), report('parallel', 4)
+    if baseline_database:
+        baseline['database'] = baseline_database
+    candidate['database'] = candidate_database
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='capability mismatch: database differs'):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+
+@pytest.mark.parametrize('field, value, reason', [
+    ('database', 'postgresql', 'database must be sqlite or mysql'),
+    ('database', None, 'database must be sqlite or mysql'),
+    ('database', ['mysql'], 'database must be sqlite or mysql'),
+    ('database_version', 8, 'database_version must be a short printable string'),
+    ('database_version', '', 'database_version must be a short printable string'),
+    ('database_version', 'x' * 65, 'database_version must be a short printable string'),
+    ('database_version', '8.4\n13', 'database_version must be a short printable string'),
+])
+def test_malformed_database_fields_are_refused(field, value, reason):
+    candidate = report('parallel', 4)
+    candidate[field] = value
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match=reason):
+        compare_ai_benchmarks.compare(report(), candidate)
