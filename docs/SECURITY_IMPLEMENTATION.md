@@ -2319,6 +2319,19 @@ This telemetry is read-only: it does not renew, reconcile, cancel, retry or
 otherwise alter a claim. Full multi-controller failover and production
 recovery acceptance remain open.
 
+### Deferred scoring eligibility in fleet status — Roadmap A checkpoint #1142
+
+The fleet status distinguishes deferred scores eligible now from the earliest
+future retry. The same aggregate retains the total queue, including rows held
+by pause or disabled scoring. Only active unpaused servers contribute an
+eligibility time while scoring is enabled. The card can therefore show ready
+work alongside the next future retry, and it explains when there is only held
+scoring work. Shared admission still governs outbound calls.
+
+The regression covers overdue and future scores, paused and inactive servers,
+and disabled scoring without adding another aggregate query. Exact scoring
+identity and provider eligibility remain checked by the scheduler.
+
 ### Update-scoring schedule-state reads
 
 The scheduler reads only identity, state and eligibility fields from retained

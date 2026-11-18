@@ -401,7 +401,11 @@ def status(s):
         UpdateScore.installed==Package.installed,UpdateScore.candidate==Package.candidate)
     scoring_where=(UpdateScore.state=='deferred',Package.candidate!='',
         Package.host_id.not_in(host_lifecycle.inactive_ids()))
-    scoring_deferred,scoring_next=s.execute(select(func.count(),func.min(UpdateScore.next_at))
+    scoring_allowed=and_(cfg['ai_enabled'] and cfg['ai_updates_enabled'],
+        Package.host_id.in_(host_lifecycle.active_ids()),Package.host_id.not_in(ai_policy.paused_ids()))
+    scoring_deferred,scoring_ready,scoring_next=s.execute(select(
+        func.count(),counted(and_(scoring_allowed,UpdateScore.next_at<=now)),
+        func.min(case((and_(scoring_allowed,UpdateScore.next_at>now),UpdateScore.next_at))))
         .select_from(UpdateScore).join(Package,scoring_scope).where(*scoring_where)).one()
     # JSON numeric 1 compares equal to true after scalar extraction on SQLite.
     # Retained malformed markers must match the public API's `is True` contract.
@@ -421,7 +425,7 @@ def status(s):
     plan_deferred=sum(row['deferred'] for row in plan_by_action.values())
     plan_ready=sum(row['ready'] for row in plan_by_action.values())
     plan_next=min((row['next_at'] for row in plan_by_action.values() if row['next_at'] is not None),default=None)
-    if scoring_next and scoring_next>now:retry=min([value for value in (retry,scoring_next) if value is not None])
+    if scoring_next is not None:retry=min([value for value in (retry,scoring_next) if value is not None])
     if plan_next:retry=min([value for value in (retry,plan_next) if value is not None])
     if provider_backoff['blocked']:
         retry=min([value for value in (retry,provider_backoff['next_at']) if value is not None])
@@ -438,8 +442,12 @@ def status(s):
     elif not pending_count and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
     elif not pending_count and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
     elif not pending_count and plan_deferred:reason='blocked';message='Advisory AI planning remains queued until its server AI integration is resumed.'
-    elif not pending_count and scoring_deferred and scoring_next>now:reason='backoff';message='Update scoring is queued until shared AI eligibility.'
-    elif not pending_count and scoring_deferred:reason='ready';message='Deferred update scoring is eligible for the next scheduler slot.'
+    elif not pending_count and scoring_ready:reason='ready';message='Deferred update scoring is eligible for the next scheduler slot.'
+    elif not pending_count and scoring_next is not None:reason='backoff';message='Update scoring is queued until shared AI eligibility.'
+    elif not pending_count and scoring_deferred:
+        reason='blocked'
+        message=('Deferred update scoring is held because update scoring is disabled.' if not cfg['ai_updates_enabled']
+                 else 'Deferred update scoring is held until its server can resume AI work.')
     elif not pending_count: reason='idle'; message='No unapproved pending behaviors. Collectors must report observations before triage can run.'
     elif not ready and retry: reason='backoff'; message='Transient or interrupted investigations are waiting for retry eligibility. Configuration failures require review.'
     elif not ready: reason='blocked'; message='Investigations need configuration review, explicit retry or server AI resume. No automatic call is eligible.'
@@ -454,6 +462,6 @@ def status(s):
             'per_server_limit_min':ai_policy.MIN_CONCURRENCY,'per_server_limit_max':ai_policy.MAX_CONCURRENCY,
             'recent_attempts':used,'last_error':last_error,
             'last_run':last_run,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
-            'scoring_deferred':scoring_deferred,'scoring_next_at':scoring_next,
+            'scoring_deferred':scoring_deferred,'scoring_ready':scoring_ready,'scoring_next_at':scoring_next,
             'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next,
             'plan_deferred_by_action':plan_by_action}
