@@ -3171,6 +3171,16 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Triage retry eligibility for the daily cap and rate throttle (#1112)
+
+A spend refusal records the absolute reset reported by reservation admission.
+If the reset has passed before the worker records the refusal, the observation
+is eligible for a fresh check. Rate spacing only follows other rate waiters.
+Provider floors, attempt refunds and authoritative budget checks still apply.
+Existing deferred records keep their saved dates until their next evaluation.
+Focused cases cover both capped modes, recording on either side of reset and
+rate spacing alongside cap and provider waiters.
+
 ### Daily-cap deferral reason — bug fix checkpoint #1015 (P3)
 
 A triage subject refused by the authoritative `ai_budget.reserve()` because the

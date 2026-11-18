@@ -133,8 +133,8 @@ def reserve(payload):
             if counted+amount>cap:
                 error=AIError('The configured daily AI spend cap has no remaining safe reservation. No provider request was sent.',
                     policy_wait=True,retry_after=max(0,reset-now))
-                # Lets durable retry state name the cap rather than the rate throttle (#1015).
-                error.budget_wait=True
+                # Persist the reset observed at admission even if the caller records the wait later.
+                error.budget_wait_until=reset
                 raise error
             from . import ai_runs
             row=BudgetEntry(id=str(uuid.uuid4()),run_id=ai_runs.active.get() or '',created=now,updated=now,
