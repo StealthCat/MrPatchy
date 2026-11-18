@@ -1,14 +1,10 @@
-"""#1015: a daily-cap deferral names the cap, not the rate throttle.
-
-Each kind of policy wait keeps its own reason text. Only the text changes: the
-deferral state, attempt refund and next eligibility stay exactly as before.
-"""
+"""Triage policy waits preserve reason, attempt refunds and independent deadlines."""
 import time
 from decimal import Decimal
 
 import pytest
 
-from app import ai, ai_budget, ai_retry
+from app import ai, ai_admission, ai_budget, ai_retry
 from app.db import Behavior, Host, Session
 from tests.test_ai_budget import configure, payload
 
@@ -73,3 +69,48 @@ def test_provider_backoff_keeps_its_reason(admin):
     error=ai.AIError('Provider backoff.',policy_wait=True,retry_after=60)
     error.provider_wait_until=now+60
     assert defer(error,now)[3]=='Waiting for shared provider backoff; no provider request was sent.'
+
+
+RATE_REASON = 'Waiting for shared AI rate eligibility; no provider request was sent.'
+CAP_REASON = 'Waiting for the daily AI spend cap to reset; no provider request was sent.'
+
+
+def add_waiter(subject, next_at, reason, provider_until=0):
+    with Session() as s:
+        s.add(ai_retry.TriageRetry(subject=subject, configuration=ai_retry.configuration(s),
+                                   state='deferred', next_at=next_at, provider_until=provider_until,
+                                   reason=reason))
+        s.commit()
+
+
+@pytest.mark.parametrize('mode', ['daily_cap', 'rate_and_daily'])
+@pytest.mark.parametrize('after_reset', [False, True])
+def test_budget_retry_uses_its_reset_even_when_another_wait_runs_later(admin, mode, after_reset):
+    configure(mode=mode, cap=Decimal('0.000001'))
+    seed()
+    refusal = cap_refusal()
+    with Session() as s:
+        reset = ai_budget.status(s)['next_reset']
+    add_waiter('rate-waiter', reset + 120, RATE_REASON)
+    recorded_at = reset + 1 if after_reset else reset - 1
+
+    assert defer(refusal, recorded_at) == ('deferred', 0, max(reset, recorded_at), CAP_REASON)
+
+
+@pytest.mark.parametrize('existing_rate_waiter', [False, True])
+def test_rate_retry_spacing_only_follows_other_rate_waiters(admin, existing_rate_waiter):
+    configure(mode='rate_and_daily', rate=20)
+    seed()
+    refill = ai_admission.admit('gpt-6-luna')['next_at']
+    with pytest.raises(ai.AIError) as refused:
+        ai_admission.admit('gpt-6-luna')
+    now = time.time()
+    add_waiter('cap-waiter', refill + 7200, CAP_REASON)
+    add_waiter('provider-waiter', refill + 3600, 'Provider wait', provider_until=refill + 3600)
+    if existing_rate_waiter:
+        add_waiter('rate-waiter', refill + 60, RATE_REASON)
+
+    state, attempts, next_at, reason = defer(refused.value, now)
+    assert (state, attempts, reason) == ('deferred', 0, RATE_REASON)
+    expected = refill + 60 + 3600 / 20 if existing_rate_waiter else refill
+    assert next_at == pytest.approx(expected, abs=1, rel=0)

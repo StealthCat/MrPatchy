@@ -1070,11 +1070,11 @@ def _loop(reporter):
                     # Separate short batches; never holds the cleanup transaction.
                     try:notifications.prune_arrivals(cutoff)
                     except Exception:log.exception('Notification arrival pruning failed')
+                    try:notifications.prune_resolved(cutoff)
+                    except Exception:log.exception('Resolved notification pruning failed')
                     last_cleanup=now
                 if is_leader and (notification_task is None or notification_task.done()): notification_task=polls.submit(operations.deliver_one)
                 if now-last_ai>=5:
-                    try:notifications.prune_resolved(cutoff)
-                    except Exception:log.exception('Resolved notification pruning failed')
                     # No executor backlog: release slots while quota/retry work
                     # waits. Alternate purposes even with a serial pool. Only the
                     # coordinator scores; any supported worker may claim triage.
