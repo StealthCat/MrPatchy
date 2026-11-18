@@ -2,6 +2,8 @@
   "baseline": {
     "concurrency": 1,
     "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "sqlite",
+    "database_version": null,
     "execution": "serial",
     "fixture_hosts": 1,
     "name": "same-server-serial.json",
@@ -19,6 +21,8 @@
   "candidate": {
     "concurrency": 4,
     "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "sqlite",
+    "database_version": null,
     "execution": "parallel",
     "fixture_hosts": 1,
     "name": "same-server-parallel.json",
@@ -220,6 +224,7 @@
   "fixture_only": true,
   "interpretation": {
     "cost": "Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.",
+    "database": "Both reports measured the same database backend; server versions are informational and may differ.",
     "latency": "Negative elapsed/stage deltas indicate lower fixture latency.",
     "scope": "Disposable loopback fixture only; this comparison does not establish production performance.",
     "throughput": "Positive throughput deltas indicate higher fixture throughput."
