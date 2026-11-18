@@ -371,14 +371,13 @@ def status(s):
     ready_sql=ai_retry.eligible(signature,now)
     claim=ai_claims.Claim
     eligible_unclaimed=and_(unpaused,ready_sql,Behavior.host_id.in_(host_lifecycle.active_ids()),claim.subject.is_(None))
-    blocked_sql=and_(TR.subject.is_not(None),or_(TR.state=='blocked',and_(TR.state=='interrupted',TR.attempts>=ai_retry.MAX_ATTEMPTS)),~ready_sql)
-    wake=case((TR.subject.is_(None),Behavior.attempted+3600),(TR.next_at!=0,TR.next_at),else_=TR.provider_until)
+    blocked_sql,wake=ai_retry.queue_waits(signature)
     def counted(condition):return func.count(case((condition,1)))
     # One statement keeps the triage counts and minima on a single snapshot:
     # separate reads let a concurrent insert make `paused` negative.
     pending_count,oldest,unpaused_count,ready,blocked,retry,waiting,oldest_waiting=s.execute(select(
         func.count(),func.min(Behavior.first_seen),counted(unpaused),counted(and_(unpaused,ready_sql)),
-        counted(and_(unpaused,blocked_sql)),func.min(case((and_(unpaused,~blocked_sql,wake>now),wake))),
+        counted(and_(unpaused,blocked_sql)),func.min(case((and_(unpaused,wake>now),wake))),
         counted(eligible_unclaimed),func.min(case((eligible_unclaimed,Behavior.first_seen))),
     ).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id)
         .outerjoin(claim,and_(claim.subject==Behavior.id,claim.expires>now)).where(*pending_where)).one()

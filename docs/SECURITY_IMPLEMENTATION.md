@@ -10979,6 +10979,20 @@ Fleet-wide reuse still requires end-to-end acceptance of complete evidence,
 zero-call cross-host hits, invalidation, Re-triage, and role isolation on SQLite
 and MySQL.
 
+### Retry eligibility after a saved AI configuration change — Roadmap A checkpoint #1124
+
+Fleet AI Activity and the per-server triage queue now show a timed provider
+wait when the saved model or key has changed since an investigation was
+blocked. The displayed deadline comes from the provider floor. An earlier
+attempt's recovery deadline does not extend the wait after a configuration
+change. Investigations blocked under the current configuration still show
+that an administrator must review them.
+
+The regression exercises configuration-blocked and exhausted interrupted
+attempts before and at the provider deadline. Shared rate, spend, pause and
+other admission gates still apply. Independent scoring admission and
+production throughput acceptance remain open.
+
 ### Eligible process-triage backlog telemetry — PR #529
 
 Administrator investigation status now reports the count of retry-eligible,
