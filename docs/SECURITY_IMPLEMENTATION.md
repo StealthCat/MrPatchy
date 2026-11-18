@@ -2604,6 +2604,18 @@ transport is a fixture.
   `tests/test_known_good.py`, not through this worker path. Production hit
   rates are not measured.
 
+### Provider retry deadlines on investigation cards — Roadmap A checkpoint #1130
+
+After a saved model or API key change, an individual blocked investigation or
+exhausted interrupted attempt displays a timed provider wait until its retained
+Retry-After expires. The card then shows retry eligibility without a stale
+deadline. The retained attempt history, active and paused overrides, and all
+provider and manual retry checks still apply.
+
+The acceptance cases cover both retained failure states, their deadline
+boundary, the investigation list, and refusal of manual retry before expiry.
+Independent scoring admission and matched production throughput remain open.
+
 ### Retry blocked process investigations — worker checkpoint #934
 
 Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
