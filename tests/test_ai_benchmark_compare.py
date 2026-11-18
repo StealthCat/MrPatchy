@@ -51,6 +51,41 @@ def test_comparison_reports_equivalent_deltas_and_zero_percent():
     assert 'never treated as zero' in result['interpretation']['cost']
 
 
+@pytest.mark.parametrize('parallel_peak', [1, 4])
+def test_comparison_preserves_measured_provider_peak(parallel_peak):
+    baseline = {**report(), 'peak_provider_requests': 1}
+    candidate = {**report('parallel', 4), 'peak_provider_requests': parallel_peak}
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['baseline']['peak_provider_requests'] == 1
+    assert result['candidate']['peak_provider_requests'] == parallel_peak
+
+
+def test_comparison_marks_unrecorded_provider_peak_as_unknown():
+    candidate = {**report('parallel', 4), 'peak_provider_requests': 3}
+    result = compare_ai_benchmarks.compare(report(), candidate)
+    assert result['baseline']['peak_provider_requests'] is None
+    assert result['candidate']['peak_provider_requests'] == 3
+
+
+@pytest.mark.parametrize('peak', [None, False, '2', 1.5, 0, 5])
+def test_comparison_rejects_invalid_provider_peak(peak):
+    candidate = {**report('parallel', 4), 'peak_provider_requests': peak}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.peak_provider_requests'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
+def test_comparison_rejects_provider_peak_above_serial_concurrency():
+    baseline = {**report(), 'peak_provider_requests': 2}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='baseline.peak_provider_requests'):
+        compare_ai_benchmarks.compare(baseline, report('parallel', 4))
+
+
+def test_comparison_rejects_provider_peak_above_number_of_investigations():
+    candidate = {**report('parallel', 4), 'runs': 2, 'peak_provider_requests': 3}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.peak_provider_requests'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
 def test_legacy_report_has_one_server_per_subject():
     baseline, candidate = report(), report('parallel', 4)
     candidate['fixture_hosts'] = candidate['runs']

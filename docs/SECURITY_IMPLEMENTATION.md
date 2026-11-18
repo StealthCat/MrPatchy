@@ -11518,3 +11518,17 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+
+### Observed provider overlap in fixture comparisons (#1092, roadmap A)
+
+Comparison reports show each input's peak simultaneous fixture provider requests
+alongside its configured concurrency. A peak of one means the run observed no
+provider overlap. Older inputs that omit the measurement report null. Explicit
+peaks must be positive integers within both the configured concurrency and the
+number of investigations. This metric is an observation, so it may differ across
+an otherwise capability-equivalent pair.
+
+The comparator regressions cover observed overlap, a parallel run without
+provider overlap, historical inputs and invalid peaks. Both retained comparison
+records are regenerated from the original SQLite fixture inputs. Matched
+production throughput and the broader faster-triage acceptance remain open.
