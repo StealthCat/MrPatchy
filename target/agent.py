@@ -1115,16 +1115,71 @@ def cron_command(text):
     return _CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),command),split is not None
 
 
+# Only these assignments change which program a job runs. Every other value stays unexported.
+CRON_DISCLOSED_ENVIRONMENT = ('SHELL','PATH')
+
+
+_CRON_SPACE = ' \t\n\v\f\r'
+
+
+def cron_assignment(text):
+    """Return (name, value) when cron's load_env would take the line as NAME=value, else None.
+    This follows load_env's state machine: the name and the value may each be wrapped in one
+    pair of single or double quotes, C isspace blanks may surround the equals sign, and an
+    unquoted value loses its trailing blanks. A line load_env refuses (an unclosed quote,
+    text after a closing quote) is not an assignment; cron then reads it as a job entry.
+    NAME= with nothing after it is kept as an empty value, as cronie does; Debian cron
+    refuses that line and with it the whole file."""
+    fields=([],[]);state=0;quote='';index=0  # 0 NAMEI 1 NAME 2 EQ1 3 EQ2 4 VALUEI 5 VALUE 6 FINI 7 ERROR
+    while state<7 and index<len(text):
+        char=text[index]
+        if state in (0,4):
+            if char in '"\'':
+                quote=char;index+=1
+                if index>=len(text):return None
+                char=text[index]
+            state+=1
+        if state in (1,5):
+            if quote and char==quote:state+=1;index+=1
+            elif quote and state==1 and char=='=':state=7
+            elif not quote and state==1 and char in _CRON_SPACE:state+=1;index+=1
+            elif not quote and state==1 and char=='=':state+=1
+            else:fields[state==5].append(char);index+=1
+        elif state==2:
+            if char=='=':state+=1;quote=''
+            elif char not in _CRON_SPACE:state=7
+            index+=1
+        elif char in _CRON_SPACE:index+=1
+        else:state+=1
+    if state not in (3,6) and not (state==5 and not quote):return None
+    name,value=''.join(fields[0]),''.join(fields[1])
+    return name,(value if quote else value.rstrip(_CRON_SPACE))
+
+
+def cron_environment_value(value):
+    """Bound and escape a disclosed SHELL/PATH value; return (text, truncated)."""
+    if value is None:return None,False
+    value,_=redact_cron_command(value)
+    shown=_CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),value[:CRON_COMMAND_LIMIT])
+    return shown[:CRON_COMMAND_LIMIT],len(value)>CRON_COMMAND_LIMIT or len(shown)>CRON_COMMAND_LIMIT
+
+
 def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):
     """Parse crontab text as data. Nothing is executed or sourced; environment values are
-    counted but never exported, and malformed lines are counted rather than guessed."""
+    counted but never exported, and malformed lines are counted rather than guessed. The
+    SHELL and PATH a file assigns above a job are reported with that job, because cron
+    applies an assignment only to the entries that follow it."""
     result={'format':form,'jobs':[],'unparsed':0,'environment':0,'truncated':False}
-    limit=max(0,min(CRON_FILE_JOBS,budget))
+    limit=max(0,min(CRON_FILE_JOBS,budget));assigned={}
     for number,line in enumerate(data.decode('utf-8','replace').split('\n'),1):
         text=line.rstrip('\r').strip(' \t')
         if not text or text.startswith('#'):continue
         if '\x00' in text:result['unparsed']+=1;continue
-        if re.match(r'[A-Za-z_][A-Za-z0-9_]*[ \t]*=',text):result['environment']+=1;continue
+        assignment=cron_assignment(text)
+        if assignment:
+            result['environment']+=1
+            if assignment[0] in CRON_DISCLOSED_ENVIRONMENT:assigned[assignment[0]]=assignment[1]
+            continue
         special=re.split(r'[ \t]+',text,maxsplit=1)[0]
         count=(1 if special.startswith('@') else 5)+(1 if form=='system' else 0)
         parts=re.split(r'[ \t]+',text,maxsplit=count)
@@ -1141,8 +1196,11 @@ def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):
         if not command:result['unparsed']+=1;continue
         if len(result['jobs'])>=limit:result['truncated']=True;continue
         command,redacted=redact_cron_command(command)
+        shell,shell_truncated=cron_environment_value(assigned.get('SHELL'))
+        path,path_truncated=cron_environment_value(assigned.get('PATH'))
         result['jobs'].append({'line':number,'schedule':schedule,'account':user,'command':command[:CRON_COMMAND_LIMIT],
-                               'redacted':redacted,'command_truncated':len(command)>CRON_COMMAND_LIMIT,'stdin':stdin})
+                               'redacted':redacted,'command_truncated':len(command)>CRON_COMMAND_LIMIT,'stdin':stdin,
+                               'shell':shell,'shell_truncated':shell_truncated,'path':path,'path_truncated':path_truncated})
     return result
 
 

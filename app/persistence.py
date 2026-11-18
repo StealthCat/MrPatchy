@@ -15,6 +15,10 @@ CRON_TOTAL_JOBS=256
 CRON_COMMAND_LIMIT=512
 
 
+CRON_JOB_KEYS=frozenset({'line','schedule','account','command','redacted','command_truncated','stdin'})
+CRON_ENVIRONMENT_KEYS=frozenset({'shell','shell_truncated','path','path_truncated'})
+
+
 def validate_cron(cron):
     """Strictly validate optional parsed crontab jobs reported by newer agents."""
     if not isinstance(cron,dict) or set(cron)!={'format','jobs','unparsed','environment','truncated'} or cron['format'] not in ('system','user'):
@@ -24,7 +28,10 @@ def validate_cron(cron):
     jobs=cron['jobs']
     if not isinstance(jobs,list) or len(jobs)>CRON_FILE_JOBS:raise ValueError('Invalid cron job inventory')
     for job in jobs:
-        if not isinstance(job,dict) or set(job)!={'line','schedule','account','command','redacted','command_truncated','stdin'}:raise ValueError('Invalid cron job')
+        if not isinstance(job,dict) or set(job) not in (CRON_JOB_KEYS,CRON_JOB_KEYS|CRON_ENVIRONMENT_KEYS):raise ValueError('Invalid cron job')
+        # Newer agents report the SHELL/PATH the file assigned above the job (None: not set in the file).
+        if 'shell' in job and any(type(job[k+'_truncated']) is not bool or (job[k] is not None and (not isinstance(job[k],str) or len(job[k])>CRON_COMMAND_LIMIT or '\x00' in job[k])) for k in ('shell','path')):
+            raise ValueError('Invalid cron job')
         if type(job['line']) is not int or job['line']<1 or type(job['redacted']) is not bool or type(job['command_truncated']) is not bool or type(job['stdin']) is not bool:raise ValueError('Invalid cron job')
         if not isinstance(job['schedule'],str) or not 1<=len(job['schedule'])<=400 or not isinstance(job['command'],str) or not 1<=len(job['command'])<=CRON_COMMAND_LIMIT:
             raise ValueError('Invalid cron job')
