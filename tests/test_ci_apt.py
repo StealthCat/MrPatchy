@@ -43,3 +43,17 @@ def test_ci_apt_preserves_signed_sources_and_is_idempotent(tmp_path, existing_so
         assert all(first[path] == expected for path in paths)
     else:
         assert not any(path in first for path in paths)
+
+
+def test_browser_dependency_install_retries_bounded_attempts():
+    import yaml
+    workflow = yaml.safe_load((SCRIPT.parents[1] / 'workflows' / 'ci.yml').read_text())
+    step = next(s for s in workflow['jobs']['browser']['steps']
+                if s.get('name') == 'Install browser system dependencies')
+    run = step['run']
+    assert 'bash .github/scripts/configure-ci-apt.sh' in run
+    assert 'for attempt in 1 2 3' in run
+    assert 'timeout 180 npx playwright install-deps chromium' in run
+    assert run.rstrip().endswith('exit 1'), 'all attempts failing must still fail the job'
+    # Three bounded attempts plus setup must fit inside the step bound.
+    assert 3 * 180 / 60 < step['timeout-minutes'] <= 15
