@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_budget,ai_credential_notifications,ai_pricing,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
+from . import ai_budget,ai_credential_notifications,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -170,6 +170,9 @@ OPERATIONAL_NOTIFICATIONS={
     'service hold':('service-hold','high','security'),
     'response integrity':('response-integrity','high','security'),
     'response verification':('response-verification','medium','security'),
+    # Notification-only (no outbox Alert): agent_integrity_notifications classifies controller-written
+    # managed-file findings into counts, so raw endpoint text never reaches the bell.
+    'agent integrity':('agent-integrity','high','agent'),
     'service health':('service-health','medium','security'),
     'service coverage':('service-coverage','medium','security'),
     'execution scan coverage':('execution-scan-coverage','medium','security'),
@@ -182,10 +185,27 @@ OPERATIONAL_NOTIFICATIONS={
     # only reports telemetry silence that has persisted for TELEMETRY_LOST_SECONDS.
     'telemetry lost':('telemetry-lost','high','agent'),
 }
-TELEMETRY_LOST_SECONDS=900
-TELEMETRY_LOST_MESSAGE=('No telemetry has arrived from this server for at least 15 minutes. It may be powered off, '
-    'unreachable, or its agent or SSH access may have failed. Review Agent health and Connection. Security '
-    'coverage is unavailable while telemetry is missing; this is not a clean-host verdict.')
+# Administrators can change the threshold in Settings -> Patch policy (#948). Values are
+# whole minutes; a missing or invalid stored value falls back to the 15-minute default.
+TELEMETRY_LOST_DEFAULT_MINUTES=15
+TELEMETRY_LOST_MIN_MINUTES=5
+TELEMETRY_LOST_MAX_MINUTES=1440
+TELEMETRY_LOST_SECONDS=TELEMETRY_LOST_DEFAULT_MINUTES*60
+
+def telemetry_lost_minutes(cfg):
+    """Return the configured telemetry-loss threshold in minutes, or the default when invalid."""
+    value=cfg.get('telemetry_lost_minutes',TELEMETRY_LOST_DEFAULT_MINUTES)
+    if type(value) is not int or not TELEMETRY_LOST_MIN_MINUTES<=value<=TELEMETRY_LOST_MAX_MINUTES:
+        return TELEMETRY_LOST_DEFAULT_MINUTES
+    return value
+
+def telemetry_lost_message(minutes):
+    # Fixed text per threshold: one revision per outage, and the default keeps the pre-#948 wording.
+    return ('No telemetry has arrived from this server for at least '+str(minutes)+' minutes. It may be powered off, '
+        'unreachable, or its agent or SSH access may have failed. Review Agent health and Connection. Security '
+        'coverage is unavailable while telemetry is missing; this is not a clean-host verdict.')
+
+TELEMETRY_LOST_MESSAGE=telemetry_lost_message(TELEMETRY_LOST_DEFAULT_MINUTES)
 OPERATIONAL_NOTIFICATION_SOURCE='operations'
 OPERATIONAL_NOTIFICATION_SUBJECT='server'
 
@@ -246,6 +266,7 @@ def collect_alerts(now=None,observing_since=None):
         ai_budget.publish_unpriced_model_notification(s,cfg,now)
         _pricing_catalog_alert(s,cfg,record,now)
         ai_budget.publish_cap_notification(s,cfg,now)
+        budget_headroom_notifications.publish(s,cfg,now)
         # In-app only: blocked triage already shows on the Investigations status card.
         triage_block_notifications.publish(s,cfg,now)
         scoring_block_notifications.publish(s,cfg,now)
@@ -274,6 +295,9 @@ def collect_alerts(now=None,observing_since=None):
             overdue_hosts.update(s.scalars(select(Package.host_id).where(Package.host_id.in_(chunk),Package.candidate!='',Package.available_since>0,
                 Package.available_since<now- min(cfg['deadlines'].values())*3600).distinct()))
         settings={row.key:row for row in s.scalars(select(Setting).where(Setting.key.in_([prefix+owner for owner in ids for prefix in ('agent-status:','persistence-baseline:')])))} if ids else {}
+        from . import agent_integrity_notifications
+        agent_integrity_notifications.publish(hosts,now,lambda *args:_operational_notification(s,*args),published)
+        lost_minutes=telemetry_lost_minutes(cfg);lost_seconds=lost_minutes*60;lost_message=telemetry_lost_message(lost_minutes)
         for host in hosts:
             if not host_lifecycle.active(host):
                 record(host,'server disabled','Server management is intentionally disabled. Polling, scheduled work and host AI requests are suspended.')
@@ -309,13 +333,13 @@ def collect_alerts(now=None,observing_since=None):
             if recovery:record(host,'recovery',str(len(recovery))+' operation(s) require console recovery/reconciliation. See Activity: '+', '.join(recovery[:10]))
             if host.state=='enrolling':continue
             if now-host.last_seen>120:record(host,'stale','Telemetry has not arrived within 120 seconds')
-            if now-host.last_seen>TELEMETRY_LOST_SECONDS:
+            if now-host.last_seen>lost_seconds:
                 # Keeping the key published holds an existing event active across a coordinator restart,
                 # while new events wait until polling has had a full threshold to refresh last_seen.
                 published.add((host.id,OPERATIONAL_NOTIFICATIONS['telemetry lost'][0]))
-                if observing_since is None or now-observing_since>TELEMETRY_LOST_SECONDS:
+                if observing_since is None or now-observing_since>lost_seconds:
                     # Fixed text keeps one stable revision per outage; resolution reuses the operational path.
-                    try:_operational_notification(s,host.id,'telemetry lost',TELEMETRY_LOST_MESSAGE,now)
+                    try:_operational_notification(s,host.id,'telemetry lost',lost_message,now)
                     except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for telemetry loss on %s',host.id)
             if host.integrity:record(host,'integrity',json.dumps(host.integrity)[:8000])
             agent=settings.get('agent-status:'+host.id)

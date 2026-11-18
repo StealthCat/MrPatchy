@@ -1,10 +1,11 @@
 /* Separate settings routes. Persistence never depends on a provider test. */
 const SETTINGS_SECTIONS={
  ai:['AI & models','Save your API key, choose a model, and test it.','openai api key model investigations budget spend rate limit scoring'],
- patching:['Patch policy','Repository checks and priority deadlines.','repository checks interval deadlines critical high normal low priority overdue'],
+ patching:['Patch policy','Repository checks and priority deadlines.','repository checks interval deadlines critical high normal low priority overdue telemetry lost offline notification'],
  database:['Database','MySQL connection details and offline migrations.','mysql sqlite connection migration host port password'],
  https:['HTTPS & certificates','Internal and external TLS profiles.','tls ssl certificate acme lets encrypt local ca domain port'],
- history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup']
+ history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup'],
+ malware:['Malware response','Fleet automatic-response policy for detected malware. Recorded only; not enforced yet.','malware quarantine terminate containment automatic response exclusions signature unknown policy']
 };
 function settingsMatches(query,sections=SETTINGS_SECTIONS){
  const terms=String(query||'').toLowerCase().split(/\s+/).filter(Boolean);
@@ -17,6 +18,88 @@ function settingsHubCards(query){
 function settingsNav(section){
  return `<div class="settings-nav" role="navigation" aria-label="Settings sections">${[['','All settings'],...Object.entries(SETTINGS_SECTIONS).map(([key,value])=>[key,value[0]])].map(([key,label])=>`<a href="#settings${key?'/'+key:''}" ${key===section?'aria-current="page" class="active"':''}>${esc(label)}</a>`).join('')}</div>`;
 }
+/* Unsaved-change guard. Each Settings form keeps a snapshot of the values it
+ loaded or last saved successfully; leaving with a different value asks first.
+ View filters (Settings search, spend-history period) are not tracked. */
+const trackedSettingsForms=new Set();
+function settingsFormState(form){
+ return JSON.stringify([...form.elements].filter(e=>/^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName)&&!['submit','button','reset'].includes(e.type)&&(e.name||e.id))
+  .map(e=>[e.name||e.id,e.type==='checkbox'||e.type==='radio'?e.checked:e.value]));
+}
+function trackSettingsForm(form){if(form){form.dataset.savedState=settingsFormState(form);trackedSettingsForms.add(form);}}
+function settingsFormSaved(form){if(form&&form.isConnected)form.dataset.savedState=settingsFormState(form);}
+function settingsHasUnsavedChanges(){
+ for(const form of [...trackedSettingsForms]){
+  if(!form.isConnected){trackedSettingsForms.delete(form);continue;}
+  if(form.dataset.savedState!==settingsFormState(form))return true;
+ }
+ return false;
+}
+function discardSettingsChanges(){trackedSettingsForms.clear();}
+// Leaving with unsaved edits asks first. settings.js loads before app.js, so these
+// listeners run before the shell's navigation and Refresh handlers and can hold
+// them. A hashchange cannot be cancelled, so it is undone by moving back through
+// session history (never by rewriting an entry, which would drop the page the
+// user came from) and redone with the same move on Discard changes. Entry
+// positions come from the Navigation API, or else from an index kept in
+// history.state that replaceState preserves.
+const SETTINGS_HISTORY_KEY='mrpatchyHistoryIndex';
+// Where the Navigation API reports entry positions, nothing is written to history:
+// stamping every entry adds a same-document navigation per hashchange, and a reload
+// issued right after a hash navigation could then restore an older entry.
+const navigationIndex=()=>{const entry=window.navigation?.currentEntry;return entry&&Number.isInteger(entry.index)&&entry.index>=0?entry.index:null;};
+const stampsHistory=navigationIndex()===null;
+const stampedIndex=()=>{const s=history.state;return s&&typeof s==='object'&&Number.isInteger(s[SETTINGS_HISTORY_KEY])?s[SETTINGS_HISTORY_KEY]:null;};
+const historyIndex=()=>stampsHistory?stampedIndex():navigationIndex();
+const nativeReplaceState=history.replaceState.bind(history);
+const stampHistory=(state,index)=>index===null||(state!==null&&typeof state!=='object')?state:{...(state||{}),[SETTINGS_HISTORY_KEY]:index};
+if(stampsHistory){
+ history.replaceState=function(state,...rest){const s=state&&typeof state==='object'&&SETTINGS_HISTORY_KEY in state?state:stampHistory(state,historyIndex());return nativeReplaceState(s,...rest);};
+ if(historyIndex()===null)nativeReplaceState(stampHistory(history.state,0),'');
+}
+let settledSettingsHash=location.hash,settledHistoryIndex=historyIndex();
+// Set only while the guard's own history.go undo is in flight. Entries can share
+// an index (rapid back-to-back hash changes settle the newer entry first), so
+// arriving on the settled index is not by itself evidence of an undo.
+let pendingHistoryUndo=null;
+function settleHistory(){
+ let index=historyIndex();
+ if(index===null&&stampsHistory){index=(settledHistoryIndex??-1)+1;nativeReplaceState(stampHistory(history.state,index),'');}
+ settledSettingsHash=location.hash;settledHistoryIndex=index;
+}
+function unsavedSettingsPending(){return !document.getElementById('shell').classList.contains('hidden')&&settingsHasUnsavedChanges();}
+function confirmLeaveUnsaved(proceed){
+ modal('Leave without saving?','<p>You have unsaved Settings changes. Leaving this page discards them.</p><div class="actions"><button type="button" id="unsaved-stay">Stay on this page</button><button type="button" id="unsaved-discard" class="danger">Discard changes</button></div>');
+ const dialog=modalRevision,box=document.getElementById('modal');
+ document.getElementById('unsaved-stay').onclick=()=>{if(dialog===modalRevision)box.close();};
+ document.getElementById('unsaved-discard').onclick=()=>{if(dialog!==modalRevision)return;discardSettingsChanges();box.close();proceed();};
+ document.getElementById('unsaved-stay').focus();
+}
+window.addEventListener('hashchange',event=>{
+ const index=historyIndex(),undo=pendingHistoryUndo;pendingHistoryUndo=null;
+ // Landing back on the settled entry after the guard's own undo: restore it without rendering.
+ if(undo!==null&&index===undo&&location.hash===settledSettingsHash){event.stopImmediatePropagation();return;}
+ if(!unsavedSettingsPending()){settleHistory();return;}
+ event.stopImmediatePropagation();
+ // Without a measurable move (no index, or an entry sharing the settled index) the
+ // address is restored in place; history.go(0) would reload and drop the edits.
+ if(settledHistoryIndex===null||index===settledHistoryIndex){
+  const target=event.newURL;
+  nativeReplaceState(history.state,'',settledSettingsHash||location.pathname+location.search);
+  confirmLeaveUnsaved(()=>{location.href=target;});
+  return;
+ }
+ // A new entry (link, typed address) sits right after the settled one; Back/Forward reports its own position.
+ const delta=index===null?1:index-settledHistoryIndex;
+ pendingHistoryUndo=settledHistoryIndex;history.go(-delta);
+ confirmLeaveUnsaved(()=>history.go(delta));
+});
+document.addEventListener('click',event=>{
+ if(!event.target.closest?.('#refresh-page')||!unsavedSettingsPending())return;
+ event.preventDefault();event.stopImmediatePropagation();
+ confirmLeaveUnsaved(()=>render());
+},true);
+window.addEventListener('beforeunload',event=>{if(unsavedSettingsPending()){event.preventDefault();event.returnValue='';}});
 async function settings(revision=renderRevision){
  const data=await api('/settings');
  if(!currentView(revision,'settings'))return;
@@ -32,19 +115,21 @@ async function settings(revision=renderRevision){
   input.oninput=draw;draw();return;
  }
  if(section==='ai'){renderAISettings(data,revision,container);return;}
+ if(section==='malware'){container.innerHTML='<div class="card" id="malware-policy"><p class="help">Loading malware response policy…</p></div>';await malwarePolicySettings(revision);return;}
  if(section==='database'){container.innerHTML='<div class="card" id="database-settings"><p class="help">Loading database settings…</p></div>';await databaseSettings(revision);return;}
  if(section==='https'){
   container.innerHTML=`<div class="card"><h2>HTTPS profiles</h2><p>Configure independent internal and external profiles with uploaded certificates, ACME, or the built-in local CA.</p><p>${Object.entries(data.tls.profiles||{}).filter(([,p])=>p.enabled).map(([name,p])=>esc(name+': '+p.domain+' · browser port '+p.effective_https_port)+' · '+badge(p.mode)).join('<br>')||'Initial HTTPS configured by deployment'}</p><button type="button" id="tls-button">Configure HTTPS →</button></div>`;
   $('#tls-button').onclick=tlsModal;return;
  }
- if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><label>OS support-end advance warning · days<input name="os_lifecycle_warning_days" type="number" min="0" max="730" value="${esc(data.os_lifecycle_warning_days??90)}" required></label><p class="help">Administrators get an in-app notice this many days before a server's verified release leaves standard support or verified Debian LTS coverage. 0 turns the advance notice off; notices after support ends are unchanged.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
+ if(section==='patching')container.innerHTML=`<form id="patch-settings-form" class="card"><h2>Patch policy</h2><p class="help">Deadlines begin when a candidate is discovered. They flag overdue work; they do not authorize unattended installation or represent CVSS scores.</p><fieldset><div class="form-grid">${['critical','high','normal','low'].map(k=>`<label>${k[0].toUpperCase()+k.slice(1)} · hours<input name="${k}" type="number" min="1" max="8760" value="${data.deadlines[k]}" required></label>`).join('')}</div><label>Repository check interval · minutes<input name="repo_minutes" type="number" min="5" max="10080" value="${data.repo_minutes}" required></label><p class="help">Target process sampling: 30 seconds. Full managed-file and executable hash refresh: 5 minutes.</p><label>OS support-end advance warning · days<input name="os_lifecycle_warning_days" type="number" min="0" max="730" value="${esc(data.os_lifecycle_warning_days??90)}" required></label><p class="help">Administrators get an in-app notice this many days before a server's verified release leaves standard support or verified Debian LTS coverage. 0 turns the advance notice off; notices after support ends are unchanged.</p><label>Telemetry-loss notice after · minutes<input name="telemetry_lost_minutes" type="number" min="5" max="1440" step="1" value="${esc(data.telemetry_lost_minutes??15)}" required></label><p class="help">Administrators get an in-app notice when an enabled server sends no telemetry for this long. Shorter values report outages sooner but can flag brief network interruptions. The two-minute stale alert and email or webhook delivery are unchanged.</p><button type="submit" class="primary">Save patch policy</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  if(section==='history')container.innerHTML=`<form id="history-settings-form" class="card"><h2>History retention</h2><fieldset><label>Days to retain observations and inventory revisions<input name="history_days" type="number" min="1" max="3650" value="${data.history_days}" required></label><p class="help">The worker uses this period for observation, inventory revision and completed AI log cleanup. Package change history is retained separately.</p><button type="submit" class="primary">Save history retention</button></fieldset><p class="help" role="status" id="section-save-result"></p></form>`;
  const form=container.querySelector('form'),result=$('#section-save-result');
+ trackSettingsForm(form);
  form.onsubmit=async event=>{
   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
-  const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),os_lifecycle_warning_days:+f.get('os_lifecycle_warning_days'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
+  const body=section==='patching'?{repo_minutes:+f.get('repo_minutes'),os_lifecycle_warning_days:+f.get('os_lifecycle_warning_days'),telemetry_lost_minutes:+f.get('telemetry_lost_minutes'),deadlines:Object.fromEntries(['critical','high','normal','low'].map(k=>[k,+f.get(k)]))}:{history_days:+f.get('history_days')};
   fieldset.disabled=true;result.textContent='Saving…';
-  try{await api('/settings/'+section,'PUT',body);if(currentView(revision,'settings')&&result.isConnected)result.textContent=section==='patching'?'Patch policy saved.':'History retention saved.';}
+  try{await api('/settings/'+section,'PUT',body);settingsFormSaved(form);if(currentView(revision,'settings')&&result.isConnected)result.textContent=section==='patching'?'Patch policy saved.':'History retention saved.';}
   catch(error){if(currentView(revision,'settings')&&result.isConnected)result.textContent=error.message;}
   finally{if(fieldset.isConnected)fieldset.disabled=false;}
  };
@@ -61,6 +146,7 @@ function renderAISettings(data,revision,container){
  const budget=data.ai_budget||{},catalog=budget.pricing_catalog||{},providerBackoff=data.ai_provider_backoff||{};
  container.innerHTML=`<form class="card" id="ai-key-form"><h2>1. API key</h2><p class="help">Save your key independently—even if the old model is invalid. Saving does not call OpenAI.</p><fieldset><label>OpenAI API key <span id="ai-key-state">${data.api_key_configured?'· saved':'· not configured'}</span><input name="api_key" type="password" autocomplete="new-password" placeholder="Enter a new key to replace the saved key" required maxlength="1000"></label><button class="primary" type="submit">Save API key</button></fieldset><p id="ai-key-result" class="help" role="status"></p></form><form class="card" id="ai-settings-form"><h2>2. Model &amp; investigations</h2><p id="ai-saved-model" class="settings-saved">Saved model: ${esc(data.ai_model||'None')}</p><fieldset>${modelPicker(data)}<div class="actions ai-save-actions"><button type="submit" class="primary">Save AI settings</button><button type="submit" id="ai-test">Save and test selected model</button></div><p id="ai-save-result" class="help" role="status"></p><p id="ai-test-result" class="help" role="status"></p><p class="help">Save and test first saves the selected model, then sends one small structured-output request. No server evidence is included. The result identifies the exact model tested. An accessible model may still lack Responses API or JSON-schema support.</p><label class="check"><input name="ai_enabled" type="checkbox" ${data.ai_enabled?'checked':''}>Enable central OpenAI API investigations</label><p class="help">Sends executable paths, SHA-256 hashes, UIDs, and network endpoint metadata. Investigations may request fixed read-only package, executable and service checks. Arguments, environment variables and arbitrary file contents are excluded. Each investigation uses up to two calls. Responses use store: false; your API organization’s data policies still apply.</p>${migration?migrationNotice(data.ai_control_migration):''}<label>Mr Patchy admission mode<select name="ai_control_mode"><option value="legacy" ${data.ai_control_mode==='legacy'?'selected':''}>Legacy separate hourly limits</option><option value="rate" ${data.ai_control_mode==='rate'?'selected':''}>Shared smooth rate throttle</option><option value="daily_cap" ${data.ai_control_mode==='daily_cap'?'selected':''}>Daily spend cap</option><option value="rate_and_daily" ${data.ai_control_mode==='rate_and_daily'?'selected':''}>Rate throttle + daily spend cap</option><option value="unthrottled" ${data.ai_control_mode==='unthrottled'?'selected':''}>Unthrottled by Mr Patchy</option></select></label><label>Shared AI work starts per hour<input name="ai_rate_per_hour" type="number" min="1" max="1000" value="${data.ai_rate_per_hour}" required></label><div class="form-grid"><label>Daily AI cap · USD<input name="ai_daily_cap_usd" type="number" min="0.01" max="1000000" step="0.01" value="${esc(data.ai_daily_cap_usd)}" required></label><label>Budget reset · IANA timezone<input name="ai_budget_timezone" maxlength="64" value="${esc(data.ai_budget_timezone)}" required placeholder="America/New_York"></label><label>Advance cap warning · % of cap<input name="ai_daily_cap_warning_percent" type="number" min="0" max="99" step="1" value="${esc(data.ai_daily_cap_warning_percent??80)}" required aria-describedby="ai-cap-warning-help"></label></div><p class="help" id="ai-cap-warning-help">Administrators get one in-app notification per budget day when counted spend reaches this share of the cap. Enter 0 to turn the advance warning off; the cap-reached notification and admission are unchanged.</p><div class="notice"><strong>Current budget window</strong><br>Counted $${esc(budget.counted_usd||'0')} · settled $${esc(budget.settled_usd||'0')} · reserved $${esc(budget.reserved_usd||'0')} · uncertain $${esc(budget.uncertain_usd||'0')} · remaining $${esc(budget.remaining_usd||data.ai_daily_cap_usd)}${budget.next_reset?' · resets '+date(budget.next_reset):''}${providerBackoff.blocked?`<br><strong>Provider backoff active</strong> · ${esc(providerBackoff.failures)} consecutive transient failure(s) · recorded ${date(providerBackoff.updated_at)} · next eligible ${date(providerBackoff.next_at)}<br>${esc(providerBackoff.reason)}<br><button type="button" id="provider-backoff-clear">Review and clear provider backoff</button>`:''}</div><p class="help">Capped modes reserve a conservative ceiling before every provider call and reconcile valid usage receipts. Unknown model/tier pricing is blocked, never treated as free. Sent calls without reliable usage retain the full reservation after timeout or restart. Provider Retry-After and transient backoff are shared across workers and purposes. Clearing a reviewed provider floor sends no request and does not bypass rate, budget, retry, pause, lifecycle or concurrency controls. Estimates use a versioned public price catalog and are not provider invoices. Unthrottled removes Mr Patchy rate/spend controls only; finite concurrency, provider limits, global/per-server pause, roles and data sharing still apply.</p><label>Legacy maximum investigations per hour<input name="ai_hourly_limit" type="number" min="1" max="1000" value="${data.ai_hourly_limit}" required></label><label class="check"><input name="ai_updates_enabled" type="checkbox" ${data.ai_updates_enabled?'checked':''}>Automatically score pending updates</label><p class="help">Sends package names, versions, OS release and priority classification. Scores are advisory estimates, not verified CVSS ratings, and never authorize installation.</p><label>Legacy maximum scoring batches per hour · up to 5 updates each<input name="ai_update_hourly_limit" type="number" min="1" max="1000" value="${data.ai_update_hourly_limit}" required></label></fieldset><a class="mint" href="#ai-logs">Inspect AI run logs →</a></form>`;
  container.insertAdjacentHTML('beforeend',`<section class="card" id="ai-spend-history" aria-labelledby="ai-spend-history-title"><h2 id="ai-spend-history-title">3. Retained spend history</h2><form id="ai-spend-history-filter" class="form-grid"><label>Period<select id="ai-spend-history-days" aria-describedby="ai-spend-history-help"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option></select></label><label>Budget timezone<input id="ai-spend-history-timezone" maxlength="64" placeholder="America/New_York" aria-describedby="ai-spend-history-timezone-help"></label><div class="actions full"><button type="submit">Apply timezone filter</button><button type="button" id="ai-spend-history-download">Download CSV</button></div></form><p class="help" id="ai-spend-history-download-status" role="status"></p><p class="help" id="ai-spend-history-timezone-help">Use the recorded IANA timezone. Clear the field and apply to show all timezones.</p><p class="help" id="ai-spend-history-help">Settled amounts are local public-price estimates based on retained usage—not provider invoices. Transmitted, uncertain and unrecognized unreleased calls retain their conservative ceiling. The CSV download uses the selected period and applied timezone filter and contains only these window totals, for comparison with your provider’s billing records.</p><div id="ai-spend-history-results"><p class="help" role="status">Loading retained AI spend history…</p></div></section>`);
+ container.insertAdjacentHTML('beforeend',`<section class="card" id="ai-spend-purpose" aria-labelledby="ai-spend-purpose-title"><h2 id="ai-spend-purpose-title">4. Current window spend by activity</h2><p class="help" id="ai-spend-purpose-help">Shows which AI activity the daily spend cap is currently counting. This is read-only: it does not change admission, reservations or the cap.</p><div id="ai-spend-purpose-results"><p class="help" role="status">Loading current-window AI spend by activity…</p></div><div class="actions"><button type="button" id="ai-spend-purpose-refresh" aria-describedby="ai-spend-purpose-help">Refresh</button></div></section>`);
  const notices=container.querySelectorAll('.notice'),budgetNotice=notices[notices.length-1];
  if(budget.enabled&&Number.isInteger(budget.unreconciled_call_count)){
   const count=budget.unreconciled_call_count;
@@ -74,6 +160,12 @@ function renderAISettings(data,revision,container){
  const keyForm=$('#ai-key-form'),form=$('#ai-settings-form'),select=$('#ai-model'),manual=$('#ai-model-manual');
  const keyResult=$('#ai-key-result'),saveResult=$('#ai-save-result'),testResult=$('#ai-test-result'),status=$('#ai-model-status'),refresh=$('#ai-model-refresh');
  const alive=()=>currentView(revision,'settings')&&container.isConnected;
+ // Read-only scoring queue summary (#917), fetched separately so its exact-identity pass never delays Settings.
+ // Counts and times only; never a promise that a batch starts now.
+ container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend','<div class="notice" id="scoring-queue" role="status" aria-live="polite"><strong>Scoring queue</strong> · Loading…</div>');
+ (async()=>{const target=$('#scoring-queue');if(!target)return;let q;try{q=await api('/update-scores/status');}catch{q=null;}
+  if(!currentView(revision,'settings')||!target.isConnected)return;
+  target.innerHTML=scoringQueueSummary(q);})();
  // Inserted after the budget notice lookup so this notice never receives budget details.
  if(data.ai_scoring_blocked>0)container.querySelector('input[name=ai_updates_enabled]')?.closest('label')?.nextElementSibling?.insertAdjacentHTML('afterend',`<div class="notice" id="scoring-blocked"><strong>${esc(data.ai_scoring_blocked)} update ${data.ai_scoring_blocked===1?'score is':'scores are'} blocked</strong> by a non-transient AI provider failure under the saved model and key. No automatic retry is scheduled. After resolving the cause (for example restored quota or access), retry them; changing the saved model or key also makes them eligible.<br><button type="button" id="scoring-blocked-retry">Retry blocked scores</button><span id="scoring-blocked-result" class="help" role="status"></span></div>`);
  const retryScoring=$('#scoring-blocked-retry');
@@ -133,6 +225,25 @@ function renderAISettings(data,revision,container){
   finally{if(historyDownload.isConnected)historyDownload.disabled=false;}
  };
 
+ const SPEND_PURPOSE_LABELS={triage:'Process triage',update_scoring:'Update importance scoring',security_plan:'Incident and startup response plans',release_configuration:'Release configuration reviews',connection_test:'AI connection tests',other:'Other recorded activity',unattributed:'Not attributed (run history pruned or no run)'};
+ const purposeResults=$('#ai-spend-purpose-results'),purposeRefresh=$('#ai-spend-purpose-refresh');let purposeGeneration=0;
+ const loadSpendByPurpose=async()=>{
+  const ticket=++purposeGeneration;purposeRefresh.disabled=true;
+  purposeResults.innerHTML='<p class="help" role="status">Loading current-window AI spend by activity…</p>';
+  try{
+   const result=await api('/settings/ai-spend-by-purpose');
+   if(!alive()||ticket!==purposeGeneration)return;
+   const notes=(Array.isArray(result.limitations)?result.limitations:[]).map(text=>`<li>${esc(text)}</li>`).join('');
+   const caveats=notes?`<ul class="help">${notes}</ul>`:'';
+   if(!result.enabled){purposeResults.innerHTML='<p class="help" role="status">No daily spend cap applies in the current control mode, so no spend is being counted against a cap.</p>';return;}
+   const windowText=`Budget window resets ${date(result.next_reset)} · ${esc(result.timezone)}`;
+   if(!result.groups.length){purposeResults.innerHTML=`<p class="help" role="status">No billable AI calls are counted in the current budget window. ${windowText}.</p>`+caveats;return;}
+   const rows=result.groups.map(row=>`<tr><th scope="row">${esc(SPEND_PURPOSE_LABELS[row.purpose]||'Other recorded activity')}</th><td>${esc(row.call_count)}</td><td>$${esc(row.settled_usd)}</td><td>$${esc(row.reserved_usd)}</td><td>$${esc(row.uncertain_usd)}</td><td><strong>$${esc(row.counted_usd)}</strong></td></tr>`).join('');
+   purposeResults.innerHTML=`<p class="help">${windowText}</p><div class="table-wrap"><table><caption>AI spend counted against the daily cap, by activity</caption><thead><tr><th scope="col">Activity</th><th scope="col">Calls</th><th scope="col">Settled estimate</th><th scope="col">Reserved</th><th scope="col">Sent or uncertain</th><th scope="col">Counted</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><th scope="row">All activity</th><td>${esc(result.call_count)}</td><td colspan="3"></td><td><strong>$${esc(result.counted_usd)}</strong></td></tr></tfoot></table></div>`+caveats;
+  }catch(error){if(alive()&&ticket===purposeGeneration){purposeResults.innerHTML=PatchyUI.error('Current-window spend by activity could not be loaded',esc(error.message));}}
+  finally{if(ticket===purposeGeneration&&purposeRefresh.isConnected)purposeRefresh.disabled=false;}
+ };
+ purposeRefresh.onclick=loadSpendByPurpose;
  $('#ai-spend-history-filter').onsubmit=event=>{
   event.preventDefault();
   appliedTimezone=historyTimezone.value.trim();
@@ -142,7 +253,7 @@ function renderAISettings(data,revision,container){
  const chosen=()=>select.value==='__manual__'?manual.value.trim():select.value;
  const toggleManual=()=>{const enabled=select.value==='__manual__';$('#ai-manual-label').hidden=!enabled;manual.required=enabled;manual.disabled=!enabled;};
  const markChanged=()=>{saveResult.textContent='Unsaved changes.';testResult.textContent='';toggleManual();};
- form.addEventListener('input',markChanged);form.addEventListener('change',markChanged);toggleManual();
+ form.addEventListener('input',markChanged);form.addEventListener('change',markChanged);toggleManual();trackSettingsForm(keyForm);trackSettingsForm(form);
  const setBusy=value=>{busy=value;keyForm.querySelector('fieldset').disabled=value;form.querySelector('fieldset').disabled=value;};
  // Effects of this change (#871): read-only preview of admission/spend ceilings before save.
  $('#ai-test-result').insertAdjacentHTML('afterend','<div class="notice ai-control-effects" id="ai-control-effects" role="status" aria-live="polite" hidden></div>');
@@ -203,7 +314,7 @@ function renderAISettings(data,revision,container){
   try{
    const response=await api('/settings/ai-key','PUT',{api_key:secret});if(!alive())return;
    keyRevision=response.api_key_revision;input.value='';$('#ai-key-state').textContent='· saved';
-   keyResult.textContent='API key saved. Your model selection is unchanged.';saved=true;
+   keyResult.textContent='API key saved. Your model selection is unchanged.';saved=true;settingsFormSaved(keyForm);
   }catch(error){if(alive())keyResult.textContent='API key was not saved. '+error.message;}
   finally{if(alive()){setBusy(false);if(saved)load();}}
  };
@@ -223,7 +334,7 @@ function renderAISettings(data,revision,container){
    keyRevision=response.api_key_revision;if(response.ai_controls_revision)controlsRevision=response.ai_controls_revision;
    effectsPanel.hidden=true;effectsPanel.textContent='';
    $('#ai-saved-model').textContent='Saved model: '+(response.ai_model||'None');
-   saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';
+   saveResult.textContent='AI settings saved. Model: '+(response.ai_model||'None')+'.';settingsFormSaved(form);
    if(test){
     testResult.textContent='Testing saved model '+response.ai_model+'…';
     try{
@@ -234,7 +345,7 @@ function renderAISettings(data,revision,container){
   }catch(error){if(alive())saveResult.textContent='AI settings were not saved. '+error.message+(error.status===409?' Your entries are still in the form; reload Settings to compare them with the current saved controls.':'');}
   finally{if(alive())setBusy(false);}
  };
- loadHistory();if(data.api_key_configured)load();
+ loadHistory();loadSpendByPurpose();if(data.api_key_configured)load();
 }
 async function databaseSettings(revision){
  const container=$('#database-settings');
@@ -251,7 +362,7 @@ docker compose run --rm --no-deps app python -m app.database_migrate --confirm-o
 docker compose up -d app worker</pre><p class="help">The offline command copies all application tables and verifies row counts and content fingerprints before activation. The original database stays intact. Failed verification leaves the active database unchanged; inspect the destination before retrying. An activated profile overrides DATABASE_URL for both app and workers. Do not restart against the old copy after using the new database.</p></details>`;
   const form=$('#database-form'),result=$('#database-result');
   const toggle=()=>{for(const name of ['mysql','sqlite']){const section=$('#database-'+name),enabled=form.elements.backend.value===name;section.hidden=!enabled;for(const input of section.querySelectorAll('input'))input.disabled=!enabled;}};
-  form.elements.backend.onchange=toggle;toggle();
+  form.elements.backend.onchange=toggle;toggle();trackSettingsForm(form);
   const testButton=$('#database-test'),testResult=$('#database-test-result');
   let testing=false,testRevision=0;
   const syncTest=()=>{testRevision++;$('#database-test-group').hidden=form.elements.backend.value!=='mysql';testResult.textContent='';};
@@ -278,6 +389,7 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
     await api('/settings/database','PUT',body);
     if(!currentView(revision,'settings')||!result.isConnected)return;
     form.elements.password.value='';form.elements.clear_password.checked=false;
+    settingsFormSaved(form);
     syncTest();
     result.textContent='Destination saved. Active database unchanged. Follow the offline migration steps below.';
     $('#database-migration-steps').open=true;
@@ -285,4 +397,44 @@ docker compose up -d app worker</pre><p class="help">The offline command copies 
    finally{if(button.isConnected)button.disabled=false;}
   };
  }catch(error){if(currentView(revision,'settings')&&container.isConnected)container.innerHTML=PatchyUI.error('Could not load database settings',esc(error.message));}
+}
+const MALWARE_ACTION_LABELS={quarantine_file:'Quarantine the verified file',terminate_process:'Terminate the verified process'};
+const MALWARE_MODE_LABELS={disabled:'Disabled',monitor_only:'Monitor only (record what would happen)',enforce:'Enforce (unavailable)'};
+function malwarePolicyForm(data){
+ const p=data.policy,l=data.limits,actions=(name,chosen)=>data.actions.map(a=>`<label class="check"><input type="checkbox" name="${name}" value="${esc(a)}" ${chosen.includes(a)?'checked':''}><span>${esc(MALWARE_ACTION_LABELS[a]||a)}<br><small class="help">${esc(data.effects[a]||'')}</small></span></label>`).join('');
+ const modes=data.modes.map(m=>{const off=m==='enforce'&&!data.enforcement_available;return `<option value="${esc(m)}" ${m===p.mode?'selected':''} ${off?'disabled':''}>${esc(MALWARE_MODE_LABELS[m]||m)}</option>`;}).join('');
+ return `<form id="malware-policy-form" class="card"><h2>Fleet malware automatic response</h2>
+<div class="notice" id="malware-enforcement-notice"><strong>Not enforced.</strong> No containment executor exists yet, so this policy is recorded and audited but never quarantines a file or terminates a process. Enforce stays unavailable until an executor is delivered and reviewed.</div>
+${data.stored_invalid?`<div class="notice" id="malware-invalid-notice" role="alert"><strong>The stored policy is invalid and is treated as Disabled.</strong> ${esc(data.stored_invalid_reason||'')}. Saving replaces it.</div>`:''}
+<p class="help">A detection qualifies only under the contract's checks: authenticated, fresh signatures bound to the artifact hash, or a bound AI malicious verdict with independent corroborating evidence. AI output alone never authorizes an action. Unknown-malware responses also need AI to be available and unpaused for that server; signature matches do not.</p>
+<fieldset><label>Mode<select name="mode">${modes}</select></label>
+<p class="help" id="malware-enforce-help">Enforce is shown for clarity but disabled: saving it is refused while no executor exists.</p>
+<fieldset class="malware-actions"><legend>Known malware (signature or indicator match)</legend>${actions('known_actions',p.known_actions)}</fieldset>
+<fieldset class="malware-actions"><legend>Unknown malware (evidence-supported AI discovery)</legend><label class="check"><input type="checkbox" name="allow_unknown" ${p.allow_unknown?'checked':''}> Allow responses to evidence-supported unknown malware</label>${actions('unknown_actions',p.unknown_actions)}</fieldset>
+<div class="form-grid"><label>Minimum AI confidence<input name="min_ai_confidence" type="number" min="${l.min_ai_confidence}" max="1" step="0.01" value="${esc(p.min_ai_confidence)}" required></label>
+<label>Corroborating evidence kinds<input name="min_corroborating_kinds" type="number" min="${l.min_corroborating_kinds}" max="${l.max_corroborating_kinds}" step="1" value="${esc(p.min_corroborating_kinds)}" required></label>
+<label>Maximum signature age · seconds<input name="max_signature_age_seconds" type="number" min="1" max="${l.max_signature_age_seconds}" step="1" value="${esc(p.max_signature_age_seconds)}" required></label></div>
+<label>Excluded paths · one absolute path per line<textarea name="excluded_paths" rows="3" spellcheck="false" autocomplete="off">${esc(p.excluded_paths.join('\n'))}</textarea></label>
+<label>Excluded SHA-256 hashes · one per line<textarea name="excluded_sha256" rows="3" spellcheck="false" autocomplete="off">${esc(p.excluded_sha256.join('\n'))}</textarea></label>
+<p class="help">Path exclusions also match a process's verified executable path. At most ${esc(l.max_exclusions)} of each.</p>
+<button type="submit" class="primary">Save malware response policy</button></fieldset><p class="help" role="status" id="malware-policy-result"></p></form>`;
+}
+async function malwarePolicySettings(revision){
+ const container=$('#malware-policy'),alive=()=>currentView(revision,'settings')&&container.isConnected;
+ try{
+  let data=await api('/settings/malware-response');if(!alive())return;
+  container.outerHTML=malwarePolicyForm(data);
+  const form=$('#malware-policy-form'),result=$('#malware-policy-result'),ok=()=>currentView(revision,'settings')&&result.isConnected;
+  const lines=v=>String(v||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  form.onsubmit=async event=>{
+   event.preventDefault();const f=new FormData(form),fieldset=form.querySelector('fieldset');
+   const policy={mode:f.get('mode'),known_actions:f.getAll('known_actions'),unknown_actions:f.getAll('unknown_actions'),allow_unknown:f.has('allow_unknown'),
+    min_ai_confidence:+f.get('min_ai_confidence'),min_corroborating_kinds:+f.get('min_corroborating_kinds'),max_signature_age_seconds:+f.get('max_signature_age_seconds'),
+    excluded_paths:lines(f.get('excluded_paths')),excluded_sha256:lines(f.get('excluded_sha256')).map(h=>h.toLowerCase())};
+   fieldset.disabled=true;result.textContent='Saving…';
+   try{data=await api('/settings/malware-response','PUT',{policy,expected_revision:data.revision});if(ok()){result.textContent='Malware response policy saved. It is recorded only and not enforced.';$('#malware-invalid-notice')?.remove();}}
+   catch(error){if(ok())result.textContent='Malware response policy was not saved. '+error.message+(error.status===409&&/refresh/i.test(error.message)?' Your entries are still in the form; reload Settings to see the current saved policy.':'');}
+   finally{if(fieldset.isConnected)fieldset.disabled=false;}
+  };
+ }catch(error){if(alive())container.innerHTML=PatchyUI.error('Could not load the malware response policy',esc(error.message));}
 }

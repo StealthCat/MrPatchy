@@ -27,19 +27,29 @@ coverage page uses:
   than the interval plus the grace period (#841). Otherwise a scheduler blocker
   present from enablement onward, such as a quarantine, a recovery-required job
   or a full queue, would leave the server silent. Legacy policies saved before
-  ``enabled_since`` existed stay silent until the policy is saved again.
+  ``enabled_since`` existed use the time this producer first saw them enabled and
+  never scanned instead (#883). That time lives in its own server-managed
+  ``security-scan-legacy-since:<host>`` setting, so the administrator's policy row
+  is never rewritten, and it is never earlier than that first observation.
+- Re-enabling scheduled scanning restarts ``enabled_since``, and a server that
+  returns to the active set after being disabled or re-enrolling restarts its own
+  server-managed ``security-scan-resumed:<host>`` clock (#1043). ``overdue`` then
+  waits for the interval plus the grace period from the later of the two, so an
+  old last scan does not publish while the scheduler is held right after the
+  return. A missing clock (upgrades, continuously active servers) adds no delay.
 
 A younger pending scan leaves an existing event unchanged. Recorded scans resolve it,
 and so do scans with findings, because the ``malware-detection`` incident
 producer owns those. Disabling scheduled scanning, or disabling, deleting or
 re-enrolling the server, also resolves the event.
 
-It only reads state. Reason text is fixed per category and never carries paths,
+Apart from that legacy first-observed marker, it only reads state. Reason text is fixed per category and never carries paths,
 rule names, engine output, errors or timestamps. It never enqueues, retries or
 cancels scans, changes patching state, or acknowledges, remediates or
 authorizes anything.
 """
 import math
+from fractions import Fraction
 
 from sqlalchemy import func, select
 
@@ -54,6 +64,12 @@ SUBJECT = 'server'
 GRACE_SECONDS = 3600
 DEFAULT_INTERVAL_HOURS = 24
 CHUNK = 500
+# Server-managed first observation of an enabled, never-scanned legacy policy (#883). The prefix must not start
+# with ``security-policy:``, which the scheduler and coverage page enumerate.
+LEGACY_PREFIX = 'security-scan-legacy-since:'
+# Server-managed resume clock (#1043): ``{"inactive": true}`` while a server with an enabled policy is outside the
+# active set, then ``{"active_since": <epoch>}`` for one interval plus grace after it returns. Same prefix rule.
+RESUME_PREFIX = 'security-scan-resumed:'
 MESSAGES = {
     'failed': ('The latest scheduled malware scan on this server failed, was blocked or was interrupted, so there is '
                'no current scan conclusion. Review the scan operation in Security and Activity. Missing coverage is '
@@ -92,32 +108,125 @@ def classify(scan, attempt, policy, now):
     if state in CATEGORIES:
         return CATEGORIES[state]
     if state == 'overdue' and result['age_seconds'] is not None and result['age_seconds'] > limit:
-        return 'overdue'
+        # A valid clock that started within the limit (scanning or the server was just re-enabled, #1043) holds
+        # the old scan's overdue state until the scheduler has had the same interval plus grace.
+        if not 0 <= _enabled_age(policy, now) <= limit:
+            return 'overdue'
+        return None
     if state == 'never_scanned' and _enabled_age(policy, now) > limit:
         return 'overdue'
     # A recently enabled never_scanned policy (the scheduler has not started yet), legacy policies without
-    # ``enabled_since``, recorded scans and findings need no coverage event.
+    # ``enabled_since`` or a first-observed marker, recorded scans and findings need no coverage event.
     return None
+
+
+def _valid_time(value, now):
+    return type(value) in (int, float) and math.isfinite(value) and value <= now
 
 
 def _enabled_age(policy, now):
     since = policy.get('enabled_since')
-    if type(since) not in (int, float) or not math.isfinite(since) or since > now:
+    if not _valid_time(since, now):
         return -1
     return now - since
 
 
+def whole_microseconds(seconds):
+    """Return ``seconds`` truncated to whole microseconds, never later than ``seconds`` (#942).
+
+    ``math.floor(seconds * 1_000_000)`` is not safe at epoch magnitudes: the product is near 1.8e15, where doubles
+    are 0.25 apart, so it can round up to the next microsecond and store a marker after ``now``. The exact rational
+    product avoids that, and dividing the integer by 10**6 gives the nearest double to that decimal, at most ``seconds``.
+    """
+    return math.floor(Fraction(seconds) * 1_000_000) / 1_000_000
+
+
+def _legacy_markers(session, policies, attempts, now):
+    """Return policies with a conservative ``enabled_since`` for enabled, never-scanned legacy policies (#883).
+
+    The first tick that sees such a policy records ``now`` under its own key, so the administrator's policy row is
+    never rewritten and a concurrent policy save cannot be lost. Markers are removed once the policy carries its
+    own ``enabled_since``, is disabled or removed, the server gets a scan attempt, or the server leaves the active
+    set. A marker with an invalid or future time is replaced by ``now``.
+    """
+    legacy = [host_id for host_id, policy in policies.items()
+              if host_id not in attempts and not _valid_time(policy.get('enabled_since'), now)]
+    wanted = {LEGACY_PREFIX + host_id: host_id for host_id in legacy}
+    existing = {row.key: row for row in session.scalars(select(Setting).where(Setting.key.like(LEGACY_PREFIX + '%')))}
+    for key, row in existing.items():
+        if key not in wanted:
+            session.delete(row)
+    effective = dict(policies)
+    for key, host_id in wanted.items():
+        row = existing.get(key)
+        since = row.value.get('first_seen') if row and isinstance(row.value, dict) else None
+        if not _valid_time(since, now):
+            # Whole microseconds keep the stored JSON double exact on MySQL, as for ``enabled_since``.
+            since = whole_microseconds(now)
+            if row:
+                row.value = {'first_seen': since}
+            else:
+                session.add(Setting(key=key, value={'first_seen': since}))
+        effective[host_id] = {**policies[host_id], 'enabled_since': since}
+    return effective
+
+
+def _active(host):
+    return host_lifecycle.active(host) and host.state != 'enrolling'
+
+
 def _enabled_policies(session, hosts):
-    by_id = {host.id: host for host in hosts if not host.deleted_at and host_lifecycle.active(host)
-             and host.state != 'enrolling'}
-    policies = {}
+    """Return ``(active, inactive)`` enabled policies for non-deleted servers."""
+    by_id = {host.id: host for host in hosts if not host.deleted_at}
+    active, inactive = {}, {}
     ids = list(by_id)
     for start in range(0, len(ids), CHUNK):
         keys = ['security-policy:' + host_id for host_id in ids[start:start + CHUNK]]
         for row in session.scalars(select(Setting).where(Setting.key.in_(keys))):
             if isinstance(row.value, dict) and row.value.get('enabled') is True:
-                policies[row.key.split(':', 1)[1]] = row.value
-    return policies
+                host_id = row.key.split(':', 1)[1]
+                (active if _active(by_id[host_id]) else inactive)[host_id] = row.value
+    return active, inactive
+
+
+def _resume_markers(session, policies, inactive, now):
+    """Apply each returning server's resume clock to its policy's ``enabled_since`` (#1043).
+
+    A server with an enabled policy outside the active set is marked inactive. When it is next seen active the
+    marker becomes ``active_since = now``, and the later of that and ``enabled_since`` starts the coverage clock.
+    Markers are written only on these transitions and removed once the clock is older than the interval plus
+    grace, or when the policy is disabled or removed or the server is deleted. A server never seen inactive has
+    no marker, so upgrades and continuously active servers keep the existing schedule.
+    """
+    existing = {row.key: row for row in session.scalars(select(Setting).where(Setting.key.like(RESUME_PREFIX + '%')))}
+    effective = dict(policies)
+    for key, row in existing.items():
+        host_id = key[len(RESUME_PREFIX):]
+        if host_id in inactive:
+            continue
+        value = row.value if isinstance(row.value, dict) else {}
+        if host_id not in policies:
+            session.delete(row)
+            continue
+        since = value.get('active_since')
+        if value.get('inactive') is True or not _valid_time(since, now):
+            since = whole_microseconds(now)
+            row.value = {'active_since': since}
+        policy = policies[host_id]
+        if now - since > _interval_hours(policy) * 3600 + GRACE_SECONDS:
+            session.delete(row)
+            continue
+        enabled = policy.get('enabled_since')
+        if _valid_time(enabled, now) and enabled >= since:
+            continue
+        effective[host_id] = {**policy, 'enabled_since': since}
+    for host_id in inactive:
+        row = existing.get(RESUME_PREFIX + host_id)
+        if not row:
+            session.add(Setting(key=RESUME_PREFIX + host_id, value={'inactive': True}))
+        elif row.value != {'inactive': True}:
+            row.value = {'inactive': True}
+    return effective
 
 
 def _latest_attempts(session, ids):
@@ -138,8 +247,10 @@ def _link(host_id):
 
 def publish(session, hosts, now):
     """Publish or resolve coverage events in the caller's transaction. Returns ``{host_id: category}``."""
-    policies = _enabled_policies(session, hosts)
+    policies, inactive = _enabled_policies(session, hosts)
     attempts = _latest_attempts(session, list(policies))
+    policies = _legacy_markers(session, policies, attempts, now)
+    policies = _resume_markers(session, policies, inactive, now)
     scans = {}
     scan_ids = [job.id for job in attempts.values()]
     for start in range(0, len(scan_ids), CHUNK):

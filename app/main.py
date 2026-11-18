@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.64.1"
+APP_VERSION = "1.75.27"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -583,6 +583,11 @@ def notification_read_batch(body:NotificationReadBatchInput,user=Depends(self_us
 def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
     return _notification_state(event_id,body,user,notification_events.dismiss)
 
+@app.post('/api/notifications/{event_id}/restore')
+def notification_restore(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    """Undo this account's dismissal; never acknowledges or resolves anything."""
+    return _notification_state(event_id,body,user,notification_events.restore)
+
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
     if deleted and user['role']!='admin':raise HTTPException(403,'Administrator access required')
@@ -1021,16 +1026,20 @@ def key_upload(host_id:str,body:KeyInput,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id); return {'job_id':worker.enqueue(s,host_id,'key',body.model_dump())}
 @app.get('/api/investigations')
-def investigations(host_id:str='',offset:int=0,limit:int=500,user=Depends(viewer_user)):
+def investigations(host_id:str='',offset:int=0,limit:int=500,cached:bool=False,user=Depends(viewer_user)):
     if offset<0 or not 1<=limit<=500:raise HTTPException(400,'Invalid investigation pagination')
     with Session() as s:
-        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id).offset(offset).limit(limit)
+        stmt=select(Behavior).order_by(Behavior.approved,Behavior.last_seen.desc(),Behavior.id)
         if host_id:
             host_or_404(s,host_id);require_host_read(s,host_id,user)
             stmt=stmt.where(Behavior.host_id==host_id)
         else:stmt=stmt.where(Behavior.host_id.not_in(host_lifecycle.inactive_ids()))
         from . import ai_retry,ai_policy,ai_claims,ai_assessments
-        rows=list(s.scalars(stmt));signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
+        # cached=true lists only rows whose current state is an exact known-good reuse:
+        # the same rows that carry the list badge. Pagination counts filtered rows.
+        if cached:rows=ai_assessments.reused_page(s,stmt.where(Behavior.verdict.in_(ai_assessments.COMPLETE)),Behavior.id,offset,limit)
+        else:rows=list(s.scalars(stmt.offset(offset).limit(limit)))
+        signature=ai_retry.configuration(s);paused=set(s.scalars(ai_policy.paused_ids()))
         retries={r.subject:r for r in s.scalars(select(ai_retry.TriageRetry).where(ai_retry.TriageRetry.subject.in_([x.id for x in rows])))}
         claimed=set(s.scalars(select(ai_claims.Claim.subject).where(ai_claims.Claim.subject.in_([x.id for x in rows]),ai_claims.Claim.expires>time.time())))
         reused=ai_assessments.current_reuse(s,rows,include_source=user.get('role')=='admin')
@@ -1166,6 +1175,17 @@ def known_good_summary(user=Depends(admin_user)):
         return known_good.summary(s)
 
 
+@app.get('/api/ai/known-good/candidates')
+def known_good_candidates(state:str='active',offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_candidates as candidates
+    if state not in candidates.STATES:
+        raise HTTPException(400,'Invalid known-good candidate state')
+    if offset<0 or not 1<=limit<=candidates.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid known-good candidate pagination')
+    with Session() as s:
+        return candidates.page(s,state,offset,limit)
+
+
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
 def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
@@ -1181,6 +1201,8 @@ def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(adm
             try:result=known_good.revoke(s,fingerprint,body.expected_version,user['username'],reason)
             except LookupError as error:raise HTTPException(404,str(error)) from None
             except ValueError as error:raise HTTPException(409,str(error)) from None
+            from . import known_good_notifications
+            known_good_notifications.publish_revocation(s,result,user['username'])
             s.commit()
             return {**result,'detail':f'Candidate revoked across the fleet. {result["linked_assessments"]} linked assessment(s) require review.'}
     finally:lock.release()
@@ -1209,6 +1231,18 @@ def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',us
         if not behavior or not row or row.subject!=behavior.id or row.host_id!=behavior.host_id or (host_id and row.host_id!=host_id):raise HTTPException(404,'Assessment not found in this scope')
         result=object_dict(row);result['known_good']=known_good.assessment(row,s)
         return result
+@app.get('/api/ai/known-good/{fingerprint}/observations')
+def known_good_observations(fingerprint:str,offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_links
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    if offset<0 or not 1<=limit<=known_good_links.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid linked-assessment pagination')
+    with Session() as s:
+        try:return known_good_links.page(s,fingerprint,offset,limit)
+        except LookupError as error:raise HTTPException(404,str(error)) from None
+
+
 @app.get('/api/operations/workers')
 def registered_workers(offset:int=0,user=Depends(admin_user)):
     from .worker_registry import page
@@ -1225,6 +1259,11 @@ def endpoint_agent_health(offset:int=0,user=Depends(admin_user)):
     from .agent_fleet_health import page
     try:return page(offset)
     except ValueError as error:raise HTTPException(400,str(error))
+
+@app.get('/api/operations/deployment-health')
+def deployment_health_summary(user=Depends(admin_user)):
+    from .deployment_health import summary
+    return summary()
 
 class WorkerControlInput(BaseModel):
     worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
@@ -1278,7 +1317,8 @@ def settings(user=Depends(admin_user)):
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
             'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
-            'ai_control_migration':ai_control_preview.legacy_migration(cfg)}
+            'ai_control_migration':ai_control_preview.legacy_migration(cfg),
+            'telemetry_lost_minutes':operations.telemetry_lost_minutes(cfg)}
 
 @app.get('/api/settings/ai-connections')
 def ai_connection_inventory(user=Depends(admin_user)):
@@ -1307,6 +1347,11 @@ def ai_spend_history_csv(days:int=30,timezone:str|None=None,user=Depends(admin_u
         'Content-Disposition':f'attachment; filename="mrpatchy-ai-spend-{days}d.csv"',
         'Cache-Control':'no-store','X-MrPatchy-Spend-History-Truncated':'true' if result['truncated'] else 'false',
         'X-MrPatchy-Spend-History-Max-Windows':str(result['max_windows'])})
+
+@app.get('/api/settings/ai-spend-by-purpose')
+def ai_spend_by_purpose(user=Depends(admin_user)):
+    from . import ai_budget
+    with Session() as s:return ai_budget.by_purpose(s)
 
 @app.get('/api/settings/ai-control-status')
 def ai_control_status(user=Depends(admin_user)):
@@ -1413,6 +1458,8 @@ class PatchSettingsInput(BaseModel):
     deadlines:dict[str,int]
     # Optional so older clients that omit it keep the stored window.
     os_lifecycle_warning_days:int|None=Field(default=None,ge=0,le=730)
+    # Optional for the same reason; whole minutes before the in-app telemetry-lost notice (#948).
+    telemetry_lost_minutes:int|None=Field(default=None,ge=5,le=1440,strict=True)
 
 class HistorySettingsInput(BaseModel):
     model_config={'extra':'forbid'}
@@ -1439,6 +1486,10 @@ def save_settings_section(values,section,expected_ai_controls_revision=None,conf
                 detail+='; daily AI cap changed from $'+str(previous['ai_daily_cap_usd'])+' to $'+str(values['ai_daily_cap_usd'])
             if section=='patching' and previous['os_lifecycle_warning_days']!=values.get('os_lifecycle_warning_days',previous['os_lifecycle_warning_days']):
                 detail+='; OS lifecycle advance warning changed from '+str(previous['os_lifecycle_warning_days'])+' to '+str(values['os_lifecycle_warning_days'])+' days'
+            if section=='patching' and 'telemetry_lost_minutes' in values:
+                before=operations.telemetry_lost_minutes(previous)
+                if before!=values['telemetry_lost_minutes']:
+                    detail+='; telemetry-loss notification threshold changed from '+str(before)+' to '+str(values['telemetry_lost_minutes'])+' minutes'
             if section=='ai' and previous['ai_budget_timezone']!=values['ai_budget_timezone']:
                 detail+='; daily AI reset timezone changed from '+previous['ai_budget_timezone']+' to '+values['ai_budget_timezone']
             if section=='ai' and previous['ai_daily_cap_warning_percent']!=values['ai_daily_cap_warning_percent']:
@@ -1517,6 +1568,17 @@ def blocked_update_scores(user=Depends(admin_user)):
     from . import scoring_block_notifications
     with Session() as s:
         return {'blocked':scoring_block_notifications.blocked_count(s,config(s))[0]}
+
+@app.get('/api/update-scores/status')
+def update_score_queue_status(user=Depends(admin_user)):
+    """Summarize the update-importance scoring queue (#917). Read-only.
+
+    Counts and timestamps only; shared AI start gates and pause still decide
+    when a scoring batch starts.
+    """
+    from . import scoring_queue_status
+    with Session() as s:
+        return scoring_queue_status.status(s,config(s))
 
 @app.post('/api/update-scores/blocked/retry')
 def retry_blocked_update_scores(user=Depends(admin_user)):
@@ -1703,6 +1765,17 @@ def investigation_status(user=Depends(viewer_user)):
         if user.get('role')=='admin':
             return ai_runs.status(s)
         return ai_runs.viewer_status(s)
+
+@app.get('/api/investigation-status/servers')
+def investigation_status_servers(user=Depends(admin_user)):
+    """Per-server process-triage queue breakdown (#975). Read-only.
+
+    Server IDs/names, counts, limits and timestamps only; shared AI start
+    gates, worker capacity and pause still decide when an investigation starts.
+    """
+    from . import triage_queue_servers
+    with Session() as s:
+        return triage_queue_servers.status(s)
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
@@ -2068,7 +2141,7 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
         from .advisories import retained,history
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
-        return {**result,'exposure_history':history(s,host_id)}
+        return {**result,'exposure_history':history(s,host_id,latest=result)}
 
 @app.get('/api/cve-exposure/fleet')
 def fleet_cve_exposure(user=Depends(admin_user)):
@@ -2403,6 +2476,57 @@ def ai_run_detail(run_id:str,host_id:str='',user=Depends(admin_user)):
         receipts=ai_runs.call_receipts(s,[row.id])[row.id]
         return object_dict(row)|{'shared_batch':len(ai_runs.run_hosts(s,[row.id])[row.id])>1,'cost':ai_runs.cost_summary(row,receipts), 'api_calls':[object_dict(r) for r in receipts],
             'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
+
+@app.post('/api/investigations/blocked/retry')
+def retry_blocked_investigations(user=Depends(admin_user)):
+    """Re-queue investigations blocked under the current AI configuration (#934).
+
+    Uses the ``ai-triage``/``configuration-blocked`` notification predicate and
+    single-item retry semantics. Sends no provider request: the scheduler still
+    applies enablement, pause, lifecycle, data sharing and shared admission.
+    """
+    return _retry_blocked_investigations(user)
+
+@app.get('/api/hosts/{host_id}/investigations/blocked')
+def host_blocked_investigations(host_id:str,user=Depends(admin_user)):
+    """Count one server's investigations blocked under the current AI configuration (#946)."""
+    from . import triage_block_notifications as blocked
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'blocked':blocked.blocked_count(s,time.time(),host_id)[0] if config(s).get('ai_enabled') else 0}
+
+@app.post('/api/hosts/{host_id}/investigations/blocked/retry')
+def retry_host_blocked_investigations(host_id:str,user=Depends(admin_user)):
+    """Re-queue one server's blocked investigations with the fleet action's semantics (#946)."""
+    with Session() as s:host_or_404(s,host_id)
+    return _retry_blocked_investigations(user,host_id)
+
+def _retry_blocked_investigations(user,host_id=None):
+    from . import triage_block_notifications as blocked
+    lock=worker.Lock('ai-triage')
+    if not lock.acquire(False):raise HTTPException(409,'An investigation is running. Retry when it finishes.')
+    try:
+        with Session() as s:
+            now=time.time()
+            candidates=blocked.retry_candidates(s,now,host_id=host_id) if config(s).get('ai_enabled') else []
+            retried=0
+            if candidates:
+                try:
+                    with host_lifecycle.activity([host for _,host in candidates],'queue'):
+                        # Drop the pre-lock read transaction so MySQL repeatable-read
+                        # cannot hide a concurrent approval or retry.
+                        s.rollback()
+                        retried=blocked.retry(s,[row_id for row_id,_ in candidates],time.time())
+                        if retried:audit(s,'retry blocked AI investigations',user['username']+' re-queued '+str(retried)+' blocked investigation(s)'+(' on '+host_id if host_id else ''))
+                        s.commit()
+                except (host_lifecycle.Busy,host_lifecycle.Inactive) as error:raise HTTPException(409,str(error)) from None
+            remaining=blocked.blocked_count(s,time.time(),host_id)[0] if config(s).get('ai_enabled') else 0
+        plural='' if retried==1 else 's'
+        detail=(f'{retried} blocked investigation{plural} queued. AI pause, data sharing, shared rate and daily-cap admission still apply.' if retried
+            else 'No investigation can be retried now under the current AI configuration.')
+        if remaining:detail+=f' {remaining} still blocked (running, waiting for provider Retry-After, or beyond this batch).'
+        return {'retried':retried,'remaining':remaining,'detail':detail}
+    finally:lock.release()
 
 @app.post('/api/investigations/{behavior_id}/retry')
 def retry_investigation(behavior_id:str,user=Depends(admin_user)):
@@ -3226,6 +3350,33 @@ def security_plan_approve(host_id:str,plan_id:str,body:SecurityPlanApproval,user
             audit(s,'security plan approved for manual response',plan.id+' '+user['username']);s.commit()
             return {'ok':True,'expires':plan.expires,'execution':'manual_only'}
 
+@app.get('/api/hosts/{host_id}/security/auto-plan-status')
+def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
+    """Read-only automatic AI plan status and pacing for this server (#922). Counts, codes and times only."""
+    from . import auto_plan_status
+    with Session() as s:
+        host_or_404(s,host_id)
+        return auto_plan_status.status(s,host_id)
+
+@app.get('/api/hosts/{host_id}/security/auto-plan-failed')
+def security_auto_plan_failed(host_id:str,user=Depends(admin_user)):
+    """Count this server's incidents whose one automatic AI plan attempt failed (#1036). Read-only."""
+    from . import auto_plan_retry
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'failed':auto_plan_retry.failed_count(s,host_id)}
+
+@app.post('/api/hosts/{host_id}/security/auto-plan-failed/retry')
+def security_auto_plan_failed_retry(host_id:str,user=Depends(admin_user)):
+    """Release failed automatic plan attempts so the automatic tick retries them (#1036). Sends nothing now."""
+    from . import auto_plan_retry
+    with worker.Lock('security-plan-queue'):
+        with Session() as s:
+            host_or_404(s,host_id)
+            result=auto_plan_retry.release(s,host_id,user['username'])
+            s.commit()
+            return result
+
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False
@@ -3252,7 +3403,8 @@ def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_
                 kept=previous.get('enabled') is True and type(since) in (int,float) and math.isfinite(since) and since<=time.time()
                 # Whole microseconds keep the decimal form at <=16 significant digits (an exact double below 2**53),
                 # so MySQL's JSON parser stores the same double the API returns instead of one bit off.
-                value['enabled_since']=since if kept else math.floor(time.time()*1_000_000)/1_000_000
+                from .scan_coverage_notifications import whole_microseconds
+                value['enabled_since']=since if kept else whole_microseconds(time.time())
             s.merge(Setting(key='security-policy:'+host_id,value=value))
             audit(s,'security scan policy saved',host_id+' '+user['username']);s.commit()
     return value
@@ -3419,6 +3571,47 @@ def agent_global_policy_update(body:AgentGlobalPolicyInput,user=Depends(admin_us
     except agent_maintenance.StalePolicy:raise HTTPException(409,'Global agent policy changed; refresh before saving')
     if not saved:raise HTTPException(409,'Global agent policy is being changed; refresh and retry')
     return value
+
+class MalwarePolicyInput(BaseModel):
+    model_config={'extra':'forbid'}
+    policy:dict
+    expected_revision:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.get('/api/settings/malware-response')
+def malware_policy_read(user=Depends(admin_user)):
+    from . import malware_policy
+    with Session() as s:return malware_policy.state(s)
+
+@app.put('/api/settings/malware-response')
+def malware_policy_update(body:MalwarePolicyInput,user=Depends(admin_user)):
+    # Stores policy only: no detector, executor, provider call or response authorization runs here.
+    from . import malware_policy,malware_response
+    try:return malware_policy.save(body.policy,body.expected_revision,user['username'])
+    except malware_response.Invalid as exc:raise HTTPException(400,'Invalid malware response policy: '+str(exc))
+    except malware_policy.EnforcementUnavailable:raise HTTPException(409,'Enforce mode is unavailable until a containment executor exists; choose Disabled or Monitor only')
+    except malware_policy.StalePolicy:raise HTTPException(409,'The malware response policy changed; refresh before saving')
+    except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
+
+class ServerMalwareOverrideInput(BaseModel):
+    model_config={'extra':'forbid'}
+    override:dict
+    expected_revision:str=Field(pattern=r'^[0-9a-f]{64}$')
+
+@app.get('/api/hosts/{host_id}/malware-response')
+def server_malware_policy_read(host_id:str,user=Depends(admin_user)):
+    from . import malware_policy
+    with Session() as s:
+        host_or_404(s,host_id);return malware_policy.server_state(s,host_id)
+
+@app.put('/api/hosts/{host_id}/malware-response')
+def server_malware_policy_update(host_id:str,body:ServerMalwareOverrideInput,user=Depends(admin_user)):
+    """Save a restrict-only server override (#940); it never adds response authority."""
+    from . import malware_policy,malware_response
+    with Session() as s:host_or_404(s,host_id)
+    try:return malware_policy.save_server(host_id,body.override,body.expected_revision,user['username'])
+    except malware_response.Invalid as exc:raise HTTPException(400,'Invalid server malware response override: '+str(exc))
+    except malware_policy.StalePolicy:raise HTTPException(409,'The server malware response override changed; refresh before saving')
+    except malware_policy.Busy:raise HTTPException(409,'The malware response policy is being changed; refresh and retry')
 
 @app.put('/api/hosts/{host_id}/security/agent')
 def agent_policy(host_id:str,body:AgentPolicyInput,user=Depends(admin_user)):
