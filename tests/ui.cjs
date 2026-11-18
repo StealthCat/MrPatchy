@@ -60,6 +60,7 @@ const assert=require('assert/strict');
     await require('./ui_database.cjs')(page,capture);
     await require('./ui_ai_spend_by_purpose.cjs')(page,capture);
     await require('./ui_settings_unsaved.cjs')(page);
+    await require('./ui_settings_unsaved_dropped.cjs')(page);
     await require('./ui_overview_hash_race.cjs')(page);
     await page.locator('[data-nav=settings]').click();
     await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();
