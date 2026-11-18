@@ -5449,6 +5449,63 @@ derive `key_user_rc` from the `authorized_keys` contract and, for certificate
 logins, the certificate's `permit-user-rc` extension, then persistence, UI and
 AI classification.
 
+### PAM service-stack contract — worker checkpoint #967
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`/etc/pam.d` stays catalogued as `login_hooks` with metadata-only parsing, and
+nothing calls the new module yet.
+
+`app/pam_stacks.py` is a pure function over captured, read-only text of PAM
+service files. `evaluate(files, family, version, vendor_dir=None)` returns, for
+each service, the ordered modules it loads, with:
+
+- **File choice.** `/etc/pam.d/<service>` replaces the same name in
+  `/usr/lib/pam.d` and an optional vendor directory. Replaced files are listed.
+- **Line rules.** Comments, backslash continuation, the `-` type prefix and
+  bracketed fields follow libpam. A line libpam installs as an always-failing
+  entry (unknown type, missing control or module) is reported as `must_fail`.
+- **Includes.** `include`, `substack` and Debian's `@include` are resolved in
+  place. Each entry keeps its own file and line and the chain of including
+  lines. A relative include name is looked up like a service, `/etc/pam.d`
+  first and then the distribution directories. The caller states the family,
+  which decides whether `@include` is recognised.
+- **`other`.** Types the service file leaves empty are listed as using the
+  `other` service. A `substack` line holds its type even when the named file
+  yields nothing. libpam reads `other` for every service, so a blocking gap
+  in `other` is a gap for every service.
+- **Executed commands.** A `pam_exec.so` entry reports its options, its `type=`
+  filter, `seteuid`, `expose_authtok` and the command argv. The command is
+  reported as applicable only when every `type=` option matches the entry's
+  type, as `pam_exec` requires. Modules named by
+  absolute path are flagged. Values are bounded and carry a SHA-256 of the full
+  text.
+
+The contract fails closed. Each of these is a blocking gap for every service
+that reaches it, never a shorter stack: an include target that was not
+captured, an include loop, a relative include name containing `/`
+(`include_relative_path`; libpam loads it, the contract does not resolve it),
+`substack` nesting past libpam's 16 levels, an include chain longer than the
+contract's own 32-file bound, an unfinished
+continuation, a line near libpam's 1024-byte buffer, a control character
+(including a carriage return), an unreadable file, invalid UTF-8 and over-limit
+input. An unreadable file still shadows a lower-priority file of the same name.
+
+The rules were read from Linux-PAM 1.4.0 and 1.5.3 (`pam_handlers.c`,
+`pam_misc.c`, `pam_exec.c`) and Debian's `031_pam_include` patch. Other
+versions report the blocking `version_unverified` gap; 1.7.0 rewrote the line
+reader and was not compared.
+
+Stack resolution for the `debian` family was compared by peer workers with
+compiled Ubuntu `libpam0g 1.5.3-5ubuntu5.7` on generated trees; the method,
+counts and limits are recorded in PR #968. The `upstream` family, Linux-PAM
+1.4.x and a vendor directory were not compared with a compiled library.
+
+**Not covered:** `/etc/pam.conf`, validation
+of bracketed control values, module binaries and the programs they run,
+collection from servers, catalog wiring, persistence, UI, provenance and AI
+classification. No schema, API, UI or authorization change, and nothing is
+labelled safe.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
