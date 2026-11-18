@@ -445,11 +445,11 @@ def fleet_updates(q:str='',host_id:str='',priority:str='',status:str='',scope:st
 @app.get('/api/notifications')
 def notification_list(unread_only:bool=False,include_dismissed:bool=False,
                       severity:str='',source:str='',host_id:str='',
-                      limit:int=50,offset:int=0,user=Depends(self_user)):
+                      lifecycle:str='',limit:int=50,offset:int=0,user=Depends(self_user)):
     """Return a bounded, current-role-filtered page for the signed-in user."""
     with Session() as s:
         try:
-            filters={'severity':severity,'source':source,'host_id':host_id}
+            filters={'severity':severity,'source':source,'host_id':host_id,'lifecycle':lifecycle}
             items=notification_events.list_for_user(
                 s,user['username'],unread_only=unread_only,
                 include_dismissed=include_dismissed,limit=limit,offset=offset,

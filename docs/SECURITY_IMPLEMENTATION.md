@@ -10881,3 +10881,12 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 - **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
 - **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
 - **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
+### Notification-center status filter — worker checkpoint #835 (roadmap J)
+
+The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
+- **API:** `GET /api/notifications` accepts an optional `lifecycle` value of `active` or `resolved`. The filter applies to the event's **current** revision, so an event that resolved and then reopened is listed as active only. Any other value returns 400 with the fixed text "Invalid notification status filter".
+- **Counts and paging:** `total` and `more` use the same filter. The bell's unread count, arrivals and the SSE stream cursor ignore the center filter and are unchanged.
+- **Same boundaries:** role visibility, per-account read/dismiss state and the include-dismissed and unread-only options combine with the status filter. The route keeps its self-service session check.
+- **UI:** Apply keeps the selection across re-renders, Clear resets it with the other filters, and Previous/Next keep it.
+- **Unchanged:** this filters display only. It never acknowledges, resolves or reopens an event, changes response authorization or alters schema.
+- **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
