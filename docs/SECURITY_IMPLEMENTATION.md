@@ -2245,6 +2245,13 @@ SELECTs from twelve to four, including candidate and host-scope reads. This is
 partial scoring performance work. Idle candidate hashing, measured production
 throughput and full parallel scoring acceptance remain open.
 
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
 Worker checkpoint #597 adds an ordered purpose/state/start-time index for active
 AI run status and recovery lookups. Startup adds the index to existing databases
 while retaining history and existing indexes. The retained-history fixture uses
