@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.26"
+APP_VERSION = "1.75.27"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1208,6 +1208,8 @@ def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(adm
             try:result=known_good.revoke(s,fingerprint,body.expected_version,user['username'],reason)
             except LookupError as error:raise HTTPException(404,str(error)) from None
             except ValueError as error:raise HTTPException(409,str(error)) from None
+            from . import known_good_notifications
+            known_good_notifications.publish_revocation(s,result,user['username'])
             s.commit()
             return {**result,'detail':f'Candidate revoked across the fleet. {result["linked_assessments"]} linked assessment(s) require review.'}
     finally:lock.release()
@@ -2136,7 +2138,7 @@ def get_advisories(host_id:str,user=Depends(admin_user)):
         host_or_404(s,host_id);row=s.get(Setting,'advisories:'+host_id)
         from .advisories import retained,history
         result=retained(row.value) if row else {'results':[],'coverage':'Not checked'}
-        return {**result,'exposure_history':history(s,host_id)}
+        return {**result,'exposure_history':history(s,host_id,latest=result)}
 
 @app.get('/api/cve-exposure/fleet')
 def fleet_cve_exposure(user=Depends(admin_user)):
