@@ -158,8 +158,10 @@ function exposureHistoryContent(history){
   const cves=Array.isArray(row.cve_ids)&&row.cve_ids.length?' · '+esc(row.cve_ids.filter(c=>typeof c==='string').join(', ')):'';
   const fixed=typeof row.fixed_version==='string'&&row.fixed_version?' · Vendor fix '+esc(row.fixed_version):'';
   const reopened=Number.isSafeInteger(row.reopened)&&row.reopened>0?' · Reopened '+row.reopened.toLocaleString()+' time'+(row.reopened===1?'':'s'):'';
+  const published=advisoryDate(row.published_at),gap=typeof row.publication_to_first_affected==='number'&&Number.isFinite(row.publication_to_first_affected)&&row.publication_to_first_affected>=0?Math.floor(row.publication_to_first_affected/86400):null;
+  const publication=published?'<div class="help">Published '+esc(published)+' (UTC)'+(gap===null?'':' · First seen affected '+(gap<1?'less than a day':gap.toLocaleString()+' day'+(gap===1?'':'s'))+' after publication (exposure in that period was not measured)')+'</div>':'';
   const resolution=resolved?'<div>Resolved '+esc(time(row.resolved_at))+' at version '+text(row.resolved_version)+': '+esc(reasons[row.resolved_status]||'unknown reason')+'.</div>':'';
-  return '<li><div>'+state+' <strong>'+text(row.advisory_id)+'</strong>'+cves+'</div><div class="help">Package '+text(row.package)+fixed+reopened+'</div><div class="help">First affected '+esc(time(row.first_affected_at))+' at version '+text(row.first_affected_version)+' · Last affected '+esc(time(row.last_affected_at))+' at version '+text(row.last_affected_version)+'</div>'+resolution+'</li>';
+  return '<li><div>'+state+' <strong>'+text(row.advisory_id)+'</strong>'+cves+'</div><div class="help">Package '+text(row.package)+fixed+reopened+'</div><div class="help">First affected '+esc(time(row.first_affected_at))+' at version '+text(row.first_affected_version)+' · Last affected '+esc(time(row.last_affected_at))+' at version '+text(row.last_affected_version)+'</div>'+publication+resolution+'</li>';
  }).join('');
  return summary+truncated+'<ul class="advisory-applicability exposure-history-list">'+rows+'</ul>'+limits+coverage+refresh;
 }
