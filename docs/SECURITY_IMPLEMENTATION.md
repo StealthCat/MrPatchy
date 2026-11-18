@@ -11502,6 +11502,20 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
 
+### Local known-good reuse during provider start holds — Roadmap A/B checkpoint #1128
+
+An exact verified known-good match can complete during a shared rate hold or
+provider backoff, as it can during a daily spend hold. The worker uses its
+existing bounded claim search and revalidates the match before recording reuse.
+An empty or revoked cache for the saved model skips per-item probes. A hit
+completes with no request, rate admission or spend reservation. If reuse fails
+after claiming, any paid request still goes through the shared admission checks.
+
+The regression covers rate, provider backoff, both together, explicit re-triage,
+pause and revocation between claim and reuse. The oldest-window bound and legacy
+purpose-specific hourly ceilings still apply. End-to-end production throughput
+and the remaining exact-match acceptance milestones stay open.
+
 ### Free exact known-good hits under an exhausted daily cap — worker checkpoint #1030
 
 Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit spends nothing. Before this checkpoint `ai_claims.acquire()` refused every claim once the cap had no headroom, or once the elected subject's own quote exceeded it. A free cached verdict on another server therefore stayed `pending` until the next reset.

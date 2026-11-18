@@ -147,7 +147,7 @@ def _oldest(s,host_id,signature,now):
 def _free_hit(s,model,election_filters):
     """Oldest eligible subject, among a bounded oldest window, with an exact known-good hit.
 
-    Used only while the daily cap is closed. The same pause, lifecycle,
+    Used while a shared provider start gate is closed. The same pause, lifecycle,
     saturation, claim and retry filters as normal election apply.
     """
     from . import known_good
@@ -177,14 +177,14 @@ def acquire(owner=None):
                 recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
-            # Read-only gate: do not create runs/attempts for work that the shared
-            # rate gate, provider backoff or daily budget cannot admit right now.
             from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing,known_good
-            if ai_admission.waiting(s,now,settings=cfg) or ai_provider_backoff.waiting(s,now):return None
-            # An exhausted daily cap defers paid work only. A subject whose exact
-            # known-good match makes no provider call and reserves nothing is
-            # still claimed (#1030); every other subject keeps waiting.
-            budget_closed=bool(ai_budget.waiting(s,now,settings=cfg))
+            # A local exact cache hit needs no provider admission. Keep paid
+            # work queued while any shared provider start gate is closed.
+            free_only=bool(ai_admission.waiting(s,now,settings=cfg)
+                or ai_provider_backoff.waiting(s,now) or ai_budget.waiting(s,now,settings=cfg))
+            if free_only and s.scalar(select(known_good.Entry.fingerprint).where(
+                    known_good.Entry.active.is_(True),known_good.Entry.model==cfg['ai_model'].strip()).limit(1)) is None:
+                return None
             signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
             # Active claims are globally bounded by worker capacity. Resolve
             # each occupied host's revisioned policy under this admission lock
@@ -198,7 +198,7 @@ def acquire(owner=None):
             election_filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
                 Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
                 Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
-            if budget_closed:
+            if free_only:
                 row=_free_hit(s,cfg['ai_model'],election_filters)
                 if not row:return None
                 host_id=row.host_id
@@ -218,11 +218,9 @@ def acquire(owner=None):
                     # only a present host can carry a lifecycle transition.
                     host=s.get(Host,host_id)
                     if host is not None and not host_lifecycle.active(host):return None
-                    if budget_closed:
-                        # Re-check under the host queue gate: only a subject that
-                        # still has an exact hit is claimed past a closed cap. If
-                        # its evidence changes before the worker's own lookup,
-                        # the atomic reservation still refuses the provider call.
+                    if free_only:
+                        # Re-check under the host queue gate. A subsequent cache
+                        # miss still goes through paid admission at the provider boundary.
                         if not known_good.exact_hit_available(s,row,cfg['ai_model']):return None
                     elif cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
                         try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
