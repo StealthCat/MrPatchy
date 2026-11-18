@@ -504,13 +504,13 @@ def execute_locked(job_id):
                 plan=startup_ai.generate(s,incident,float(job.payload['expected_updated']))
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='security-plan':
-                from . import incidents
+                from . import incidents,job_notifications
                 incident=s.get(incidents.Incident,job.payload['incident_id'])
                 if not incident or incident.host_id!=h.id:raise ValueError('Incident not found')
                 if job.payload.get('automatic'):
                     policy=s.get(Setting,'security-policy:'+h.id)
-                    if not policy or not policy.value.get('auto_ai_plan'):raise ValueError('Automatic AI planning is disabled; no AI call sent')
-                    if incident.state!='open' or incident.scan_id!=job.payload.get('scan_id'):raise ValueError('Automatic incident evidence changed; no AI call sent')
+                    if not policy or not policy.value.get('auto_ai_plan'):raise ValueError(job_notifications.AUTOMATIC_PLAN_DISABLED)
+                    if incident.state!='open' or incident.scan_id!=job.payload.get('scan_id'):raise ValueError(job_notifications.AUTOMATIC_PLAN_STALE)
                 plan=incidents.generate(s,incident,include_related=job.payload.get('include_related') is True and not job.payload.get('automatic'))
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='vendor-inspect':
