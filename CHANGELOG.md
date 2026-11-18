@@ -1,3 +1,7 @@
+## 1.75.41 — 2026-11-18
+
+1. [PR #1107](https://github.com/StealthCat/MrPatchy/pull/1107): Settings' unsaved-navigation guard now returns to the edited entry when Back or an in-app tab navigation is held, and Discard reaches the exact requested history entry after a dropped undo. Where the Navigation API is available, keyed traversals use bounded retries and per-prompt guards. Compatibility: browsers without the Navigation API retain the existing `history.go` path; no API, schema, role, audit, or response-authorization behavior changes. #1083 remains open pending hosted confirmation and resolution of its separate diagnostics defect.
+
 ## 1.75.40 — 2026-11-18
 
 1. [PR #1096](https://github.com/StealthCat/MrPatchy/pull/1096): The optional MySQL AI benchmark verifies the original session still owns its advisory lock before cleanup DDL; when ownership cannot be verified, cleanup is skipped and operators are told to inspect the disposable database. Successful reports follow cleanup. Compatibility: production runtime, workload and report schema are unchanged; refused cleanup can leave fixture tables for inspection.
