@@ -383,6 +383,57 @@ def history(session,days=30,now=None,*,timezone_name=None):
         'truncated':truncated,'windows':windows}
 
 
+# Fixed activity codes for the current-window breakdown. They mirror the purposes
+# ai_runs.track() records; anything else retained in run history is "other".
+SPEND_PURPOSES=('triage','update_scoring','security_plan','release_configuration','connection_test')
+SPEND_PURPOSE_ORDER=SPEND_PURPOSES+('other','unattributed')
+SPEND_PURPOSE_LIMITATIONS=[
+    'Amounts are local public-price estimates and conservative reservations, not provider invoices.',
+    'Attribution follows each call\'s link to retained AI run history. Calls whose run was pruned or '
+    'that had no run are counted under "Not attributed" and are never guessed.',
+]
+
+
+def by_purpose(session,now=None):
+    """Split the spend capped admission currently counts by AI activity.
+
+    Read-only and bounded: one grouped aggregate over exactly the rows
+    ``_state`` counts, joined to retained run history for the purpose only.
+    At most ``len(SPEND_PURPOSE_ORDER)`` result rows; no ledger entry, model,
+    subject, host or identifier is loaded or returned.
+    """
+    from .ai_runs import AIRun
+    now=time.time() if now is None else now;cfg=config(session)
+    mode=cfg['ai_control_mode'];enabled=mode in ai_pricing.CAP_MODES
+    name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
+    result={'generated_at':now,'mode':mode,'enabled':enabled,'timezone':name if enabled else None,
+        'window_start':start if enabled else None,'next_reset':reset if enabled else None,
+        'call_count':0,'counted_usd':'0','groups':[],'limitations':SPEND_PURPOSE_LIMITATIONS}
+    if not enabled:return result
+    amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
+        else_=BudgetEntry.reservation_usd)
+    zero=Decimal(0)
+    def bucket(*statuses):
+        return _aggregate(session,case((BudgetEntry.status.in_(statuses),amount),else_=zero))
+    purpose=case((AIRun.id.is_(None),'unattributed'),(AIRun.purpose.in_(SPEND_PURPOSES),AIRun.purpose),else_='other')
+    query=(select(purpose,func.count(BudgetEntry.id),bucket('settled'),bucket('reserved'),
+        bucket('sent','uncertain'),_aggregate(session,amount))
+        .select_from(BudgetEntry).outerjoin(AIRun,AIRun.id==BudgetEntry.run_id)
+        # Same predicate as _state so the groups sum to the counted total.
+        .where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
+        .group_by(purpose))
+    groups={};total=Decimal(0);calls=0
+    for key,count,settled,reserved,uncertain,counted in session.execute(query):
+        counted=Decimal(counted or 0);total+=counted;calls+=count
+        groups[key]={'purpose':key,'call_count':count,'settled_usd':_money(Decimal(settled or 0)),
+            'reserved_usd':_money(Decimal(reserved or 0)),'uncertain_usd':_money(Decimal(uncertain or 0)),
+            'counted_usd':_money(counted)}
+    result.update(call_count=calls,counted_usd=_money(total),
+        groups=[groups[key] for key in SPEND_PURPOSE_ORDER if key in groups])
+    return result
+
+
 HISTORY_CSV_COLUMNS=('window_start_utc','reset_at_utc','timezone','calls','settled_usd','reserved_usd',
     'sent_usd','uncertain_usd','other_usd','counted_usd')
 

@@ -62,7 +62,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.20"
+APP_VERSION = "1.75.26"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -582,6 +582,11 @@ def notification_read_batch(body:NotificationReadBatchInput,user=Depends(self_us
 @app.post('/api/notifications/{event_id}/dismiss')
 def notification_dismiss(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
     return _notification_state(event_id,body,user,notification_events.dismiss)
+
+@app.post('/api/notifications/{event_id}/restore')
+def notification_restore(event_id:str,body:NotificationStateInput,user=Depends(self_user)):
+    """Undo this account's dismissal; never acknowledges or resolves anything."""
+    return _notification_state(event_id,body,user,notification_events.restore)
 
 @app.get('/api/hosts')
 def hosts(deleted:bool=False,user=Depends(viewer_user)):
@@ -1170,6 +1175,17 @@ def known_good_summary(user=Depends(admin_user)):
         return known_good.summary(s)
 
 
+@app.get('/api/ai/known-good/candidates')
+def known_good_candidates(state:str='active',offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_candidates as candidates
+    if state not in candidates.STATES:
+        raise HTTPException(400,'Invalid known-good candidate state')
+    if offset<0 or not 1<=limit<=candidates.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid known-good candidate pagination')
+    with Session() as s:
+        return candidates.page(s,state,offset,limit)
+
+
 @app.post('/api/ai/known-good/{fingerprint}/revoke')
 def revoke_known_good(fingerprint:str,body:RevokeKnownGoodInput,user=Depends(admin_user)):
     from . import known_good
@@ -1213,6 +1229,18 @@ def investigation_assessment(behavior_id:str,assessment_id:str,host_id:str='',us
         if not behavior or not row or row.subject!=behavior.id or row.host_id!=behavior.host_id or (host_id and row.host_id!=host_id):raise HTTPException(404,'Assessment not found in this scope')
         result=object_dict(row);result['known_good']=known_good.assessment(row,s)
         return result
+@app.get('/api/ai/known-good/{fingerprint}/observations')
+def known_good_observations(fingerprint:str,offset:int=0,limit:int=20,user=Depends(admin_user)):
+    from . import known_good_links
+    if not re.fullmatch(r'[a-f0-9]{64}',fingerprint):
+        raise HTTPException(400,'Invalid known-good fingerprint')
+    if offset<0 or not 1<=limit<=known_good_links.PAGE_LIMIT:
+        raise HTTPException(400,'Invalid linked-assessment pagination')
+    with Session() as s:
+        try:return known_good_links.page(s,fingerprint,offset,limit)
+        except LookupError as error:raise HTTPException(404,str(error)) from None
+
+
 @app.get('/api/operations/workers')
 def registered_workers(offset:int=0,user=Depends(admin_user)):
     from .worker_registry import page
@@ -1229,6 +1257,11 @@ def endpoint_agent_health(offset:int=0,user=Depends(admin_user)):
     from .agent_fleet_health import page
     try:return page(offset)
     except ValueError as error:raise HTTPException(400,str(error))
+
+@app.get('/api/operations/deployment-health')
+def deployment_health_summary(user=Depends(admin_user)):
+    from .deployment_health import summary
+    return summary()
 
 class WorkerControlInput(BaseModel):
     worker_id:str=Field(pattern=r'^[A-Za-z0-9_.:-]{1,48}$')
@@ -1312,6 +1345,11 @@ def ai_spend_history_csv(days:int=30,timezone:str|None=None,user=Depends(admin_u
         'Content-Disposition':f'attachment; filename="mrpatchy-ai-spend-{days}d.csv"',
         'Cache-Control':'no-store','X-MrPatchy-Spend-History-Truncated':'true' if result['truncated'] else 'false',
         'X-MrPatchy-Spend-History-Max-Windows':str(result['max_windows'])})
+
+@app.get('/api/settings/ai-spend-by-purpose')
+def ai_spend_by_purpose(user=Depends(admin_user)):
+    from . import ai_budget
+    with Session() as s:return ai_budget.by_purpose(s)
 
 @app.get('/api/settings/ai-control-status')
 def ai_control_status(user=Depends(admin_user)):
@@ -1715,6 +1753,17 @@ def investigation_status(user=Depends(viewer_user)):
         if user.get('role')=='admin':
             return ai_runs.status(s)
         return ai_runs.viewer_status(s)
+
+@app.get('/api/investigation-status/servers')
+def investigation_status_servers(user=Depends(admin_user)):
+    """Per-server process-triage queue breakdown (#975). Read-only.
+
+    Server IDs/names, counts, limits and timestamps only; shared AI start
+    gates, worker capacity and pause still decide when an investigation starts.
+    """
+    from . import triage_queue_servers
+    with Session() as s:
+        return triage_queue_servers.status(s)
 
 @app.get('/api/hosts/{host_id}/history/{record_id}')
 def history_detail(host_id:str,record_id:str,kind:str='inventory',user=Depends(admin_user)):
@@ -3296,6 +3345,25 @@ def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id)
         return auto_plan_status.status(s,host_id)
+
+@app.get('/api/hosts/{host_id}/security/auto-plan-failed')
+def security_auto_plan_failed(host_id:str,user=Depends(admin_user)):
+    """Count this server's incidents whose one automatic AI plan attempt failed (#1036). Read-only."""
+    from . import auto_plan_retry
+    with Session() as s:
+        host_or_404(s,host_id)
+        return {'failed':auto_plan_retry.failed_count(s,host_id)}
+
+@app.post('/api/hosts/{host_id}/security/auto-plan-failed/retry')
+def security_auto_plan_failed_retry(host_id:str,user=Depends(admin_user)):
+    """Release failed automatic plan attempts so the automatic tick retries them (#1036). Sends nothing now."""
+    from . import auto_plan_retry
+    with worker.Lock('security-plan-queue'):
+        with Session() as s:
+            host_or_404(s,host_id)
+            result=auto_plan_retry.release(s,host_id,user['username'])
+            s.commit()
+            return result
 
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
