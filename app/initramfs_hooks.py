@@ -73,7 +73,7 @@ DIRECTORY_STATES = ('listed', 'absent', 'not_directory', 'unreadable')
 BLOCKING = frozenset({
     'input_malformed', 'too_many_entries', 'duplicate_name', 'metadata_missing', 'directory_not_observed',
     'directory_unreadable', 'listing_incomplete', 'family_not_observed', 'family_unsupported',
-    'generator_not_observed', 'gaps_truncated',
+    'generator_not_observed', 'gaps_truncated', 'glob_literal_entry',
 })
 OUT_OF_SCOPE = (
     ('Boot-time scripts under /usr/share/initramfs-tools/scripts and /etc/initramfs-tools/scripts, which are copied '
@@ -318,10 +318,22 @@ def _directory(path: str, observed: Any, config: dict[str, str] | None,
         seen.add(entry['name'])
         out['entries'].append(_assess(f"{path}/{entry['name']}", entry, dir_noexec, config, gaps))
     out['entries'].sort(key=lambda e: e['name'].encode('utf-8', 'surrogateescape'))
+    if '*' in seen:
+        # set_initlist's empty-directory check ([ "$si_x" = "$initdir/*" ] && return) also matches a real entry
+        # named "*", so listing stops there. Where "*" falls in the glob depends on the build locale.
+        _gap(gaps, 'glob_literal_entry', f'{path}/*',
+             'An entry literally named "*" makes set_initlist stop listing this directory when the glob reaches '
+             'it, so later hooks never run. Glob order depends on the build locale; in the C locale no hook in '
+             'this pass runs.')
+        for entry in out['entries']:
+            if entry['invocations']:
+                entry['reason'] = 'unresolved'
+                entry['invocations'] = []
     if any(e['runs_if_named_as_prereq'] for e in out['entries']):
         _gap(gaps, 'excluded_file_may_run_as_prereq', path,
-             'call_scripts runs any regular file another hook names as a prerequisite, including files '
-             'set_initlist ignored. Prerequisite output is not observed.')
+             'call_scripts executes any regular file another hook names as a prerequisite, including files '
+             'set_initlist ignored. One that is executable runs as root; one without an execute bit or on a '
+             'noexec mount fails to execute and aborts the build. Prerequisite output is not observed.')
     return out
 
 

@@ -4938,13 +4938,19 @@ captured entry metadata and never reads a hook's contents.
   `*[![:alnum:]._-]*` are ignored, so a `.dpkg-old` backup still runs.
   Directories (followed), dangling symlinks, entries without any execute bit,
   `noexec` mounts and hooks `sh -n` rejects are ignored. Non-ASCII names depend
-  on the build locale and are unresolved.
+  on the build locale and are unresolved. `set_initlist`'s empty-directory
+  check also matches a real entry named `*`, which stops the listing when the
+  glob reaches it (in the C locale, before every hook). Such an entry is a
+  blocking `glob_literal_entry` gap, and that pass's listable hooks are
+  unresolved.
 - **Invocations.** Every listed hook runs as root once with `prereqs` while
   `tsort` computes the order, even when an `OPTION=` gate later disables it,
   then once with no arguments. The order within a pass is not established.
   `call_scripts` runs any regular file another hook names as a prerequisite,
-  including files `set_initlist` ignored, and that is reported as a gap. A
-  failing hook aborts the build.
+  including files `set_initlist` ignored, and that is reported as a gap: an
+  executable one runs as root, and one without an execute bit or on a `noexec`
+  mount fails to execute and aborts the build. A failing hook aborts the
+  build.
 - **OPTION= gates.** The value follows `sed '/^OPTION=/!d;$d;…'`, so an
   `OPTION=` on the file's last line is dropped. The hook runs only when the
   named variable is non-empty and not `n`. An unsupplied value is

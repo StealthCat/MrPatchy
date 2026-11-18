@@ -192,6 +192,26 @@ def test_limits():
     assert len(gappy['gaps']) == ih.MAX_GAPS and gappy['gaps'][-1]['code'] == 'gaps_truncated'
 
 
+@pytest.mark.parametrize('star', [hook('*'), {'name': '*', 'type': 'directory'}, hook('*', mode=0o644)])
+def test_entry_named_star_stops_listing_and_blocks(star):
+    # set_initlist's `[ "$si_x" = "$initdir/*" ] && return` matches a real entry named "*" whatever its type.
+    result = run(pkg=[hook('fsck')], local=[star, hook('aa'), hook('zz', option_lines=['OPTION=X']),
+                                             hook('off', mode=0o644)])
+    assert 'glob_literal_entry' in codes(result)
+    gap = next(g for g in result['gaps'] if g['code'] == 'glob_literal_entry')
+    assert gap['blocking'] is True and gap['path'] == f'{LOCAL}/*'
+    assert result['runs'] == [f'{PKG}/fsck']
+    assert result['conditional'] == []
+    assert result['prereq_invocations'] == [[f'{PKG}/fsck', 'prereqs']]
+    for name in ('aa', 'zz'):
+        assert entry(result, f'{LOCAL}/{name}')['reason'] == 'unresolved'
+        assert entry(result, f'{LOCAL}/{name}')['invocations'] == []
+    assert entry(result, f'{LOCAL}/off')['reason'] == 'not_executable'
+    assert result['complete'] is False and result['covered'] is False
+    # The packaged pass is unaffected.
+    assert entry(result, f'{PKG}/fsck')['reason'] == 'runs'
+
+
 # The shipped functions from initramfs-tools-core 0.142ubuntu25.8 hook-functions, verbatim apart from
 # dropping the verbose echo lines, plus mkinitramfs' two hook passes.
 _HOOK_FUNCTIONS = r'''
@@ -332,3 +352,32 @@ def test_live_hook_functions_agree(tmp_path):
     run_lines = [ln for ln in lines if ln.endswith(' run')]
     assert max(i for i, ln in enumerate(run_lines) if ln.startswith(str(pkg) + '/')) < min(
         i for i, ln in enumerate(run_lines) if ln.startswith(str(local) + '/'))
+
+
+@pytest.mark.skipif(shutil.which('dash') is None or shutil.which('tsort') is None or os.geteuid() != 0,
+                    reason='needs dash, tsort and root (execute-bit semantics are root\'s)')
+def test_live_entry_named_star_stops_the_pass(tmp_path):
+    log = tmp_path / 'log'
+    pkg, local = tmp_path / 'pkg', tmp_path / 'local'
+    for directory, names in ((pkg, ('aa', 'zz')), (local, ('*', 'aa', 'zz'))):
+        directory.mkdir()
+        for name in names:
+            path = directory / name
+            path.write_text(f'#!/bin/sh\necho "$0 ${{1:-run}}" >> {log}\n')
+            path.chmod(0o755)
+    env = {'PATH': os.environ['PATH'], 'PKGDIR': str(pkg), 'LOCALDIR': str(local), 'LC_ALL': 'C'}
+    subprocess.run(['dash', '-c', _HOOK_FUNCTIONS], env=env, check=True, capture_output=True)
+    lines = log.read_text().splitlines()
+    assert lines and all(ln.startswith(str(pkg) + '/') for ln in lines)
+
+    original = (ih.PACKAGE_DIR, ih.LOCAL_DIR, ih.HOOK_DIRS, ih.PASS_ENV)
+    try:
+        ih.PACKAGE_DIR, ih.LOCAL_DIR, ih.HOOK_DIRS = str(pkg), str(local), (str(pkg), str(local))
+        ih.PASS_ENV = {str(pkg): (), str(local): ()}
+        result = ih.evaluate({'family': 'debian', 'initramfs_tools': True, 'directories': {
+            str(pkg): listed(hook('aa'), hook('zz')), str(local): listed(hook('*'), hook('aa'), hook('zz'))}})
+    finally:
+        ih.PACKAGE_DIR, ih.LOCAL_DIR, ih.HOOK_DIRS, ih.PASS_ENV = original
+    # Nothing the contract reports as running is absent from the real run, and the pass is not complete.
+    assert sorted(f'{p} run' for p in result['runs']) == sorted(ln for ln in lines if ln.endswith(' run'))
+    assert result['complete'] is False
