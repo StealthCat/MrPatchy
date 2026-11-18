@@ -118,7 +118,10 @@ def test_exhausted_cap_still_reuses_an_exact_hit_with_zero_calls_and_no_new_rese
     configure()
     exhaust()
     seed()
-    assert ai_budget.waiting(Session(), time.time())  # the global cap gate is closed
+    # Close this probe session: on MySQL an open read transaction holds metadata
+    # locks that block the next test's drop_all indefinitely.
+    with Session() as s:
+        assert ai_budget.waiting(s, time.time())  # the global cap gate is closed
     before = ledger()
     worker.investigate_one()
     assert provider.bodies == []
