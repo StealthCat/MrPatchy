@@ -4712,6 +4712,28 @@ hashes, and it never executes or sources anything.
 Redaction is pattern-based. It may over-redact, and it cannot recognise every credential format.
 
 
+### System crontab loading rules — worker checkpoint #771
+
+View increment only; the startup-awareness requirement remains incomplete.
+`app/cron_loading.py` is pure and I/O-free. For each stored `/etc/crontab` and
+`/etc/cron.d/*` entry, it uses the existing receipt metadata (kind, owner uid,
+permission bits) and the host's package family to decide whether the
+distribution's default cron rules would load the file.
+
+- **Debian/Ubuntu/Raspberry Pi OS cron:** the file must be owned by root and must not be group- or other-writable. `/etc/cron.d` names may contain only letters, digits, `_` and `-`.
+- **cronie (RPM):** `/etc/cron.d` names starting with `.` or `#`, ending with `~`, `.rpmsave`, `.rpmorig` or `.rpmnew`, or of 255 bytes or more are skipped. The file must be owned by root and satisfy `(mode & 07533) == 0400`.
+- **Unknown family, symlink or malformed metadata:** the result is `unknown`, never guessed.
+
+The Startup files view shows "Cron would skip this file" with the reasons, and
+Coverage counts skipped and unassessed files. Receipts, comparisons, baselines,
+incident evidence, AI payloads and the agent are unchanged. **Not evaluated:**
+which cron implementation is installed (apt hosts are assessed as Debian cron
+and RPM hosts as cronie, so an apt host running cronie can be shown the wrong
+result), daemon options such as cronie `-p` or Debian `cron -l`, patched
+daemons, hard-link counts (Debian cron skips files with more than one link),
+whether cron runs, user spool crontab owner/mode rules, run-parts directories,
+anacron and at.
+
 ### Startup-entry provenance classification contract — worker checkpoint #720
 
 Contract increment only; the startup-awareness requirement and its provenance
