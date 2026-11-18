@@ -2575,6 +2575,20 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
 - **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
 
+#### Retry failed automatic AI plans — worker checkpoint #1036
+
+Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
+
+- **Change:** `app/auto_plan_retry.py` counts a server's open, non-YARA, unplanned incidents whose only unreleased automatic attempts for their current scan are `failed`. Attempts the worker skipped because the evidence changed are not counted.
+  - Admin-only `GET /api/hosts/{id}/security/auto-plan-failed` returns `{failed}`. Unknown servers return 404.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and marks up to 200 incidents' failed `security-plan` jobs with `retry_released` (plus who and when). It returns `{released, remaining}` and writes one audit row when anything was released. A disabled or deleted server releases nothing.
+  - `incidents.awaiting_auto_plan` ignores released attempts, so the ordinary `auto_plan_tick` plans the incident again.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The tick still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. A new failure blocks the incident again until another release. The failed job's state and output are kept.
+- **UI:** the Security tab's scheduled-scanning card shows **Retry failed automatic plans** to administrators only, when the count is above 0. It says to fix the cause first, that no provider request is sent now, and that the gates still apply; it refreshes the status afterwards. Operators cannot open the Security tab, so they never request the count.
+- **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
+- **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
@@ -3225,6 +3239,33 @@ releasing another owner's claim on exit. No runtime change was needed. SQLite on
 MySQL-native runs, contention/fairness and measured performance remain open in
 milestone 4.
 
+### Current-window spend by activity — worker checkpoint #982
+
+Settings → AI → *Current window spend by activity* shows which AI activity the
+daily spend cap is currently counting. The admin-only
+`GET /api/settings/ai-spend-by-purpose` groups exactly the ledger rows capped
+admission counts (the current window, plus a window a timezone change left
+open) by the purpose of the linked AI run: process triage, update importance
+scoring, incident/startup response plans, release configuration reviews and
+connection tests. The groups sum to the counted total in the budget status.
+- **Attribution:** the purpose comes from retained AI run history. A call whose
+  run was pruned, or that had no run, is reported as *Not attributed*. A stored
+  purpose outside the fixed list is reported as *Other*. Nothing is dropped or
+  guessed, and an unrecognized ledger status still counts its ceiling.
+- **Bounded:** one grouped SQL aggregate with at most seven result rows. No
+  ledger or run row is loaded.
+- **Payload:** fixed activity codes, call counts and USD amounts only. No model
+  ID, subject, host, run/call identifier, pricing source or evidence.
+- **Uncapped modes:** the endpoint reports that no cap applies and returns no
+  groups.
+- **Unchanged:** admission, reservations, reconciliation, the shared budget
+  lock, schema, roles and response authorization. The read writes nothing and
+  sends no provider request.
+- **Limitations:** this is a point-in-time read of the current window only.
+  Per-activity history for earlier windows, per-server attribution and
+  per-activity caps are not provided. Amounts remain local public-price
+  estimates, not provider invoices. The wider roadmap A acceptance remains open.
+
 ### Release definitely unsent spend — worker checkpoint #588
 
 A confirmed local HTTP connection-pool acquisition timeout releases only the
@@ -3485,6 +3526,49 @@ unavailable and never implies a plan will start.
   manual-only.
 - **Limitations:** this is a point-in-time read for one server. A fleet-wide
   plan queue view and startup-change plans (never automatic) are not covered.
+
+### Per-server process-triage queue breakdown — worker checkpoint #975
+
+`GET /api/investigation-status` reports fleet-wide totals only. When the queue
+was not draining, an administrator could not see which servers held the backlog
+or why each one was waiting. Update scoring (#917) and automatic plans (#922)
+already had queue summaries; process triage had no per-server view.
+
+The admin-only `GET /api/investigation-status/servers` lists each active server
+with unapproved `pending`/`error` behaviors. Each pending investigation is
+placed in exactly one class:
+- **active:** an unexpired claim holds it;
+- **eligible:** retry-eligible under the saved model/key and unclaimed;
+- **blocked:** needs configuration review or an explicit retry;
+- **retry wait:** waiting out a finite retry or provider wait, with the
+  server's earliest such time.
+
+Each row also reports the pending total, the oldest pending observation,
+whether AI is paused for the server, its per-server investigation limit (a
+corrupt stored limit is shown as the fail-closed minimum), `active_leases` and
+whether those leases have reached the limit. `active_leases` is the admission
+count: every unexpired claim on the server, including one whose behavior was
+approved while it runs, so the limit flag matches what `ai_claims.acquire`
+enforces. The list holds at most 50 servers, largest backlog
+first, and states the number of servers with a backlog and whether it was
+truncated.
+
+The classes use the predicates of `ai_runs.status()` and the claim query, so
+per-server pending, paused, eligible-unclaimed and active counts add up to the
+fleet totals. One difference is deliberate: a running claim takes precedence,
+so an investigation on its last attempt is `active` here while the fleet
+`blocked` total counts it until it ends.
+
+- **Unchanged:** the payload holds server IDs and names, counts, limits and
+  timestamps only: no evidence, paths, command lines, analysis, provider text or
+  key material. It sends no provider request and writes nothing. Admission,
+  claims, pause, budget, schema, roles and response authorization are unchanged.
+- **Limitations:** this is a point-in-time read, and "eligible" is not a promise
+  to start: shared start gates, worker capacity, the per-server limit and pause
+  still apply. Pause is read as the fleet status reads it, so a manually
+  corrupted per-server AI policy is not shown as paused although provider calls
+  for that server are refused. No page shows the breakdown yet; the UI panel, servers beyond the
+  first 50 and matched production acceptance remain open.
 
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
@@ -5588,6 +5672,33 @@ attention only: they assess no HTTP/TLS readiness, grant no failover, serving or
 response authority, and read/dismiss stays separate from acknowledgement. Still
 planned for this requirement: endpoint-agent resource metrics and readiness,
 GCP-node inventory, HTTPS/Caddy checks and unified dashboard acceptance.
+
+### Unified deployment-health summary — worker checkpoint #843
+
+Activity → Workers now opens with an admin-only **Deployment health** card, backed by
+`GET /api/operations/deployment-health` (`app/deployment_health.py`). The card combines
+controllers, workers and endpoint agents into one shared state vocabulary.
+
+- **States:** offline, degraded, unknown, maintenance and healthy. The overall state is
+  the worst state present, in that order. A deployment with nothing counted is
+  `unknown`, never healthy.
+- **Workers:** these reuse expected workers, whether configured or inferred.
+  - missing, stale or stopped → offline
+  - version mismatch → degraded
+  - unknown → unknown
+  - draining or drained → maintenance
+  - reporting → healthy
+  - An invalid expectation makes the component unknown.
+- **Controllers:** with `MRPATCHY_EXPECTED_CONTROLLER_IDS` configured, the same
+  mapping applies to the expected list. Without it, only currently reporting
+  controllers are counted. A gap states that a missing controller cannot be
+  detected, and retained stopped or stale history is never shown as offline.
+- **Endpoint agents:** these reuse the existing `agent_fleet_health` counts.
+- **Unchanged:** responses carry counts, sources and fixed-text reasons and gaps only.
+  The summary runs no checks and changes no state. Notifications, roles and failover,
+  drain, repair and response authority are unchanged.
+- **Limitations:** HTTP/TLS readiness, resource metrics and GCP-node inventory remain
+  planned for this requirement, as does the unified dashboard's full acceptance.
 
 ## Implemented in v0.5.0: successful enrollment returns to server Overview
 
@@ -10034,6 +10145,17 @@ also still required before delivery.
 
 The bell panel and the notification center each offer **Mark shown read**. The client sends `POST /api/notifications/read-batch` with the exact `{id, revision}` pairs it displayed, at most 100 per request. Each pair follows the single-item `mark_read` revision rule, so an event escalated or reopened after the page loaded stays unread at its newer revision. Events that no longer exist or are hidden from the user's current role are counted as unavailable and are never written, and the response does not say which reason applied. Malformed, duplicate, empty, oversized or above-current-revision batches are rejected before any write. One audit row records each batch that marks anything. The route is self-service with the existing session, CSRF and role filtering. Read state remains per-account and never acknowledges alerts, resolves incidents, approves AI output or runs remediation. There are no schema changes. Remaining: a filter-wide "mark all matching" across pages is intentionally not offered, because it cannot bind the revisions the user actually saw.
 
+### Restore a dismissed notification — worker checkpoint #833
+
+Dismissing a notification can now be undone for the same account. In the notification center, **Include dismissed** marks each dismissed item as *dismissed* and offers **Restore** in place of Dismiss.
+- **API:** the client sends `POST /api/notifications/{id}/restore` with the revision it displayed. When that revision is the event's current revision and this account dismissed it, the account's dismissal is cleared and the item returns to the default history.
+- **Read state is kept**, so restoring never inflates the unread badge.
+- **Idempotent:** a stale revision, an undismissed event or a repeated restore changes nothing, and an event this account never touched gets no state row.
+- **Same checks as read/dismiss:** session, CSRF and current-role checks apply. A hidden or malformed event returns 404 and an above-current revision returns 400.
+- **Audit and sync:** each effective restore writes one `restore notification` audit row. Restore changes the account's stream cursor, so the account's other tabs refresh.
+- **Focus:** keyboard focus stays on the same card after Dismiss or Restore, even though the clicked button is briefly disabled.
+- **Unchanged:** restore is per-account only. It never acknowledges an alert, resolves an incident, approves AI output, runs remediation or changes another user's state, and there are no schema changes.
+
 ### Shared AI start gates in the worker status card — worker checkpoint #727
 
 The administrator Investigations page now reads the #546 snapshot and shows a
@@ -10408,3 +10530,40 @@ The startup catalog listed `/etc/xdg/autostart` and `~/.config/autostart` as met
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. A `system` origin is not a verified package default.
 - **Validation:** `tests/test_xdg_autostart.py` has 17 tests. They cannot run on main, where the module does not exist, and they pass on the branch. Four review-follow-up regressions fail on the earlier head `78168b5`: `sh -c '…'`, an unquoted backslash, each reserved character, and `AutostartCondition`.
 - **Remaining:** collection wiring into the startup inventory, per-user directory enumeration, provenance and UI.
+
+### Fleet known-good candidate list — worker checkpoint #928
+
+Roadmap B slice: administrators can now find a candidate without already knowing
+an assessment that links to it. `GET /api/ai/known-good/candidates?state=active|revoked|all`
+(administrator only, read-only, 1–50 per page) returns candidates newest first, with
+a fingerprint tie-break. Each item gives the fingerprint, version, model,
+classification source, origin assessment and subject, and the origin server (with
+whether it is still active). It also gives the revocation time, actor and reason,
+and per-page counts of linked observations and exact-match reuses, using two
+grouped queries. It never returns the canonical contract, saved result, snapshot,
+observation JSON or evidence. It takes no locks, writes nothing and makes no audit
+or provider calls.
+
+The Fleet known-good cache panel in AI activity adds an on-demand **Candidates**
+list with an Active/Revoked/All filter, paging, escaped text, an **Origin
+assessment** link (where Revoke and Linked servers already live), Retry, and a
+stale-response guard. Viewers never request it. Lookup, publication, revocation,
+approval, budget, pause, role and response boundaries are unchanged. Search by
+hash, bulk revocation and matched SQLite/MySQL production acceptance remain open.
+### Linked servers for a fleet known-good candidate — worker checkpoint #891
+
+Roadmap B slice: explain cache hits and retain visible per-host observations.
+`GET /api/ai/known-good/{fingerprint}/observations` (administrator only, read-only)
+pages the retained observations bound to one durable candidate, newest first with
+an assessment-ID tie-break. Each item has a role: `origin` (the assessment that
+published the candidate), `reuse` (exact-match reuse with no provider call) or `linked`
+(an independent AI assessment with the same fingerprint), plus the server, whether
+that server is still active, and links. It returns identifiers and timestamps only,
+never observation JSON, snapshots, evidence or results. It takes no locks, writes
+nothing and makes no audit or provider calls.
+
+On the assessment page, a "Linked servers" section loads lazily below published,
+reused or revoked candidates. It has escaped names, paging, Retry and a stale-response
+guard, and states that linkage grants no approval and authorizes no response. This
+does not complete roadmap B: complete context collection, the canonical fingerprint
+over full evidence and SQLite/MySQL runtime acceptance remain open.
