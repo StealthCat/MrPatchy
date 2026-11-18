@@ -127,7 +127,7 @@ async function investigationAssessmentPage(revision,context,base){
  if(!isAdmin()){root.innerHTML=PatchyUI.error('Administrator access required','Assessment history contains retained evidence.');return;}
  const raw=location.hash.slice((base+'/item/').length).split('/');let id,record;
  try{id=decodeURIComponent(raw[0]||'');record=decodeURIComponent(raw[2]||'');}catch{id='';}
- const back=`<a class="button" href="${base}${investigationFilterContext.get(context?.hostId||'fleet')==='cached'?'/cached':''}">← Investigations</a>`;
+ const back=`<a class="button" href="${investigationListAddress.get(context?.hostId||'fleet')||base}">← Investigations</a>`;
  if(!id||id.length>64||id.includes('/')||raw[1]!=='history'||record.length>36){root.innerHTML=PatchyUI.error('Invalid assessment link','Return to investigations and select a saved assessment.',back);return;}
  const historyBase=base+'/item/'+encodeURIComponent(id)+'/history';
  const scope=context?'&host_id='+encodeURIComponent(context.hostId):'';
@@ -145,6 +145,7 @@ async function investigationAssessmentPage(revision,context,base){
   const explanation=item.source==='legacy'?item.result.saved_analysis:item.result.explanation;
   const reused=item.source==='known_good',provider=item.source==='ai';
   root.innerHTML=intro+`<a class="button" href="${historyBase}">← Assessment list</a><section class="card"><h2>${item.source==='legacy'?'Preserved legacy result':reused?'Reused exact-match assessment':'Recorded AI assessment'}</h2><dl class="ai-run-facts"><div><dt>Recorded</dt><dd>${date(item.created)}</dd></div><div><dt>Risk</dt><dd>${esc(item.result.risk)}</dd></div><div><dt>Requested model</dt><dd>${esc(item.model||'Not recorded')}</dd></div><div><dt>Assessment ID</dt><dd><code>${esc(item.id)}</code></dd></div></dl><pre class="ai-run-message">${esc(explanation||'No explanation saved.')}</pre>${provider||reused?`<h3>Recommended checks</h3><pre class="ai-run-message">${esc(item.result.recommended_checks)}</pre>`:'<p class="notice">Preserved at refresh request time, not a reconstructed original assessment timestamp. Original model, run and exact inputs are unavailable.</p>'}${item.refresh?.id?`<p class="help">Refresh requested by ${esc(item.refresh.actor)} · ${date(item.refresh.created)}${item.refresh.withdrew_approval?' · Prior approval explicitly withdrawn':''}</p><pre class="ai-run-message">${esc(item.refresh.reason)}</pre>`:''}${assessmentContextCoverage(item)}${assessmentKnownGood(item)}<details><summary>Evidence snapshot and supplied inputs</summary>${provider||reused?`<p class="help assessment-policy">Recorded policy digest: <code>${esc(item.policy_hash)}</code>. ${reused?'No provider input was sent; the exact candidate context was revalidated locally.':'Inputs retain their original collection limits; this is not verified fleet-wide matching.'}</p>`:''}<pre class="ai-run-message">${esc(JSON.stringify({snapshot:item.snapshot,inputs:item.inputs},null,2))}</pre></details>${item.run_id?`<a class="button" href="${context?serverLink(context.hostId,'ai'):'#ai-logs'}/run/${encodeURIComponent(item.run_id)}/summary">Original run diagnostics</a><p class="help">Diagnostics may expire under normal retention. This assessment and evidence remain available.</p>`:''}</section>`;
+  loadKnownGoodLinks(root,item.known_good,revision,view);
  }else{
   root.innerHTML=intro+`<section class="card">${data.items.length?`<div class="table-wrap"><table><thead><tr><th>Recorded</th><th>Source</th><th>Risk</th><th>Requested model</th><th></th></tr></thead><tbody>${data.items.map(r=>`<tr><td>${date(r.created)}</td><td>${esc(r.source==='legacy'?'Preserved legacy result':r.source==='known_good'?'Exact-match reuse':'AI assessment')}</td><td>${badge(r.risk)}</td><td>${esc(r.model||'Not recorded')}</td><td><a class="button" href="${historyBase}/${encodeURIComponent(r.id)}">Review assessment</a></td></tr>`).join('')}</tbody></table></div>`:empty('No retained assessments yet','History starts with the next completed triage or a preserved result when Re-triage is requested. Existing AI diagnostics remain separate.')}</section><div class="actions"><button id="assessment-previous" ${offset?'':'disabled'}>Previous assessments</button><button id="assessment-next" ${data.more?'':'disabled'}>Next assessments</button></div>`;
   root.querySelector('#assessment-previous').onclick=()=>{assessmentOffsets.set(key,Math.max(0,offset-20));render();};root.querySelector('#assessment-next').onclick=()=>{assessmentOffsets.set(key,offset+20);render();};
@@ -235,10 +236,36 @@ function bindAiControlGates(root,revision){
  toolbar.before(section);
  loadAiControlGates(root,revision,'ai-logs');
 }
+// Shared read-only update-scoring queue text (#917, #926) for Settings → AI and AI activity.
+// Counts and times only; never a promise that a batch starts now.
+function scoringQueueSummary(q){
+ if(!q||!q.counts)return '<strong>Scoring queue</strong> · Unavailable right now. This never means scoring may start; shared start gates and pause still apply.';
+ const c=q.counts,stopped={ai_disabled:'Central AI provider calls are disabled, so no scoring batch starts.',scoring_disabled:'Automatic update scoring is off, so no scoring batch starts.',not_configured:'A saved model and API key are required before scoring can start.'}[q.scheduler];
+ return `<strong>Scoring queue</strong> · ${esc(q.current_updates)} current pending update${q.current_updates===1?'':'s'}: ${esc(c.complete)} scored · ${esc(c.running)} running · ${esc(c.eligible)} eligible now · ${esc(c.deferred)} deferred by shared admission · ${esc(c.retry_wait)} waiting for the hourly retry · ${esc(c.blocked)} blocked${q.paused_server_updates?' · '+esc(q.paused_server_updates)+' on AI-paused servers (not queued)':''}.${q.unscored?'<br>Oldest unscored since '+esc(date(q.oldest_waiting_since))+(q.next_eligible_at?' · next timed eligibility '+esc(date(q.next_eligible_at)):''):''}${stopped?'<br>'+esc(stopped):''}<br><span class="help">Shared start gates, per-server pause and the daily cap still decide when a batch starts. Scores are advisory.</span>`;
+}
+// Daily-cap window on the Investigations worker card (#876). Display-only, from
+// the same admin-only ai_budget.status payload that Settings shows.
+function aiBudgetStatus(budget){
+ if(!budget||budget.enabled!==true)return '';
+ const usd=value=>typeof value==='string'&&/^\d{1,12}(\.\d{1,12})?$/.test(value)?'$'+value:'Unavailable';
+ const when=value=>Number.isFinite(value)&&value>0?date(value):null;
+ const zone=typeof budget.timezone==='string'&&budget.timezone?budget.timezone:'timezone unavailable';
+ const resetAt=when(budget.next_reset);
+ const reset=!resetAt?'Next reset unavailable.':budget.next_reset_authoritative===false
+  ?`Configured reset ${resetAt} (${esc(zone)}) is only a recheck boundary: spend admitted before a timezone change stays counted, so headroom may not refill then.`
+  :`Resets ${resetAt} (${esc(zone)}).`;
+ const count=budget.unreconciled_call_count;
+ const pending=Number.isSafeInteger(count)&&count>0
+  ?`<p class="help" data-ai-budget-unreconciled><strong>${count} transmitted AI ${count===1?'call awaits':'calls await'} reconciliation.</strong> Oldest reservation ${when(budget.oldest_unreconciled_reservation_at)||'time unavailable'}. Their full reserved ceiling stays counted until a usage receipt reconciles them.</p>`
+  :Number.isSafeInteger(count)&&count===0?'':'<p class="help" data-ai-budget-unreconciled>Calls awaiting reconciliation: Unavailable.</p>';
+ const facts=[['cap',budget.cap_usd],['counted',budget.counted_usd],['settled',budget.settled_usd],['reserved',budget.reserved_usd],['uncertain',budget.uncertain_usd],['remaining',budget.remaining_usd]]
+  .map(([label,value])=>`<span><strong>${esc(usd(value))}</strong> ${label}</span>`).join('');
+ return `<section class="ai-budget-status" data-ai-budget-status aria-labelledby="ai-budget-status-title"><h3 id="ai-budget-status-title">Daily AI spend cap</h3><div class="status-facts">${facts}</div><p class="help">${reset} Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled. Public price estimates are not provider invoices.</p>${pending}</section>`;
+}
 function triageStatus(status){
  const count=value=>Number.isSafeInteger(value)&&value>=0?value:'Unavailable';
  const control=aiAdmissionControl(status);
- const budget=status.budget||{};const spend=budget.enabled?`<p class="help">Daily budget: $${esc(budget.counted_usd)} counted · $${esc(budget.remaining_usd)} remaining · $${esc(budget.uncertain_usd)} uncertain · resets ${date(budget.next_reset)} (${esc(budget.timezone)}). Public price estimates are not provider invoices.</p>`:'';
+ const spend=aiBudgetStatus(status.budget);
  const plans=status.plan_deferred_by_action;
  const planDetails=plans&&status.plan_deferred>0?`<details><summary>Deferred plans by purpose</summary>
  <p class="help">Queue-ready means the job is due and server AI is active. Shared controls can still delay a start. Recorded retry times may belong to paused servers.</p>
@@ -270,14 +297,21 @@ function aiCostDetails(run){
  const tokens=value=>Number.isInteger(value)?value.toLocaleString():'Unavailable';
  return `<section class="ai-cost-detail"><h2>Estimated API cost (USD)</h2><div class="ai-cost-total">${aiCost(cost)}</div><p class="help">Public token-rate estimates, not an OpenAI invoice. Partial amounts cover only priced calls. Failed responses can still incur charges. Output tokens include reasoning.</p>${calls.map(c=>`<section class="ai-call"><h3>API call ${c.number} · ${c.status==='estimated'?aiMoney(c.pricing.estimated_usd):'Cost unavailable'}</h3><p class="help">${esc(c.response_model||c.requested_model)} · ${esc(c.service_tier||'Processing tier unavailable')}</p><div class="ai-token-grid"><span>Input<strong>${tokens(c.usage.input_tokens)}</strong></span><span>Cached input<strong>${tokens(c.usage.cached_tokens)}</strong></span><span>Cache writes<strong>${tokens(c.usage.cache_write_tokens)}</strong></span><span>Output<strong>${tokens(c.usage.output_tokens)}</strong></span><span>Reasoning (included in output)<strong>${tokens(c.usage.reasoning_tokens)}</strong></span></div>${c.status==='estimated'?`<details><summary>Rates used · ${esc(c.pricing.version)}</summary><p class="help">USD per million tokens: input $${esc(c.pricing.per_million.input)} · cached input $${esc(c.pricing.per_million.cached_input)} · output $${esc(c.pricing.per_million.output)} · cache writes $${esc(c.pricing.per_million.cache_write)}${c.pricing.cache_ttl?' ('+esc(c.pricing.cache_ttl)+')':''}. Rates are saved with this call.</p></details>`:`<p class="help">${esc(c.reason)}</p>`}</section>`).join('')}${!calls.length&&run.calls?'<p class="help">No token receipts were stored for this run. Historical costs cannot be reconstructed.</p>':''}</section>`;
 }
+// Fetched separately (#926) so the scoring queue's exact-identity pass never delays AI activity.
+async function loadAiActivityScoringQueue(root,revision){
+ const target=root.querySelector('#ai-scoring-queue');if(!target)return;
+ let q;try{q=await api('/update-scores/status');}catch{q=null;}
+ if(!currentView(revision,'ai-logs')||!target.isConnected)return;
+ target.innerHTML=scoringQueueSummary(q);
+}
 async function aiDiagnostics(revision=renderRevision,context=null){
  const root=context?.root||$('#content');
  const base=context?serverLink(context.hostId,'ai'):'#ai-logs',parts=location.hash.slice(1).split('/'),index=context?3:1;
  if(parts[index]==='run')return aiRunPage(revision,context,base,parts.slice(index+1));
  const key=context?.hostId||'fleet',saved=aiListContext.get(key)||{purpose:'',state:'',offset:0};
  const status=context?null:await api('/investigation-status');if(!currentView(revision,context?'servers':'ai-logs')||!root.isConnected)return;
- root.innerHTML=(context?'<p class="help">AI activity linked to this server. Shared scoring batches show the whole batch cost, not a per-server charge. Older runs without a server association remain in fleet AI logs.</p>':heading('Know what Mr Patchy is thinking.','Persistent run stages, provider errors, retries, and worker health.')+triageStatus(status))+`<div class="toolbar"><label>Purpose<select id="ai-log-purpose"><option value="">All logged AI activity</option><option value="triage">Process triage</option><option value="update_scoring">Update importance</option><option value="connection_test">Connection tests</option><option value="release_configuration">Release configuration</option><option value="security_plan">Security response plans</option><option value="worker">Worker failures</option></select></label><label>State<select id="ai-log-state"><option value="">All run states</option><option value="running">Running</option><option value="complete">Complete</option><option value="error">Failed</option><option value="deferred">Deferred</option><option value="interrupted">Interrupted</option></select></label><p class="help">API keys, raw prompts and provider bodies are excluded.</p></div><p class="help">Costs are estimated in USD from returned token usage and saved public rates. Older activity and calls without usage or known pricing show Unavailable.</p><div class="card" id="ai-log-table"></div><div class="actions"><button id="ai-log-prev">Previous</button><button id="ai-log-next">Next</button></div>`;
- if(!context&&isAdmin()){bindAiControlGates(root,revision);bindTriageTimingSummary(root,revision);bindKnownGoodSummary(root,revision);}
+ root.innerHTML=(context?'<p class="help">AI activity linked to this server. Shared scoring batches show the whole batch cost, not a per-server charge. Older runs without a server association remain in fleet AI logs.</p>':heading('Know what Mr Patchy is thinking.','Persistent run stages, provider errors, retries, and worker health.')+triageStatus(status)+(isAdmin()?'<div class="notice" id="ai-scoring-queue" role="status" aria-live="polite"><strong>Scoring queue</strong> · Loading…</div>':''))+`<div class="toolbar"><label>Purpose<select id="ai-log-purpose"><option value="">All logged AI activity</option><option value="triage">Process triage</option><option value="update_scoring">Update importance</option><option value="connection_test">Connection tests</option><option value="release_configuration">Release configuration</option><option value="security_plan">Security response plans</option><option value="worker">Worker failures</option></select></label><label>State<select id="ai-log-state"><option value="">All run states</option><option value="running">Running</option><option value="complete">Complete</option><option value="error">Failed</option><option value="deferred">Deferred</option><option value="interrupted">Interrupted</option></select></label><p class="help">API keys, raw prompts and provider bodies are excluded.</p></div><p class="help">Costs are estimated in USD from returned token usage and saved public rates. Older activity and calls without usage or known pricing show Unavailable.</p><div class="card" id="ai-log-table"></div><div class="actions"><button id="ai-log-prev">Previous</button><button id="ai-log-next">Next</button></div>`;
+ if(!context&&isAdmin()){loadAiActivityScoringQueue(root,revision);bindAiControlGates(root,revision);bindTriageTimingSummary(root,revision);bindKnownGoodSummary(root,revision);bindKnownGoodLookups(root,revision);}
  let offset=saved.offset,ticket=0;
  const table=$('#ai-log-table'),purposeFilter=$('#ai-log-purpose'),stateFilter=$('#ai-log-state');
  purposeFilter.value=saved.purpose;stateFilter.value=saved.state;
@@ -340,7 +374,7 @@ function bindKnownGoodSummary(root,revision){
  const panel=document.createElement('section');
  panel.className='card';
  panel.setAttribute('aria-labelledby','ai-known-good-title');
- panel.innerHTML='<h2 id="ai-known-good-title">Fleet known-good cache</h2><p class="help">Counts of retained exact-match safe candidates and the assessments that reused them. Counts describe retained records only. They do not verify current context or count cache misses. Avoided provider work is estimated from each candidate’s originating investigation receipts; it is not a provider invoice. Reuse grants no approval and authorizes no response.</p><button type="button">Load cache summary</button><p class="help" role="status"></p><div class="status-facts" hidden></div><p class="help known-good-estimate" hidden></p><p class="help known-good-review" hidden></p>';
+ panel.innerHTML='<h2 id="ai-known-good-title">Fleet known-good cache</h2><p class="help">Counts of retained exact-match safe candidates and the assessments that reused them. Counts describe retained records only. They do not verify current context; cache misses are counted separately under Cache lookup outcomes. Avoided provider work is estimated from each candidate’s originating investigation receipts; it is not a provider invoice. Reuse grants no approval and authorizes no response.</p><button type="button">Load cache summary</button><p class="help" role="status"></p><div class="status-facts" hidden></div><p class="help known-good-estimate" hidden></p><p class="help known-good-review" hidden></p>';
  root.querySelector('.toolbar').before(panel);
  const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),facts=panel.querySelector('.status-facts'),review=panel.querySelector('.known-good-review'),estimate=panel.querySelector('.known-good-estimate');
  const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
@@ -365,6 +399,86 @@ function bindKnownGoodSummary(root,revision){
    facts.hidden=true;facts.innerHTML='';review.hidden=true;review.textContent='';estimate.hidden=true;estimate.textContent='';
    status.textContent='Cache summary is unavailable. You can still inspect individual AI runs.';
    button.textContent='Retry cache summary';
+  }finally{if(active())button.disabled=false;}
+ };
+ bindKnownGoodCandidates(panel,revision);
+}
+// On-demand fleet list of known-good candidates. Rows show provenance metadata
+// only and link to the origin assessment, where Revoke and Linked servers live.
+function bindKnownGoodCandidates(panel,revision){
+ const section=document.createElement('section');
+ section.className='known-good-candidates';
+ section.setAttribute('aria-labelledby','known-good-candidates-title');
+ section.innerHTML='<h3 id="known-good-candidates-title">Candidates</h3><p class="help">Each candidate is one exact verified context. Listing grants no approval and authorizes no response. Open the origin assessment to review linked servers or revoke a candidate.</p><div class="known-good-candidate-controls"><label>Show<select name="known-good-state"><option value="active">Active</option><option value="revoked">Revoked</option><option value="all">All</option></select></label><button type="button" data-known-good-candidates="load">Load candidates</button></div><p class="help" role="status" aria-live="polite"></p><div class="known-good-candidate-table"></div><div class="actions" hidden><button type="button" data-known-good-candidates="previous">Previous candidates</button><button type="button" data-known-good-candidates="next">Next candidates</button></div>';
+ panel.append(section);
+ const select=section.querySelector('select'),load=section.querySelector('[data-known-good-candidates=load]'),status=section.querySelector('[role=status]'),table=section.querySelector('.known-good-candidate-table'),pager=section.querySelector('.actions'),previous=section.querySelector('[data-known-good-candidates=previous]'),next=section.querySelector('[data-known-good-candidates=next]');
+ const count=v=>Number.isSafeInteger(v)&&v>=0?v.toLocaleString():'Unavailable';
+ const fingerprint=v=>typeof v==='string'&&/^[a-f0-9]{64}$/.test(v)?v:'';
+ let offset=0,ticket=0;
+ const active=()=>section.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
+ const row=item=>{
+  const value=item&&typeof item==='object'?item:{},origin=value.origin&&typeof value.origin==='object'?value.origin:{};
+  const print=fingerprint(value.fingerprint),name=origin.host_name||origin.host_id||'Unknown server';
+  const link=value.origin_subject&&value.origin_assessment_id?`<a class="button" href="#investigations/item/${encodeURIComponent(value.origin_subject)}/history/${encodeURIComponent(value.origin_assessment_id)}">Origin assessment</a>`:'<span class="help">Origin assessment not retained</span>';
+  const state=value.active===true?badge('active'):`${badge('revoked')}<small>${date(value.revoked_at)} · ${esc(value.revoked_by||'unknown')}</small>${value.revoked_reason?`<small class="known-good-reason">${esc(value.revoked_reason)}</small>`:''}`;
+  return `<tr><td><code class="known-good-fingerprint">${esc(print||'Invalid fingerprint')}</code><small>v${esc(value.version)} · ${esc(value.model||'model not recorded')}</small></td><td>${esc(name)}${origin.host_active===true?'':' <span class="badge">Inactive server</span>'}<small>${date(value.created)}</small></td><td>${state}</td><td>${esc(count(value.linked))} linked<small>${esc(count(value.reused))} exact-match reuse(s)</small></td><td>${link}</td></tr>`;
+ };
+ const fetchPage=async()=>{
+  if(!active())return;
+  const turn=++ticket,state=select.value;
+  load.disabled=previous.disabled=next.disabled=true;status.textContent='Loading candidates…';
+  try{
+   const data=await api('/ai/known-good/candidates?state='+encodeURIComponent(state)+'&offset='+offset+'&limit=20');
+   if(turn!==ticket||!active())return;
+   const items=Array.isArray(data?.items)?data.items:[];
+   table.innerHTML=items.length?`<div class="table-wrap"><table><thead><tr><th>Fingerprint</th><th>Origin</th><th>State</th><th>Links</th><th></th></tr></thead><tbody>${items.map(row).join('')}</tbody></table></div>`:`<p class="help">No ${state==='all'?'':esc(state)+' '}candidates on this page.</p>`;
+   pager.hidden=!(offset||data?.more);previous.disabled=!offset;next.disabled=data?.more!==true;
+   status.textContent=(items.length?`Showing ${state==='all'?'':state+' '}candidates ${offset+1}–${offset+items.length}.`:'No candidates on this page.')+' Retained records only; current context is rechecked at every lookup.';
+   load.textContent='Refresh candidates';
+  }catch{
+   if(turn!==ticket||!active())return;
+   table.innerHTML='';pager.hidden=true;
+   status.textContent='Candidates are unavailable. The summary and individual AI runs remain usable.';
+   load.textContent='Retry candidates';
+  }finally{if(turn===ticket&&active())load.disabled=false;}
+ };
+ load.onclick=()=>{offset=0;fetchPage();};
+ select.onchange=()=>{offset=0;if(load.textContent!=='Load candidates')fetchPage();};
+ previous.onclick=()=>{offset=Math.max(0,offset-20);fetchPage();};
+ next.onclick=()=>{offset+=20;fetchPage();};
+}
+const KNOWN_GOOD_MISS_LABELS=[['no_candidate','no candidate for the exact fingerprint'],['context_ineligible','exact verified context incomplete'],['candidate_revoked','matching candidate revoked'],['candidate_unverified','candidate not reusable at lookup time'],['bypassed_refresh','bypassed by administrator Re-triage'],['bypassed_changed','bypassed by an authenticated artifact change'],['miss_unclassified','reason unavailable']];
+function bindKnownGoodLookups(root,revision){
+ const panel=document.createElement('section');
+ panel.className='card';
+ panel.setAttribute('aria-labelledby','ai-known-good-lookups-title');
+ panel.innerHTML='<h2 id="ai-known-good-lookups-title">Cache lookup outcomes</h2><p class="help">Durable daily counts of process-triage lookups in the fleet known-good cache, by fixed outcome. Counting starts when this version is installed and is kept separately from pruned AI run logs. A miss means a provider investigation was needed; a hit grants no approval and authorizes no response.</p><button type="button">Load lookup outcomes</button><p class="help" role="status"></p><div class="status-facts" hidden></div><ul class="help known-good-misses" hidden></ul>';
+ root.querySelector('.toolbar').before(panel);
+ const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),facts=panel.querySelector('.status-facts'),misses=panel.querySelector('.known-good-misses');
+ const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
+ const valid=value=>Number.isSafeInteger(value)&&value>=0;
+ const count=value=>valid(value)?value.toLocaleString():'Unavailable';
+ button.onclick=async()=>{
+  if(!active()||button.disabled)return;
+  button.disabled=true;status.textContent='Loading lookup outcomes…';
+  try{
+   const data=await api('/ai/known-good/lookups');
+   if(!active())return;
+   const value=data&&typeof data==='object'?data:{},reasons=value.misses&&typeof value.misses==='object'?value.misses:{};
+   const days=valid(value.window_days)?value.window_days:30;
+   facts.innerHTML=[[value.hits,'cache hits'],[value.total_misses,'cache misses']].map(([n,label])=>`<span><strong>${esc(count(n))}</strong> ${label}</span>`).join('');
+   facts.hidden=false;
+   const rows=KNOWN_GOOD_MISS_LABELS.filter(([key])=>valid(reasons[key])&&reasons[key]>0);
+   misses.innerHTML=rows.map(([key,label])=>`<li><strong>${esc(count(reasons[key]))}</strong> ${label}</li>`).join('');
+   misses.hidden=!rows.length;
+   const since=typeof value.counted_since_day==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value.counted_since_day)?value.counted_since_day:'';
+   status.textContent=`Last ${days} UTC days of process triage. `+(since?`Counted since ${since} (UTC).`:'No lookups have been counted yet.');
+   button.textContent='Refresh lookup outcomes';
+  }catch{
+   if(!active())return;
+   facts.hidden=true;facts.innerHTML='';misses.hidden=true;misses.innerHTML='';
+   status.textContent='Lookup outcomes are unavailable. You can still inspect individual AI runs.';
+   button.textContent='Retry lookup outcomes';
   }finally{if(active())button.disabled=false;}
  };
 }
@@ -392,7 +506,7 @@ async function users(revision=renderRevision){
 
 async function fleetSecurityCoverage(revision){
  const root=$('#content');let offset=0,query='',ticket=0;
- root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>';
+ root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>'+(isAdmin()?'<section class="card" id="fleet-auto-plans" aria-labelledby="fleet-auto-plans-title"><h2 id="fleet-auto-plans-title">Automatic AI plans across the fleet</h2><div class="fleet-auto-plans-body"></div></section>':'');
  const current=()=>currentView(revision,'security')&&root.isConnected;
  const load=async()=>{const turn=++ticket;try{
   const data=await api('/security/coverage?offset='+offset+'&q='+encodeURIComponent(query));if(!current()||turn!==ticket)return;
@@ -401,7 +515,7 @@ async function fleetSecurityCoverage(revision){
   root.querySelector('#coverage-results').innerHTML='<p>'+data.summary.servers+' servers on this page · '+data.summary.disabled+' disabled · '+data.summary.open_incidents+' open or acknowledged scanner incidents</p>'+data.items.map(h=>'<article class="card"><div class="card-head"><h2>'+esc(h.name)+'</h2><a class="button" href="'+serverLink(h.id,'security')+'">Review server security</a></div><p>'+badge(h.enabled?'enabled':'disabled')+' · Last contact '+date(h.last_seen)+' · '+h.open_incidents+' open incidents · ClamAV age limit '+h.expected_hours+' hours · YARA age limit 24 hours</p>'+(!h.enabled?'<p class="notice">Management is disabled. These results are historical; collection is suspended.</p>':'')+'<div class="server-grid">'+engine('ClamAV',h.engines.ClamAV)+engine('YARA',h.engines.YARA)+'</div></article>').join('')+(data.items.length?'':'<p>No matching managed servers.</p>');
   root.querySelector('#coverage-prev').disabled=!offset;root.querySelector('#coverage-next').disabled=!data.more;
  }catch(error){if(current()&&turn===ticket)root.querySelector('#coverage-results').innerHTML=PatchyUI.error('Unable to load coverage',esc(error.message));}};
- root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root)]);
+ root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root),fleetAutoPlans(revision,root)]);
 }
 
 // Stored advisory-scan ledger only (#911): version applicability, never exploitation evidence, a clean-host verdict
@@ -444,6 +558,47 @@ function fleetExposureContent(data){
  return summary+truncated+'<ul class="advisory-applicability fleet-exposure-list">'+rows+'</ul>'+limits+coverage+refresh;
 }
 
+// Read-only automatic AI plan status for opted-in servers (#936), the fleet form of the Security tab
+// notice (#922). Admin-only; it reads stored rows and never implies a plan will start.
+async function fleetAutoPlans(revision,root){
+ const card=root.querySelector('#fleet-auto-plans');if(!card||!isAdmin())return;
+ const body=card.querySelector('.fleet-auto-plans-body');let ticket=0;
+ const load=async()=>{
+  const turn=++ticket,current=()=>turn===ticket&&body.isConnected&&currentView(revision,'security');
+  body.innerHTML='<p role="status">Loading automatic AI plan status…</p>';
+  try{const data=await api('/security/auto-plan-status');if(!current())return;body.innerHTML=fleetAutoPlansContent(data);}
+  catch(error){if(!current())return;body.innerHTML='<div class="notice" role="alert"><p>Automatic AI plan status is unavailable right now. This never means a plan will start; pause, holds and shared start gates still apply. The rest of this page is unaffected.</p><button type="button" class="fleet-auto-plans-refresh">Retry automatic plan status</button></div>';}
+  body.querySelectorAll('.fleet-auto-plans-refresh').forEach(button=>button.onclick=load);
+ };
+ await load();
+}
+const FLEET_AUTO_PLAN_STATES={off:['Off','disabled'],ai_disabled:['AI disabled','disabled'],not_configured:['Needs model and key','medium'],paused:['AI paused','medium'],held:['Response hold','medium'],inactive:['Server disabled','disabled'],ready:['Ready','low']};
+function fleetAutoPlansContent(data){
+ const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unknown';
+ const time=value=>typeof value==='number'&&Number.isFinite(value)&&value>0?date(value):'Unknown';
+ const job=value=>value&&typeof value==='object'&&typeof value.state==='string'?value:null;
+ const refresh='<div class="actions"><button type="button" class="fleet-auto-plans-refresh">Refresh automatic plan status</button></div>';
+ const limits='<p class="help">Each server opts in on its Security tab. Plans are proposals for review and never execute automatically. Ready means a plan can be requested, not that one will start: AI pause, response holds and the shared AI start gates still decide.</p>';
+ if(!data||typeof data!=='object'||!Array.isArray(data.items)||!data.totals||!data.pacing)return '<div class="notice" role="status"><p>Automatic AI plan status is unavailable in this response. This never means a plan will start.</p></div>'+limits+refresh;
+ const t=data.totals,p=data.pacing;
+ const pacing=p.mode==='legacy'?'Legacy fleet allowance: '+count(p.used)+' of '+count(p.limit)+' plan requests used this hour'+(typeof p.next_at==='number'?' · next free '+esc(time(p.next_at)):'')+'.':'No plan-specific hourly limit; the shared AI start gates (rate throttle, daily cap, provider backoff) pace each plan.';
+ const summary='<div class="status-facts" role="status"><span><strong>'+count(t.servers)+'</strong>Servers opted in</span><span><strong>'+count(t.ready)+'</strong>Ready</span><span><strong>'+count(t.awaiting)+(t.awaiting_truncated?'+':'')+'</strong>Incidents awaiting an attempt</span><span><strong>'+count(t.active_plans)+'</strong>Plan jobs queued or running</span></div><p class="help">'+pacing+'</p>';
+ const truncated=data.truncated===true?'<div class="notice">Only the first '+count(data.items.length)+' opted-in servers are shown, ordered by name. The totals count the listed servers only.</div>':'';
+ if(!data.items.length)return summary+'<p>No server has automatic AI plans enabled. Turn them on from a server\'s Security tab.</p>'+limits+refresh;
+ const rows=data.items.map(raw=>{
+  const item=raw&&typeof raw==='object'?raw:{},state=FLEET_AUTO_PLAN_STATES[item.state]||['Unknown','unknown'];
+  const name=typeof item.host_name==='string'&&item.host_name?esc(item.host_name):'Unknown server';
+  const host=typeof item.host_id==='string'&&item.host_id?'<a href="'+serverLink(item.host_id,'security')+'">'+name+'</a>':name;
+  const facts=[];
+  facts.push(item.awaiting||item.awaiting_truncated?count(item.awaiting)+(item.awaiting_truncated?' or more':'')+' awaiting'+(item.oldest_awaiting_since?' · oldest updated '+esc(time(item.oldest_awaiting_since)):''):'Nothing awaiting');
+  const active=job(item.active_plan),latest=job(item.latest_automatic);
+  if(active)facts.push('Plan '+(active.state==='running'?'running':'queued')+' since '+esc(time(active.created)));
+  facts.push(latest?'Latest automatic attempt: '+esc(latest.state)+' at '+esc(time(latest.created)):'No automatic attempt yet');
+  return '<li><div>'+host+' <span class="badge '+state[1]+'">'+esc(state[0])+'</span></div><div class="help">'+facts.join(' · ')+'</div></li>';
+ }).join('');
+ return summary+truncated+'<ul class="fleet-auto-plans-list">'+rows+'</ul>'+limits+refresh;
+}
+
 async function aiRunPage(revision,context,base,parts){
  const root=context?.root||$('#content'),name=context?'servers':'ai-logs';
  const back=`<a class="button" href="${base}">← AI activity</a>`;
@@ -459,4 +614,27 @@ async function aiRunPage(revision,context,base,parts){
  const summary=`<section class="card"><h2>Saved run</h2><dl class="ai-run-facts"><div><dt>Purpose</dt><dd>${esc(run.purpose)}</dd></div><div><dt>Model</dt><dd>${esc(run.model)}</dd></div><div><dt>Started</dt><dd>${date(run.started)}</dd></div><div><dt>Finished</dt><dd>${run.finished?date(run.finished):run.state==='running'?'Not yet':'Not recorded'}</dd></div><div><dt>API calls</dt><dd>${esc(run.calls)}</dd></div><div><dt>Run ID</dt><dd><code>${esc(run.id)}</code></dd></div></dl><h3>Last diagnostic</h3><pre class="ai-run-message">${esc(run.message||'No diagnostic saved.')}</pre><div class="ai-cost-total">${aiCost(run.cost)}</div></section>`;
  const timeline=`<section class="card"><h2>Run timeline</h2><p class="help">Saved stages describe processing at the recorded time; they do not certify current server health or response execution. Timing records use monotonic elapsed milliseconds and can overlap; do not add them together. Queue age includes policy/backoff waits. Older or interrupted runs may have incomplete timing coverage.</p><div class="timeline">${(run.events||[]).map(event=>`<div><section><h3>${esc(typeof event.stage==='string'&&event.stage.startsWith('timing_')?'Timing · '+event.stage.slice(7).replaceAll('_',' '):event.stage)}</h3><small>${date(event.created)}</small><pre class="ai-run-message">${esc(event.message)}</pre></section></div>`).join('')||'<p>No stage events were saved for this run.</p>'}</div></section>`;
  root.innerHTML=(context?'':heading('A closer look at the work.','Saved AI processing, usage and diagnostic evidence.'))+back+`<div class="ai-run-title"><h2>AI run · ${esc(run.purpose)}</h2>${badge(run.state)}</div><p class="help">Read-only history. Browsing does not retry AI requests or approve actions. ${run.shared_batch?'Shared batch: displayed cost covers the whole run, not a per-server charge.':''}</p>`+nav+(tab==='cost'?`<section class="card">${aiCostDetails(run)}</section>`:tab==='timeline'?timeline:summary);
+}
+// Per-server linkage for one fleet known-good candidate. The page loads lazily
+// below the candidate notice and only shows identifiers, never retained evidence.
+function loadKnownGoodLinks(root,value,revision,view,offset=0){
+ if(!value?.fingerprint||!(value.published||value.reused||value.review_required))return;
+ const anchor=root.querySelector('.assessment-known-good');if(!anchor)return;
+ let section=root.querySelector('#known-good-links');
+ if(!section){section=document.createElement('section');section.id='known-good-links';section.className='known-good-links';section.setAttribute('aria-labelledby','known-good-links-title');section.setAttribute('aria-live','polite');anchor.after(section);}
+ const token=String(Math.random());section.dataset.request=token;
+ section.innerHTML='<h3 id="known-good-links-title">Linked servers</h3><p class="help" role="status">Loading linked assessments…</p>';
+ const stale=()=>!currentView(revision,view)||!section.isConnected||section.dataset.request!==token;
+ const roles={origin:'Published this candidate',reuse:'Exact-match reuse · no provider call',linked:'Independent AI assessment · same fingerprint'};
+ api('/ai/known-good/'+encodeURIComponent(value.fingerprint)+'/observations?offset='+offset+'&limit=20').then(data=>{
+  if(stale())return;
+  const rows=data.items.map(i=>{const name=i.host_name||i.host_id;const link=`#investigations/item/${encodeURIComponent(i.subject)}/history/${encodeURIComponent(i.assessment_id)}`;return `<tr><td>${esc(name)}${i.host_active?'':' <span class="badge">Inactive server</span>'}</td><td>${esc(roles[i.role]||i.role)}</td><td>${date(i.created)}</td><td><a class="button" href="${link}">Review assessment</a></td></tr>`;}).join('');
+  section.innerHTML=`<h3 id="known-good-links-title">Linked servers</h3><p class="help">${esc(data.total)} retained assessment(s) on the fleet are bound to fingerprint v${esc(data.version)}${data.active?'':' (revoked: each needs review)'}. Linkage is provenance only. It grants no approval and authorizes no response.</p>${rows?`<div class="table-wrap"><table><thead><tr><th>Server</th><th>Link</th><th>Recorded</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`:'<p class="help">No linked assessments are retained on this page.</p>'}<div class="actions"><button type="button" data-known-good-links="previous" ${data.offset?'':'disabled'}>Previous linked</button><button type="button" data-known-good-links="next" ${data.more?'':'disabled'}>Next linked</button></div>`;
+  section.querySelector('[data-known-good-links="previous"]').onclick=()=>loadKnownGoodLinks(root,value,revision,view,Math.max(0,offset-20));
+  section.querySelector('[data-known-good-links="next"]').onclick=()=>loadKnownGoodLinks(root,value,revision,view,offset+20);
+ }).catch(error=>{
+  if(stale())return;
+  section.innerHTML=`<h3 id="known-good-links-title">Linked servers</h3>${PatchyUI.error('Unable to load linked assessments',esc(error.message),'<button type="button" data-known-good-links="retry">Retry</button>')}`;
+  section.querySelector('[data-known-good-links="retry"]').onclick=()=>loadKnownGoodLinks(root,value,revision,view,offset);
+ });
 }

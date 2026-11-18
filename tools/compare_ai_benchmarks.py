@@ -17,11 +17,17 @@ MAX_STAGE_MS = MAX_ELAPSED_SECONDS * 1000
 MAX_QUEUE_AGE_SECONDS = 86_400
 LEGACY_QUEUE_AGE_SECONDS = 2
 MAX_SINGLE_SERVER_SLOTS = 4
+DATABASES = ('sqlite', 'mysql')
+MAX_DATABASE_VERSION_CHARS = 64
 REPORT_ROUNDING_RADIUS = Decimal('0.0005')
 STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
     'queue_age', 'receipt_persistence', 'usage_persistence',
 )
+# AI control modes the fixture can measure without pacing or pricing changing
+# the workload. Reports from before --control-mode ran in the implicit legacy mode.
+CONTROL_MODES = ('legacy', 'unthrottled')
+LEGACY_CONTROL_MODE = 'legacy'
 
 
 class ComparisonError(ValueError):
@@ -206,6 +212,16 @@ def _validate(report, label):
     else:
         ssh_delay = 10
         ssh_delay_source = 'legacy fixed default'
+    # Reports created before --control-mode stored no ai_control_mode, so the
+    # application read them as the implicit legacy mode.
+    control_mode_source = 'report'
+    if 'ai_control_mode' in report:
+        control_mode = report['ai_control_mode']
+        if not isinstance(control_mode, str) or control_mode not in CONTROL_MODES:
+            raise ComparisonError(f'{label}.ai_control_mode must be one of {", ".join(CONTROL_MODES)}')
+    else:
+        control_mode = LEGACY_CONTROL_MODE
+        control_mode_source = 'legacy implicit default'
     # Reports created before the optional synthetic receipt/usage persistence
     # delay carried no field and ran with no added delay. Treat only that
     # documented legacy contract as zero; bound any reported value.
@@ -221,7 +237,17 @@ def _validate(report, label):
                                      f'{label}.retained_history_rows')
     if retained_history_rows > 50_000:
         raise ComparisonError(f'{label}.retained_history_rows must be between 0 and 50000')
+    # Older fixtures could only measure their temporary SQLite file.
+    database = report.get('database', 'sqlite')
+    if database not in DATABASES:
+        raise ComparisonError(f'{label}.database must be sqlite or mysql')
+    database_version = report.get('database_version')
+    if database_version is not None and (
+            not isinstance(database_version, str) or not database_version.isprintable()
+            or not 1 <= len(database_version) <= MAX_DATABASE_VERSION_CHARS):
+        raise ComparisonError(f'{label}.database_version must be a short printable string')
     return {
+        'database': database, 'database_version': database_version,
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'fixture_hosts': fixture_hosts, 'single_server_slots': single_server_slots,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
@@ -235,6 +261,7 @@ def _validate(report, label):
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
         'cost_status': cost_status, 'workload_fingerprint': workload_fingerprint,
         'stages': stages,
+        'ai_control_mode': control_mode, 'ai_control_mode_source': control_mode_source,
     }
 
 
@@ -257,8 +284,10 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     current = _validate(candidate, 'candidate')
     if (base['execution'], base['concurrency']) == (current['execution'], current['concurrency']):
         raise ComparisonError('candidate must use a distinct execution configuration')
+    if base['ai_control_mode'] != current['ai_control_mode']:
+        raise ComparisonError('capability mismatch: ai_control_mode differs')
     controls = (
-        'runs', 'fixture_hosts', 'single_server_slots',
+        'database', 'runs', 'fixture_hosts', 'single_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
         'queue_age_seconds', 'retained_history_rows',
         'provider_calls', 'input_tokens', 'output_tokens',
@@ -287,7 +316,10 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'queue_age_seconds': base['queue_age_seconds'],
             'queue_age_source': base['queue_age_source'],
             'retained_history_rows': base['retained_history_rows'],
+            'database': base['database'], 'database_version': base['database_version'],
             'cost_status': base['cost_status'],
+            'ai_control_mode': base['ai_control_mode'],
+            'ai_control_mode_source': base['ai_control_mode_source'],
         },
         'candidate': {
             'name': candidate_name, 'execution': current['execution'],
@@ -301,7 +333,10 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'queue_age_seconds': current['queue_age_seconds'],
             'queue_age_source': current['queue_age_source'],
             'retained_history_rows': current['retained_history_rows'],
+            'database': current['database'], 'database_version': current['database_version'],
             'cost_status': current['cost_status'],
+            'ai_control_mode': current['ai_control_mode'],
+            'ai_control_mode_source': current['ai_control_mode_source'],
         },
         'capability': {
             'runs': base['runs'], 'provider_calls': base['provider_calls'],
@@ -324,7 +359,9 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'latency': 'Negative elapsed/stage deltas indicate lower fixture latency.',
             'throughput': 'Positive throughput deltas indicate higher fixture throughput.',
             'scope': 'Disposable loopback fixture only; this comparison does not establish production performance.',
+            'database': 'Both reports measured the same database backend; server versions are informational and may differ.',
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
+            'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
     }
 

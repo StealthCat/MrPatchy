@@ -1,4 +1,4 @@
-"""Read-only automatic AI plan status for one server (#922).
+"""Read-only automatic AI plan status for one server (#922) and the opted-in fleet (#936).
 
 The Security tab's scan policy can opt a server into automatic AI response
 proposals for new detections (``incidents.auto_plan_tick``). This module explains,
@@ -24,12 +24,14 @@ authorization are unchanged and plans remain manual-only.
 """
 import time
 
-from sqlalchemy import select
+from sqlalchemy import literal, select
 
 from . import ai_control_status, ai_policy, host_lifecycle, incidents
 from .db import Host, Job, Setting, config
 
 AWAITING_LIMIT = 500
+FLEET_LIMIT = 100
+POLICY_PREFIX = 'security-policy:'
 PLAN_ACTIONS = ('security-plan', 'startup-plan')
 STATES = ('off', 'ai_disabled', 'not_configured', 'paused', 'held', 'inactive', 'ready')
 
@@ -67,12 +69,17 @@ def _job(row):
     return None if row is None else {'state': row[0], 'created': float(row[1])}
 
 
-def status(session, host_id, now=None):
-    """Return this server's automatic AI plan status in the caller's session. Read-only."""
-    now = time.time() if now is None else now
-    cfg = config(session)
-    row = session.get(Setting, 'security-policy:' + host_id)
-    policy = row.value if row and isinstance(row.value, dict) else {}
+def _pacing(session, cfg, now):
+    if cfg['ai_control_mode'] == 'legacy':
+        limit = ai_control_status.AUTO_PLAN_HOURLY_LIMIT
+        used, blocked, next_at = ai_control_status._window(
+            session, Job.created, (Job.action.in_(PLAN_ACTIONS),), limit, now)
+        return {'mode': 'legacy', 'limit': limit, 'used': used, 'remaining': max(limit - used, 0),
+                'next_at': next_at if blocked else None}
+    return {'mode': cfg['ai_control_mode'], 'limit': None, 'used': None, 'remaining': None, 'next_at': None}
+
+
+def _host(session, host_id, policy, cfg):
     awaiting, truncated, oldest = _awaiting(session, host_id)
     active = session.execute(
         select(Job.state, Job.created).where(Job.host_id == host_id, Job.action.in_(PLAN_ACTIONS),
@@ -82,16 +89,7 @@ def status(session, host_id, now=None):
         select(Job.state, Job.created).where(Job.host_id == host_id, Job.action == 'security-plan',
                                              Job.payload['automatic'].as_boolean() == True)  # noqa: E712
         .order_by(Job.created.desc(), Job.id.desc()).limit(1)).first()
-    if cfg['ai_control_mode'] == 'legacy':
-        limit = ai_control_status.AUTO_PLAN_HOURLY_LIMIT
-        used, blocked, next_at = ai_control_status._window(
-            session, Job.created, (Job.action.in_(PLAN_ACTIONS),), limit, now)
-        pacing = {'mode': 'legacy', 'limit': limit, 'used': used, 'remaining': max(limit - used, 0),
-                  'next_at': next_at if blocked else None}
-    else:
-        pacing = {'mode': cfg['ai_control_mode'], 'limit': None, 'used': None, 'remaining': None, 'next_at': None}
     return {
-        'generated_at': now,
         'enabled': bool(policy.get('auto_ai_plan')),
         'state': _state(session, host_id, policy, cfg),
         'awaiting': awaiting,
@@ -99,5 +97,46 @@ def status(session, host_id, now=None):
         'oldest_awaiting_since': oldest,
         'active_plan': _job(active),
         'latest_automatic': _job(latest),
-        'pacing': pacing,
+    }
+
+
+def status(session, host_id, now=None):
+    """Return this server's automatic AI plan status in the caller's session. Read-only."""
+    now = time.time() if now is None else now
+    cfg = config(session)
+    row = session.get(Setting, 'security-policy:' + host_id)
+    policy = row.value if row and isinstance(row.value, dict) else {}
+    return {'generated_at': now, **_host(session, host_id, policy, cfg), 'pacing': _pacing(session, cfg, now)}
+
+
+def fleet(session, now=None):
+    """Return automatic AI plan status for every opted-in, non-deleted server (#936). Read-only.
+
+    Rows reuse ``status`` field by field, ordered by server name then ID, and are
+    bounded to ``FLEET_LIMIT``. Totals count only the listed rows; ``truncated`` says
+    more opted-in servers exist. Pacing is fleet-wide and reported once.
+    """
+    now = time.time() if now is None else now
+    cfg = config(session)
+    hosts = session.execute(
+        select(Host.id, Host.name, Setting.value)
+        .join(Setting, Setting.key == literal(POLICY_PREFIX) + Host.id)
+        .where(Host.deleted_at == 0)
+        .order_by(Host.name, Host.id)).all()
+    opted = [(host_id, name, value) for host_id, name, value in hosts
+             if isinstance(value, dict) and value.get('auto_ai_plan')]
+    items = [{'host_id': host_id, 'host_name': name, **_host(session, host_id, value, cfg)}
+             for host_id, name, value in opted[:FLEET_LIMIT]]
+    return {
+        'generated_at': now,
+        'items': items,
+        'truncated': len(opted) > FLEET_LIMIT,
+        'totals': {
+            'servers': len(items),
+            'ready': sum(item['state'] == 'ready' for item in items),
+            'awaiting': sum(item['awaiting'] for item in items),
+            'awaiting_truncated': any(item['awaiting_truncated'] for item in items),
+            'active_plans': sum(item['active_plan'] is not None for item in items),
+        },
+        'pacing': _pacing(session, cfg, now),
     }

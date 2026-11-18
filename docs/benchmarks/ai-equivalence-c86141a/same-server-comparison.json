@@ -1,0 +1,238 @@
+{
+  "baseline": {
+    "ai_control_mode": "legacy",
+    "ai_control_mode_source": "legacy implicit default",
+    "concurrency": 1,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "sqlite",
+    "database_version": null,
+    "execution": "serial",
+    "fixture_hosts": 1,
+    "name": "same-server-serial.json",
+    "persistence_delay_ms": 5,
+    "persistence_delay_source": "report",
+    "provider_delay_ms": 25,
+    "queue_age_seconds": 2,
+    "queue_age_source": "report",
+    "retained_history_rows": 0,
+    "runs": 20,
+    "single_server_slots": 4,
+    "ssh_delay_ms": 10,
+    "ssh_delay_source": "report"
+  },
+  "candidate": {
+    "ai_control_mode": "legacy",
+    "ai_control_mode_source": "legacy implicit default",
+    "concurrency": 4,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "sqlite",
+    "database_version": null,
+    "execution": "parallel",
+    "fixture_hosts": 1,
+    "name": "same-server-parallel.json",
+    "persistence_delay_ms": 5,
+    "persistence_delay_source": "report",
+    "provider_delay_ms": 25,
+    "queue_age_seconds": 2,
+    "queue_age_source": "report",
+    "retained_history_rows": 0,
+    "runs": 20,
+    "single_server_slots": 4,
+    "ssh_delay_ms": 10,
+    "ssh_delay_source": "report"
+  },
+  "capability": {
+    "input_tokens": 3000,
+    "output_tokens": 600,
+    "provider_calls": 30,
+    "runs": 20,
+    "stage_samples": {
+      "admission": 20,
+      "one_stage": 10,
+      "provider": 30,
+      "queue_age": 20,
+      "receipt_persistence": 30,
+      "run": 20,
+      "ssh_evidence": 10,
+      "two_stage": 10,
+      "usage_persistence": 30
+    },
+    "workload_fingerprint": {
+      "sha256": "2cda5b8653f145cfaef84c8d5ad283aed0fa83eb2c6357c43533d09882b60344",
+      "version": 1
+    }
+  },
+  "capability_equivalent": true,
+  "deltas": {
+    "elapsed_seconds": {
+      "absolute": -0.902,
+      "baseline": 2.074,
+      "candidate": 1.172,
+      "percent": -43.491,
+      "percent_unavailable": null
+    },
+    "runs_per_second": {
+      "absolute": 7.419,
+      "baseline": 9.641,
+      "candidate": 17.06,
+      "percent": 76.953,
+      "percent_unavailable": null
+    },
+    "stages": {
+      "admission": {
+        "p50_ms": {
+          "absolute": 20.995,
+          "baseline": 11.945,
+          "candidate": 32.94,
+          "percent": 175.764,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 68.031,
+          "baseline": 16.3,
+          "candidate": 84.331,
+          "percent": 417.368,
+          "percent_unavailable": null
+        }
+      },
+      "one_stage": {
+        "p50_ms": {
+          "absolute": 84.576,
+          "baseline": 69.581,
+          "candidate": 154.157,
+          "percent": 121.55,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 157.64,
+          "baseline": 125.257,
+          "candidate": 282.897,
+          "percent": 125.853,
+          "percent_unavailable": null
+        }
+      },
+      "provider": {
+        "p50_ms": {
+          "absolute": 12.517,
+          "baseline": 41.024,
+          "candidate": 53.541,
+          "percent": 30.511,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 50.849,
+          "baseline": 45.819,
+          "candidate": 96.668,
+          "percent": 110.978,
+          "percent_unavailable": null
+        }
+      },
+      "queue_age": {
+        "p50_ms": {
+          "absolute": -465.587,
+          "baseline": 3027.978,
+          "candidate": 2562.391,
+          "percent": -15.376,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": -900.445,
+          "baseline": 3898.86,
+          "candidate": 2998.415,
+          "percent": -23.095,
+          "percent_unavailable": null
+        }
+      },
+      "receipt_persistence": {
+        "p50_ms": {
+          "absolute": 3.251,
+          "baseline": 6.376,
+          "candidate": 9.627,
+          "percent": 50.988,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 10.42,
+          "baseline": 7.37,
+          "candidate": 17.79,
+          "percent": 141.384,
+          "percent_unavailable": null
+        }
+      },
+      "run": {
+        "p50_ms": {
+          "absolute": 116.63,
+          "baseline": 125.357,
+          "candidate": 241.987,
+          "percent": 93.038,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 223.4,
+          "baseline": 134.249,
+          "candidate": 357.649,
+          "percent": 166.407,
+          "percent_unavailable": null
+        }
+      },
+      "ssh_evidence": {
+        "p50_ms": {
+          "absolute": 0.105,
+          "baseline": 10.091,
+          "candidate": 10.196,
+          "percent": 1.041,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 0.782,
+          "baseline": 10.184,
+          "candidate": 10.966,
+          "percent": 7.679,
+          "percent_unavailable": null
+        }
+      },
+      "two_stage": {
+        "p50_ms": {
+          "absolute": 127.829,
+          "baseline": 129.102,
+          "candidate": 256.931,
+          "percent": 99.014,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 215.71,
+          "baseline": 163.721,
+          "candidate": 379.431,
+          "percent": 131.755,
+          "percent_unavailable": null
+        }
+      },
+      "usage_persistence": {
+        "p50_ms": {
+          "absolute": 2.977,
+          "baseline": 6.145,
+          "candidate": 9.122,
+          "percent": 48.446,
+          "percent_unavailable": null
+        },
+        "p95_ms": {
+          "absolute": 7.747,
+          "baseline": 7.1,
+          "candidate": 14.847,
+          "percent": 109.113,
+          "percent_unavailable": null
+        }
+      }
+    }
+  },
+  "fixture_only": true,
+  "interpretation": {
+    "control_mode": "Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.",
+    "cost": "Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.",
+    "database": "Both reports measured the same database backend; server versions are informational and may differ.",
+    "latency": "Negative elapsed/stage deltas indicate lower fixture latency.",
+    "scope": "Disposable loopback fixture only; this comparison does not establish production performance.",
+    "throughput": "Positive throughput deltas indicate higher fixture throughput."
+  },
+  "schema_version": 1
+}

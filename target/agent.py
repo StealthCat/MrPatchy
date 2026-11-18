@@ -148,13 +148,39 @@ def digest(path):
     return hash_artifact(path,{})
 def read(path):
     return Path(path).read_text(errors='replace')
+REBOOT_PACKAGE_LIMIT = 50
+
+
+def reboot_state(flag=Path('/var/run/reboot-required'),packages=Path('/var/run/reboot-required.pkgs'),
+                 marker=Path('/opt/drpatch/rpm-reboot-required'),boot=Path('/proc/sys/kernel/random/boot_id')):
+    """Read-only pending-reboot report. Mirrors the bridge health check: the Debian flag file,
+    or the RPM marker only when it names the current boot. Package names are bounded and
+    validated; nothing is executed."""
+    required=flag.is_file();names=[];truncated=False
+    if not required:
+        try:
+            current=boot.read_text()[:100].strip()
+            required=bool(current) and marker.is_file() and marker.stat().st_size<200 and marker.read_text().strip()==current
+        except OSError:required=False
+    if required:
+        try:
+            if packages.is_file() and packages.stat().st_size<64_000:
+                for line in packages.read_text(errors='replace').splitlines():
+                    name=line.strip()
+                    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}',name) or name in names:continue
+                    if len(names)>=REBOOT_PACKAGE_LIMIT:truncated=True;break
+                    names.append(name)
+        except OSError:pass
+    return {'required':required,'packages':names,'packages_truncated':truncated}
+
+
 def inventory():
     if not Path('/var/lib/dpkg/status').exists():
         import sys
         sys.path.insert(0,'/usr/local/lib/mrpatchy')
         try:from rpm_support import local_inventory
         except ImportError:from target.rpm_support import local_inventory
-        return local_inventory()
+        return {**local_inventory(),'reboot':reboot_state()}
     files = {}
     for pattern in ['/etc/apt/sources.list', '/etc/apt/sources.list.d/*', '/etc/apt/preferences', '/etc/apt/preferences.d/*']:
         for name in glob.glob(pattern):
@@ -174,7 +200,7 @@ def inventory():
                 keys[name]=base64.b64encode(p.read_bytes()).decode()
     arch = subprocess.check_output(['dpkg', '--print-architecture'], text=True).strip()
     foreign = subprocess.check_output(['dpkg', '--print-foreign-architectures'], text=True).split()
-    return {'os': read('/etc/os-release'), 'architecture': arch, 'foreign_architectures': foreign, 'status': read('/var/lib/dpkg/status'), 'files': files, 'keys': keys, 'machine_id': read('/etc/machine-id').strip(), 'collected': time.time()}
+    return {'os': read('/etc/os-release'), 'architecture': arch, 'foreign_architectures': foreign, 'status': read('/var/lib/dpkg/status'), 'files': files, 'keys': keys, 'machine_id': read('/etc/machine-id').strip(), 'reboot': reboot_state(), 'collected': time.time()}
 def address(value, ipv6):
     ip, port = value.split(':')
     raw = bytes.fromhex(ip)
@@ -1011,7 +1037,11 @@ def security_scan(paths,yara_rules=None):
 PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/etc/cron.hourly','/etc/cron.weekly','/etc/cron.monthly',
                      '/var/spool/cron','/etc/init.d','/etc/profile.d')
-PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload')
+PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab')
+# Built-in files that administrators could previously select as custom paths. A stored
+# custom path equal to one of them is already covered by built-in scope, so it is
+# accepted and inventoried once instead of failing saved policies after an upgrade.
+PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab',)
 PACKAGE_ID = r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}'
 
 
@@ -1019,6 +1049,9 @@ def validate_custom_paths(paths):
     if not isinstance(paths,list) or len(paths)>16:raise ValueError('Select up to 16 custom file or directory paths')
     selected=list(PERSISTENCE_ROOTS)+list(PERSISTENCE_FILES)
     for value in paths:
+        if value in PROMOTED_PERSISTENCE_FILES:
+            if paths.count(value)>1:raise ValueError('Custom paths must not overlap each other or built-in startup scope')
+            continue
         if not isinstance(value,str) or not 1<len(value)<=4096 or not value.startswith('/') or value.startswith('//') or str(Path(value))!=value or '..' in Path(value).parts or any(ord(c)<32 for c in value):raise ValueError('Custom paths must be canonical absolute paths without control characters')
         if scan_excluded(Path(value)):raise ValueError('Custom path is in an excluded filesystem or quarantine directory')
         if any(value==root or value.startswith(root+'/') or root.startswith(value+'/') for root in selected):raise ValueError('Custom paths must not overlap each other or built-in startup scope')
@@ -1115,16 +1148,71 @@ def cron_command(text):
     return _CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),command),split is not None
 
 
+# Only these assignments change which program a job runs. Every other value stays unexported.
+CRON_DISCLOSED_ENVIRONMENT = ('SHELL','PATH')
+
+
+_CRON_SPACE = ' \t\n\v\f\r'
+
+
+def cron_assignment(text):
+    """Return (name, value) when cron's load_env would take the line as NAME=value, else None.
+    This follows load_env's state machine: the name and the value may each be wrapped in one
+    pair of single or double quotes, C isspace blanks may surround the equals sign, and an
+    unquoted value loses its trailing blanks. A line load_env refuses (an unclosed quote,
+    text after a closing quote) is not an assignment; cron then reads it as a job entry.
+    NAME= with nothing after it is kept as an empty value, as cronie does; Debian cron
+    refuses that line and with it the whole file."""
+    fields=([],[]);state=0;quote='';index=0  # 0 NAMEI 1 NAME 2 EQ1 3 EQ2 4 VALUEI 5 VALUE 6 FINI 7 ERROR
+    while state<7 and index<len(text):
+        char=text[index]
+        if state in (0,4):
+            if char in '"\'':
+                quote=char;index+=1
+                if index>=len(text):return None
+                char=text[index]
+            state+=1
+        if state in (1,5):
+            if quote and char==quote:state+=1;index+=1
+            elif quote and state==1 and char=='=':state=7
+            elif not quote and state==1 and char in _CRON_SPACE:state+=1;index+=1
+            elif not quote and state==1 and char=='=':state+=1
+            else:fields[state==5].append(char);index+=1
+        elif state==2:
+            if char=='=':state+=1;quote=''
+            elif char not in _CRON_SPACE:state=7
+            index+=1
+        elif char in _CRON_SPACE:index+=1
+        else:state+=1
+    if state not in (3,6) and not (state==5 and not quote):return None
+    name,value=''.join(fields[0]),''.join(fields[1])
+    return name,(value if quote else value.rstrip(_CRON_SPACE))
+
+
+def cron_environment_value(value):
+    """Bound and escape a disclosed SHELL/PATH value; return (text, truncated)."""
+    if value is None:return None,False
+    value,_=redact_cron_command(value)
+    shown=_CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),value[:CRON_COMMAND_LIMIT])
+    return shown[:CRON_COMMAND_LIMIT],len(value)>CRON_COMMAND_LIMIT or len(shown)>CRON_COMMAND_LIMIT
+
+
 def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):
     """Parse crontab text as data. Nothing is executed or sourced; environment values are
-    counted but never exported, and malformed lines are counted rather than guessed."""
+    counted but never exported, and malformed lines are counted rather than guessed. The
+    SHELL and PATH a file assigns above a job are reported with that job, because cron
+    applies an assignment only to the entries that follow it."""
     result={'format':form,'jobs':[],'unparsed':0,'environment':0,'truncated':False}
-    limit=max(0,min(CRON_FILE_JOBS,budget))
+    limit=max(0,min(CRON_FILE_JOBS,budget));assigned={}
     for number,line in enumerate(data.decode('utf-8','replace').split('\n'),1):
         text=line.rstrip('\r').strip(' \t')
         if not text or text.startswith('#'):continue
         if '\x00' in text:result['unparsed']+=1;continue
-        if re.match(r'[A-Za-z_][A-Za-z0-9_]*[ \t]*=',text):result['environment']+=1;continue
+        assignment=cron_assignment(text)
+        if assignment:
+            result['environment']+=1
+            if assignment[0] in CRON_DISCLOSED_ENVIRONMENT:assigned[assignment[0]]=assignment[1]
+            continue
         special=re.split(r'[ \t]+',text,maxsplit=1)[0]
         count=(1 if special.startswith('@') else 5)+(1 if form=='system' else 0)
         parts=re.split(r'[ \t]+',text,maxsplit=count)
@@ -1141,8 +1229,11 @@ def parse_cron(data,form,account=None,budget=CRON_FILE_JOBS):
         if not command:result['unparsed']+=1;continue
         if len(result['jobs'])>=limit:result['truncated']=True;continue
         command,redacted=redact_cron_command(command)
+        shell,shell_truncated=cron_environment_value(assigned.get('SHELL'))
+        path,path_truncated=cron_environment_value(assigned.get('PATH'))
         result['jobs'].append({'line':number,'schedule':schedule,'account':user,'command':command[:CRON_COMMAND_LIMIT],
-                               'redacted':redacted,'command_truncated':len(command)>CRON_COMMAND_LIMIT,'stdin':stdin})
+                               'redacted':redacted,'command_truncated':len(command)>CRON_COMMAND_LIMIT,'stdin':stdin,
+                               'shell':shell,'shell_truncated':shell_truncated,'path':path,'path_truncated':path_truncated})
     return result
 
 
@@ -1296,6 +1387,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
             except FileNotFoundError:report['missing_roots'].append(value)
             except OSError:gap(path,'Persistence file parent inaccessible')
         for value in paths:
+            if value in PROMOTED_PERSISTENCE_FILES:continue
             path=Path(value);selected=False
             try:
                 with scan_root(path.parent) as parent:

@@ -51,7 +51,7 @@ GitHub permissions. Requiring `integration-version` and the other applicable CI
 checks in repository protection would enforce the check requirement at GitHub;
 this workflow does not itself configure repository protection.
 
-Accept a worker's ready handoff and prepare one PR at a time. Review actual scope
+Accept a worker's ready handoff and prepare one integration at a time: a single PR, or a batch of up to 8 independent ready PRs as described in AGENTS.md (Batched integration). Review actual scope
 and dependencies, merge current main into the branch without rewriting commits,
 and resolve only understood conflicts. Return substantive or ambiguous fixes to
 the worker. Handle every README/changelog update from the PR notes, validating

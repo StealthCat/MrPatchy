@@ -81,8 +81,10 @@ def save_inventory(s,h,inv):
     items=package_backend.installed(inv)
     if h.inventory and any(h.inventory.get(key)!=inv.get(key) for key in ('status','files','keys','architecture','foreign_architectures','machine_id','package_manager','rpm_vars','module_platform_id')):
         h.last_repo=0
-    previous={k:v for k,v in h.inventory.items() if k!='collected'}
-    current={k:v for k,v in inv.items() if k!='collected'}
+    # The pending-reboot flag is current state, not inventory history: flipping it alone
+    # does not retain another full inventory revision.
+    previous={k:v for k,v in h.inventory.items() if k not in ('collected','reboot')}
+    current={k:v for k,v in inv.items() if k not in ('collected','reboot')}
     old={p.name:p for p in s.scalars(select(Package).where(Package.host_id==h.id))}
     package_history.record(s,h,inv,old,items)
     if previous!=current or not s.scalar(select(InventoryRevision.id).where(InventoryRevision.host_id==h.id).limit(1)):
@@ -504,13 +506,13 @@ def execute_locked(job_id):
                 plan=startup_ai.generate(s,incident,float(job.payload['expected_updated']))
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='security-plan':
-                from . import incidents
+                from . import incidents,job_notifications
                 incident=s.get(incidents.Incident,job.payload['incident_id'])
                 if not incident or incident.host_id!=h.id:raise ValueError('Incident not found')
                 if job.payload.get('automatic'):
                     policy=s.get(Setting,'security-policy:'+h.id)
-                    if not policy or not policy.value.get('auto_ai_plan'):raise ValueError('Automatic AI planning is disabled; no AI call sent')
-                    if incident.state!='open' or incident.scan_id!=job.payload.get('scan_id'):raise ValueError('Automatic incident evidence changed; no AI call sent')
+                    if not policy or not policy.value.get('auto_ai_plan'):raise ValueError(job_notifications.AUTOMATIC_PLAN_DISABLED)
+                    if incident.state!='open' or incident.scan_id!=job.payload.get('scan_id'):raise ValueError(job_notifications.AUTOMATIC_PLAN_STALE)
                 plan=incidents.generate(s,incident,include_related=job.payload.get('include_related') is True and not job.payload.get('automatic'))
                 job.output=json.dumps({'plan_id':plan.id,'execution':'manual_only'})
             elif job.action=='vendor-inspect':
@@ -739,6 +741,18 @@ def validate_patch(s,h,specs,cfg=None):
             raise ValueError('Queued patch is no longer valid; review package '+name)
 
 
+def prune_history(s,cutoff):
+    """Delete diagnostic history older than ``cutoff`` in the caller's transaction.
+
+    Removes observations, inventory revisions and finished AI runs with their
+    events, call receipts and host links. Running AI runs, retained AI
+    assessments, the fleet known-good cache and the spend ledger are kept.
+    """
+    s.execute(delete(Observation).where(Observation.received<cutoff))
+    s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
+    ai_runs.prune_history(s,cutoff)
+
+
 def investigate_one(owner=None):
     from . import ai_claims
     admission_started=time.perf_counter()
@@ -785,8 +799,21 @@ def _explain_known_good_miss(missed,model,policy_hashes):
             explained=known_good.explain_miss(read,missed['evidence'],model,policy_hashes,
                 refresh=missed['refresh'],changed=missed['changed'])
     except Exception:
-        log.warning('Known-good miss diagnostic unavailable',exc_info=True);return
+        log.warning('Known-good miss diagnostic unavailable',exc_info=True)
+        _count_known_good_lookup(None)
+        return
+    _count_known_good_lookup(explained['code'])
     ai_runs.event('known_good_lookup',explained['message'])
+
+def _count_known_good_lookup(code):
+    """Durably count one cache miss outcome; never affects the investigation."""
+    from . import known_good_lookups
+    outcome=code if code in known_good_lookups.MISSES else known_good_lookups.UNCLASSIFIED
+    try:
+        with Session() as write:
+            known_good_lookups.record(write,outcome);write.commit()
+    except Exception:
+        log.warning('Known-good lookup counter unavailable',exc_info=True)
 
 def _assess_active_behavior(s,row,cfg,secret):
     from . import ai_assessments,ai_claims,known_good,triage_notifications
@@ -819,6 +846,12 @@ def _assess_active_behavior(s,row,cfg,secret):
         saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
         assessment=ai_assessments.record_reuse(write,saved,hit)
         known_good.link_reuse(write,assessment,hit)
+        from . import known_good_lookups
+        try:
+            # Counted inside the reuse transaction: a rolled-back reuse is not a hit.
+            with write.begin_nested():known_good_lookups.record(write,known_good_lookups.HIT)
+        except Exception:
+            log.warning('Known-good lookup counter unavailable',exc_info=True)
         from .file_trust import record_reuse
         record_reuse(write,saved,assessment,hit)
         ai_retry.clear(write,saved)
@@ -833,8 +866,12 @@ def _assess_active_behavior(s,row,cfg,secret):
             s.commit();return
     _explain_known_good_miss(missed,cfg['ai_model'],policy_hashes)
     inputs=[]
-    def assess(evidence):
-        prepared=ai.investigation_input(evidence)
+    def assess(evidence,follow_up=False):
+        try:prepared=ai.investigation_input(evidence)
+        except ai.AIError as error:
+            # The first-stage call already went out, so say so (#1007 review).
+            if follow_up and error.cause==ai.EVIDENCE_SIZE:error.cause=ai.FOLLOW_UP_EVIDENCE_SIZE
+            raise
         inputs.append({'evidence':prepared,'policy':policy})
         return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
     result=assess(row.evidence)
@@ -868,7 +905,7 @@ def _assess_active_behavior(s,row,cfg,secret):
                     saved.evidence=updated
                 row.evidence=copy.deepcopy(saved.evidence)
             else:row.evidence=updated;s.commit()
-        result=assess(row.evidence)
+        result=assess(row.evidence,follow_up=True)
     with ai_runs.measure('result_persistence'):
         def save(write,saved):
             saved.verdict=result['risk'];saved.analysis=result['explanation']+'\n\nRecommended checks: '+result['recommended_checks']
@@ -1026,13 +1063,7 @@ def _loop(reporter):
                 if is_leader and now-last_cleanup>3600:
                     with Session() as s:
                         cutoff=now-config(s)['history_days']*86400
-                        s.execute(delete(Observation).where(Observation.received<cutoff))
-                        s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
-                        expired=select(ai_runs.AIRun.id).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running')
-                        s.execute(delete(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id.in_(expired)))
-                        s.execute(delete(ai_runs.AICall).where(ai_runs.AICall.run_id.in_(expired)))
-                        s.execute(delete(ai_runs.AIRunHost).where(ai_runs.AIRunHost.run_id.in_(expired)))
-                        s.execute(delete(ai_runs.AIRun).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running'))
+                        prune_history(s,cutoff)
                         for entry in s.scalars(select(Setting).where(Setting.key.like('session:%') | Setting.key.like('enroll:%') | Setting.key.like('oidc-state:%'))):
                             if entry.value.get('expires',now+1)<now: s.delete(entry)
                         s.commit()
