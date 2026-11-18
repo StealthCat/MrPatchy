@@ -11531,3 +11531,15 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+
+### Interrupted package scoring in AI Activity — Roadmap A checkpoint #1115
+
+The scoring queue summary shows an exact current package attempt as waiting to
+retry when worker recovery has recorded its linked scoring run as interrupted.
+It reports the existing one-hour eligibility boundary. A live, missing or older
+run link cannot supply evidence of interruption for the current attempt.
+
+The regression compares counts before and after the retry boundary and verifies
+that reading the summary leaves the score intact. If the worker stops before
+linking its run, the summary has no run state for that attempt. Independent
+scoring admission and native fleet throughput acceptance remain open.
