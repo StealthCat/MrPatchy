@@ -3776,8 +3776,21 @@ so an investigation on its last attempt is `active` here while the fleet
   to start: shared start gates, worker capacity, the per-server limit and pause
   still apply. Pause is read as the fleet status reads it, so a manually
   corrupted per-server AI policy is not shown as paused although provider calls
-  for that server are refused. No page shows the breakdown yet; the UI panel, servers beyond the
-  first 50 and matched production acceptance remain open.
+  for that server are refused. Servers beyond the first 50 and matched
+  production acceptance remain open.
+- **UI panel (worker follow-up):** the fleet AI activity page (`#ai-logs`) now
+  has an administrator-only, on-demand **Servers holding the triage backlog**
+  panel. It reads this endpoint and shows each server's pending, active,
+  eligible-now, retry-wait and blocked counts. It also shows pause and
+  lease-versus-limit admission state, the oldest observation and the next
+  retry, and links to that server's Investigations tab. The panel states the
+  total number of servers with a backlog and when the list was truncated, and
+  lists the endpoint's limitations as escaped text. A failed read shows a
+  generic message with Retry, and a late reply after navigation is discarded.
+  Fetching runs only on request, so the page never sends the grouped query
+  unprompted. A browser regression (`tests/ui_ai_triage_servers.cjs`) covers
+  error, empty, populated and truncated replies, escaping, the deep link,
+  navigation during a held request and 320/768/1440 px layouts.
 
 ### Active admission control in the investigations queue notice — worker checkpoint #685
 
