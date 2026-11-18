@@ -1,3 +1,7 @@
+## 1.75.42 — 2026-11-18
+
+1. [PR #1118](https://github.com/StealthCat/MrPatchy/pull/1118): Shared AI provider backoff now preserves the newest failure timestamp when parallel failures are recorded out of order, so a success from a request already in flight at the newer failure cannot clear that retry floor. A later successful request can still clear it. Compatibility: no schema, API, role, client, or response-authorization change; timestamp ordering assumes synchronized worker clocks, and matched production throughput remains outside this slice.
+
 ## 1.75.41 — 2026-11-18
 
 1. [PR #1107](https://github.com/StealthCat/MrPatchy/pull/1107): Settings' unsaved-navigation guard now returns to the edited entry when Back or an in-app tab navigation is held, and Discard reaches the exact requested history entry after a dropped undo. Where the Navigation API is available, keyed traversals use bounded retries and per-prompt guards. Compatibility: browsers without the Navigation API retain the existing `history.go` path; no API, schema, role, audit, or response-authorization behavior changes. #1083 remains open pending hosted confirmation and resolution of its separate diagnostics defect.
