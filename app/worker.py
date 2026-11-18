@@ -750,11 +750,7 @@ def prune_history(s,cutoff):
     """
     s.execute(delete(Observation).where(Observation.received<cutoff))
     s.execute(delete(InventoryRevision).where(InventoryRevision.created<cutoff))
-    expired=select(ai_runs.AIRun.id).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running')
-    s.execute(delete(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id.in_(expired)))
-    s.execute(delete(ai_runs.AICall).where(ai_runs.AICall.run_id.in_(expired)))
-    s.execute(delete(ai_runs.AIRunHost).where(ai_runs.AIRunHost.run_id.in_(expired)))
-    s.execute(delete(ai_runs.AIRun).where(ai_runs.AIRun.started<cutoff,ai_runs.AIRun.state!='running'))
+    ai_runs.prune_history(s,cutoff)
 
 
 def investigate_one(owner=None):
