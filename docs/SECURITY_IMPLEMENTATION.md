@@ -11555,3 +11555,39 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+
+### Python site startup-hook contract — worker checkpoint #1144 (roadmap F)
+
+Every CPython start without `-S` imports `site`, including root services. `site` executes each `.pth` line that starts with `import ` or `import\t` in every processed site directory, then imports `sitecustomize`, and `usercustomize` when the user site is enabled. This is a known persistence hook (MITRE ATT&CK T1546.018). Neither the startup catalog nor any contract covered it.
+
+- **Change:** a new pure module, `app/python_site_hooks.py`. From captured directory listings and `.pth` bytes it reports:
+  - which site directories `site` processes, in order;
+  - which `.pth` files it reads;
+  - which lines it executes as code, which it appends to `sys.path`, and which are reached only if earlier code did not raise;
+  - which observed `sitecustomize` or `usercustomize` an import finds first, per account and with the user site disabled.
+- **Reference:** the rules follow Debian CPython 3.11, 3.12 and 3.13 `Lib/site.py` (`main`, `getsitepackages`, `addsitedir`, `addpackage`).
+  - The user site comes first, then `/usr/local/lib/python3.X/dist-packages`, `/usr/lib/python3/dist-packages` and `/usr/lib/python3.X/dist-packages`. Each is processed only when it is a directory.
+  - `.pth` names are case-sensitive, a leading dot hides a file, and files are read in `sorted()` order.
+  - `#` lines and blank lines are skipped. Only `import ` or `import\t` at column 0 runs; an indented `import` is a path line.
+  - The first failing line stops the rest of its file.
+  - 3.13 strips a UTF-8 BOM and splits with `splitlines()`. 3.11 and 3.12 read in locale text mode with universal newlines.
+  - Directories added by path lines are not scanned for `.pth` files.
+  - For the customize modules, `FileFinder` takes a package before an extension, an extension before source, and source before sourceless bytecode.
+- **Gaps, never reported as covered:**
+  - an unobserved or incompletely listed directory, and unread, truncated or special `.pth` files;
+  - non-ASCII content on 3.11 or 3.12, and non-UTF-8 content on 3.13, because decoding depends on the locale;
+  - a path line whose target was not observed;
+  - extension-module, zip or namespace-only customize candidates;
+  - malformed input, hash mismatches and caps;
+  - a family other than Debian, and any version other than 3.11–3.13, including free-threaded builds.
+- **Unobserved, stated in every result:**
+  - the script directory and `PYTHONPATH`;
+  - the interpreter options `-S`, `-s` and `-I`, and `PYTHONNOUSERSITE`;
+  - `HOME` and `PYTHONUSERBASE` overrides;
+  - virtual environments and other interpreters;
+  - what executed hook code does, including changes to `sys.path`.
+
+  A resolution reached after `.pth` code has run carries `pth_code_may_change_sys_path`.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_python_site_hooks.py` has 17 tests and cannot run on main, where the module does not exist. A parametrized test runs the real `site.addsitedir` from the local python3.11, 3.12 and 3.13 against one fixture tree. It compares the executed lines, their order and the added `sys.path` entries, including the 3.13-only form-feed split. Six mutations are each caught: case-insensitive names, universal newlines on 3.13, indented or space-less `import` treated as code, unsorted order, dropping `after_code`, and treating non-ASCII bytes as exact on 3.12.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against `dpkg` ownership of the shipped `.pth` files and `/etc/python3.X/sitecustomize.py`, RPM-family layouts, and UI.
