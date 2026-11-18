@@ -1,3 +1,9 @@
+## 1.75.36 — 2026-11-18
+
+1. [PR #1090](https://github.com/StealthCat/MrPatchy/pull/1090): Batched integration of [PR #1084](https://github.com/StealthCat/MrPatchy/pull/1084), [PR #1080](https://github.com/StealthCat/MrPatchy/pull/1080).
+2. [PR #1084](https://github.com/StealthCat/MrPatchy/pull/1084): The unsaved-Settings browser check now reports the observed address and history position when it fails, instead of a Node 26 assertion TypeError (#1083). Test diagnostics only.
+3. [PR #1080](https://github.com/StealthCat/MrPatchy/pull/1080): Add a pure acpid event-rule contract that resolves which `/etc/acpi/events` rule files acpid 2.0.28–2.0.34 loads, which event regex triggers each and which action it runs as root through `/bin/sh -c`, also reporting drop rules and `-c`/`-r`/`-L` options and failing closed on unobserved input (#1079). Compatibility for this batch: test diagnostics and a new pure contract only; no schema, API or authorization change.
+
 ## 1.75.35 — 2026-11-18
 
 1. [PR #1086](https://github.com/StealthCat/MrPatchy/pull/1086): Batched integration of [PR #1085](https://github.com/StealthCat/MrPatchy/pull/1085), [PR #1082](https://github.com/StealthCat/MrPatchy/pull/1082), [PR #1076](https://github.com/StealthCat/MrPatchy/pull/1076), [PR #1073](https://github.com/StealthCat/MrPatchy/pull/1073).
