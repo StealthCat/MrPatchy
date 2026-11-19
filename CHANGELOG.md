@@ -1,3 +1,7 @@
+## 1.75.51 — 2026-11-19
+
+1. [PR #1139](https://github.com/StealthCat/MrPatchy/pull/1139): Extends the optional native MySQL triage benchmark with matched same-server serial and four-worker runs, checking workload parity, provider overlap, completed investigations, required SSH follow-ups, no approvals, equivalent SQLite workload and database cleanup. Compatibility: tests and documentation only; no production runtime, schema, API or response-authorization change. Limit: synthetic provider and disposable database only; production throughput and failover remain unverified.
+
 ## 1.75.50 — 2026-11-19
 
 1. [PR #1160](https://github.com/StealthCat/MrPatchy/pull/1160): Blocked process investigations now distinguish model refusals and response token-budget exhaustion from provider/configuration failures. Both reasons state the request was sent and may be billed; eligibility, attempts and retry behavior are unchanged. Compatibility: existing blocked rows keep their stored reason until retried; no schema, API, UI, role, admission, accounting or response-authorization change. Limit: update-scoring and advisory-plan failure wording is unchanged.

@@ -10921,6 +10921,19 @@ checkpoint changes no runtime, schema, admission, provider call or response
 authority.
 
 
+### Same-server MySQL benchmark acceptance — Roadmap A checkpoint #1138
+
+The native MySQL suite now runs matched serial and four-worker investigations
+against one server as well as across servers. The one-server fixture declares
+four slots and uses synthetic provider latency to make real overlap observable.
+The test checks four completed subjects, six provider calls, two SSH fixture
+calls, zero approvals, the same canonical workload on SQLite, and empty MySQL
+tables after both runs.
+
+This measures the loopback benchmark on a disposable database. A reported
+throughput figure is fixture-only. Representative live-provider and production
+failover measurements remain open.
+
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
