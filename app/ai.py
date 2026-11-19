@@ -25,6 +25,10 @@ EVIDENCE_SIZE='evidence_size'
 # already reached the provider (#1007 review): nothing more is sent, but the
 # first call was, so the wording must not claim that nothing was sent.
 FOLLOW_UP_EVIDENCE_SIZE='follow_up_evidence_size'
+# Both reached the provider (#1158): the model declined, or it used the whole
+# max_output_tokens budget before completing the JSON. Neither is a key or quota problem.
+MODEL_REFUSAL='model_refusal'
+TOKEN_BUDGET='token_budget'
 
 
 class AIError(RuntimeError):
@@ -40,7 +44,8 @@ class AIError(RuntimeError):
         # Why a non-transient failure happened, for retry wording only (#1007).
         # 'evidence_size' is a local refusal before any provider request;
         # 'follow_up_evidence_size' is that refusal on the follow-up request, after
-        # the first-stage call was sent. Anything else keeps the provider/configuration meaning. Never changes eligibility.
+        # the first-stage call was sent. 'model_refusal' and 'token_budget' were sent
+        # and may be billed (#1158). Anything else keeps the provider/configuration meaning. Never changes eligibility.
         self.cause=cause
 
 
@@ -271,17 +276,26 @@ def _request(payload,key,timeout,reservation,encoded_body):
         error=AIError('Could not reach the OpenAI API. Check central-server DNS, outbound HTTPS, proxy settings and trusted CA certificates.',transient=not isinstance(exception,(httpx.LocalProtocolError,httpx.UnsupportedProtocol)))
         if error.transient:error.retry_after=ai_provider_backoff.failed(error)
         raise error from None
+    return structured_result(data)
+
+
+def structured_result(data):
+    """Return the accepted JSON object from a parsed response body, or raise a controlled AIError.
+
+    A refusal and max_output_tokens exhaustion carry their own cause (#1158) so the
+    retry reason can name them; both requests reached the provider.
+    """
     if data is None:raise AIError('OpenAI returned invalid JSON. Check any HTTPS proxy or gateway between Mr Patchy and the API.')
     if not isinstance(data,dict):raise AIError('OpenAI returned an unexpected response format.')
     if data.get('status')!='completed':
         reason=data.get('incomplete_details') or {}
         if isinstance(reason,dict) and reason.get('reason')=='max_output_tokens':
-            raise AIError('The model exhausted the response token budget before completing JSON. Select a model compatible with this task budget; no assessment was accepted.')
+            raise AIError('The model exhausted the response token budget before completing JSON. Select a model compatible with this task budget; no assessment was accepted.',cause=TOKEN_BUDGET)
         raise AIError('OpenAI did not complete the structured response. No partial assessment was accepted; retry or review the model configuration.')
     try:
         output=data.get('output',[])
         if any(c.get('type')=='refusal' for o in output for c in o.get('content',[])):
-            raise AIError('The model declined the request. Review this observation manually; no safety assessment was accepted.')
+            raise AIError('The model declined the request. Review this observation manually; no safety assessment was accepted.',cause=MODEL_REFUSAL)
         text=''.join(c['text'] for o in output for c in o.get('content',[]) if c.get('type')=='output_text')
         result=json.loads(text)
         if not isinstance(result,dict):raise ValueError()
