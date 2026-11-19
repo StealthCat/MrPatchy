@@ -1,3 +1,43 @@
+## 1.75.50 — 2026-11-19
+
+1. [PR #1160](https://github.com/StealthCat/MrPatchy/pull/1160): Blocked process investigations now distinguish model refusals and response token-budget exhaustion from provider/configuration failures. Both reasons state the request was sent and may be billed; eligibility, attempts and retry behavior are unchanged. Compatibility: existing blocked rows keep their stored reason until retried; no schema, API, UI, role, admission, accounting or response-authorization change. Limit: update-scoring and advisory-plan failure wording is unchanged.
+
+## 1.75.49 — 2026-11-19
+
+1. [PR #1157](https://github.com/StealthCat/MrPatchy/pull/1157): Startup → Files now lists individual `/etc/anacrontab` jobs with period, delay, identifier and bounded, best-effort redacted commands, plus valid `START_HOURS_RANGE` and `RANDOM_DELAY` settings; other environment assignments are counted but not stored. Older agents show the file as not reported until updated and reinspected. Compatibility: the added inventory key needs no schema migration, older controllers ignore it, and baseline/incident comparisons remain metadata-only; no authentication, scheduling or response-authorization change. Limits: anacron activation, run-parts targets and `/var/spool/anacron` timestamps are not assessed, and command redaction remains best-effort.
+
+## 1.75.48 — 2026-11-19
+
+1. [PR #1152](https://github.com/StealthCat/MrPatchy/pull/1152): Idle package scoring skips the fleet lock when a cold memo has neither an active unpaused candidate nor an unfinished scoring run. The lock still protects recovery and candidate processing, and warm passes retain memo pruning. A busy cold poll adds one read-only existence probe; work arriving after a negative probe waits for the next poll. Compatibility: no schema, API or response-authorization change; independent scoring admission and production throughput remain open.
+
+## 1.75.47 — 2026-11-19
+
+1. [PR #1155](https://github.com/StealthCat/MrPatchy/pull/1155): Stabilizes daily-cap contention fixtures across UTC midnight by persisting a shared timezone with its reset outside the test window and checking a real reservation before and after midnight. Compatibility: test-only; runtime, schema, provider behavior and operator configuration are unchanged. Explicit tests continue to cover real budget resets.
+
+## 1.75.46 — 2026-11-19
+
+1. [PR #1147](https://github.com/StealthCat/MrPatchy/pull/1147): Update scoring now fetches package and current host-inventory evidence in two bounded queries after a provider response, replacing ten per-row reads for a five-package/five-host batch while retaining exact identity checks. Changed candidates, inventories, missing packages or missing hosts still supersede the affected assessment. Compatibility: provider calls, scoring inputs, admission, validation, schema, API and response authorization are unchanged. Independent scoring admission and measured production throughput remain open.
+
+## 1.75.45 — 2026-11-18
+
+1. [PR #1149](https://github.com/StealthCat/MrPatchy/pull/1149): Adds a pure, versioned contract that identifies root-executable Ubuntu `needrestart` configuration and hook paths after APT transactions from captured observations and known package hashes. Unknown versions, modified Perl configuration, uncertain ordering and incomplete observations remain explicit coverage gaps. Compatibility: no runtime caller, collection wiring, UI, schema, route, role, target-helper or response-authorization change; startup-inventory integration, a catalog entry, dpkg provenance and non-Ubuntu coverage remain open.
+
+## 1.75.44 — 2026-11-18
+
+1. [PR #1143](https://github.com/StealthCat/MrPatchy/pull/1143): AI Activity now shows the retained deferred-scoring total, counts scores eligible now only on active unpaused servers while scoring is enabled, and reports the earliest future retry separately. When deferred work is held and no competing operation applies, the card explains the hold. Compatibility: the administrator status adds `scoring_ready`, and `scoring_next_at` now means a future retry; the single aggregate read remains. Scheduler identity checks, shared provider admission, schema and response authorization are unchanged. Independent scoring admission and measured production throughput remain open.
+
+## 1.75.43 — 2026-11-18
+
+1. [PR #1141](https://github.com/StealthCat/MrPatchy/pull/1141): When scoring recovers an abandoned update-scoring run, it now marks exactly linked running package scores as failed in the same transaction while retaining their attempt timestamps and existing one-hour retry boundary. Newer attempts, completed scores and rows without a reliable run link remain untouched. Compatibility: no schema, API, provider-charge, scheduling, client or response-authorization change; already-interrupted rows and crashes before a reliable run link retain existing recovery behavior.
+
+## 1.75.42 — 2026-11-18
+
+1. [PR #1118](https://github.com/StealthCat/MrPatchy/pull/1118): Shared AI provider backoff now preserves the newest failure timestamp when parallel failures are recorded out of order, so a success from a request already in flight at the newer failure cannot clear that retry floor. A later successful request can still clear it. Compatibility: no schema, API, role, client, or response-authorization change; timestamp ordering assumes synchronized worker clocks, and matched production throughput remains outside this slice.
+
+## 1.75.41 — 2026-11-18
+
+1. [PR #1107](https://github.com/StealthCat/MrPatchy/pull/1107): Settings' unsaved-navigation guard now returns to the edited entry when Back or an in-app tab navigation is held, and Discard reaches the exact requested history entry after a dropped undo. Where the Navigation API is available, keyed traversals use bounded retries and per-prompt guards. Compatibility: browsers without the Navigation API retain the existing `history.go` path; no API, schema, role, audit, or response-authorization behavior changes. #1083 remains open pending hosted confirmation and resolution of its separate diagnostics defect.
+
 ## 1.75.40 — 2026-11-18
 
 1. [PR #1096](https://github.com/StealthCat/MrPatchy/pull/1096): The optional MySQL AI benchmark verifies the original session still owns its advisory lock before cleanup DDL; when ownership cannot be verified, cleanup is skipped and operators are told to inspect the disposable database. Successful reports follow cleanup. Compatibility: production runtime, workload and report schema are unchanged; refused cleanup can leave fixture tables for inspection.

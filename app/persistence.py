@@ -64,9 +64,47 @@ def validate_at(at,path):
     if any(not isinstance(c,str) or not 1<=len(c)<=CRON_COMMAND_LIMIT or '\x00' in c for c in commands):raise ValueError('Invalid at job')
 
 
+ANACRONTAB='/etc/anacrontab'
+ANACRON_KEYS={'parsed','jobs','environment','settings','unparsed','truncated','redacted'}
+ANACRON_JOB_KEYS={'line','period_days','period_name','delay_minutes','identifier','command','command_truncated','redacted','duplicate_of_line'}
+ANACRON_PERIODS={'daily':1,'weekly':7,'monthly':30,'yearly':365,'annually':365}
+
+
+def validate_anacron(anacron,path):
+    """Strictly validate optional parsed /etc/anacrontab jobs reported by newer agents."""
+    if path!=ANACRONTAB:raise ValueError('Anacron jobs outside /etc/anacrontab')
+    if not isinstance(anacron,dict) or set(anacron)!=ANACRON_KEYS:raise ValueError('Invalid anacron jobs')
+    if any(type(anacron[k]) is not bool for k in ('parsed','truncated','redacted')) or any(type(anacron[k]) is not int or not 0<=anacron[k]<=1000000 for k in ('environment','unparsed')):
+        raise ValueError('Invalid anacron jobs')
+    settings=anacron['settings']
+    if not isinstance(settings,dict) or set(settings)!={'start_hours_range','random_delay'}:raise ValueError('Invalid anacron settings')
+    hours=settings['start_hours_range']
+    if hours is not None and (not isinstance(hours,dict) or set(hours)!={'start','end'} or any(type(hours[k]) is not int or not 0<=hours[k]<=24 for k in ('start','end'))):
+        raise ValueError('Invalid anacron settings')
+    if settings['random_delay'] is not None and (type(settings['random_delay']) is not int or not 0<=settings['random_delay']<=999999):raise ValueError('Invalid anacron settings')
+    jobs=anacron['jobs']
+    if not isinstance(jobs,list) or len(jobs)>CRON_FILE_JOBS or (not anacron['parsed'] and (jobs or anacron['environment'] or anacron['unparsed'] or anacron['truncated'] or anacron['redacted'] or hours is not None or settings['random_delay'] is not None)):
+        raise ValueError('Invalid anacron jobs')
+    lines={}
+    for job in jobs:
+        if not isinstance(job,dict) or set(job)!=ANACRON_JOB_KEYS:raise ValueError('Invalid anacron job')
+        if type(job['line']) is not int or job['line']<1 or job['line'] in lines or any(type(job[k]) is not bool for k in ('command_truncated','redacted')):raise ValueError('Invalid anacron job')
+        if type(job['delay_minutes']) is not int or not 0<=job['delay_minutes']<=999999:raise ValueError('Invalid anacron job')
+        name=job['period_name']
+        if name is None:
+            if type(job['period_days']) is not int or not 1<=job['period_days']<=99999:raise ValueError('Invalid anacron job')
+        elif name not in ANACRON_PERIODS or job['period_days']!=ANACRON_PERIODS[name] or type(job['period_days']) is not int:raise ValueError('Invalid anacron job')
+        if not isinstance(job['identifier'],str) or not re.fullmatch(r'[^\s/\x00]{1,255}',job['identifier']):raise ValueError('Invalid anacron job')
+        if not isinstance(job['command'],str) or not 1<=len(job['command'])<=CRON_COMMAND_LIMIT or '\x00' in job['command']:raise ValueError('Invalid anacron job')
+        duplicate=job['duplicate_of_line']
+        if duplicate is not None and (type(duplicate) is not int or lines.get(duplicate)!=job['identifier']):raise ValueError('Invalid anacron job')
+        lines[job['line']]=job['identifier']
+    return len(jobs)
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at job detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron job detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron')} if row is not None else None
 
 
 def validate(inventory):
@@ -99,6 +137,9 @@ def validate(inventory):
         if 'at' in row:
             if row['kind']!='regular':raise ValueError('At jobs require a regular file')
             validate_at(row['at'],path)
+        if 'anacron' in row:
+            if row['kind']!='regular':raise ValueError('Anacron jobs require a regular file')
+            validate_anacron(row['anacron'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 

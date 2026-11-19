@@ -2319,6 +2319,32 @@ This telemetry is read-only: it does not renew, reconcile, cancel, retry or
 otherwise alter a claim. Full multi-controller failover and production
 recovery acceptance remain open.
 
+### Atomic recovery of interrupted package scores — Roadmap A checkpoint #1140
+
+The scoring worker now commits the interruption event and the failures of its
+linked running package scores together under the existing scoring lock. A
+score with a newer attempt timestamp, completed result or missing run link is
+left alone. The recovered score keeps its attempt time, so the existing
+one-hour retry interval still applies. Recovery can run with scoring disabled
+and makes no provider call or spend change.
+
+The regression verifies rollback when the score write fails and confirms
+successful scoring at the original eligibility boundary. A crash before
+linking the run and independent scoring admission remain open.
+
+### Deferred scoring eligibility in fleet status — Roadmap A checkpoint #1142
+
+The fleet status distinguishes deferred scores eligible now from the earliest
+future retry. The same aggregate retains the total queue, including rows held
+by pause or disabled scoring. Only active unpaused servers contribute an
+eligibility time while scoring is enabled. The card can therefore show ready
+work alongside the next future retry, and it explains when there is only held
+scoring work. Shared admission still governs outbound calls.
+
+The regression covers overdue and future scores, paused and inactive servers,
+and disabled scoring without adding another aggregate query. Exact scoring
+identity and provider eligibility remain checked by the scheduler.
+
 ### Update-scoring schedule-state reads
 
 The scheduler reads only identity, state and eligibility fields from retained
@@ -2640,7 +2666,16 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Notification:** the `ai-triage`/`configuration-blocked` text is now cause-neutral. It points to each investigation's retry reason and separates configuration fixes from oversized evidence. The identity, revision key, severity, role and deep link are unchanged. The **Retry blocked investigations** help text says the same.
 - **Unchanged:** retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits an evidence-size block, which is then refused locally again), admission, reservations and authorization.
 - **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
-- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
+- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion now have dedicated blocked reasons (see #1158 below).
+
+
+#### Model refusal and token-budget wording — worker checkpoint #1158
+
+- **Problem:** a model refusal, and a response that used the whole `max_output_tokens` budget before completing the JSON, were blocked with the provider/configuration reason ("correct API configuration"). Neither is a key or quota problem, and both requests reached the provider and may be billed.
+- **Change:** response parsing moves unchanged into `ai.structured_result`. An output `refusal` raises with cause `model_refusal`, and `incomplete_details.reason == max_output_tokens` raises with cause `token_budget`. Every other incomplete, invalid or unexpected response keeps `provider`. `ai_retry.failed` gives each new cause its own reason: the request was sent and may be billed, and a key change does not help. The refusal reason says a different model may assess the observation, and the token-budget reason says to select a model that completes within the task budget or review it manually.
+- **Unchanged:** the diagnostic stored on the investigation, retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits either block), admission, reservations and receipt accounting, the cause-neutral `configuration-blocked` notification, roles and response authorization.
+- **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
+- **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
 
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
@@ -3089,6 +3124,8 @@ elsewhere (#1027). Roadmap B acceptance remains open.
 contention/fairness" for triage under a daily cap. Each test runs real
 `worker.investigate_one()` claims against a cap with room for exactly K calls.
 The provider is a disposable fixture.
+
+Worker checkpoint #1154 keeps the triage contention fixtures within one configured budget window when UTC midnight passes. Fixtures persist a shared timezone whose local reset is several hours away, and a deterministic reservation check confirms the counted amount and reset boundary remain stable across UTC midnight. Explicit production-reset tests continue to cover actual window changes.
 
 - **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
   each for a different subject. The suite checks:
@@ -11568,3 +11605,55 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+### Provider backoff under reversed failure writes — Roadmap A checkpoint #1117
+
+Shared provider backoff retains the latest recorded failure timestamp. If an
+earlier failure acquires the shared lock after a newer one, a response from a
+request already in flight at the newer failure still cannot clear the wait.
+The regression controls lock entry to exercise this order and checks admission
+before and after a later successful request.
+
+This check uses the existing worker clock timestamps. Clock skew across workers
+and matched production throughput remain outside this acceptance slice.
+
+### needrestart hook contract — worker checkpoint #1148 (roadmap F)
+
+- **What it covers:** `app/needrestart_hooks.py` is a pure, versioned contract. It reports which root code Ubuntu's default `needrestart` can run after every APT transaction. The trigger is `/etc/apt/apt.conf.d/99needrestart` (`DPkg::Post-Invoke`), which runs `/usr/lib/needrestart/apt-pinvoke -m u`, which in turn execs `/usr/sbin/needrestart`.
+- **Pinned source:** the rules follow the shipped `needrestart 3.6-7ubuntu4.x` source, and other versions are gaps.
+  - `needrestart.conf` and every `sort </etc/needrestart/conf.d/*.conf>` file are passed to Perl `eval` as root. The glob skips dot-hidden names, the sort is byte order, and a matched directory is a no-op.
+  - `hook.d` entries run in natural order with no execute-bit check, until one identifies the service.
+  - `restart.d/<service>` replaces `systemctl restart` when it is executable. Under APT the restart mode is automatic unless `restart` or `ui` is configured.
+  - `notify.d` entries that are `-x` and not named `*~` or `*.dpkg-<suffix>` run as root per outdated session, until one exits 0.
+  - A missing config or `hook.d` aborts needrestart before any hook runs.
+- **Fail closed:**
+  - Perl is never evaluated. `needrestart.conf` is understood only when it matches the shipped SHA-256, and a `conf.d` file only when it holds comments and simple literal `$nrconf{key}` assignments. Other code, unread files, and any `hook_d`, `notify_d` or `restart_d` override are gaps that leave the directories unresolved.
+  - Sort::Naturally is not reimplemented. An order is reported only when a simple natural order and the byte order agree for `[a-z0-9._-]` names among the entries that can run.
+  - A modified or unknown trigger, unknown entries, special files, incomplete listings, an invalid restart mode, unsupported families or versions, and caps are all gaps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
+
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
+### Scoring idle-poll preflight — Roadmap A checkpoint #1150
+
+A cold scoring pass now takes the existing lock only when an active, unpaused server has a candidate or an update-scoring run needs recovery. One read-only probe checks both conditions; the locked pass then opens a fresh session and rechecks the work. Warm passes still prune absent memo entries, and recovery still runs when scoring is disabled. Empty, paused-only and inactive-only polls use one query and skip the scoring lock. A busy cold pass adds one probe, and work arriving after a negative probe waits until the next poll. Compatibility: no schema or response-authorization change. Independent scoring admission and measured production throughput remain open.
+
+### Individual anacron jobs — worker checkpoint #1156 (roadmap F)
+
+- **What it covers:** this connects the pure `app/scheduled_jobs.parse_anacrontab` contract (#711) to collection and the startup inventory. When the controller asks for parsed jobs, the agent parses `/etc/anacrontab` from exactly the bytes it hashed. For each job it reports the period (day count or `@name`), delay, job identifier, line and a bounded, redacted command. It also flags a repeated identifier, since anacron shares one timestamp file between those jobs.
+- **Settings:** only `START_HOURS_RANGE` and `RANDOM_DELAY` values are stored, and only when valid. Other assignments are counted, never stored, because values can hold credentials.
+- **Fail closed:**
+  - Text over 64 KiB, invalid UTF-8 or NUL bytes yields `parsed: false` with no jobs.
+  - Lines anacron would reject are counted as unparsed.
+  - Jobs stop at 64 per file, with `truncated` set.
+  - Commands use the cron redaction and control-character escaping and are capped at 512 characters.
+- **Controller:** `persistence.validate_anacron` accepts the record only on a regular `/etc/anacrontab` entry, with exact key sets and bounded types. It checks named periods against their day counts and requires a duplicate reference to point at an earlier job with the same identifier. An unparsed record must be empty. Comparisons and incident evidence strip the record, so baselines stay metadata-only.
+- **UI/API:** Startup Files shows the settings and a job table with escaped identifiers and commands. It also explains older agents (`not_reported`) and unreadable tables. Search matches identifiers and commands, and the Coverage catalog row counts parsed jobs. Roles are unchanged (administrator only).
+- **Parity:** `tests/test_anacron_jobs.py` compares agent output with the pure contract on a shared corpus (jobs, duplicate links, unparsed counts and settings). It has 45 tests, and six source mutations are each caught.
+- **Remaining:** whether and how anacron is started (cron `0anacron` or a systemd timer), `/var/spool/anacron` timestamps, run-parts targets, package provenance of the default table, and AI classification. No schema, scheduling, AI or response-authorization change was made.
