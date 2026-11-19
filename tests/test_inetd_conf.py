@@ -84,6 +84,30 @@ def test_ipv6_reparse_that_never_reaches_the_protocol_fails_closed():
     assert 'reparse_never_ends' in codes(result) and not result['complete']
 
 
+def test_ipv6_reparse_sees_the_nul_bytes_an_earlier_reparse_left_in_saved_line():
+    # Re-parse 1 cuts saved_line to "40001\0stream" and fails on "tcp,x"; goto more re-parses only "40001",
+    # which then takes the next continuation line and loads an IPv6 root shell.
+    result = run('40001 stream\n\ttcp nowait root internal\n\ttcp,x\n\tstream tcp nowait root /bin/sh\n')
+    shell = find(result, '40001', 'tcp6')
+    assert (shell['user'], shell['program'], shell['argv']) == ('root', '/bin/sh', ['sh'])
+    assert shell['runs_as_root'] is True
+    assert {'line': 1, 'service': '40001', 'protocol': 'tcp', 'ipv6_copy': False,
+            'reason': 'unknown_internal_service'} in result['rejected']
+    assert result['complete']
+
+
+def test_ipv6_reparse_cuts_saved_line_at_the_host_delimiter():
+    # The host parser writes NUL at the last ':' (and at ']' for "[addr]:"), so the second re-parse of the
+    # same entry reads "lo" or "[::1" as the whole first field.
+    tail = '\n\ttcp nowait root internal\n\ttcp,x\n\tstream tcp nowait root /bin/sh\n'
+    named = run('lo:40002 stream' + tail)
+    assert services(named) == [('lo', 'tcp6', '*')]
+    assert find(named, 'lo', 'tcp6')['program'] == '/bin/sh'
+    bracketed = run('[::1]:40002 stream' + tail)
+    assert services(bracketed) == [('1', 'tcp6', '[:')]
+    assert ('40002', 'tcp6', '::1') not in services(bracketed)
+
+
 def test_default_host_lines_brackets_and_host_lists():
     text = ('127.0.0.1:\n5000 stream tcp4 nowait root /bin/a\n[::1]:5001 stream tcp6 nowait root /bin/b\n'
             ':5002 stream tcp4 nowait root /bin/c\n10.0.0.1,,127.0.0.2:5003 stream tcp4 nowait root /bin/d\n'

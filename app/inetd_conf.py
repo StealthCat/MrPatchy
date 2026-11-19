@@ -35,7 +35,10 @@ runs ``/usr/sbin/inetd`` with no arguments, so it reads ``/etc/inetd.conf``):
   (``tcp``, ``udp``, ``rpc/tcp``) loads once as IPv4 and then a second time as
   IPv6 with ``6`` appended. The second pass re-parses only a saved copy of the
   entry's *first* physical line, so fields or arguments on continuation lines
-  are missing from the IPv6 copy.
+  are missing from the IPv6 copy. That copy is parsed in place: ``skip()`` and
+  the host parser leave NUL bytes in it, so when a re-parse fails before the
+  protocol and inetd re-parses again, it reads the line cut at the first NUL
+  and may take a later continuation line as the rest of the entry.
 - A later entry with the same service, host, protocol and address replaces the
   earlier entry's user, group, program, argv and rate. Its wait mode is taken
   only when the earlier entry was ``wait`` or the later one is ``nowait``, and
@@ -130,11 +133,21 @@ class _Reader:
 class _Cursor:
     """``char *cp`` with ``skip()`` semantics; ``line is None`` is ``cp == NULL``."""
 
-    def __init__(self, reader: _Reader, line: bytes) -> None:
+    def __init__(self, reader: _Reader, line: bytes, buffer: bytearray | None = None) -> None:
+        # ``buffer`` is the mutable ``saved_line`` of an IPv6 re-parse. inetd parses it in place, so skip() and
+        # the host parser leave NUL bytes in it and a later re-parse of the same entry sees a C string cut at
+        # the first of them.
         self.reader = reader
-        self.line: bytes | None = line
+        self.buffer = buffer
+        self.line: bytes | None = bytes(buffer).split(b'\0', 1)[0] if buffer is not None else line
         self.index = 0
+        self.start = 0
         self.continued = False
+
+    def terminate(self, index: int) -> None:
+        """Write ``'\0'`` at ``index`` of the original line, as inetd does to ``saved_line``."""
+        if self.buffer is not None and not self.continued:
+            self.buffer[index] = 0
 
     def skip(self) -> bytes | None:
         if self.line is None:
@@ -151,11 +164,12 @@ class _Cursor:
                     continue
             self.line = None
             return None
-        start = self.index
+        start = self.start = self.index
         while self.index < len(self.line) and self.line[self.index:self.index + 1] not in _SPACE:
             self.index += 1
         token = self.line[start:self.index]
         if self.index < len(self.line):
+            self.terminate(self.index)
             self.index += 1
         return token
 
@@ -289,7 +303,9 @@ def _parse_entry(cursor: _Cursor, line: int, defhost: list[str], override: str |
     colon = text.rfind(':')
     if colon >= 0:
         prefix = text[:colon]
+        cursor.terminate(cursor.start + arg.rfind(b':'))
         if prefix.startswith('[') and colon > 0 and prefix.endswith(']'):
+            cursor.terminate(cursor.start + arg.rfind(b':') - 1)
             host = prefix[1:-1]
         elif colon == 0:
             host = '*'
@@ -517,7 +533,7 @@ def evaluate(text: str | bytes | None, *, state: str = 'read', path: str = CONFI
     reader = _Reader(data)
     defhost = ['*']
     services: list[dict[str, Any]] = []
-    saved: tuple[bytes, int] | None = None
+    saved: tuple[bytearray, int] | None = None
     passes = 0
     while True:
         passes += 1
@@ -527,11 +543,12 @@ def evaluate(text: str | bytes | None, *, state: str = 'read', path: str = CONFI
         reparse = saved is not None
         if saved is not None:
             first, line = saved
-            position = reader.pos
-            entry = _parse_entry(_Cursor(reader, first), line, defhost, 'ipv6')
+            position, before = reader.pos, bytes(first)
+            entry = _parse_entry(_Cursor(reader, b'', first), line, defhost, 'ipv6')
             if 'family' not in entry:
-                # proto_override is cleared only once the protocol is parsed again.
-                if reader.pos == position:
+                # proto_override is cleared only once the protocol is parsed again. A pass that consumed no
+                # line and left saved_line unchanged repeats exactly.
+                if reader.pos == position and bytes(first) == before:
                     _gap(gaps, 'reparse_never_ends', line, 'The IPv6 re-parse of this entry\'s first line '
                          'never reaches the protocol, so getconfigent() repeats it forever and inetd never '
                          'finishes loading its configuration.')
@@ -549,7 +566,7 @@ def evaluate(text: str | bytes | None, *, state: str = 'read', path: str = CONFI
             line = reader.number
             entry = _parse_entry(_Cursor(reader, first_line), line, defhost, None)
             if entry.get('override_ipv6'):
-                saved = (first_line, line)
+                saved = (bytearray(first_line), line)
         if entry['kind'] == 'default_host':
             result['default_hosts'].append({'line': line, 'host': entry['host']})
             continue

@@ -6023,8 +6023,12 @@ performs no I/O, name lookup or response action.
   trailing `4` or `6` twice, as IPv4 and then as IPv6 with `6` appended. The
   IPv6 pass re-parses only a saved copy of the entry's first physical line.
   Arguments on continuation lines are therefore missing from the IPv6 copy,
-  and a field missing from that line rejects it. When the re-parse never
-  reaches the protocol, inetd repeats it forever; this is reported as a
+  and a field missing from that line rejects it. The copy is parsed in place,
+  so `skip()` and the host parser leave NUL bytes in it: when a re-parse fails
+  before the protocol, the next one reads the line cut at the first NUL and can
+  take a later continuation line as the rest of the entry (for example an IPv6
+  root shell after a malformed protocol). When a re-parse consumes no line and
+  leaves the copy unchanged, inetd repeats it forever; this is reported as a
   blocking gap. A literal address of the wrong family drops that listener.
 - **Merging and spawn.** A later entry with the same service, host, protocol
   and address replaces the earlier one's user, group, program, argv and rate.
