@@ -1,3 +1,7 @@
+## 1.75.57 — 2026-11-19
+
+1. [PR #1175](https://github.com/StealthCat/MrPatchy/pull/1175): Release configuration review diagnostics now distinguish model refusal and response token exhaustion in blocked plan/run history, state that no review was accepted and the request may be billed, and give operators next steps. Failed outputs retain one provider receipt, save no proposed edit, and do not expose refusal text; other incomplete responses keep their existing wording. Compatibility: diagnostic wording for these two new failures only; no schema, permission, approval, execution or shared-admission changes. Limit: production-provider acceptance remains unverified.
+
 ## 1.75.56 — 2026-11-19
 
 1. [PR #1129](https://github.com/StealthCat/MrPatchy/pull/1129): Exact verified known-good assessments can now be reused during shared provider rate throttling or backoff without a provider call, rate admission or spend reservation. Misses, paused servers and explicit Re-triage remain held, and matches are revalidated before completion. Compatibility: no schema or API change; legacy quotas remain. Limit: existing oldest-subject scan bound remains, and production throughput is unmeasured.
