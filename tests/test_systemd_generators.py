@@ -264,6 +264,47 @@ def test_malformed_and_duplicate_entries_are_blocking():
     assert result['complete'] is False
 
 
+@pytest.mark.parametrize('malformed', [
+    {'name': 'gen', 'type': 'unknown'},
+    {'name': 'gen'},
+    {'name': 'gen', 'type': ['file']},
+])
+def test_malformed_higher_entry_with_a_valid_name_leaves_lower_same_name_undetermined(malformed):
+    result = run(observed(dirs={ETC: listed(malformed), VENDOR: listed(f('gen'), f('other'))}))
+    assert 'input_malformed' in codes(result)
+    assert result['complete'] is False
+    assert result['kinds']['system']['complete'] is False
+    by = entries(result)
+    assert by[('gen', 1)]['status'] == 'unresolved'
+    assert by[('gen', 1)]['type'] is None
+    assert by[('gen', 3)]['status'] == 'unresolved'
+    assert by[('gen', 3)]['reason_code'] == 'shadow_undetermined'
+    assert by[('other', 3)]['status'] == 'runs'
+    assert names(result) == ['other']
+
+
+def test_malformed_lower_entry_stays_overridden_or_masked_by_a_higher_one():
+    result = run(observed(dirs={ETC: listed(f('gen'), f('off', size=0)),
+                                VENDOR: listed({'name': 'gen', 'type': 'bogus'}, {'name': 'off'})}))
+    by = entries(result)
+    assert by[('gen', 3)]['reason_code'] == 'overridden'
+    assert by[('off', 3)]['reason_code'] == 'masked'
+    assert names(result) == ['gen']
+
+
+@pytest.mark.parametrize('malformed', ['gen', {'type': 'file'}, {'name': 'a/b', 'type': 'file'}, None])
+def test_higher_entry_without_a_usable_name_makes_lower_generators_undetermined(malformed):
+    result = run(observed(dirs={ETC: listed(malformed, f('kept')), VENDOR: listed(f('gen'), f('kept'))}))
+    assert 'input_malformed' in codes(result)
+    assert result['complete'] is False
+    by = entries(result)
+    assert by[('kept', 1)]['status'] == 'runs'
+    assert by[('kept', 3)]['reason_code'] == 'overridden'
+    assert by[('gen', 3)]['status'] == 'unresolved'
+    assert by[('gen', 3)]['reason_code'] == 'higher_directory_unobserved'
+    assert names(result) == ['kept']
+
+
 def test_version_gaps_and_inputs():
     dirs = observed()
     assert 'version_not_observed' in codes(sg.evaluate(merged_usr=True, directories=dirs, kinds=['system']))

@@ -253,9 +253,14 @@ def _directory(observation: Any, path: str, gaps: list[dict[str, Any]]) -> tuple
 
 
 def _normalize(item: Any, gaps: list[dict[str, Any]], directory: str) -> dict[str, Any] | None:
-    if not isinstance(item, dict) or not _valid_name(item.get('name')) or item.get('type') not in ENTRY_TYPES:
+    if not isinstance(item, dict) or not _valid_name(item.get('name')):
         _gap(gaps, 'input_malformed', directory, 'An entry observation has no valid name or type.')
         return None
+    if item.get('type') not in ENTRY_TYPES:
+        # The name is known but nothing else is: keep it as an undetermined entry so that it still
+        # shadows same-named entries in lower-priority directories instead of silently vanishing.
+        _gap(gaps, 'input_malformed', f'{directory}/{item["name"]}', 'An entry observation has no valid type.')
+        return {'name': item['name'], 'type': None, 'resolved': False, 'malformed': True}
     entry: dict[str, Any] = {'name': item['name'], 'type': item['type'], 'resolved': True}
     if item['type'] == 'symlink':
         text = item.get('link_target')
@@ -338,6 +343,8 @@ def _kind(kind: str, libexec: str | None, directories: dict[str, Any], version: 
         for item in entries:
             entry = _normalize(item, gaps, path)
             if entry is None:
+                # An entry without a usable name could be any name, so nothing below it is certain.
+                fully = False
                 continue
             name = entry['name']
             entry_path = f'{path}/{name}'
@@ -355,8 +362,9 @@ def _kind(kind: str, libexec: str | None, directories: dict[str, Any], version: 
             elif name in undetermined:
                 code = 'shadow_undetermined'
             elif not entry['resolved']:
-                _gap(gaps, 'metadata_missing', entry_path,
-                     'Required metadata for this entry was not supplied or is malformed.')
+                if not entry.get('malformed'):
+                    _gap(gaps, 'metadata_missing', entry_path,
+                         'Required metadata for this entry was not supplied or is malformed.')
                 code = 'unresolved'
             else:
                 code, stat = _assess(entry, entry_path, version, gaps)
