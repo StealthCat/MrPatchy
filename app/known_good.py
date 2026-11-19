@@ -435,8 +435,8 @@ def exact_hit_available(s, behavior, model):
     It derives evidence as the worker does, without persisting trust state, and
     honours an administrator Refresh and an authenticated ``changed`` artifact
     exactly as the worker does. The result only lets a subject be claimed past a
-    closed spend gate. It never approves anything, and the worker's own lookup
-    and the atomic budget reservation still decide what happens next. Any
+    shared provider start hold. It never approves anything, and the worker's own
+    lookup and the provider admission gates still decide what happens next. Any
     failure answers ``False``, which keeps today's deferral.
     """
     try:
