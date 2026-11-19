@@ -13,7 +13,8 @@ def generate(*, model, host_id, subject, schema_name, instructions, evidence,
                 'text': {'format': {'type': 'json_schema', 'name': schema_name,
                     'strict': True, 'schema': schema}}}, secret())
             validate(content)
-            return persist(content, run_id)
+            with ai_runs.measure('result_persistence'):
+                return persist(content, run_id)
     except ai.AIError as error:
         eligible = ai.defer_until(error)
         if eligible is not None:
