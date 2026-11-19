@@ -1,3 +1,7 @@
+## 1.75.46 — 2026-11-19
+
+1. [PR #1147](https://github.com/StealthCat/MrPatchy/pull/1147): Update scoring now fetches package and current host-inventory evidence in two bounded queries after a provider response, replacing ten per-row reads for a five-package/five-host batch while retaining exact identity checks. Changed candidates, inventories, missing packages or missing hosts still supersede the affected assessment. Compatibility: provider calls, scoring inputs, admission, validation, schema, API and response authorization are unchanged. Independent scoring admission and measured production throughput remain open.
+
 ## 1.75.45 — 2026-11-18
 
 1. [PR #1149](https://github.com/StealthCat/MrPatchy/pull/1149): Adds a pure, versioned contract that identifies root-executable Ubuntu `needrestart` configuration and hook paths after APT transactions from captured observations and known package hashes. Unknown versions, modified Perl configuration, uncertain ordering and incomplete observations remain explicit coverage gaps. Compatibility: no runtime caller, collection wiring, UI, schema, route, role, target-helper or response-authorization change; startup-inventory integration, a catalog entry, dpkg provenance and non-Ubuntu coverage remain open.
