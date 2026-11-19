@@ -2666,7 +2666,16 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Notification:** the `ai-triage`/`configuration-blocked` text is now cause-neutral. It points to each investigation's retry reason and separates configuration fixes from oversized evidence. The identity, revision key, severity, role and deep link are unchanged. The **Retry blocked investigations** help text says the same.
 - **Unchanged:** retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits an evidence-size block, which is then refused locally again), admission, reservations and authorization.
 - **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
-- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
+- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion now have dedicated blocked reasons (see #1158 below).
+
+
+#### Model refusal and token-budget wording — worker checkpoint #1158
+
+- **Problem:** a model refusal, and a response that used the whole `max_output_tokens` budget before completing the JSON, were blocked with the provider/configuration reason ("correct API configuration"). Neither is a key or quota problem, and both requests reached the provider and may be billed.
+- **Change:** response parsing moves unchanged into `ai.structured_result`. An output `refusal` raises with cause `model_refusal`, and `incomplete_details.reason == max_output_tokens` raises with cause `token_budget`. Every other incomplete, invalid or unexpected response keeps `provider`. `ai_retry.failed` gives each new cause its own reason: the request was sent and may be billed, and a key change does not help. The refusal reason says a different model may assess the observation, and the token-budget reason says to select a model that completes within the task budget or review it manually.
+- **Unchanged:** the diagnostic stored on the investigation, retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits either block), admission, reservations and receipt accounting, the cause-neutral `configuration-blocked` notification, roles and response authorization.
+- **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
+- **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
 
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
@@ -10912,6 +10921,19 @@ checkpoint changes no runtime, schema, admission, provider call or response
 authority.
 
 
+### Same-server MySQL benchmark acceptance — Roadmap A checkpoint #1138
+
+The native MySQL suite now runs matched serial and four-worker investigations
+against one server as well as across servers. The one-server fixture declares
+four slots and uses synthetic provider latency to make real overlap observable.
+The test checks four completed subjects, six provider calls, two SSH fixture
+calls, zero approvals, the same canonical workload on SQLite, and empty MySQL
+tables after both runs.
+
+This measures the loopback benchmark on a disposable database. A reported
+throughput figure is fixture-only. Representative live-provider and production
+failover measurements remain open.
+
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
@@ -11635,6 +11657,10 @@ A cold scoring pass now takes the existing lock only when an active, unpaused se
 - **UI/API:** Startup Files shows the settings and a job table with escaped identifiers and commands. It also explains older agents (`not_reported`) and unreadable tables. Search matches identifiers and commands, and the Coverage catalog row counts parsed jobs. Roles are unchanged (administrator only).
 - **Parity:** `tests/test_anacron_jobs.py` compares agent output with the pure contract on a shared corpus (jobs, duplicate links, unparsed counts and settings). It has 45 tests, and six source mutations are each caught.
 - **Remaining:** whether and how anacron is started (cron `0anacron` or a systemd timer), `/var/spool/anacron` timestamps, run-parts targets, package provenance of the default table, and AI classification. No schema, scheduling, AI or response-authorization change was made.
+
+### Scoring result-persistence timing — Roadmap A checkpoint #1159
+
+Update scoring now records the same `result_persistence` timing stage that process triage already uses. Each scoring reply that passes structured validation records one event. That event covers re-reading the current package and inventory evidence and committing the batch, including scores superseded because evidence changed. A committed batch records `outcome=complete`, and a failed write records `outcome=error`; the existing failure handling then marks the batch `error` for a normal retry. Refusals, token-budget exhaustion and malformed or mismatched replies raise before revalidation and record no event. The event uses the existing buffered, redacted timing format and run-history retention. Score identity, provider authorization, admission and retry behavior are unchanged. Compatibility: no schema, API, UI or response-authorization change. The fleet timing summary still samples triage runs only. Independent scoring admission and measured production throughput remain open.
 
 ### pppd hook contract — worker checkpoint #1091 (roadmap F)
 
