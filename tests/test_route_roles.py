@@ -198,6 +198,8 @@ EXPECTED_ROLES = {
     ('POST','/api/operations/jobs/{job_id}/reconcile'):'admin',
     ('GET','/api/operations/notifications'):'admin',
     ('PUT','/api/operations/notifications'):'admin',
+    ('GET','/api/operations/alert-delivery-threshold'):'admin',
+    ('PUT','/api/operations/alert-delivery-threshold'):'admin',
     ('POST','/api/operations/rollouts'):'admin',
     ('PUT','/api/operations/smtp'):'admin',
     ('PUT','/api/operations/sso-binding'):'admin',
