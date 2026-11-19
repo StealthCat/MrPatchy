@@ -1,3 +1,7 @@
+## 1.75.49 — 2026-11-19
+
+1. [PR #1157](https://github.com/StealthCat/MrPatchy/pull/1157): Startup → Files now lists individual `/etc/anacrontab` jobs with period, delay, identifier and bounded, best-effort redacted commands, plus valid `START_HOURS_RANGE` and `RANDOM_DELAY` settings; other environment assignments are counted but not stored. Older agents show the file as not reported until updated and reinspected. Compatibility: the added inventory key needs no schema migration, older controllers ignore it, and baseline/incident comparisons remain metadata-only; no authentication, scheduling or response-authorization change. Limits: anacron activation, run-parts targets and `/var/spool/anacron` timestamps are not assessed, and command redaction remains best-effort.
+
 ## 1.75.48 — 2026-11-19
 
 1. [PR #1152](https://github.com/StealthCat/MrPatchy/pull/1152): Idle package scoring skips the fleet lock when a cold memo has neither an active unpaused candidate nor an unfinished scoring run. The lock still protects recovery and candidate processing, and warm passes retain memo pruning. A busy cold poll adds one read-only existence probe; work arriving after a negative probe waits for the next poll. Compatibility: no schema, API or response-authorization change; independent scoring admission and production throughput remain open.
