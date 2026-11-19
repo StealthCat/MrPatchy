@@ -269,7 +269,10 @@ def run_one():
                         if (type(row.get('score')) is not int or not 0<=row['score']<=100 or row.get('confidence') not in ('low','medium','high') or
                             any(not isinstance(row.get(k),str) or not 1<=len(row[k])<=4000 for k in ('explanation','limitations'))):
                             raise ai.AIError('Update scoring returned invalid scores or explanations; no assessment accepted.')
-                    with Session() as s:
+                    # One timing per reply that reaches revalidation: re-reading current
+                    # package evidence and committing (or superseding) the validated batch.
+                    # Refused and malformed replies raise above and are not timed here.
+                    with ai_runs.measure('result_persistence'),Session() as s:
                         scores=_batch_scores(s,ids)
                         package_ids = {identifier: score.host_id + ':' + score.name
                                        for identifier, score in scores.items()}
