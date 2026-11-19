@@ -273,6 +273,7 @@ def run_one():
                     # package evidence and committing (or superseding) the validated batch.
                     # Refused and malformed replies raise above and are not timed here.
                     with ai_runs.measure('result_persistence'),Session() as s:
+                        scores=_batch_scores(s,ids)
                         package_ids = {identifier: score.host_id + ':' + score.name
                                        for identifier, score in scores.items()}
                         packages = {package.id: package for package in s.scalars(
