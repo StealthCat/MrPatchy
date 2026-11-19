@@ -5984,6 +5984,12 @@ The contract takes captured file text, performs no I/O and authorizes nothing.
   - **Prefix and keys.** A `-` prefix before an assignment ignores a failed
     write. A bare `-key` is a negative match that excludes the key from globs.
     Keys may use `.` or `/` as the separator, following `sysctl_normalize`.
+    That includes systemd's `path_simplify()` step, ported exactly: leading
+    `..` components of an absolute key are dropped, so
+    `/../kernel/core_pattern` sets `kernel.core_pattern`. Inner `..` stays,
+    and a component longer than 255 bytes stops simplification. A
+    differential run of 4,500 key spellings against systemd-sysctl 255
+    agreed on every watched key written (#1089 coordinator review).
   - **Order.** A changed later value replaces the earlier one and moves to
     the end of the apply order. A repeated value keeps the earlier position.
   - **Globs.** A glob applies per path component, and only to keys that have
@@ -6019,7 +6025,7 @@ The contract takes captured file text, performs no I/O and authorizes nothing.
     line, the `sysctl.extra` credential, runtime writes (for example apport,
     `systemd-coredump` or `sysctl -w`), the live `/proc/sys` value and the
     keys present there.
-- **Validation.** `tests/test_sysctl_exec.py` has 21 tests. Each of 12 source
+- **Validation.** `tests/test_sysctl_exec.py` has 28 tests. Each of 12 source
   mutations is caught by at least one test: precedence, masking, comment
   characters, line endings, same-value retention, glob re-ordering,
   component-wise glob matching, explicit-over-glob, key normalization and the

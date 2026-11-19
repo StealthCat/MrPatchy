@@ -66,6 +66,44 @@ def test_slash_separator_and_leading_slash_normalize():
     assert k['program'] == '/x/helper' and 'kernel_config_uevent_helper' in k['conditions']
 
 
+def test_normalize_matches_systemd_path_simplify():
+    # systemd v255 runs path_simplify() before stripping the leading slash, so leading
+    # ".." components of an absolute key vanish (verified against systemd-sysctl 255).
+    cases = {
+        '/../kernel/core_pattern': 'kernel/core_pattern',
+        '/./..//kernel//core_pattern/.': 'kernel/core_pattern',
+        '/../../kernel/modprobe/': 'kernel/modprobe',
+        '..kernel.core_pattern': 'kernel/core_pattern',  # dot-first: becomes //kernel/core_pattern
+        '/kernel/../kernel/core_pattern': 'kernel/../kernel/core_pattern',  # inner ".." kept
+        '../kernel/core_pattern': '.kernel.core_pattern',  # dot-first swap, then one component
+        'net/../kernel/core_pattern': 'net/../kernel/core_pattern',  # relative: ".." kept
+        'kernel/core_pattern/..': 'kernel/core_pattern/..',
+        '/..': '/', '/': '/', './': '/', '.': '/', '': '',
+    }
+    for raw, expected in cases.items():
+        assert se.normalize_key(raw) == expected, raw
+    long = 'x' * 256
+    # A component longer than NAME_MAX stops simplification of the rest, as in systemd.
+    assert se.normalize_key(f'/../{long}//./a') == f'{long}//./a'
+    assert se.normalize_key(f'/a//{long}//b') == f'a/{long}//b'
+
+
+def test_path_simplify_upstream_examples():
+    # The examples documented on systemd v255 path_simplify_full().
+    for raw, expected in {'///foo//./bar/.': '/foo/bar', './/./foo//./bar/.': 'foo/bar',
+                          '/../foo/bar': '/foo/bar', '/../foo/bar/..': '/foo/bar/..', './.': '.'}.items():
+        assert se.path_simplify(raw) == expected, raw
+
+
+def test_leading_parent_component_assigns_watched_key():
+    r = se.resolve([f('/etc/sysctl.d/90-x.conf', '/../kernel/core_pattern = |/tmp/x\n'
+                                                 '/./../kernel/modprobe = /tmp/m\n')])
+    k = key(r, 'kernel.core_pattern')
+    assert k['state'] == 'configured' and k['executes'] is True and k['program'] == '/tmp/x'
+    assert key(r, 'kernel.modprobe')['program'] == '/tmp/m'
+    assert sorted(r['executing_keys']) == ['kernel.core_pattern', 'kernel.modprobe']
+
+
 def test_comments_blank_and_non_assignment_lines():
     text = '# kernel.modprobe=/a\n\n   \nkernel.modprobe\nkernel.modprobe = /c\r\n ; not an assignment\n'
     r = se.resolve([f('/etc/sysctl.d/a.conf', text)])

@@ -154,19 +154,63 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode('utf-8', 'surrogatepass')).hexdigest()
 
 
+_NAME_MAX = 255
+
+
+def _skip_slash_or_dot(path: str, i: int) -> int:
+    while i < len(path):
+        if path[i] == '/':
+            i += 1
+        elif path.startswith('./', i):
+            i += 2
+        else:
+            break
+    return i
+
+
+def path_simplify(path: str) -> str:
+    """Port of systemd v255 ``path_simplify()`` (``path_simplify_full`` with no
+    flags): drop repeated slashes, ``.`` components and a trailing slash, and
+    drop ``..`` components only at the start of an absolute path. A component
+    longer than ``NAME_MAX`` bytes stops simplification, leaving the rest as is.
+    Everything stripped from a relative path becomes ``.``."""
+    if not path:
+        return path
+    absolute = path.startswith('/')
+    out = '/' if absolute else ''
+    add_slash, beginning, p = False, True, int(absolute)
+    while True:
+        first = _skip_slash_or_dot(path, p)
+        if first >= len(path) or path[first:] == '.':
+            break
+        end = path.find('/', first)
+        end = len(path) if end < 0 else end
+        component = path[first:end]
+        if len(component.encode('utf-8', 'surrogatepass')) > _NAME_MAX:
+            # systemd refuses to simplify the remainder of an invalid path.
+            return out + ('/' if add_slash else '') + path[p:]
+        nxt = _skip_slash_or_dot(path, end)
+        p = nxt + (1 if path[nxt:] == '.' else 0)
+        if absolute and beginning and component == '..':
+            continue
+        beginning = False
+        out += ('/' if add_slash else '') + component
+        add_slash = True
+    return out or '.'
+
+
 def normalize_key(key: str) -> str:
-    """Apply systemd's ``sysctl_normalize``: when the first separator is a dot,
-    swap dots and slashes; collapse repeated slashes and ``.`` components; drop
-    a leading slash."""
+    """Apply systemd v255 ``sysctl_normalize``: when the first separator is a
+    dot, swap dots and slashes; then ``path_simplify()`` (which also drops
+    leading ``..`` components of an absolute key); then drop a leading slash
+    unless it is the whole key."""
     first = re.search(r'[/.]', key)
     if first and first.group() == '.':
         key = key[:first.start()] + key[first.start():].translate(str.maketrans('./', '/.'))
-    absolute = key.startswith('/')
-    parts = [p for p in key.split('/') if p not in ('', '.')]
-    simplified = '/'.join(parts)
-    if absolute and not simplified:
-        return '/'
-    return simplified
+    key = path_simplify(key)
+    if key.startswith('/') and len(key) > 1:
+        key = key[1:]
+    return key
 
 
 def display_key(key: str) -> str:
