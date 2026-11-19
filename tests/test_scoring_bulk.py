@@ -8,18 +8,18 @@ from app.db import Session,Host,Package,Setting,engine
 from app.security import seal
 
 
-def seed(count,state='complete',completed=None):
+def seed(count,state='complete',completed=None,host_count=2):
     now=time.time()
     with Session() as s:
-        hosts=[Host(id='bulk-'+str(i),name='Fixture',address='192.0.2.1',fingerprint='',inventory={'os':'ID=debian\nVERSION_ID=12'}) for i in range(2)]
+        hosts=[Host(id='bulk-'+str(i),name='Fixture',address='192.0.2.1',fingerprint='',inventory={'os':'ID=debian\nVERSION_ID=12'}) for i in range(host_count)]
         s.add_all(hosts)
         s.merge(Setting(key='config',value={'ai_enabled':True,'ai_updates_enabled':True,'ai_model':'fixture','ai_control_mode':'unthrottled'}))
         s.merge(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
-        packages=[Package(id=hosts[i%2].id+':pkg'+str(i//2).zfill(4),host_id=hosts[i%2].id,name='pkg'+str(i//2).zfill(4),installed='1',candidate='2',available_since=now-10000+i) for i in range(count)]
+        packages=[Package(id=hosts[i%host_count].id+':pkg'+str(i//host_count).zfill(4),host_id=hosts[i%host_count].id,name='pkg'+str(i//host_count).zfill(4),installed='1',candidate='2',available_since=now-10000+i) for i in range(count)]
         s.add_all(packages);s.flush()
         for i,p in enumerate(packages):
             if completed is not None and i>=completed:continue
-            s.add(update_scores.UpdateScore(id=update_scores.identity(hosts[i%2],p),host_id=p.host_id,name=p.name,installed='1',candidate='2',state=state,score=50 if state=='complete' else None,attempted=now-7000,next_at=now+600 if state=='deferred' else 0))
+            s.add(update_scores.UpdateScore(id=update_scores.identity(hosts[i%host_count],p),host_id=p.host_id,name=p.name,installed='1',candidate='2',state=state,score=50 if state=='complete' else None,attempted=now-7000,next_at=now+600 if state=='deferred' else 0))
         s.commit()
         return [p.id for p in packages]
 
@@ -339,6 +339,50 @@ def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, mon
     # Candidate identity and persisted host scope are still read separately.
     assert len(score_reads) == 4
     assert all('where update_scores.id in (' in query for query in score_reads)
+
+
+def test_scoring_revalidates_five_results_in_two_evidence_queries(admin, monkeypatch):
+    packages = seed(5, completed=0, host_count=5)
+    sent = capture_assessments(monkeypatch)
+    assess = ai.request
+    response_returned = False
+    reads = []
+
+    def change_evidence(*args, **kwargs):
+        nonlocal response_returned
+        with Session() as session:
+            session.get(Package, packages[1]).candidate = '3'
+            session.get(Host, 'bulk-2').inventory = {'os': 'ID=debian\nVERSION_ID=13'}
+            session.delete(session.get(Package, packages[3]))
+            session.delete(session.get(Host, 'bulk-4'))
+            session.commit()
+        result = assess(*args, **kwargs)
+        response_returned = True
+        return result
+
+    def observe(conn, cursor, statement, parameters, context, executemany):
+        query = statement.lower()
+        if response_returned and query.lstrip().startswith('select'):
+            if 'from packages ' in query or 'from packages\n' in query:
+                reads.append('package')
+            if 'from hosts ' in query or 'from hosts\n' in query:
+                reads.append('host')
+
+    monkeypatch.setattr(ai, 'request', change_evidence)
+    event.listen(engine, 'before_cursor_execute', observe)
+    try:
+        update_scores.run_one()
+    finally:
+        event.remove(engine, 'before_cursor_execute', observe)
+
+    with Session() as session:
+        scored = {row.host_id: (row.state, row.score)
+                  for row in session.scalars(select(update_scores.UpdateScore))}
+    assert len(sent) == 5
+    assert scored == {'bulk-0': ('complete', 50), **{
+        f'bulk-{index}': ('superseded', None) for index in range(1, 5)
+    }}
+    assert sorted(reads) == ['host', 'package']
 
 
 def test_equal_age_candidates_keep_id_tiebreak_order_across_chunks(admin,monkeypatch):
