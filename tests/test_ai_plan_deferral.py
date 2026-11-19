@@ -1,6 +1,7 @@
 import time
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from sqlalchemy import select
 
@@ -100,6 +101,57 @@ def test_uncontrolled_plan_error_remains_terminal(admin, monkeypatch):
         job=session.get(Job,job_id)
         assert job.state=='failed' and job.next_at==0
         assert '_ai_deferred' not in job.payload
+
+
+@pytest.mark.parametrize('plan_kind', ['incident', 'startup'])
+@pytest.mark.parametrize('response_kind', ['refusal', 'token_limit', 'other_incomplete'])
+def test_plan_provider_failures_keep_accurate_redacted_diagnostics(admin, monkeypatch, plan_kind, response_kind):
+    if plan_kind == 'incident':
+        job_id, incident_id = seed_security_plan()
+    else:
+        from test_startup_ai import BASE, setup_incident
+
+        incident_id = setup_incident(admin)
+        with Session() as session:
+            updated = session.get(incidents.PersistenceIncident, incident_id).updated
+        queued = admin.post(f'{BASE}/persistence-incidents/{incident_id}/plan',
+                            json={'expected_updated': updated})
+        assert queued.status_code == 200
+        job_id = queued.json()['job_id']
+
+    raw_provider_text = 'private refusal /srv/provider-only-marker'
+    if response_kind == 'refusal':
+        response = {'status': 'completed', 'output': [
+            {'content': [{'type': 'refusal', 'refusal': raw_provider_text}]}]}
+    else:
+        reason = 'max_output_tokens' if response_kind == 'token_limit' else 'other'
+        response = {'status': 'incomplete', 'incomplete_details': {'reason': reason}}
+
+    def provider(*args, **kwargs):
+        return httpx.Response(200, json=response, request=httpx.Request('POST', ai.URL))
+
+    monkeypatch.setattr(ai.transport, 'post', provider)
+    worker.execute(job_id)
+
+    with Session() as session:
+        job = session.get(Job, job_id)
+        run = session.scalar(select(ai_runs.AIRun).where(ai_runs.AIRun.subject == incident_id))
+        receipt = session.scalar(select(ai_runs.AICall).where(ai_runs.AICall.run_id == run.id))
+        events = list(session.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id == run.id)))
+        assert job.state == 'failed' and job.next_at == 0 and '_ai_deferred' not in job.payload
+        assert run.state == 'error' and run.calls == 1 and receipt is not None
+        assert not session.scalar(select(incidents.Plan).where(incidents.Plan.incident_id == incident_id))
+        assert job.output.strip() == run.message
+        assert [event.message for event in events if event.stage == 'failed'] == [run.message]
+        assert all(raw_provider_text not in text for text in [job.output, run.message, *(e.message for e in events)])
+        if response_kind == 'other_incomplete':
+            assert run.message == ('OpenAI did not complete the structured response. '
+                                   'No partial assessment was accepted; retry or review the model configuration.')
+        else:
+            assert 'No advisory plan was accepted.' in run.message
+            assert 'may be billed' in run.message and 'review' in run.message.lower()
+            reason = 'model refused' if response_kind == 'refusal' else 'response token budget'
+            assert reason in run.message
 
 
 def test_ready_plan_precedes_future_plan_backoff(admin):
