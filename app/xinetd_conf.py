@@ -53,6 +53,13 @@ DEFAULT_ATTRIBUTES: dict[str, int] = {
     'groups': 1, 'banner_success': 1, 'banner_fail': 1, 'cps': 2,
     'enabled': -2, 'max_load': 1, 'v6only': 1, 'umask': 1,
 }
+# Defaults attributes whose parsers cannot fail on their values: the
+# enabled/disabled parsers only collect service ids. Every other defaults
+# parser (instances, log_type, per_source, cps, umask, bind, banner, ...)
+# can return FAILED, and a failing defaults parser makes parse_entry() log a
+# fatal error and terminate xinetd. Those parsers are not evaluated here, so
+# each one reached is a blocking gap rather than an assumed success.
+_DEFAULTS_MODELLED = {'enabled', 'disabled'}
 # Service attributes whose parsers this contract evaluates exactly. Any
 # other recognised attribute can still fail its parser on the host (which
 # disables the service), so its presence leaves the service unresolved.
@@ -298,18 +305,28 @@ class _Parser:
                     continue
                 if nvalues > 0 and len(values) != nvalues:
                     continue
+                self.defaults_parser_not_evaluated(path, item[0], name)
                 self.defaults[attr] = values
                 continue
             if op == '-=':
                 self.gap('defaults_subtraction_not_modelled', path=path,
                          line=item[0], attribute=name)
                 continue
+            if name not in _DEFAULTS_MODELLED:
+                self.defaults_parser_not_evaluated(path, item[0], name)
             # In defaults '=' means '+=' for modifiable attributes.
             if name == 'enabled':
                 self.enabled_list = (self.enabled_list or []) + values
             elif name == 'disabled':
                 self.disabled_list += values
             self.defaults.setdefault(attr, []).extend(values)
+
+    def defaults_parser_not_evaluated(self, path: str, line: int, name: str):
+        # identify_attribute() returns FAILED for a failing defaults parser
+        # (debug off) and parse_entry() then terminates xinetd, so an
+        # unevaluated value could mean no service runs at all.
+        self.gap('defaults_attribute_not_evaluated', path=path, line=line,
+                 attribute=name)
 
     def parse_service(self, svc: _Service, next_line) -> bool:
         while True:

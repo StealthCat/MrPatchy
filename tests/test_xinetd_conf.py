@@ -234,3 +234,30 @@ def test_redirect_forwards_without_exec():
     assert svc['status'] == 'loads_if_lookups_succeed'
     assert svc['argv'] is None
     assert svc['redirect'] == ['10.0.0.5', '22']
+
+
+def test_unevaluated_defaults_parser_is_a_blocking_gap():
+    # A failing defaults parser makes xinetd log a fatal error and exit
+    # (parse.c parse_entry), so a valid-looking value cannot be assumed.
+    for line in ('instances = abc', 'log_type = BOGUS', 'instances = 60',
+                 'log_on_success = HOST PID', 'only_from = 127.0.0.1'):
+        text = 'defaults\n{\n' + line + '\n}\n' + BACKDOOR
+        result = _run({'/etc/xinetd.conf': text})
+        assert result['complete'] is False, line
+        gaps = [g for g in result['gaps'] if g['kind'] == 'defaults_attribute_not_evaluated']
+        assert len(gaps) == 1 and gaps[0]['blocking'] is True, line
+        assert gaps[0]['attribute'] == line.split()[0]
+        assert gaps[0]['path'] == '/etc/xinetd.conf' and gaps[0]['line'] == 3
+
+
+def test_ignored_defaults_lines_and_id_lists_need_no_parser_gap():
+    # A repeated non-modifiable value, a wrong value count, an unknown name
+    # and enabled/disabled id lists never reach a parser that can fail.
+    text = ('defaults\n{\nenabled = backdoor\ndisabled = other\ncps = 10\n'
+            'nosuch = 1\n}\n' + BACKDOOR)
+    result = _run({'/etc/xinetd.conf': text})
+    assert result['complete'] is True
+    assert result['gaps'] == []
+    repeated = 'defaults\n{\ninstances = 60\ninstances = abc\n}\n' + BACKDOOR
+    gaps = _run({'/etc/xinetd.conf': repeated})['gaps']
+    assert [g['line'] for g in gaps] == [3]

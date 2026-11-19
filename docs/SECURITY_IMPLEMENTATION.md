@@ -5928,6 +5928,9 @@ action.
   - A defaults `enabled` list disables every unlisted id, and re-enables
     listed ids even after a parser failure.
   - A defaults `disabled` list removes listed ids.
+  - Any other defaults attribute that reaches its parser is a blocking
+    `defaults_attribute_not_evaluated` gap: a failing defaults parser makes
+    xinetd log a fatal error and exit, and those parsers are not evaluated.
   - The lookup-independent `service_fill`/`check_entry`/`service_attr_check`
     rules apply: required attributes, `dgram` services must `wait`, the
     NAMEINARGS and redirect rules, TCPMUX must be UNLISTED, and an UNLISTED
