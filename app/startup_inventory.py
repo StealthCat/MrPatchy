@@ -16,10 +16,11 @@ CATALOG=(
     ('anacron','anacron table','/etc/anacrontab'),
 )
 GAPS=[
-    'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar), anacron and at queues are not parsed into jobs.',
+    'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar) are not parsed into jobs; anacron and at queue parsing is described separately below.',
     'Parsed jobs are data from the hashed file only: referenced scripts are not inspected, and PATH/SHELL settings and whether the cron daemon runs are not evaluated. /etc/crontab and /etc/cron.d files are checked against the distribution cron defaults for names, root ownership and permission bits from stored metadata; '+cron_loading.LIMITATION+' User spool crontab ownership/mode rules are not evaluated.',
     'Vendor/user systemd units, effective precedence, generated/transient units and runtime state are not enumerated.',
-    '/etc/anacrontab is hashed as a startup file by agents that report it, but its jobs are not parsed; /var/spool/anacron timestamps and at queues, user login/autostart/SSH hooks, udev and module-load mechanisms are not comprehensively inventoried.',
+    '/var/spool/anacron timestamps, user login/autostart/SSH hooks, udev and module-load mechanisms are not comprehensively inventoried.',
+    'Exception for anacron: /etc/anacrontab is hashed and its jobs are parsed into period, delay, job identifier and command from the hashed bytes by agents that report them, with the START_HOURS_RANGE and RANDOM_DELAY settings. Other environment values are counted, never stored; commands use the same best-effort redaction and are bounded to 64 jobs; lines anacron would reject are counted as unparsed. Scripts that run-parts commands execute, anacron timestamps and whether anacron runs (cron, systemd timer or boot) are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
     'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
@@ -51,6 +52,16 @@ def at_state(entry):
     return 'not_reported' if entry['kind']=='regular' and name[0]==persistence.AT_SPOOL_DIR and re.fullmatch(r'[a-zA-Z=][0-9a-f]{13}',name[1]) else None
 
 
+def anacron_state(entry):
+    """Whether parsed anacron jobs exist, were not reported (older agent) or do not apply."""
+    if 'anacron' in entry:return 'parsed'
+    return 'not_reported' if entry['kind']=='regular' and entry['path']==persistence.ANACRONTAB else None
+
+
+def anacron_text(entry):
+    return ' '.join(j['identifier']+' '+j['command'] for j in entry.get('anacron',{}).get('jobs',()))
+
+
 def with_at_jobs(rows,inventory,q,changes):
     """Attach parsed at jobs to matching rows and add entries found only by an at account or command."""
     by_path={r['path']:r for r in rows}
@@ -73,9 +84,13 @@ def with_at_jobs(rows,inventory,q,changes):
 
 
 def catalog_rows(inventory):
-    """Mechanism counts; the at row also reports parsed and older-agent job files."""
+    """Mechanism counts; the at and anacron rows also report parsed jobs and older-agent files."""
     result=[]
     for key,label,_ in CATALOG:
+        if key=='anacron':
+            states=[anacron_state(e) for e in inventory['entries']]
+            jobs=sum(len(e['anacron']['jobs']) for e in inventory['entries'] if 'anacron' in e)
+            label+=f' · {jobs} parsed job{"" if jobs==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
         if key=='at':
             states=[at_state(e) for e in inventory['entries']]
             parsed=states.count('parsed');missing=states.count('not_reported')
@@ -101,11 +116,14 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         row={k:entry[k] for k in ('path','kind','uid','gid','mode','size','sha256','target') if k in entry}
         row.update(mechanism=key,mechanism_label=label,change=changes.get(entry['path'],'unchanged') if changes is not None else 'not_compared',origin='not_assessed',jobs_state=jobs_state(entry))
         if 'cron' in entry:row['cron']=entry['cron']
+        state=anacron_state(entry)
+        if state:row['anacron_state']=state
+        if 'anacron' in entry:row['anacron']=entry['anacron']
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and any(entry['path']==root or entry['path'].startswith(root+'/') for root in newly):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)
