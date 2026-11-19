@@ -6,7 +6,7 @@ module.exports=async(page,capture)=>{
  // #1180: the page reads every open undelivered alert from a paged server route; counts come from the server.
  let paged=false;const pendingOffsets=[];
  const row=(id,attempts,error,kind='stale')=>({id,host_id:'missing-host',kind,state:'open',created:now,notified:0,attempted:now,attempts,error});
- const alerts=route=>{reads.push('alerts');const offset=Number(new URL(route.request().url()).searchParams.get('offset')||0);pendingOffsets.push(offset);
+ let hold=null;const alerts=async route=>{if(hold&&new URL(route.request().url()).searchParams.get('offset'))await hold;reads.push('alerts');const offset=Number(new URL(route.request().url()).searchParams.get('offset')||0);pendingOffsets.push(offset);
   const all=paged?Array.from({length:51},(_,i)=>row('p'+i,1,'',i===50?'oldest-row':'stale')):[row('a1',4,'ConnectError <svg onload=window.__deliveryInjected=true>','stale <img src=x onerror=window.__deliveryInjected=true>')];
   return route.fulfill({json:{items:all.slice(offset,offset+50),offset,limit:50,total:all.length,failing:paged?0:(4>=limit?1:0),failed_attempts:limit}});};
  const config=route=>{reads.push('config');return route.fulfill({json:unreadable?{channel:'webhook',password_configured:false,token_configured:false,unreadable:true}:{enabled:true,channel:'webhook',url:'https://hooks.example.test/secret-path',token_configured:true,password_configured:false,unreadable:false}});};
@@ -40,8 +40,18 @@ module.exports=async(page,capture)=>{
   assert.equal(pendingOffsets.at(-1),50);assert.equal(await page.locator('#pending-deliveries tbody tr').count(),1);assert.match(await page.locator('#pending-deliveries tbody').textContent(),/oldest-row/);
   assert.equal(await field.inputValue(),'9');assert.equal(await page.evaluate(()=>document.activeElement?.textContent),'Undelivered open alerts');
   for(const width of [320,768,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await capture('alert-delivery-paged-'+width);}
+  // Review of #1181: a page response still in flight when a threshold save re-renders the page must not
+  // replace the refreshed list or move focus.
+  let release;hold=new Promise(r=>release=r);
+  await page.getByRole('button',{name:'Previous alerts',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-delivery-offset]')?.disabled);
+  await field.fill('6');await page.getByRole('button',{name:'Save threshold',exact:true}).click();
+  await page.getByText('Showing 1–50 of 51, newest first. Acknowledge alerts from the Operations panel.',{exact:true}).waitFor();
+  await field.focus();release();hold=null;await page.waitForTimeout(300);
+  assert.match(await page.locator('#pending-deliveries').textContent(),/Showing 1–50 of 51/);assert.equal(await field.inputValue(),'6');
+  assert.equal(await page.evaluate(()=>document.activeElement?.name),'failed_attempts');
+  await page.getByRole('button',{name:'Next alerts',exact:true}).click();await page.getByText('Showing 51–51 of 51, newest first. Acknowledge alerts from the Operations panel.',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Previous alerts',exact:true}).click();await page.getByText('Showing 1–50 of 51, newest first. Acknowledge alerts from the Operations panel.',{exact:true}).waitFor();
-  assert.equal(pendingOffsets.at(-1),0);paged=false;await page.reload();await page.getByRole('heading',{name:'Failure notification',exact:true}).waitFor();
+  assert.equal(pendingOffsets.at(-1),0);paged=false;limit=3;await page.reload();await page.getByRole('heading',{name:'Failure notification',exact:true}).waitFor();
   for(const width of [320,768,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await capture('alert-delivery-'+width);}
   await page.getByRole('button',{name:'Open delivery settings',exact:true}).click();
   await page.locator('#notification-form').waitFor();await page.locator('#close-modal').click();

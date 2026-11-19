@@ -535,9 +535,10 @@ function pendingDeliveries(data){
 let pendingDeliveryRequest=0;
 function bindPendingDeliveries(revision){
  $('#pending-deliveries').querySelectorAll('[data-delivery-offset]').forEach(button=>button.onclick=async()=>{
-  const ticket=++pendingDeliveryRequest;button.disabled=true;
+  // Bind the response to the list that requested it: a full page refresh (for example after a
+  // threshold save) replaces that section, so a late page response must not overwrite the new one.
+  const ticket=++pendingDeliveryRequest,section=$('#pending-deliveries');button.disabled=true;
   try{const data=await api('/operations/alert-delivery/pending?offset='+Number(button.dataset.deliveryOffset));
-   const section=$('#pending-deliveries');
    if(ticket!==pendingDeliveryRequest||!currentView(revision,'activity')||location.hash!=='#activity/delivery'||!section||!section.isConnected)return;
    section.outerHTML=pendingDeliveries(data);bindPendingDeliveries(revision);$("#pending-deliveries h2").focus();}
   catch(error){toast(error.message);if(button.isConnected)button.disabled=false;}});
