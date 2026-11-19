@@ -11622,6 +11622,20 @@ admission and production throughput remain open.
 
 A cold scoring pass now takes the existing lock only when an active, unpaused server has a candidate or an update-scoring run needs recovery. One read-only probe checks both conditions; the locked pass then opens a fresh session and rechecks the work. Warm passes still prune absent memo entries, and recovery still runs when scoring is disabled. Empty, paused-only and inactive-only polls use one query and skip the scoring lock. A busy cold pass adds one probe, and work arriving after a negative probe waits until the next poll. Compatibility: no schema or response-authorization change. Independent scoring admission and measured production throughput remain open.
 
+### Individual anacron jobs — worker checkpoint #1156 (roadmap F)
+
+- **What it covers:** this connects the pure `app/scheduled_jobs.parse_anacrontab` contract (#711) to collection and the startup inventory. When the controller asks for parsed jobs, the agent parses `/etc/anacrontab` from exactly the bytes it hashed. For each job it reports the period (day count or `@name`), delay, job identifier, line and a bounded, redacted command. It also flags a repeated identifier, since anacron shares one timestamp file between those jobs.
+- **Settings:** only `START_HOURS_RANGE` and `RANDOM_DELAY` values are stored, and only when valid. Other assignments are counted, never stored, because values can hold credentials.
+- **Fail closed:**
+  - Text over 64 KiB, invalid UTF-8 or NUL bytes yields `parsed: false` with no jobs.
+  - Lines anacron would reject are counted as unparsed.
+  - Jobs stop at 64 per file, with `truncated` set.
+  - Commands use the cron redaction and control-character escaping and are capped at 512 characters.
+- **Controller:** `persistence.validate_anacron` accepts the record only on a regular `/etc/anacrontab` entry, with exact key sets and bounded types. It checks named periods against their day counts and requires a duplicate reference to point at an earlier job with the same identifier. An unparsed record must be empty. Comparisons and incident evidence strip the record, so baselines stay metadata-only.
+- **UI/API:** Startup Files shows the settings and a job table with escaped identifiers and commands. It also explains older agents (`not_reported`) and unreadable tables. Search matches identifiers and commands, and the Coverage catalog row counts parsed jobs. Roles are unchanged (administrator only).
+- **Parity:** `tests/test_anacron_jobs.py` compares agent output with the pure contract on a shared corpus (jobs, duplicate links, unparsed counts and settings). It has 45 tests, and six source mutations are each caught.
+- **Remaining:** whether and how anacron is started (cron `0anacron` or a systemd timer), `/var/spool/anacron` timestamps, run-parts targets, package provenance of the default table, and AI classification. No schema, scheduling, AI or response-authorization change was made.
+
 ### systemd generator contract — worker checkpoint #1151 (roadmap F)
 
 This is a contract increment only. The startup-awareness requirement is still incomplete. The startup catalog lists `systemd_generators` locations, but nothing resolved which generators systemd actually runs. Generators run before any unit is loaded, at every boot and at every `daemon-reload` (including the reloads package installs trigger). A same-named file in `/etc/systemd` or `/run/systemd` replaces or masks a vendor generator. `app/systemd_generators.py` is a pure, versioned contract for this. It takes supplied directory-entry metadata, performs no I/O and never reads a generator's contents.
