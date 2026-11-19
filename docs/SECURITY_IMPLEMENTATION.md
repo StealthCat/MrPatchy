@@ -27,6 +27,20 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+### Retry eligibility after a saved AI configuration change — Roadmap A checkpoint #1124
+
+Fleet AI Activity and the per-server triage queue now show a timed provider
+wait when the saved model or key has changed since an investigation was
+blocked. The displayed deadline comes from the provider floor. An earlier
+attempt's recovery deadline does not extend the wait after a configuration
+change. Investigations blocked under the current configuration still show
+that an administrator must review them.
+
+The regression exercises configuration-blocked and exhausted interrupted
+attempts before and at the provider deadline. Shared rate, spend, pause and
+other admission gates still apply. Independent scoring admission and
+production throughput acceptance remain open.
+
 ## Dependency vulnerability gate (partial #201)
 
 The CI `static` job runs `pip-audit` (pinned in `requirements-audit.txt`) against the
@@ -3707,8 +3721,25 @@ legacy per-purpose ceiling, including the fixed 10/hour automatic-plan allowance
   proposal, four concurrent startups applying once, the stale-revision refusal and
   controller startup. The startup case fails without the hook. The standalone
   worker hook has no dedicated test.
-- **Still open:** an in-app notification for the migration and the broader
-  shared-controls acceptance.
+- **Still open:** the broader shared-controls acceptance; the migration notification is addressed below.
+
+### Legacy AI admission migration notifications — worker checkpoint #1178
+
+The #1039 "still open" in-app notification is delivered. `app/ai_control_migration.py`
+now publishes admin-only events (source `ai-admission`, deep link `#settings/ai`):
+- **Migrated:** one `info` record naming the new shared rate, written in the same
+  transaction as the migration and its audit row. Restarts add nothing.
+- **Refused:** when the proposal would expand admission or spend, one `medium` event
+  says the hidden legacy allowances remain and that nothing was changed. Repeated
+  refused startups publish no new revision. Each `collect_alerts` pass keeps it active
+  while the stored configuration still has no `ai_control_mode`, and resolves it once
+  an administrator saves an explicit mode or a later startup migrates.
+- **Unchanged:** a rejected notification payload never blocks or rolls back the
+  migration. No schema, admission, spend, pause, role or response-authorization
+  change; no provider call; no SMTP/webhook alert.
+- **Validation:** `tests/test_ai_control_migration_notifications.py`; three of its
+  five cases fail without the change.
+- **Still open:** the broader shared-controls acceptance.
 
 ### Refuse unconfirmed AI admission/spend expansions on save — worker checkpoint #881
 
@@ -3964,6 +3995,18 @@ Cleanup validation for #1095 covers a disconnected session, an absent lock
 and a lock assigned to another session. The native MySQL fixture verifies that
 stale cleanup leaves the subsequent holder's table intact. This is fixture
 cleanup acceptance. Production failover and throughput acceptance remain open.
+
+### Advisory plan result-persistence timing — Roadmap A checkpoint #1176
+
+Incident and startup plan runs record a retained `result_persistence` timing
+after structured validation. The timing includes existing evidence revalidation
+and the plan transaction. A saved plan records completion and a failed save
+records an error. Provider refusals and invalid structured plans never enter
+this stage. The run timeline uses the existing redacted duration and outcome
+format. Worker fixtures exercise both plan types through a successful write,
+a failed write, an invalid response and a refusal. Existing plan state,
+evidence, manual approval and provider accounting retain their behavior.
+Production throughput and release-plan timings remain separate.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -11331,7 +11374,7 @@ The producer is read-only. It never sends, retries, changes backoff or acknowled
 
 **Remaining:**
 - ~~The event has no deep link, because the Operations panel is a modal with no route.~~ Addressed by the #824 worker checkpoint below.
-- The threshold is fixed.
+- ~~The threshold is fixed.~~ Addressed by the #1172 worker checkpoint below.
 - ~~A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.~~ Addressed by the #812 worker checkpoint below.
 
 ### Alert-delivery notification deep link — worker checkpoint #824
@@ -11341,7 +11384,27 @@ The admin-only `alert-delivery`/`delivery-failing` event now links to a routable
 - **Page:** it shows the delivery channel (SMTP email, webhook, disabled or unreadable configuration) and the open alerts that have not been delivered, with server, kind, raised time, attempts and the stored sanitized error class. All text is escaped. No URL, token, password or recipient is shown. **Open delivery settings** opens the existing Operations panel, where configuration changes and acknowledgement remain. The page only reads the existing admin-only `GET /api/operations/alerts` and `GET /api/operations/notifications` routes, so it never sends, retries or acknowledges anything. Non-admins see the administrator-required state and no data request is made.
 - **Upgrade impact:** the link is part of the notification payload fingerprint. An event that is already active therefore gains one unread revision on the first collection pass after upgrade. Later passes add none.
 - **Unchanged:** schema, roles, routes, delivery and backoff, admission and response authorization.
-- **Remaining:** the threshold is still fixed, and the page lists only the 200 most recent alerts that the existing route returns.
+- **Remaining:** ~~the threshold is still fixed~~ (addressed by the #1172 worker checkpoint below), and the page lists only the 200 most recent alerts that the existing route returns.
+
+### Configurable alert-delivery notification threshold — worker checkpoint #1172
+
+Administrators can now set how many failed delivery attempts trigger the admin-only `alert-delivery`/`delivery-failing` notification. This closes the "threshold is fixed" item from checkpoints #792 and #824.
+
+- **Setting:** a whole number from 1 to 20 on Activity → Alert delivery (**Failure notification**). The default stays 3. It is stored in its own `alert-delivery-threshold` setting, outside the encrypted SMTP/webhook configuration. That keeps it readable and editable when the delivery configuration cannot be decrypted, and neither delivery save path nor any secret is touched. A missing or invalid stored value (out of range, boolean, non-integer, malformed) falls back to 3, so a bad value never silences the notice.
+- **API:** admin-only `GET`/`PUT /api/operations/alert-delivery-threshold`. `PUT` requires strict integers `failed_attempts` and `expected_failed_attempts`. It returns 400 outside the range, 409 when the saved value no longer matches the expected one, and it is serialized with a `worker.Lock`. Each change writes one `alert delivery threshold` audit entry with actor, before and after. Saving the same value writes nothing.
+- **Producer:** `failing_count` and the reason text use the saved threshold. Saving never sends, retries, acknowledges or resolves an alert, and it publishes nothing by itself. The next `collect_alerts` pass re-evaluates the event. Raising the threshold above every failing alert resolves an active event. If the event is already active and the threshold changes, the reason text (now naming the new count) adds one unread revision.
+- **Page:** the status line and the failing count on the Alert delivery page use the saved threshold instead of a fixed "three".
+- **Unchanged:** schema, roles, delivery and backoff, the unreadable-configuration path, admission and response authorization.
+- **Remaining:** ~~the page lists only the 200 most recent alerts that the existing route returns.~~ Addressed by the #1180 worker checkpoint below.
+
+### Every undelivered alert on the Alert delivery page — worker checkpoint #1180
+
+The Alert delivery page used to filter open, undelivered alerts in the browser from `GET /api/operations/alerts`, which returns only the 200 newest alerts of any state. With more than 200 newer delivered, acknowledged or resolved alerts, an older open alert that was still failing delivery disappeared from the page. Its failing count could then disagree with the admin `alert-delivery` notification, which counts every alert.
+
+- **API:** new admin-only, read-only `GET /api/operations/alert-delivery/pending?offset=N`. It returns open, undelivered alerts newest first, 50 per page, without the alert message. It also returns server-side `total` and `failing` counts across every such alert, using the saved threshold (`failed_attempts`). `offset` must be from 0 to 1,000,000.
+- **Page:** the status line and failing count use the server counts. The list shows "Showing A–B of N, newest first" with **Previous alerts** and **Next alerts**. Paging replaces only the alert list and moves focus to its heading, so unsaved threshold input survives. A late page response is discarded if a newer page was requested or the administrator left the page.
+- **Unchanged:** `GET /api/operations/alerts` and the Operations panel, delivery, retries and backoff, acknowledgement, the notification producer, schema, roles, admission and response authorization. The page still never sends, retries or acknowledges anything.
+- **Remaining:** none for the page's list scope. Acknowledgement stays in the Operations panel, which still lists the 200 newest alerts.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 
@@ -11500,7 +11563,18 @@ Two re-enable paths published `overdue` straight away when the scheduler was hel
 - **No upgrade delay:** a server never seen inactive has no marker, so existing and continuously active servers keep the #816 schedule after upgrade.
 - **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
-- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
+- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope. (The grace became configurable in #1182.)
+
+### Configurable grace before scheduled-scan coverage notifications — worker checkpoint #1182
+
+Checkpoints #883 and #1043 left the one-hour grace fixed. A server that planned maintenance or slow workers routinely hold past its scan interval could only avoid repeated `overdue` or `stalled` events by turning scheduled scanning off.
+
+- **Change:** the server's Scheduled scanning policy accepts `notify_grace_hours`, an integer from 1 to 168 (default 1). Other values are rejected with 422. The policy GET default includes it, and the Security tab's Scheduled scanning form shows and saves it.
+- **Producer:** `overdue`, `stalled`, the never-scanned `enabled_since` wait, the #883 legacy marker wait and the #1043 resume clock all use the interval plus the configured grace. A missing, malformed or out-of-range stored value keeps one hour, so existing policies keep the #816 schedule after upgrade.
+- **Reason text:** with the default grace the reason is byte-identical to before, so existing events gain no unread revision on upgrade. A non-default grace names its hours in the `overdue` and `stalled` reasons, and changing the grace while an event is active adds one revision.
+- **Unchanged:** the scheduler, scan intervals, `security_coverage.assessment` and the coverage page, `failed` and `incomplete`, payload shape, roles (admin-only save, unchanged route dependency), the schema and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** seven focused tests in `tests/test_scan_coverage_grace.py` fail on main `c22fb68` and pass after the change, alongside the existing coverage-notification tests. `tests/ui_security.cjs` checks that a legacy policy shows one hour and that the saved value is sent.
+- **Remaining:** a server disabled and re-enabled between two alert ticks is still never seen inactive. YARA schedules remain out of scope.
 
 ### XDG autostart contract — worker checkpoint #889 (roadmap F)
 
@@ -11734,6 +11808,31 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
+
+### systemd-tmpfiles kernel-hook and startup-file contract — worker checkpoint #1097 (roadmap F)
+
+`systemd-tmpfiles-setup.service` applies `tmpfiles.d` as root at every boot. A `w /proc/sys/kernel/core_pattern - - - - |/tmp/x` line sets a program that the kernel itself runs, without going through `sysctl.d` (#1088). A line such as `f /etc/cron.d/job …`, `L+ /etc/ld.so.preload - - - - …` or `C /etc/systemd/system/x.service …` creates a startup file. No contract covered `tmpfiles.d`.
+
+- **Change:** a new pure module, `app/tmpfiles_exec.py`. From captured `tmpfiles.d` text it reports two things:
+  - the effective lines that write `kernel.core_pattern`, `kernel.modprobe`, the uevent helper (`kernel.hotplug` or `/sys/kernel/uevent_helper`), `kernel.poweroff_cmd` or `fs.binfmt_misc.register`, in apply order with the last writer and the program it names;
+  - every effective `f`/`L`/`C`/`w` line that creates, replaces, writes or links into a listed startup location, with its condition (`if_absent`, `replace`, `write_if_present` or `append_if_present`).
+
+  Each entry gives the source file and line, the type, the modifiers (`!` boot only, `-` ignore errors) and the argument, bounded to 512 bytes, with its SHA-256.
+- **Reference:** systemd 255 (255.4-1ubuntu8.18). The rules were derived by running the compiled `systemd-tmpfiles --root … --create --boot` on fixture trees:
+  - Precedence is `/etc` → `/run` → `/usr/local/lib` → `/usr/lib`. Only `*.conf` files are read, in name order, and a link to `/dev/null` masks a file.
+  - Field quoting and C escapes are applied. In the argument, quotes are kept, escapes are decoded first and then `%%` becomes `%` (so `\x25H` is the host name). `~` means base64, which is not expanded.
+  - Duplicate-line rules: the first `f`/`L`/`C`/`d`/`p`/… line for a path wins unless the later one is identical. A `w` line conflicts with a `w`/`e`/`x`/`X`/`r`/`R` line for the same path, except that `w+` lines after a `w+` all apply.
+  - Map order: all non-glob-type lines apply before the glob-type map (`w`, `x`, `z`, …), and each map applies in the order its paths first appeared. So `f+` runs before `w`, and among `w` lines a later-appearing path or pattern is written later.
+  - `f` writes only when it creates the file, so it never changes a kernel setting. `f+` truncates and writes. `w` writes only to an existing file. Only `w` expands globs, and `*` does not match `/` or hidden names.
+  - Rejected lines include relative paths, `w` without an argument, invalid base64, modifiers unknown to v255 (such as `$`) or repeated (`w++`), and an invalid mode or age. A rejected line never takes a path's slot.
+  - Conditional lines: a user or group other than `-`, `root` or a plain id (resolved through the host's NSS), an age form not checked against the binary, and `C` lines (skipped when the copy source is missing) may be rejected on the host. A write such a line shadows, or a kernel setting it writes, is a blocking `line_validity_unresolved` gap.
+  - A seeded random comparison of 10,000 fixture trees found no difference in any stand-in kernel value or in the set of created startup files. It simulates regular-file overwrite and append, and covers precedence, masking, duplicate and conflict rules, globs, modifiers, escapes, base64 and simplified paths.
+- **Fail-closed gaps, which mark the result incomplete:** unreadable, over-limit, invalid UTF-8 or NUL input; an unfollowed symlink, which never falls back to a lower-priority file; malformed or duplicate input; host-dependent specifiers in the path of a writing line or in a relevant argument; credential (`^`) values; modifiers newer releases may accept; arguments or fields this parser cannot unescape; and conditional lines that shadow a write or write a kernel setting. `multiple_writers` is non-blocking: every writer is listed.
+- **Unobserved, stated in every result:** `--user` tmpfiles; the live `/proc/sys` value and kernel write failures or truncation; later `sysctl.d` or runtime writes; credential and `/usr/share/factory` contents; whether a target already exists; startup locations outside the fixed list; and removal, mode and ACL lines.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and nothing is labelled safe.
+- **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
+- **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
 
 ### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
 
