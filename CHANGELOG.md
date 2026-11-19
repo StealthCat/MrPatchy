@@ -1,3 +1,11 @@
+## 1.75.59 — 2026-11-19
+
+1. [PR #1177](https://github.com/StealthCat/MrPatchy/pull/1177): Incident and startup advisory plan runs now retain result-persistence timing after response validation, recording elapsed milliseconds and completion or save-error outcome. Invalid responses and refusals emit no persistence timing. Compatibility: existing run-event format and retention; plan state, evidence, accounting, deferral and manual approval are unchanged. Limit: production throughput and release-plan timing remain unmeasured/out of scope.
+
+## 1.75.58 — 2026-11-19
+
+1. [PR #1171](https://github.com/StealthCat/MrPatchy/pull/1171): Incident and startup advisory jobs now give plan-specific blocked diagnostics for model refusal and response token exhaustion, state that no plan was accepted and the request may be billed, and tell operators what to do next. Raw refusal text is excluded; failed calls keep one provider receipt and no saved plan, while unrelated incomplete responses retain their wording. Compatibility: no schema or permission change; eligibility, deferral, accounting and authorization remain unchanged. Limit: production-provider acceptance remains unverified.
+
 ## 1.75.57 — 2026-11-19
 
 1. [PR #1175](https://github.com/StealthCat/MrPatchy/pull/1175): Release configuration review diagnostics now distinguish model refusal and response token exhaustion in blocked plan/run history, state that no review was accepted and the request may be billed, and give operators next steps. Failed outputs retain one provider receipt, save no proposed edit, and do not expose refusal text; other incomplete responses keep their existing wording. Compatibility: diagnostic wording for these two new failures only; no schema, permission, approval, execution or shared-admission changes. Limit: production-provider acceptance remains unverified.
