@@ -598,6 +598,10 @@ slots and draining-capacity limitation. Worker rows show actual task counts; leg
 missing counts remain unavailable. Existing glass components, mascot, navigation
 and administrator boundaries are retained.
 
+The card also reports how many deferred scores are eligible now. Its next
+scoring timestamp shows the next future retry on an active unpaused server
+when scoring is enabled. Shared provider gates can still delay a start.
+
 Real Chromium acceptance reviewed the following illustrative fixture renders,
 including overflow at 320/768/1440, escaped evidence, retry feedback, Back/reload,
 worker controls and operator/viewer isolation:
