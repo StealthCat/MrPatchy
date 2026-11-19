@@ -27,6 +27,20 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+### Retry eligibility after a saved AI configuration change — Roadmap A checkpoint #1124
+
+Fleet AI Activity and the per-server triage queue now show a timed provider
+wait when the saved model or key has changed since an investigation was
+blocked. The displayed deadline comes from the provider floor. An earlier
+attempt's recovery deadline does not extend the wait after a configuration
+change. Investigations blocked under the current configuration still show
+that an administrator must review them.
+
+The regression exercises configuration-blocked and exhausted interrupted
+attempts before and at the provider deadline. Shared rate, spend, pause and
+other admission gates still apply. Independent scoring admission and
+production throughput acceptance remain open.
+
 ## Dependency vulnerability gate (partial #201)
 
 The CI `static` job runs `pip-audit` (pinned in `requirements-audit.txt`) against the
@@ -11794,6 +11808,31 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
+
+### systemd-tmpfiles kernel-hook and startup-file contract — worker checkpoint #1097 (roadmap F)
+
+`systemd-tmpfiles-setup.service` applies `tmpfiles.d` as root at every boot. A `w /proc/sys/kernel/core_pattern - - - - |/tmp/x` line sets a program that the kernel itself runs, without going through `sysctl.d` (#1088). A line such as `f /etc/cron.d/job …`, `L+ /etc/ld.so.preload - - - - …` or `C /etc/systemd/system/x.service …` creates a startup file. No contract covered `tmpfiles.d`.
+
+- **Change:** a new pure module, `app/tmpfiles_exec.py`. From captured `tmpfiles.d` text it reports two things:
+  - the effective lines that write `kernel.core_pattern`, `kernel.modprobe`, the uevent helper (`kernel.hotplug` or `/sys/kernel/uevent_helper`), `kernel.poweroff_cmd` or `fs.binfmt_misc.register`, in apply order with the last writer and the program it names;
+  - every effective `f`/`L`/`C`/`w` line that creates, replaces, writes or links into a listed startup location, with its condition (`if_absent`, `replace`, `write_if_present` or `append_if_present`).
+
+  Each entry gives the source file and line, the type, the modifiers (`!` boot only, `-` ignore errors) and the argument, bounded to 512 bytes, with its SHA-256.
+- **Reference:** systemd 255 (255.4-1ubuntu8.18). The rules were derived by running the compiled `systemd-tmpfiles --root … --create --boot` on fixture trees:
+  - Precedence is `/etc` → `/run` → `/usr/local/lib` → `/usr/lib`. Only `*.conf` files are read, in name order, and a link to `/dev/null` masks a file.
+  - Field quoting and C escapes are applied. In the argument, quotes are kept, escapes are decoded first and then `%%` becomes `%` (so `\x25H` is the host name). `~` means base64, which is not expanded.
+  - Duplicate-line rules: the first `f`/`L`/`C`/`d`/`p`/… line for a path wins unless the later one is identical. A `w` line conflicts with a `w`/`e`/`x`/`X`/`r`/`R` line for the same path, except that `w+` lines after a `w+` all apply.
+  - Map order: all non-glob-type lines apply before the glob-type map (`w`, `x`, `z`, …), and each map applies in the order its paths first appeared. So `f+` runs before `w`, and among `w` lines a later-appearing path or pattern is written later.
+  - `f` writes only when it creates the file, so it never changes a kernel setting. `f+` truncates and writes. `w` writes only to an existing file. Only `w` expands globs, and `*` does not match `/` or hidden names.
+  - Rejected lines include relative paths, `w` without an argument, invalid base64, modifiers unknown to v255 (such as `$`) or repeated (`w++`), and an invalid mode or age. A rejected line never takes a path's slot.
+  - Conditional lines: a user or group other than `-`, `root` or a plain id (resolved through the host's NSS), an age form not checked against the binary, and `C` lines (skipped when the copy source is missing) may be rejected on the host. A write such a line shadows, or a kernel setting it writes, is a blocking `line_validity_unresolved` gap.
+  - A seeded random comparison of 10,000 fixture trees found no difference in any stand-in kernel value or in the set of created startup files. It simulates regular-file overwrite and append, and covers precedence, masking, duplicate and conflict rules, globs, modifiers, escapes, base64 and simplified paths.
+- **Fail-closed gaps, which mark the result incomplete:** unreadable, over-limit, invalid UTF-8 or NUL input; an unfollowed symlink, which never falls back to a lower-priority file; malformed or duplicate input; host-dependent specifiers in the path of a writing line or in a relevant argument; credential (`^`) values; modifiers newer releases may accept; arguments or fields this parser cannot unescape; and conditional lines that shadow a write or write a kernel setting. `multiple_writers` is non-blocking: every writer is listed.
+- **Unobserved, stated in every result:** `--user` tmpfiles; the live `/proc/sys` value and kernel write failures or truncation; later `sysctl.d` or runtime writes; credential and `/usr/share/factory` contents; whether a target already exists; startup locations outside the fixed list; and removal, mode and ACL lines.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and nothing is labelled safe.
+- **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
+- **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
 
 ### incron table contract — worker checkpoint #1132 (roadmap F)
 

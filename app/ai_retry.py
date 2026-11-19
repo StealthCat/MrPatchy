@@ -8,7 +8,7 @@ import json
 import math
 import random
 import time
-from sqlalchemy import String, Double, Integer, Text, and_, or_, func, select
+from sqlalchemy import String, Double, Integer, Text, and_, case, or_, func, select
 from sqlalchemy.orm import Mapped, mapped_column
 from . import ai_provider_backoff
 from .db import Base, Behavior, Setting, config
@@ -56,10 +56,28 @@ def configuration_signature(model,key_value):
     return hashlib.sha256(json.dumps(['triage-retry-v1',model,key_value],sort_keys=True).encode()).hexdigest()
 
 
+def _requires_new_configuration():
+    return or_(TriageRetry.state == 'blocked',
+               and_(TriageRetry.state == 'interrupted', TriageRetry.attempts >= MAX_ATTEMPTS))
+
+
 def eligible(signature,now):
     return or_(and_(TriageRetry.subject.is_(None),Behavior.attempted<=now-3600),
                and_(TriageRetry.state.in_(('deferred','interrupted')),TriageRetry.attempts<MAX_ATTEMPTS,TriageRetry.next_at<=now),
-               and_(or_(TriageRetry.state=='blocked',and_(TriageRetry.state=='interrupted',TriageRetry.attempts>=MAX_ATTEMPTS)),TriageRetry.configuration!=signature,TriageRetry.provider_until<=now))
+               and_(_requires_new_configuration(),TriageRetry.configuration!=signature,TriageRetry.provider_until<=now))
+
+
+def queue_waits(signature):
+    """SQL expressions for an indefinite configuration block and a timed retry."""
+    configuration_blocked = _requires_new_configuration()
+    same_configuration = TriageRetry.configuration == signature
+    blocked = and_(TriageRetry.subject.is_not(None), configuration_blocked, same_configuration)
+    wake = case(
+        (TriageRetry.subject.is_(None), Behavior.attempted + 3600),
+        (configuration_blocked, case((same_configuration, 0), else_=TriageRetry.provider_until)),
+        else_=TriageRetry.next_at,
+    )
+    return blocked, wake
 
 
 def begin(s,row,signature,now):
