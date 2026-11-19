@@ -11698,6 +11698,18 @@ pause and revocation between claim and reuse. The oldest-window bound and legacy
 purpose-specific hourly ceilings still apply. End-to-end production throughput
 and the remaining exact-match acceptance milestones stay open.
 
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
 ### systemd generator contract — worker checkpoint #1151 (roadmap F)
 
 This is a contract increment only. The startup-awareness requirement is still incomplete. The startup catalog lists `systemd_generators` locations, but nothing resolved which generators systemd actually runs. Generators run before any unit is loaded, at every boot and at every `daemon-reload` (including the reloads package installs trigger). A same-named file in `/etc/systemd` or `/run/systemd` replaces or masks a vendor generator. `app/systemd_generators.py` is a pure, versioned contract for this. It takes supplied directory-entry metadata, performs no I/O and never reads a generator's contents.
