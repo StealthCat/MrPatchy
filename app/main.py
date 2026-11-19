@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.58"
+APP_VERSION = "1.75.65"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2020,9 +2020,48 @@ def notifications(body:NotificationInput,user=Depends(admin_user)):
         retain_notification_secret(previous if previous.get('channel','webhook')=='webhook' else {},value,'token',body.clear_token,('url',))
         s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
     return {'ok':True}
+
+class AlertDeliveryThresholdInput(BaseModel):
+    failed_attempts:int=Field(strict=True)
+    expected_failed_attempts:int=Field(strict=True)
+
+def alert_delivery_threshold_view(s):
+    from . import alert_delivery_notifications as delivery
+    return {'failed_attempts':delivery.threshold(s),'default':delivery.FAILED_ATTEMPTS,
+            'minimum':delivery.MINIMUM_ATTEMPTS,'maximum':delivery.MAXIMUM_ATTEMPTS}
+
+@app.get('/api/operations/alert-delivery-threshold')
+def get_alert_delivery_threshold(user=Depends(admin_user)):
+    with Session() as s:return alert_delivery_threshold_view(s)
+
+@app.put('/api/operations/alert-delivery-threshold')
+def save_alert_delivery_threshold(body:AlertDeliveryThresholdInput,user=Depends(admin_user)):
+    """Set when the admin alert-delivery notice fires (#1172). Never sends, retries or acknowledges alerts."""
+    from . import alert_delivery_notifications as delivery
+    if not delivery.valid_threshold(body.failed_attempts):
+        raise HTTPException(400,f'Use a whole number of failed attempts from {delivery.MINIMUM_ATTEMPTS} to {delivery.MAXIMUM_ATTEMPTS}')
+    with worker.Lock('alert-delivery-threshold'),Session() as s:
+        before=delivery.threshold(s)
+        if body.expected_failed_attempts!=before:raise HTTPException(409,'Alert delivery threshold changed; reload it before editing')
+        if body.failed_attempts!=before:
+            s.merge(Setting(key=delivery.THRESHOLD_KEY,value={'failed_attempts':body.failed_attempts}))
+            audit(s,'alert delivery threshold',json.dumps({'actor':user['username'],'before':before,'after':body.failed_attempts},sort_keys=True))
+            s.commit()
+        return alert_delivery_threshold_view(s)
 @app.get('/api/operations/alerts')
 def alerts(user=Depends(admin_user)):
     with Session() as s:return [object_dict(a) for a in s.scalars(select(operations.Alert).order_by(operations.Alert.created.desc()).limit(200))]
+@app.get('/api/operations/alert-delivery/pending')
+def pending_alert_deliveries(offset:int=Query(0,ge=0,le=1_000_000),user=Depends(admin_user)):
+    """Open alerts not yet delivered, newest first, paged (#1180). Read-only: never sends, retries or acknowledges."""
+    from . import alert_delivery_notifications as delivery
+    limit=50
+    with Session() as s:
+        attempts=delivery.threshold(s)
+        query=select(operations.Alert).where(operations.Alert.state=='open',operations.Alert.notified==0)
+        rows=s.scalars(query.order_by(operations.Alert.created.desc(),operations.Alert.id).offset(offset).limit(limit)).all()
+        return {'items':[object_dict(a,('message',)) for a in rows],'offset':offset,'limit':limit,
+                'total':delivery.undelivered_count(s),'failing':delivery.failing_count(s,attempts),'failed_attempts':attempts}
 @app.post('/api/operations/alerts/{alert_id}/ack')
 def acknowledge_alert(alert_id:str,user=Depends(admin_user)):
     with Session() as s:
@@ -3424,12 +3463,14 @@ class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False
     interval_hours:int=Field(default=24,ge=1,le=720)
+    # Hours past the interval before coverage notifications publish overdue or stalled (#1182).
+    notify_grace_hours:int=Field(default=1,strict=True,ge=1,le=168)
 
 @app.get('/api/hosts/{host_id}/security/policy')
 def security_policy(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
-        return row.value if row else {'enabled':False,'interval_hours':24,'paths':['/usr/local/bin','/tmp']}
+        return row.value if row else {'enabled':False,'interval_hours':24,'notify_grace_hours':1,'paths':['/usr/local/bin','/tmp']}
 
 @app.put('/api/hosts/{host_id}/security/policy')
 def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_user)):
