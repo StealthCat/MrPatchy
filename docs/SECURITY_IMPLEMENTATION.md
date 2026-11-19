@@ -11698,6 +11698,18 @@ pause and revocation between claim and reuse. The oldest-window bound and legacy
 purpose-specific hourly ceilings still apply. End-to-end production throughput
 and the remaining exact-match acceptance milestones stay open.
 
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
 ### Python site startup-hook contract — worker checkpoint #1144 (roadmap F)
 
 Every CPython start without `-S` imports `site`, including root services. `site` executes each `.pth` line that starts with `import ` or `import\t` in every processed site directory, then imports `sitecustomize`, and `usercustomize` when the user site is enabled. This is a known persistence hook (MITRE ATT&CK T1546.018). Neither the startup catalog nor any contract covered it.
