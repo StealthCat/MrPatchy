@@ -11644,3 +11644,16 @@ A cold scoring pass now takes the existing lock only when an active, unpaused se
 - **UI/API:** Startup Files shows the settings and a job table with escaped identifiers and commands. It also explains older agents (`not_reported`) and unreadable tables. Search matches identifiers and commands, and the Coverage catalog row counts parsed jobs. Roles are unchanged (administrator only).
 - **Parity:** `tests/test_anacron_jobs.py` compares agent output with the pure contract on a shared corpus (jobs, duplicate links, unparsed counts and settings). It has 45 tests, and six source mutations are each caught.
 - **Remaining:** whether and how anacron is started (cron `0anacron` or a systemd timer), `/var/spool/anacron` timestamps, run-parts targets, package provenance of the default table, and AI classification. No schema, scheduling, AI or response-authorization change was made.
+
+### Refusal and token-budget wording for blocked update scores — worker checkpoint #1162
+
+Roadmap A: this follows up the #1158 "Remaining" line, which said update scoring kept its old failure text after process triage learned to name a model refusal and `max_output_tokens` exhaustion.
+
+- **Problem:** update scoring stored the triage-oriented diagnostic plus `BLOCKED_SUFFIX` on every package in a blocked batch. A refusal therefore read "Review this observation manually; no safety assessment was accepted", implied a key change might help, and never said the request reached the provider. The token-budget case also suggested a key change and omitted billing.
+- **Change:** `update_scores.blocked_explanation()` maps cause `model_refusal` and cause `token_budget` to scoring-specific text, followed by the unchanged `BLOCKED_SUFFIX`.
+  - Both texts say the request was sent and may be billed, and that changing the API key does not help.
+  - The refusal text says a different model may score the updates. The token-budget text says to select a model that completes within the scoring budget.
+  - Every other blocked cause keeps `safe_error(error) + BLOCKED_SUFFIX` byte-for-byte. Provider-supplied refusal text is never stored.
+- **Unchanged:** the `blocked` state, the stored configuration signature and eligibility (a model or key change still re-admits), deferral, transient handling, the hourly error retry, admission, reservations, the `ai-scoring` blocked notification and count, the administrator retry, schema, API, roles and response authorization.
+- **Validation:** `tests/test_update_score_block_causes.py` drives the real `update_scores.run_one()` path with only the provider transport as a fixture. Restoring main's call site fails the two cause tests and leaves the six invariant guards passing: invalid output, other incomplete responses, rejected key, blocked count, model-change re-admission and key-change re-admission. 185 scoring/retry tests pass.
+- **Remaining:** advisory security plans keep their existing failure wording.
