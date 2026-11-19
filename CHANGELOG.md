@@ -1,3 +1,7 @@
+## 1.75.66 — 2026-11-19
+
+1. [PR #1089](https://github.com/StealthCat/MrPatchy/pull/1089): Add a pure systemd-sysctl contract for effective kernel exec-hook assignments from captured `sysctl.d` files, including ordering, sources and fail-closed gaps for unsupported glob syntax. Compatibility: additive module only; no collection, schema, route, role, UI, AI, scheduling or response-authorization change. Limits: live `/proc/sys` keys and values are not observed; agent collection, catalog wiring and UI remain follow-up work, and the procps view approximates systemd precedence.
+
 ## 1.75.65 — 2026-11-19
 
 1. [PR #1098](https://github.com/StealthCat/MrPatchy/pull/1098): Add a pure, fail-closed systemd-tmpfiles contract for lines that write kernel execution hooks or create startup files. It reports bounded evidence, source locations, ordering and unresolved host-dependent cases. Compatibility: additive module only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: no agent collection or UI; the startup-location list is fixed, and host-dependent conditions remain explicit gaps.
