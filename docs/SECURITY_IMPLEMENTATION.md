@@ -4016,6 +4016,19 @@ preserves live leases and provider receipts, and removes expired claims with
 missing runs. The recovery fixture checks the fixed read count and idempotent
 interruption history. Production throughput remains unverified.
 
+### Idle triage admission preflight — Roadmap A checkpoint #1134
+
+The triage worker reads one boolean projection before acquiring the shared
+admission lock. If there is no unapproved pending or error observation, expired
+claim or orphaned running triage run, the dispatch ends without taking the lock.
+Otherwise a fresh session under the lock follows the existing recovery and
+claim path. Work arriving after an idle read remains queued for the next poll.
+
+Four idle dispatches took four admission locks on the base and zero after the
+change. The regression also checks expired, orphaned and live lease handling.
+Busy dispatches use one additional bounded read. Production throughput and
+independent scoring acceptance remain open.
+
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
 This stacked threaded-execution increment replaces the fixed two-lease server bound
