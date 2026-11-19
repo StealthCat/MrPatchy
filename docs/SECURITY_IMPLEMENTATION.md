@@ -2332,6 +2332,19 @@ The regression verifies rollback when the score write fails and confirms
 successful scoring at the original eligibility boundary. A crash before
 linking the run and independent scoring admission remain open.
 
+### Deferred scoring eligibility in fleet status — Roadmap A checkpoint #1142
+
+The fleet status distinguishes deferred scores eligible now from the earliest
+future retry. The same aggregate retains the total queue, including rows held
+by pause or disabled scoring. Only active unpaused servers contribute an
+eligibility time while scoring is enabled. The card can therefore show ready
+work alongside the next future retry, and it explains when there is only held
+scoring work. Shared admission still governs outbound calls.
+
+The regression covers overdue and future scores, paused and inactive servers,
+and disabled scoring without adding another aggregate query. Exact scoring
+identity and provider eligibility remain checked by the scheduler.
+
 ### Update-scoring schedule-state reads
 
 The scheduler reads only identity, state and eligibility fields from retained
@@ -11578,6 +11591,23 @@ before and after a later successful request.
 
 This check uses the existing worker clock timestamps. Clock skew across workers
 and matched production throughput remain outside this acceptance slice.
+
+### needrestart hook contract — worker checkpoint #1148 (roadmap F)
+
+- **What it covers:** `app/needrestart_hooks.py` is a pure, versioned contract. It reports which root code Ubuntu's default `needrestart` can run after every APT transaction. The trigger is `/etc/apt/apt.conf.d/99needrestart` (`DPkg::Post-Invoke`), which runs `/usr/lib/needrestart/apt-pinvoke -m u`, which in turn execs `/usr/sbin/needrestart`.
+- **Pinned source:** the rules follow the shipped `needrestart 3.6-7ubuntu4.x` source, and other versions are gaps.
+  - `needrestart.conf` and every `sort </etc/needrestart/conf.d/*.conf>` file are passed to Perl `eval` as root. The glob skips dot-hidden names, the sort is byte order, and a matched directory is a no-op.
+  - `hook.d` entries run in natural order with no execute-bit check, until one identifies the service.
+  - `restart.d/<service>` replaces `systemctl restart` when it is executable. Under APT the restart mode is automatic unless `restart` or `ui` is configured.
+  - `notify.d` entries that are `-x` and not named `*~` or `*.dpkg-<suffix>` run as root per outdated session, until one exits 0.
+  - A missing config or `hook.d` aborts needrestart before any hook runs.
+- **Fail closed:**
+  - Perl is never evaluated. `needrestart.conf` is understood only when it matches the shipped SHA-256, and a `conf.d` file only when it holds comments and simple literal `$nrconf{key}` assignments. Other code, unread files, and any `hook_d`, `notify_d` or `restart_d` override are gaps that leave the directories unresolved.
+  - Sort::Naturally is not reimplemented. An order is reported only when a simple natural order and the byte order agree for `[a-z0-9._-]` names among the entries that can run.
+  - A modified or unknown trigger, unknown entries, special files, incomplete listings, an invalid restart mode, unsupported families or versions, and caps are all gaps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
 
 ### Interrupted package scoring in AI Activity — Roadmap A checkpoint #1115
 

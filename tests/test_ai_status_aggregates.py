@@ -1,8 +1,8 @@
 import time
 import pytest
 from sqlalchemy import event
-from app import ai_runs, ai_retry
-from app.db import Session, Setting, Behavior, Host, Job, engine
+from app import ai_runs, ai_retry, update_scores
+from app.db import Session, Setting, Behavior, Host, Job, Package, engine
 from app.security import seal
 
 COUNT=3000
@@ -46,6 +46,43 @@ def test_status_combines_run_and_scoring_aggregates(admin):
     scoring_aggregates=[query for query in statements if 'from update_scores' in query and 'join packages' in query]
     assert len(run_aggregates)==1 and 'count(' in run_aggregates[0] and 'min(' in run_aggregates[0]
     assert len(scoring_aggregates)==1 and 'count(' in scoring_aggregates[0] and 'min(' in scoring_aggregates[0]
+
+
+@pytest.mark.parametrize(('due_paused', 'future_paused', 'scoring_enabled', 'reason', 'ready', 'has_deadline'), [
+    (False, False, True, 'ready', 1, True),
+    (True, False, True, 'backoff', 0, True),
+    (True, True, True, 'blocked', 0, False),
+    (False, False, False, 'blocked', 0, False),
+])
+def test_scoring_status_keeps_ready_separate_from_future_eligibility(
+        admin, due_paused, future_paused, scoring_enabled, reason, ready, has_deadline):
+    now = time.time()
+    with Session() as s:
+        s.merge(Setting(key='config', value={'ai_enabled': True, 'ai_model': 'fixture',
+            'ai_updates_enabled': scoring_enabled, 'ai_control_mode': 'unthrottled'}))
+        s.merge(Setting(key='openai_key', value={'encrypted': seal('private-key')}))
+        s.merge(Setting(key='worker:heartbeat', value={'seen': now}))
+        for host_id, next_at, paused in (
+            ('due', now - 10, due_paused), ('future', now + 120, future_paused),
+            ('paused', now + 60, True), ('inactive', now - 30, False),
+        ):
+            host = Host(id=host_id, name=host_id, address='192.0.2.1', fingerprint='',
+                        enabled=host_id != 'inactive', inventory={})
+            package = Package(id=host_id + ':fixture', host_id=host_id, name='fixture',
+                              installed='1', candidate='2')
+            s.add_all([host, package, update_scores.UpdateScore(
+                id=update_scores.identity(host, package), host_id=host_id, name=package.name,
+                installed='1', candidate='2', state='deferred', next_at=next_at,
+            )])
+            if paused:
+                s.add(Setting(key='server-ai:' + host_id, value={'paused': True}))
+        s.commit()
+    with Session() as s:
+        status = ai_runs.status(s)
+    assert status['scoring_deferred'] == 3
+    assert status['scoring_next_at'] == (pytest.approx(now + 120, abs=0.0001, rel=0) if has_deadline else None)
+    assert status['scoring_ready'] == ready
+    assert status['reason'] == reason
 
 
 @pytest.mark.parametrize('role',['viewer','operator'])
