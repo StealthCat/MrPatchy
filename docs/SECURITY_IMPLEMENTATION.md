@@ -2677,6 +2677,17 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
 - **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
 
+#### Advisory plan provider failures — Roadmap A checkpoint #1170
+
+Incident and startup advisory jobs now distinguish a model refusal from response
+token-budget exhaustion in their saved job and run histories. Both diagnostics
+state that no advisory plan was accepted, the sent request may be billed, and the
+operator can review manually or choose a suitable model. The shared plan request
+retains fixed wording without provider text. Other errors and shared deferrals
+keep their behavior. Worker-path tests exercise both job kinds with synthetic
+provider responses and check that neither error persists a plan. Release-plan
+diagnostics and production provider acceptance remain separate.
+
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
 Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
