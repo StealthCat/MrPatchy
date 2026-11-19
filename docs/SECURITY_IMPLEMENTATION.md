@@ -2237,6 +2237,15 @@ open.
 
 ### Parallel execution and latency work
 
+Worker checkpoint #1163 records a separate `file_provenance` timing for the
+controller-authenticated file preparation and its transaction in process triage.
+It runs before the normal cache lookup or provider request, including when a run
+reuses a known-good result. Failed preparation records an error timing with
+elapsed time only. The existing administrator timing summary shows available
+samples and leaves percentiles empty for older runs. Fixture benchmarks retain
+the same stage in their persisted timings. Read-only admission probes and
+production throughput remain outside this measurement.
+
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run
 and persisting completed, deferred or failed outcomes for the existing five-item
 scoring batch. The same sessions still recheck current package and server evidence
@@ -2676,17 +2685,6 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Unchanged:** the diagnostic stored on the investigation, retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits either block), admission, reservations and receipt accounting, the cause-neutral `configuration-blocked` notification, roles and response authorization.
 - **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
 - **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
-
-#### Advisory plan provider failures — Roadmap A checkpoint #1170
-
-Incident and startup advisory jobs now distinguish a model refusal from response
-token-budget exhaustion in their saved job and run histories. Both diagnostics
-state that no advisory plan was accepted, the sent request may be billed, and the
-operator can review manually or choose a suitable model. The shared plan request
-retains fixed wording without provider text. Other errors and shared deferrals
-keep their behavior. Worker-path tests exercise both job kinds with synthetic
-provider responses and check that neither error persists a plan. Release-plan
-diagnostics and production provider acceptance remain separate.
 
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
@@ -4017,6 +4015,19 @@ under the existing admission lock. It still interrupts running orphaned runs,
 preserves live leases and provider receipts, and removes expired claims with
 missing runs. The recovery fixture checks the fixed read count and idempotent
 interruption history. Production throughput remains unverified.
+
+### Idle triage admission preflight — Roadmap A checkpoint #1134
+
+The triage worker reads one boolean projection before acquiring the shared
+admission lock. If there is no unapproved pending or error observation, expired
+claim or orphaned running triage run, the dispatch ends without taking the lock.
+Otherwise a fresh session under the lock follows the existing recovery and
+claim path. Work arriving after an idle read remains queued for the next poll.
+
+Four idle dispatches took four admission locks on the base and zero after the
+change. The regression also checks expired, orphaned and live lease handling.
+Busy dispatches use one additional bounded read. Production throughput and
+independent scoring acceptance remain open.
 
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
@@ -11672,3 +11683,54 @@ A cold scoring pass now takes the existing lock only when an active, unpaused se
 ### Scoring result-persistence timing — Roadmap A checkpoint #1159
 
 Update scoring now records the same `result_persistence` timing stage that process triage already uses. Each scoring reply that passes structured validation records one event. That event covers re-reading the current package and inventory evidence and committing the batch, including scores superseded because evidence changed. A committed batch records `outcome=complete`, and a failed write records `outcome=error`; the existing failure handling then marks the batch `error` for a normal retry. Refusals, token-budget exhaustion and malformed or mismatched replies raise before revalidation and record no event. The event uses the existing buffered, redacted timing format and run-history retention. Score identity, provider authorization, admission and retry behavior are unchanged. Compatibility: no schema, API, UI or response-authorization change. The fleet timing summary still samples triage runs only. Independent scoring admission and measured production throughput remain open.
+
+### Local known-good reuse during provider start holds — Roadmap A/B checkpoint #1128
+
+An exact verified known-good match can complete during a shared rate hold or
+provider backoff, as it can during a daily spend hold. The worker uses its
+existing bounded claim search and revalidates the match before recording reuse.
+An empty or revoked cache for the saved model skips per-item probes. A hit
+completes with no request, rate admission or spend reservation. If reuse fails
+after claiming, any paid request still goes through the shared admission checks.
+
+The regression covers rate, provider backoff, both together, explicit re-triage,
+pause and revocation between claim and reuse. The oldest-window bound and legacy
+purpose-specific hourly ceilings still apply. End-to-end production throughput
+and the remaining exact-match acceptance milestones stay open.
+
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
+### Advisory plan provider failures — Roadmap A checkpoint #1170
+
+Incident and startup advisory jobs now distinguish a model refusal from response
+token-budget exhaustion in their saved job and run histories. Both diagnostics
+state that no advisory plan was accepted, the sent request may be billed, and the
+operator can review manually or choose a suitable model. The shared plan request
+retains fixed wording without provider text. Other errors and shared deferrals
+keep their behavior. Worker-path tests exercise both job kinds with synthetic
+provider responses and check that neither error persists a plan. Release-plan
+diagnostics and production provider acceptance remain separate.
+
+#### Retry failed automatic AI plans — worker checkpoint #1036
+
+Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
+
+- **Change:** `app/auto_plan_retry.py` counts a server's open, non-YARA, unplanned incidents whose only unreleased automatic attempts for their current scan are `failed`. Attempts the worker skipped because the evidence changed are not counted.
+  - Admin-only `GET /api/hosts/{id}/security/auto-plan-failed` returns `{failed}`. Unknown servers return 404.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and marks up to 200 incidents' failed `security-plan` jobs with `retry_released` (plus who and when). It returns `{released, remaining}` and writes one audit row when anything was released. A disabled or deleted server releases nothing.
+  - `incidents.awaiting_auto_plan` ignores released attempts, so the ordinary `auto_plan_tick` plans the incident again.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The tick still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. A new failure blocks the incident again until another release. The failed job's state and output are kept.
+- **UI:** the Security tab's scheduled-scanning card shows **Retry failed automatic plans** to administrators only, when the count is above 0. It says to fix the cause first, that no provider request is sent now, and that the gates still apply; it refreshes the status afterwards. Operators cannot open the Security tab, so they never request the count.
+- **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
+- **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
