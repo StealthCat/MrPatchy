@@ -561,7 +561,7 @@ def test_staggered_waiters_reserve_after_existing_tail_with_different_clocks(adm
     with Session() as s:
         cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
         s.add(ai_retry.TriageRetry(subject='occupied-tail',configuration='sig',state='deferred',
-            attempts=0,next_at=now+7200,provider_until=0))
+            attempts=0,next_at=now+7200,provider_until=0,reason=ai_retry.RATE_WAIT_REASON))
         s.commit()
         wakes=[]
         for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
@@ -579,7 +579,7 @@ def test_provider_policy_waits_keep_exact_floor_without_rate_staggering(admin,st
     with Session() as s:
         cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
         s.add(ai_retry.TriageRetry(subject='rate-tail',configuration='sig',state='deferred',
-            attempts=0,next_at=now+7200,provider_until=0))
+            attempts=0,next_at=now+7200,provider_until=0,reason=ai_retry.RATE_WAIT_REASON))
         s.commit()
         for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
             at=now+start_delay+index*.01

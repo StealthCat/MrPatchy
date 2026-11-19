@@ -4,7 +4,7 @@ import json
 import math
 import time
 from typing import NamedTuple
-from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_
+from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
@@ -143,6 +143,11 @@ def _load_scoring_hosts(s, host_ids):
     return prepared
 
 
+def _scoring_package_filters():
+    return (Package.candidate != '', Package.host_id.not_in(ai_policy.paused_ids()),
+            Package.host_id.in_(host_lifecycle.active_ids()))
+
+
 def scoring_candidates(s):
     """Read ordered candidates and exact/deferred score state in bounded chunks.
 
@@ -153,8 +158,7 @@ def scoring_candidates(s):
     cursor = None
     hosts = {}
     while True:
-        query=select(Package).where(Package.candidate!='',Package.host_id.not_in(ai_policy.paused_ids()),
-            Package.host_id.in_(host_lifecycle.active_ids()))
+        query=select(Package).where(*_scoring_package_filters())
         if cursor is not None:
             query=query.where(or_(Package.available_since>cursor[0],
                 and_(Package.available_since==cursor[0],Package.id>cursor[1])))
@@ -193,10 +197,28 @@ def _batch_scores(s, ids):
 
 
 def run_one():
+    if not _MEMO:
+        # A warm memo still uses the locked pass so an exhausted walk can prune
+        # absent hosts. This probe only skips idle work. The worker rechecks
+        # candidates and recovery under the same lock on a fresh session.
+        unfinished = select(ai_runs.AIRun.id).where(
+            ai_runs.AIRun.purpose == 'update_scoring', ai_runs.AIRun.state == 'running').exists()
+        candidates = select(Package.id).where(*_scoring_package_filters()).exists()
+        with Session() as s:
+            if not s.scalar(select(or_(unfinished, candidates))):
+                return
     lock=Lock('ai-update-scoring')
     if not lock.acquire(False):return
     try:
-        ai_runs.reconcile('update_scoring')
+        with Session() as s:
+            for run in ai_runs.reconcile(s, 'update_scoring'):
+                # A new attempt can temporarily retain the previous run link.
+                s.execute(update(UpdateScore).where(
+                    UpdateScore.run_id == run.id, UpdateScore.state == 'running',
+                    UpdateScore.attempted <= run.started,
+                ).values(state='error', next_at=0,
+                         explanation='Scoring was interrupted before a result was saved. Normal retry timing applies.'))
+            s.commit()
         with Session() as s:
             cfg=config(s);secret=s.get(Setting,'openai_key');now=time.time()
             if not cfg['ai_enabled'] or not cfg['ai_updates_enabled'] or not cfg['ai_model'] or not secret:return
@@ -249,8 +271,17 @@ def run_one():
                             raise ai.AIError('Update scoring returned invalid scores or explanations; no assessment accepted.')
                     with Session() as s:
                         scores=_batch_scores(s,ids)
+                        package_ids = {identifier: score.host_id + ':' + score.name
+                                       for identifier, score in scores.items()}
+                        packages = {package.id: package for package in s.scalars(
+                            select(Package).where(Package.id.in_(package_ids.values())))}
+                        evidence_host_ids = {score.host_id for score in scores.values()}
+                        hosts = {host.id: host for host in s.execute(
+                            select(Host.id, Host.inventory).where(Host.id.in_(evidence_host_ids)))}
                         for item in rows:
-                            row=scores[item['id']];package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
+                            row = scores[item['id']]
+                            package = packages.get(package_ids[row.id])
+                            host = hosts.get(row.host_id)
                             if not package or not host or not package.candidate or identity(host,package)!=row.id:
                                 row.state='superseded';row.next_at=0;row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
                             row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.next_at=0;row.completed=time.time()
