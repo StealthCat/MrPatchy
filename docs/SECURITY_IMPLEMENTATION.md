@@ -11683,3 +11683,17 @@ A cold scoring pass now takes the existing lock only when an active, unpaused se
 ### Scoring result-persistence timing — Roadmap A checkpoint #1159
 
 Update scoring now records the same `result_persistence` timing stage that process triage already uses. Each scoring reply that passes structured validation records one event. That event covers re-reading the current package and inventory evidence and committing the batch, including scores superseded because evidence changed. A committed batch records `outcome=complete`, and a failed write records `outcome=error`; the existing failure handling then marks the batch `error` for a normal retry. Refusals, token-budget exhaustion and malformed or mismatched replies raise before revalidation and record no event. The event uses the existing buffered, redacted timing format and run-history retention. Score identity, provider authorization, admission and retry behavior are unchanged. Compatibility: no schema, API, UI or response-authorization change. The fleet timing summary still samples triage runs only. Independent scoring admission and measured production throughput remain open.
+
+### Local known-good reuse during provider start holds — Roadmap A/B checkpoint #1128
+
+An exact verified known-good match can complete during a shared rate hold or
+provider backoff, as it can during a daily spend hold. The worker uses its
+existing bounded claim search and revalidates the match before recording reuse.
+An empty or revoked cache for the saved model skips per-item probes. A hit
+completes with no request, rate admission or spend reservation. If reuse fails
+after claiming, any paid request still goes through the shared admission checks.
+
+The regression covers rate, provider backoff, both together, explicit re-triage,
+pause and revocation between claim and reuse. The oldest-window bound and legacy
+purpose-specific hourly ceilings still apply. End-to-end production throughput
+and the remaining exact-match acceptance milestones stay open.
