@@ -10485,6 +10485,18 @@ it does not establish a live GitHub alert inventory; those #201 items remain ope
 No Docker runtime was available locally, so exact-head CI supplies the image-build,
 Compose/HTTPS startup and custom-binding acceptance.
 
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
 ### Resumable multi-stage release configuration reviews — worker checkpoint #366
 
 Issue #366 implements the next bounded faster-AI increment. Distribution release
