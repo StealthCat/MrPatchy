@@ -492,26 +492,35 @@ async function loadEndpointAgentHealth(revision,offset=0){
  section.outerHTML=endpointAgentHealth(data);
  $('#endpoint-agent-health').querySelectorAll('[data-agent-offset]').forEach(button=>button.onclick=()=>loadEndpointAgentHealth(revision,Number(button.dataset.agentOffset)));
 }
-// Alert delivery (#824): routable target for the alert-delivery in-app notification. Read-only;
-// settings changes stay in the existing Operations panel. Never shows URLs, tokens or recipients.
+// Alert delivery (#824): routable target for the alert-delivery in-app notification. Never shows
+// URLs, tokens or recipients. Channel settings stay in the Operations panel; the only change made
+// here is the notification threshold (#1172), which never sends, retries or acknowledges alerts.
 async function alertDelivery(revision){
  const root=$('#content');
  if(!isAdmin()){root.innerHTML=heading('Alert delivery.','Delivery status requires administrator access.')+PatchyUI.error('Administrator access required','Return to operations to review work available to your role.','<a class="button" href="#activity">Operations</a>');return;}
- const [alerts,config]=await Promise.all([api('/operations/alerts'),api('/operations/notifications')]);
+ const [alerts,config,limit]=await Promise.all([api('/operations/alerts'),api('/operations/notifications'),api('/operations/alert-delivery-threshold')]);
  if(!currentView(revision,'activity')||!root.isConnected||location.hash!=='#activity/delivery')return;
  $('#breadcrumb').textContent='Workspace / Activity / Alert delivery';document.title='Alert delivery · Mr Patchy';
  const channel=config.unreadable?'Unreadable configuration':!config.enabled?'Disabled':config.channel==='smtp'?'SMTP email':'Webhook';
+ const threshold=Number(limit.failed_attempts)||3,attempts=threshold===1?'one or more delivery attempts':threshold+' or more delivery attempts';
  const pending=alerts.filter(a=>a.state==='open'&&!a.notified);
- const failing=pending.filter(a=>a.attempts>=3&&a.error);
+ const failing=pending.filter(a=>a.attempts>=threshold&&a.error);
  const status=config.unreadable?'<p class="help warning" role="alert">The saved delivery configuration cannot be read, for example after the encryption key changed. No SMTP or webhook alerts are being sent until it is saved again.</p>'
   :!config.enabled?'<p class="help">External delivery is off. Alerts stay visible in Mr Patchy only.</p>'
-  :failing.length?'<p class="help warning" role="status">'+failing.length+' open alert'+(failing.length===1?' has':'s have')+' failed three or more delivery attempts. Mr Patchy keeps retrying with backoff.</p>'
-  :'<p class="help" role="status">No open alert has repeatedly failed delivery.</p>';
+  :failing.length?'<p class="help warning" role="status">'+failing.length+' open alert'+(failing.length===1?' has':'s have')+' failed '+attempts+'. Mr Patchy keeps retrying with backoff.</p>'
+  :'<p class="help" role="status">No open alert has failed '+attempts+'.</p>';
  const row=a=>`<tr><td>${esc(hostName(a.host_id))}</td><td>${esc(a.kind)}</td><td>${date(a.created)}</td><td>${esc(String(a.attempts||0))}</td><td>${a.error?esc(a.error):'—'}</td></tr>`;
  root.innerHTML=heading('Alert delivery.','External SMTP/webhook delivery of server alerts, and what has not arrived yet.')+activityNavigation('delivery')
-  +`<section class="card"><h2>Delivery channel</h2><p><strong>${esc(channel)}</strong></p>${status}<div class="actions"><button class="primary" id="open-delivery-settings">Open delivery settings</button></div><p class="help">Settings open in the Operations panel. This page only reads state; it never sends, retries or acknowledges alerts.</p></section>`
+  +`<section class="card"><h2>Delivery channel</h2><p><strong>${esc(channel)}</strong></p>${status}<div class="actions"><button class="primary" id="open-delivery-settings">Open delivery settings</button></div><p class="help">Settings open in the Operations panel. This page never sends, retries or acknowledges alerts.</p></section>`
+  +`<section class="card"><h2>Failure notification</h2><form id="delivery-threshold-form"><label>Notify administrators after this many failed attempts<input name="failed_attempts" type="number" inputmode="numeric" required min="${esc(String(limit.minimum))}" max="${esc(String(limit.maximum))}" step="1" value="${esc(String(threshold))}" aria-describedby="delivery-threshold-help"></label><button>Save threshold</button></form><p class="help" id="delivery-threshold-help">An admin-only in-app notification appears while an open alert has failed this many delivery attempts without being delivered. Default ${esc(String(limit.default))}, from ${esc(String(limit.minimum))} to ${esc(String(limit.maximum))}. Changing it is audited and takes effect on the next alert check. It does not change delivery retries or backoff.</p></section>`
   +`<section class="card"><h2>Undelivered open alerts</h2>${pending.length?`<div class="table-wrap"><table><thead><tr><th scope="col">Server</th><th scope="col">Kind</th><th scope="col">Raised</th><th scope="col">Attempts</th><th scope="col">Last error</th></tr></thead><tbody>${pending.map(row).join('')}</tbody></table></div><p class="help">Shows the 200 most recent alerts. Acknowledge alerts from the Operations panel.</p>`:empty('Nothing waiting','Every open alert has been delivered, or none are open.')}</section>`;
  $('#open-delivery-settings').onclick=operationsPanel;
+ const form=$('#delivery-threshold-form');
+ form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button'),value=Number(form.elements.failed_attempts.value);
+  if(!Number.isInteger(value)||value<limit.minimum||value>limit.maximum)return toast('Use a whole number from '+limit.minimum+' to '+limit.maximum);
+  button.disabled=true;
+  try{await api('/operations/alert-delivery-threshold','PUT',{failed_attempts:value,expected_failed_attempts:threshold});toast('Alert delivery threshold saved');if(currentView(revision,'activity')&&location.hash==='#activity/delivery')await alertDelivery(revision);}
+  catch(error){toast(error.message);if(button.isConnected)button.disabled=false;}};
 }
 async function workerRegistrations(revision,offset=0){
  const root=$('#content');

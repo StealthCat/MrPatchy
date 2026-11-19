@@ -2020,6 +2020,34 @@ def notifications(body:NotificationInput,user=Depends(admin_user)):
         retain_notification_secret(previous if previous.get('channel','webhook')=='webhook' else {},value,'token',body.clear_token,('url',))
         s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
     return {'ok':True}
+
+class AlertDeliveryThresholdInput(BaseModel):
+    failed_attempts:int=Field(strict=True)
+    expected_failed_attempts:int=Field(strict=True)
+
+def alert_delivery_threshold_view(s):
+    from . import alert_delivery_notifications as delivery
+    return {'failed_attempts':delivery.threshold(s),'default':delivery.FAILED_ATTEMPTS,
+            'minimum':delivery.MINIMUM_ATTEMPTS,'maximum':delivery.MAXIMUM_ATTEMPTS}
+
+@app.get('/api/operations/alert-delivery-threshold')
+def get_alert_delivery_threshold(user=Depends(admin_user)):
+    with Session() as s:return alert_delivery_threshold_view(s)
+
+@app.put('/api/operations/alert-delivery-threshold')
+def save_alert_delivery_threshold(body:AlertDeliveryThresholdInput,user=Depends(admin_user)):
+    """Set when the admin alert-delivery notice fires (#1172). Never sends, retries or acknowledges alerts."""
+    from . import alert_delivery_notifications as delivery
+    if not delivery.valid_threshold(body.failed_attempts):
+        raise HTTPException(400,f'Use a whole number of failed attempts from {delivery.MINIMUM_ATTEMPTS} to {delivery.MAXIMUM_ATTEMPTS}')
+    with worker.Lock('alert-delivery-threshold'),Session() as s:
+        before=delivery.threshold(s)
+        if body.expected_failed_attempts!=before:raise HTTPException(409,'Alert delivery threshold changed; reload it before editing')
+        if body.failed_attempts!=before:
+            s.merge(Setting(key=delivery.THRESHOLD_KEY,value={'failed_attempts':body.failed_attempts}))
+            audit(s,'alert delivery threshold',json.dumps({'actor':user['username'],'before':before,'after':body.failed_attempts},sort_keys=True))
+            s.commit()
+        return alert_delivery_threshold_view(s)
 @app.get('/api/operations/alerts')
 def alerts(user=Depends(admin_user)):
     with Session() as s:return [object_dict(a) for a in s.scalars(select(operations.Alert).order_by(operations.Alert.created.desc()).limit(200))]

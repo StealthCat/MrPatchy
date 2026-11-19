@@ -11309,7 +11309,7 @@ The producer is read-only. It never sends, retries, changes backoff or acknowled
 
 **Remaining:**
 - ~~The event has no deep link, because the Operations panel is a modal with no route.~~ Addressed by the #824 worker checkpoint below.
-- The threshold is fixed.
+- ~~The threshold is fixed.~~ Addressed by the #1172 worker checkpoint below.
 - ~~A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.~~ Addressed by the #812 worker checkpoint below.
 
 ### Alert-delivery notification deep link — worker checkpoint #824
@@ -11319,7 +11319,18 @@ The admin-only `alert-delivery`/`delivery-failing` event now links to a routable
 - **Page:** it shows the delivery channel (SMTP email, webhook, disabled or unreadable configuration) and the open alerts that have not been delivered, with server, kind, raised time, attempts and the stored sanitized error class. All text is escaped. No URL, token, password or recipient is shown. **Open delivery settings** opens the existing Operations panel, where configuration changes and acknowledgement remain. The page only reads the existing admin-only `GET /api/operations/alerts` and `GET /api/operations/notifications` routes, so it never sends, retries or acknowledges anything. Non-admins see the administrator-required state and no data request is made.
 - **Upgrade impact:** the link is part of the notification payload fingerprint. An event that is already active therefore gains one unread revision on the first collection pass after upgrade. Later passes add none.
 - **Unchanged:** schema, roles, routes, delivery and backoff, admission and response authorization.
-- **Remaining:** the threshold is still fixed, and the page lists only the 200 most recent alerts that the existing route returns.
+- **Remaining:** ~~the threshold is still fixed~~ (addressed by the #1172 worker checkpoint below), and the page lists only the 200 most recent alerts that the existing route returns.
+
+### Configurable alert-delivery notification threshold — worker checkpoint #1172
+
+Administrators can now set how many failed delivery attempts trigger the admin-only `alert-delivery`/`delivery-failing` notification. This closes the "threshold is fixed" item from checkpoints #792 and #824.
+
+- **Setting:** a whole number from 1 to 20 on Activity → Alert delivery (**Failure notification**). The default stays 3. It is stored in its own `alert-delivery-threshold` setting, outside the encrypted SMTP/webhook configuration. That keeps it readable and editable when the delivery configuration cannot be decrypted, and neither delivery save path nor any secret is touched. A missing or invalid stored value (out of range, boolean, non-integer, malformed) falls back to 3, so a bad value never silences the notice.
+- **API:** admin-only `GET`/`PUT /api/operations/alert-delivery-threshold`. `PUT` requires strict integers `failed_attempts` and `expected_failed_attempts`. It returns 400 outside the range, 409 when the saved value no longer matches the expected one, and it is serialized with a `worker.Lock`. Each change writes one `alert delivery threshold` audit entry with actor, before and after. Saving the same value writes nothing.
+- **Producer:** `failing_count` and the reason text use the saved threshold. Saving never sends, retries, acknowledges or resolves an alert, and it publishes nothing by itself. The next `collect_alerts` pass re-evaluates the event. Raising the threshold above every failing alert resolves an active event. If the event is already active and the threshold changes, the reason text (now naming the new count) adds one unread revision.
+- **Page:** the status line and the failing count on the Alert delivery page use the saved threshold instead of a fixed "three".
+- **Unchanged:** schema, roles, delivery and backoff, the unreadable-configuration path, admission and response authorization.
+- **Remaining:** the page lists only the 200 most recent alerts that the existing route returns.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 
