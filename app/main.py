@@ -2051,6 +2051,17 @@ def save_alert_delivery_threshold(body:AlertDeliveryThresholdInput,user=Depends(
 @app.get('/api/operations/alerts')
 def alerts(user=Depends(admin_user)):
     with Session() as s:return [object_dict(a) for a in s.scalars(select(operations.Alert).order_by(operations.Alert.created.desc()).limit(200))]
+@app.get('/api/operations/alert-delivery/pending')
+def pending_alert_deliveries(offset:int=Query(0,ge=0,le=1_000_000),user=Depends(admin_user)):
+    """Open alerts not yet delivered, newest first, paged (#1180). Read-only: never sends, retries or acknowledges."""
+    from . import alert_delivery_notifications as delivery
+    limit=50
+    with Session() as s:
+        attempts=delivery.threshold(s)
+        query=select(operations.Alert).where(operations.Alert.state=='open',operations.Alert.notified==0)
+        rows=s.scalars(query.order_by(operations.Alert.created.desc(),operations.Alert.id).offset(offset).limit(limit)).all()
+        return {'items':[object_dict(a,('message',)) for a in rows],'offset':offset,'limit':limit,
+                'total':delivery.undelivered_count(s),'failing':delivery.failing_count(s,attempts),'failed_attempts':attempts}
 @app.post('/api/operations/alerts/{alert_id}/ack')
 def acknowledge_alert(alert_id:str,user=Depends(admin_user)):
     with Session() as s:
