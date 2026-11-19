@@ -2237,6 +2237,15 @@ open.
 
 ### Parallel execution and latency work
 
+Worker checkpoint #1163 records a separate `file_provenance` timing for the
+controller-authenticated file preparation and its transaction in process triage.
+It runs before the normal cache lookup or provider request, including when a run
+reuses a known-good result. Failed preparation records an error timing with
+elapsed time only. The existing administrator timing summary shows available
+samples and leaves percentiles empty for older runs. Fixture benchmarks retain
+the same stage in their persisted timings. Read-only admission probes and
+production throughput remain outside this measurement.
+
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run
 and persisting completed, deferred or failed outcomes for the existing five-item
 scoring batch. The same sessions still recheck current package and server evidence
@@ -4006,6 +4015,19 @@ under the existing admission lock. It still interrupts running orphaned runs,
 preserves live leases and provider receipts, and removes expired claims with
 missing runs. The recovery fixture checks the fixed read count and idempotent
 interruption history. Production throughput remains unverified.
+
+### Idle triage admission preflight — Roadmap A checkpoint #1134
+
+The triage worker reads one boolean projection before acquiring the shared
+admission lock. If there is no unapproved pending or error observation, expired
+claim or orphaned running triage run, the dispatch ends without taking the lock.
+Otherwise a fresh session under the lock follows the existing recovery and
+claim path. Work arriving after an idle read remains queued for the next poll.
+
+Four idle dispatches took four admission locks on the base and zero after the
+change. The regression also checks expired, orphaned and live lease handling.
+Busy dispatches use one additional bounded read. Production throughput and
+independent scoring acceptance remain open.
 
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
@@ -11661,6 +11683,20 @@ A cold scoring pass now takes the existing lock only when an active, unpaused se
 ### Scoring result-persistence timing — Roadmap A checkpoint #1159
 
 Update scoring now records the same `result_persistence` timing stage that process triage already uses. Each scoring reply that passes structured validation records one event. That event covers re-reading the current package and inventory evidence and committing the batch, including scores superseded because evidence changed. A committed batch records `outcome=complete`, and a failed write records `outcome=error`; the existing failure handling then marks the batch `error` for a normal retry. Refusals, token-budget exhaustion and malformed or mismatched replies raise before revalidation and record no event. The event uses the existing buffered, redacted timing format and run-history retention. Score identity, provider authorization, admission and retry behavior are unchanged. Compatibility: no schema, API, UI or response-authorization change. The fleet timing summary still samples triage runs only. Independent scoring admission and measured production throughput remain open.
+
+### Local known-good reuse during provider start holds — Roadmap A/B checkpoint #1128
+
+An exact verified known-good match can complete during a shared rate hold or
+provider backoff, as it can during a daily spend hold. The worker uses its
+existing bounded claim search and revalidates the match before recording reuse.
+An empty or revoked cache for the saved model skips per-item probes. A hit
+completes with no request, rate admission or spend reservation. If reuse fails
+after claiming, any paid request still goes through the shared admission checks.
+
+The regression covers rate, provider backoff, both together, explicit re-triage,
+pause and revocation between claim and reuse. The oldest-window bound and legacy
+purpose-specific hourly ceilings still apply. End-to-end production throughput
+and the remaining exact-match acceptance milestones stay open.
 
 ### Interrupted package scoring in AI Activity — Roadmap A checkpoint #1115
 

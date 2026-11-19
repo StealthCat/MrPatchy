@@ -122,9 +122,10 @@ def test_triage_timing_summary_uses_retained_samples_without_exposing_details(ad
     assert data['stages']['provider'] == {
         'samples': 4, 'errors': 2, 'p50_ms': 10.0, 'p95_ms': 30.0,
     }
-    assert data['stages']['ssh_evidence'] == {
-        'samples': 0, 'errors': 0, 'p50_ms': None, 'p95_ms': None,
-    }
+    for stage in ('ssh_evidence', 'file_provenance'):
+        assert data['stages'][stage] == {
+            'samples': 0, 'errors': 0, 'p50_ms': None, 'p95_ms': None,
+        }
     assert '/private/evidence' not in response.text and 'private-key' not in response.text
     assert 'no-timings' not in response.text
 
