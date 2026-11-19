@@ -11658,6 +11658,10 @@ A cold scoring pass now takes the existing lock only when an active, unpaused se
 - **Parity:** `tests/test_anacron_jobs.py` compares agent output with the pure contract on a shared corpus (jobs, duplicate links, unparsed counts and settings). It has 45 tests, and six source mutations are each caught.
 - **Remaining:** whether and how anacron is started (cron `0anacron` or a systemd timer), `/var/spool/anacron` timestamps, run-parts targets, package provenance of the default table, and AI classification. No schema, scheduling, AI or response-authorization change was made.
 
+### Scoring result-persistence timing — Roadmap A checkpoint #1159
+
+Update scoring now records the same `result_persistence` timing stage that process triage already uses. Each scoring reply that passes structured validation records one event. That event covers re-reading the current package and inventory evidence and committing the batch, including scores superseded because evidence changed. A committed batch records `outcome=complete`, and a failed write records `outcome=error`; the existing failure handling then marks the batch `error` for a normal retry. Refusals, token-budget exhaustion and malformed or mismatched replies raise before revalidation and record no event. The event uses the existing buffered, redacted timing format and run-history retention. Score identity, provider authorization, admission and retry behavior are unchanged. Compatibility: no schema, API, UI or response-authorization change. The fleet timing summary still samples triage runs only. Independent scoring admission and measured production throughput remain open.
+
 ### Notification-center deep link — worker checkpoint #1168 (roadmap J)
 
 The #835 checkpoint recorded that the notification center's filters were not in its deep link, so a reload, a copied link or Back reset them. They are now part of the `#notifications` hash.

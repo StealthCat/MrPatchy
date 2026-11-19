@@ -1,3 +1,7 @@
+## 1.75.52 — 2026-11-19
+
+1. [PR #1161](https://github.com/StealthCat/MrPatchy/pull/1161): Update scoring now records the existing `result_persistence` timing after validated replies enter revalidation, covering evidence reads and commit or supersede outcomes. Failed writes record `error`; refused or malformed replies record no persistence event. Compatibility: extra timing events use existing retention; no schema, API, UI, role, admission, accounting or response-authorization change. Limit: fleet timing summaries remain triage-only; independent scoring admission and production throughput remain open.
+
 ## 1.75.51 — 2026-11-19
 
 1. [PR #1139](https://github.com/StealthCat/MrPatchy/pull/1139): Extends the optional native MySQL triage benchmark with matched same-server serial and four-worker runs, checking workload parity, provider overlap, completed investigations, required SSH follow-ups, no approvals, equivalent SQLite workload and database cleanup. Compatibility: tests and documentation only; no production runtime, schema, API or response-authorization change. Limit: synthetic provider and disposable database only; production throughput and failover remain unverified.
