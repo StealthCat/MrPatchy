@@ -3707,8 +3707,7 @@ legacy per-purpose ceiling, including the fixed 10/hour automatic-plan allowance
   proposal, four concurrent startups applying once, the stale-revision refusal and
   controller startup. The startup case fails without the hook. The standalone
   worker hook has no dedicated test.
-- **Still open:** an in-app notification for the migration and the broader
-  shared-controls acceptance.
+- **Still open:** the broader shared-controls acceptance; the migration notification is addressed below.
 
 ### Legacy AI admission migration notifications — worker checkpoint #1178
 
@@ -3982,6 +3981,18 @@ Cleanup validation for #1095 covers a disconnected session, an absent lock
 and a lock assigned to another session. The native MySQL fixture verifies that
 stale cleanup leaves the subsequent holder's table intact. This is fixture
 cleanup acceptance. Production failover and throughput acceptance remain open.
+
+### Advisory plan result-persistence timing — Roadmap A checkpoint #1176
+
+Incident and startup plan runs record a retained `result_persistence` timing
+after structured validation. The timing includes existing evidence revalidation
+and the plan transaction. A saved plan records completion and a failed save
+records an error. Provider refusals and invalid structured plans never enter
+this stage. The run timeline uses the existing redacted duration and outcome
+format. Worker fixtures exercise both plan types through a successful write,
+a failed write, an invalid response and a refusal. Existing plan state,
+evidence, manual approval and provider accounting retain their behavior.
+Production throughput and release-plan timings remain separate.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -11349,7 +11360,7 @@ The producer is read-only. It never sends, retries, changes backoff or acknowled
 
 **Remaining:**
 - ~~The event has no deep link, because the Operations panel is a modal with no route.~~ Addressed by the #824 worker checkpoint below.
-- The threshold is fixed.
+- ~~The threshold is fixed.~~ Addressed by the #1172 worker checkpoint below.
 - ~~A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.~~ Addressed by the #812 worker checkpoint below.
 
 ### Alert-delivery notification deep link — worker checkpoint #824
@@ -11359,7 +11370,27 @@ The admin-only `alert-delivery`/`delivery-failing` event now links to a routable
 - **Page:** it shows the delivery channel (SMTP email, webhook, disabled or unreadable configuration) and the open alerts that have not been delivered, with server, kind, raised time, attempts and the stored sanitized error class. All text is escaped. No URL, token, password or recipient is shown. **Open delivery settings** opens the existing Operations panel, where configuration changes and acknowledgement remain. The page only reads the existing admin-only `GET /api/operations/alerts` and `GET /api/operations/notifications` routes, so it never sends, retries or acknowledges anything. Non-admins see the administrator-required state and no data request is made.
 - **Upgrade impact:** the link is part of the notification payload fingerprint. An event that is already active therefore gains one unread revision on the first collection pass after upgrade. Later passes add none.
 - **Unchanged:** schema, roles, routes, delivery and backoff, admission and response authorization.
-- **Remaining:** the threshold is still fixed, and the page lists only the 200 most recent alerts that the existing route returns.
+- **Remaining:** ~~the threshold is still fixed~~ (addressed by the #1172 worker checkpoint below), and the page lists only the 200 most recent alerts that the existing route returns.
+
+### Configurable alert-delivery notification threshold — worker checkpoint #1172
+
+Administrators can now set how many failed delivery attempts trigger the admin-only `alert-delivery`/`delivery-failing` notification. This closes the "threshold is fixed" item from checkpoints #792 and #824.
+
+- **Setting:** a whole number from 1 to 20 on Activity → Alert delivery (**Failure notification**). The default stays 3. It is stored in its own `alert-delivery-threshold` setting, outside the encrypted SMTP/webhook configuration. That keeps it readable and editable when the delivery configuration cannot be decrypted, and neither delivery save path nor any secret is touched. A missing or invalid stored value (out of range, boolean, non-integer, malformed) falls back to 3, so a bad value never silences the notice.
+- **API:** admin-only `GET`/`PUT /api/operations/alert-delivery-threshold`. `PUT` requires strict integers `failed_attempts` and `expected_failed_attempts`. It returns 400 outside the range, 409 when the saved value no longer matches the expected one, and it is serialized with a `worker.Lock`. Each change writes one `alert delivery threshold` audit entry with actor, before and after. Saving the same value writes nothing.
+- **Producer:** `failing_count` and the reason text use the saved threshold. Saving never sends, retries, acknowledges or resolves an alert, and it publishes nothing by itself. The next `collect_alerts` pass re-evaluates the event. Raising the threshold above every failing alert resolves an active event. If the event is already active and the threshold changes, the reason text (now naming the new count) adds one unread revision.
+- **Page:** the status line and the failing count on the Alert delivery page use the saved threshold instead of a fixed "three".
+- **Unchanged:** schema, roles, delivery and backoff, the unreadable-configuration path, admission and response authorization.
+- **Remaining:** ~~the page lists only the 200 most recent alerts that the existing route returns.~~ Addressed by the #1180 worker checkpoint below.
+
+### Every undelivered alert on the Alert delivery page — worker checkpoint #1180
+
+The Alert delivery page used to filter open, undelivered alerts in the browser from `GET /api/operations/alerts`, which returns only the 200 newest alerts of any state. With more than 200 newer delivered, acknowledged or resolved alerts, an older open alert that was still failing delivery disappeared from the page. Its failing count could then disagree with the admin `alert-delivery` notification, which counts every alert.
+
+- **API:** new admin-only, read-only `GET /api/operations/alert-delivery/pending?offset=N`. It returns open, undelivered alerts newest first, 50 per page, without the alert message. It also returns server-side `total` and `failing` counts across every such alert, using the saved threshold (`failed_attempts`). `offset` must be from 0 to 1,000,000.
+- **Page:** the status line and failing count use the server counts. The list shows "Showing A–B of N, newest first" with **Previous alerts** and **Next alerts**. Paging replaces only the alert list and moves focus to its heading, so unsaved threshold input survives. A late page response is discarded if a newer page was requested or the administrator left the page.
+- **Unchanged:** `GET /api/operations/alerts` and the Operations panel, delivery, retries and backoff, acknowledgement, the notification producer, schema, roles, admission and response authorization. The page still never sends, retries or acknowledges anything.
+- **Remaining:** none for the page's list scope. Acknowledgement stays in the Operations panel, which still lists the 200 newest alerts.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 
@@ -11715,3 +11746,40 @@ The regression covers rate, provider backoff, both together, explicit re-triage,
 pause and revocation between claim and reuse. The oldest-window bound and legacy
 purpose-specific hourly ceilings still apply. End-to-end production throughput
 and the remaining exact-match acceptance milestones stay open.
+
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
+### Advisory plan provider failures — Roadmap A checkpoint #1170
+
+Incident and startup advisory jobs now distinguish a model refusal from response
+token-budget exhaustion in their saved job and run histories. Both diagnostics
+state that no advisory plan was accepted, the sent request may be billed, and the
+operator can review manually or choose a suitable model. The shared plan request
+retains fixed wording without provider text. Other errors and shared deferrals
+keep their behavior. Worker-path tests exercise both job kinds with synthetic
+provider responses and check that neither error persists a plan. Release-plan
+diagnostics and production provider acceptance remain separate.
+
+#### Retry failed automatic AI plans — worker checkpoint #1036
+
+Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
+
+- **Change:** `app/auto_plan_retry.py` counts a server's open, non-YARA, unplanned incidents whose only unreleased automatic attempts for their current scan are `failed`. Attempts the worker skipped because the evidence changed are not counted.
+  - Admin-only `GET /api/hosts/{id}/security/auto-plan-failed` returns `{failed}`. Unknown servers return 404.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and marks up to 200 incidents' failed `security-plan` jobs with `retry_released` (plus who and when). It returns `{released, remaining}` and writes one audit row when anything was released. A disabled or deleted server releases nothing.
+  - `incidents.awaiting_auto_plan` ignores released attempts, so the ordinary `auto_plan_tick` plans the incident again.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The tick still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. A new failure blocks the incident again until another release. The failed job's state and output are kept.
+- **UI:** the Security tab's scheduled-scanning card shows **Retry failed automatic plans** to administrators only, when the count is above 0. It says to fix the cause first, that no provider request is sent now, and that the gates still apply; it refreshes the status afterwards. Operators cannot open the Security tab, so they never request the count.
+- **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
+- **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
