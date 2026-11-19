@@ -2245,13 +2245,6 @@ SELECTs from twelve to four, including candidate and host-scope reads. This is
 partial scoring performance work. Idle candidate hashing, measured production
 throughput and full parallel scoring acceptance remain open.
 
-Worker checkpoint #1146 batches live evidence reads after a scoring response.
-A five-package fixture spanning five servers reduces package and inventory reads
-from ten queries to two. Each assessment still uses the exact score identity.
-The fixture keeps an unchanged score and supersedes scores when the candidate
-or inventory changes or the package or server disappears. Independent scoring
-admission and production throughput remain open.
-
 Worker checkpoint #597 adds an ordered purpose/state/start-time index for active
 AI run status and recovery lookups. Startup adds the index to existing databases
 while retaining history and existing indexes. The retained-history fixture uses
@@ -2325,6 +2318,32 @@ recovery. Expiry does not prove a provider request stopped or was not billed.
 This telemetry is read-only: it does not renew, reconcile, cancel, retry or
 otherwise alter a claim. Full multi-controller failover and production
 recovery acceptance remain open.
+
+### Atomic recovery of interrupted package scores — Roadmap A checkpoint #1140
+
+The scoring worker now commits the interruption event and the failures of its
+linked running package scores together under the existing scoring lock. A
+score with a newer attempt timestamp, completed result or missing run link is
+left alone. The recovered score keeps its attempt time, so the existing
+one-hour retry interval still applies. Recovery can run with scoring disabled
+and makes no provider call or spend change.
+
+The regression verifies rollback when the score write fails and confirms
+successful scoring at the original eligibility boundary. A crash before
+linking the run and independent scoring admission remain open.
+
+### Deferred scoring eligibility in fleet status — Roadmap A checkpoint #1142
+
+The fleet status distinguishes deferred scores eligible now from the earliest
+future retry. The same aggregate retains the total queue, including rows held
+by pause or disabled scoring. Only active unpaused servers contribute an
+eligibility time while scoring is enabled. The card can therefore show ready
+work alongside the next future retry, and it explains when there is only held
+scoring work. Shared admission still governs outbound calls.
+
+The regression covers overdue and future scores, paused and inactive servers,
+and disabled scoring without adding another aggregate query. Exact scoring
+identity and provider eligibility remain checked by the scheduler.
 
 ### Update-scoring schedule-state reads
 
@@ -11562,3 +11581,37 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+### Provider backoff under reversed failure writes — Roadmap A checkpoint #1117
+
+Shared provider backoff retains the latest recorded failure timestamp. If an
+earlier failure acquires the shared lock after a newer one, a response from a
+request already in flight at the newer failure still cannot clear the wait.
+The regression controls lock entry to exercise this order and checks admission
+before and after a later successful request.
+
+This check uses the existing worker clock timestamps. Clock skew across workers
+and matched production throughput remain outside this acceptance slice.
+
+### needrestart hook contract — worker checkpoint #1148 (roadmap F)
+
+- **What it covers:** `app/needrestart_hooks.py` is a pure, versioned contract. It reports which root code Ubuntu's default `needrestart` can run after every APT transaction. The trigger is `/etc/apt/apt.conf.d/99needrestart` (`DPkg::Post-Invoke`), which runs `/usr/lib/needrestart/apt-pinvoke -m u`, which in turn execs `/usr/sbin/needrestart`.
+- **Pinned source:** the rules follow the shipped `needrestart 3.6-7ubuntu4.x` source, and other versions are gaps.
+  - `needrestart.conf` and every `sort </etc/needrestart/conf.d/*.conf>` file are passed to Perl `eval` as root. The glob skips dot-hidden names, the sort is byte order, and a matched directory is a no-op.
+  - `hook.d` entries run in natural order with no execute-bit check, until one identifies the service.
+  - `restart.d/<service>` replaces `systemctl restart` when it is executable. Under APT the restart mode is automatic unless `restart` or `ui` is configured.
+  - `notify.d` entries that are `-x` and not named `*~` or `*.dpkg-<suffix>` run as root per outdated session, until one exits 0.
+  - A missing config or `hook.d` aborts needrestart before any hook runs.
+- **Fail closed:**
+  - Perl is never evaluated. `needrestart.conf` is understood only when it matches the shipped SHA-256, and a `conf.d` file only when it holds comments and simple literal `$nrconf{key}` assignments. Other code, unread files, and any `hook_d`, `notify_d` or `restart_d` override are gaps that leave the directories unresolved.
+  - Sort::Naturally is not reimplemented. An order is reported only when a simple natural order and the byte order agree for `[a-z0-9._-]` names among the entries that can run.
+  - A modified or unknown trigger, unknown entries, special files, incomplete listings, an invalid restart mode, unsupported families or versions, and caps are all gaps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
+
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.

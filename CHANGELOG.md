@@ -1,3 +1,19 @@
+## 1.75.45 — 2026-11-18
+
+1. [PR #1149](https://github.com/StealthCat/MrPatchy/pull/1149): Adds a pure, versioned contract that identifies root-executable Ubuntu `needrestart` configuration and hook paths after APT transactions from captured observations and known package hashes. Unknown versions, modified Perl configuration, uncertain ordering and incomplete observations remain explicit coverage gaps. Compatibility: no runtime caller, collection wiring, UI, schema, route, role, target-helper or response-authorization change; startup-inventory integration, a catalog entry, dpkg provenance and non-Ubuntu coverage remain open.
+
+## 1.75.44 — 2026-11-18
+
+1. [PR #1143](https://github.com/StealthCat/MrPatchy/pull/1143): AI Activity now shows the retained deferred-scoring total, counts scores eligible now only on active unpaused servers while scoring is enabled, and reports the earliest future retry separately. When deferred work is held and no competing operation applies, the card explains the hold. Compatibility: the administrator status adds `scoring_ready`, and `scoring_next_at` now means a future retry; the single aggregate read remains. Scheduler identity checks, shared provider admission, schema and response authorization are unchanged. Independent scoring admission and measured production throughput remain open.
+
+## 1.75.43 — 2026-11-18
+
+1. [PR #1141](https://github.com/StealthCat/MrPatchy/pull/1141): When scoring recovers an abandoned update-scoring run, it now marks exactly linked running package scores as failed in the same transaction while retaining their attempt timestamps and existing one-hour retry boundary. Newer attempts, completed scores and rows without a reliable run link remain untouched. Compatibility: no schema, API, provider-charge, scheduling, client or response-authorization change; already-interrupted rows and crashes before a reliable run link retain existing recovery behavior.
+
+## 1.75.42 — 2026-11-18
+
+1. [PR #1118](https://github.com/StealthCat/MrPatchy/pull/1118): Shared AI provider backoff now preserves the newest failure timestamp when parallel failures are recorded out of order, so a success from a request already in flight at the newer failure cannot clear that retry floor. A later successful request can still clear it. Compatibility: no schema, API, role, client, or response-authorization change; timestamp ordering assumes synchronized worker clocks, and matched production throughput remains outside this slice.
+
 ## 1.75.41 — 2026-11-18
 
 1. [PR #1107](https://github.com/StealthCat/MrPatchy/pull/1107): Settings' unsaved-navigation guard now returns to the edited entry when Back or an in-app tab navigation is held, and Discard reaches the exact requested history entry after a dropped undo. Where the Navigation API is available, keyed traversals use bounded retries and per-prompt guards. Compatibility: browsers without the Navigation API retain the existing `history.go` path; no API, schema, role, audit, or response-authorization behavior changes. #1083 remains open pending hosted confirmation and resolution of its separate diagnostics defect.
