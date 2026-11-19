@@ -11698,6 +11698,18 @@ pause and revocation between claim and reuse. The oldest-window bound and legacy
 purpose-specific hourly ceilings still apply. End-to-end production throughput
 and the remaining exact-match acceptance milestones stay open.
 
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
 ### pppd hook contract — worker checkpoint #1091 (roadmap F)
 
 When a PPP link changes state, pppd runs `/etc/ppp` scripts as root. On Debian and Ubuntu, the packaged `ip-up`, `ip-down`, `ip-pre-up`, `ipv6-up` and `ipv6-down` wrappers then run their `.local` override or `run-parts` over their `.d` directory. No startup catalog entry or contract covered any of this.
