@@ -11698,6 +11698,18 @@ pause and revocation between claim and reuse. The oldest-window bound and legacy
 purpose-specific hourly ceilings still apply. End-to-end production throughput
 and the remaining exact-match acceptance milestones stay open.
 
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
 ### systemd-tmpfiles kernel-hook and startup-file contract — worker checkpoint #1097 (roadmap F)
 
 `systemd-tmpfiles-setup.service` applies `tmpfiles.d` as root at every boot. A `w /proc/sys/kernel/core_pattern - - - - |/tmp/x` line sets a program that the kernel itself runs, without going through `sysctl.d` (#1088). A line such as `f /etc/cron.d/job …`, `L+ /etc/ld.so.preload - - - - …` or `C /etc/systemd/system/x.service …` creates a startup file. No contract covered `tmpfiles.d`.
