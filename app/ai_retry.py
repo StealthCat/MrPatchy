@@ -14,6 +14,8 @@ from . import ai_provider_backoff
 from .db import Base, Behavior, Setting, config
 
 MAX_ATTEMPTS=5
+RATE_WAIT_REASON='Waiting for shared AI rate eligibility; no provider request was sent.'
+BUDGET_WAIT_REASON='Waiting for the daily AI spend cap to reset; no provider request was sent.'
 PROVIDER_BLOCKED_REASON='Review the failure and correct API configuration or explicitly retry. No automatic retry is scheduled.'
 # A local refusal is not a key, quota or model problem (#1007): say so, so an
 # administrator does not rotate the key or change the model to clear it.
@@ -22,6 +24,14 @@ EVIDENCE_SIZE_BLOCKED_REASON=('This observation\'s evidence is larger than Mr Pa
 FOLLOW_UP_EVIDENCE_SIZE_BLOCKED_REASON=('The follow-up evidence collected from the server is larger than Mr Patchy shares with '
     'the AI provider, so the follow-up request was not sent. The first-stage request was sent and may be billed. '
     'Review it manually. Changing the API key or model does not help. No automatic retry is scheduled.')
+# Both requests reached the provider (#1158), so neither reason may say nothing was
+# sent, and neither is a key or quota problem. A model change still re-admits them.
+MODEL_REFUSAL_BLOCKED_REASON=('The AI model declined to assess this observation. The request was sent and may be billed. '
+    'Review it manually. Changing the API key does not help; a different model may assess it. '
+    'No automatic retry is scheduled.')
+TOKEN_BUDGET_BLOCKED_REASON=('The AI model used its whole response token budget before finishing the assessment. '
+    'The request was sent and may be billed. Select a model that completes within Mr Patchy\'s task budget, '
+    'or review it manually. Changing the API key does not help. No automatic retry is scheduled.')
 
 
 class TriageRetry(Base):
@@ -72,27 +82,33 @@ def failed(s,row,error,now):
     cause=getattr(error,'cause',None) if isinstance(error,AIError) else None
     if cause=='evidence_size':retry.reason=EVIDENCE_SIZE_BLOCKED_REASON
     elif cause=='follow_up_evidence_size':retry.reason=FOLLOW_UP_EVIDENCE_SIZE_BLOCKED_REASON
+    elif cause=='model_refusal':retry.reason=MODEL_REFUSAL_BLOCKED_REASON
+    elif cause=='token_budget':retry.reason=TOKEN_BUDGET_BLOCKED_REASON
     if isinstance(error,AIError) and error.policy_wait:
         retry.attempts=max(0,retry.attempts-1)
         retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
         provider_wait=getattr(error,'provider_wait_until',0)
         provider_wait=(provider_wait if type(provider_wait) in (int,float)
             and math.isfinite(provider_wait) and provider_wait>0 else 0)
+        budget_reset=getattr(error,'budget_wait_until',None)
         if provider_wait:
             retry.provider_until=provider_wait
             retry.next_at=max(now,provider_wait)
+            retry.reason='Waiting for shared provider backoff; no provider request was sent.'
+        elif budget_reset is not None:
+            retry.next_at=max(now,budget_reset)
+            retry.reason=BUDGET_WAIT_REASON
         elif error.retry_after:
-            # Reserve after the durable eligible tail, including waiters whose
-            # base time is slightly earlier than this failure's wall clock.
+            # Only rate waiters share the pacing queue. Budget and provider
+            # waits each have their own time boundary.
             tail=s.scalar(select(func.max(TriageRetry.next_at)).where(TriageRetry.subject!=row.id,
-                TriageRetry.state=='deferred',TriageRetry.next_at>now,TriageRetry.provider_until<=now))
+                TriageRetry.state=='deferred',TriageRetry.next_at>now,TriageRetry.provider_until<=now,
+                TriageRetry.reason==RATE_WAIT_REASON))
             cfg=config(s);rate=cfg['ai_rate_per_hour'] if cfg['ai_control_mode'] in ('rate','rate_and_daily') else 120
             if tail is not None:retry.next_at=max(retry.next_at,tail+3600.0/max(1,rate))
-        retry.reason=('Waiting for shared AI rate eligibility; no provider request was sent.' if error.retry_after else
-            'Waiting for AI policy resume; eligibility is rechecked before every provider call.')
-        if getattr(error,'budget_wait',False) is True:
-            retry.reason='Waiting for the daily AI spend cap to reset; no provider request was sent.'
-        if provider_wait:retry.reason='Waiting for shared provider backoff; no provider request was sent.'
+            retry.reason=RATE_WAIT_REASON
+        else:
+            retry.reason='Waiting for AI policy resume; eligibility is rechecked before every provider call.'
     elif isinstance(error,AIError) and error.transient:
         provider=min(error.provider_retry_after or 0,ai_provider_backoff.MAX_PROVIDER_DELAY)
         retry.provider_until=now+provider if provider else 0
