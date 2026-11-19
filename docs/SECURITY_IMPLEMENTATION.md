@@ -11364,7 +11364,16 @@ Administrators can now set how many failed delivery attempts trigger the admin-o
 - **Producer:** `failing_count` and the reason text use the saved threshold. Saving never sends, retries, acknowledges or resolves an alert, and it publishes nothing by itself. The next `collect_alerts` pass re-evaluates the event. Raising the threshold above every failing alert resolves an active event. If the event is already active and the threshold changes, the reason text (now naming the new count) adds one unread revision.
 - **Page:** the status line and the failing count on the Alert delivery page use the saved threshold instead of a fixed "three".
 - **Unchanged:** schema, roles, delivery and backoff, the unreadable-configuration path, admission and response authorization.
-- **Remaining:** the page lists only the 200 most recent alerts that the existing route returns.
+- **Remaining:** ~~the page lists only the 200 most recent alerts that the existing route returns.~~ Addressed by the #1180 worker checkpoint below.
+
+### Every undelivered alert on the Alert delivery page — worker checkpoint #1180
+
+The Alert delivery page used to filter open, undelivered alerts in the browser from `GET /api/operations/alerts`, which returns only the 200 newest alerts of any state. With more than 200 newer delivered, acknowledged or resolved alerts, an older open alert that was still failing delivery disappeared from the page. Its failing count could then disagree with the admin `alert-delivery` notification, which counts every alert.
+
+- **API:** new admin-only, read-only `GET /api/operations/alert-delivery/pending?offset=N`. It returns open, undelivered alerts newest first, 50 per page, without the alert message. It also returns server-side `total` and `failing` counts across every such alert, using the saved threshold (`failed_attempts`). `offset` must be from 0 to 1,000,000.
+- **Page:** the status line and failing count use the server counts. The list shows "Showing A–B of N, newest first" with **Previous alerts** and **Next alerts**. Paging replaces only the alert list and moves focus to its heading, so unsaved threshold input survives. A late page response is discarded if a newer page was requested or the administrator left the page.
+- **Unchanged:** `GET /api/operations/alerts` and the Operations panel, delivery, retries and backoff, acknowledgement, the notification producer, schema, roles, admission and response authorization. The page still never sends, retries or acknowledges anything.
+- **Remaining:** none for the page's list scope. Acknowledgement stays in the Operations panel, which still lists the 200 newest alerts.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 
