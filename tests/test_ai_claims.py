@@ -427,7 +427,6 @@ def test_idle_triage_still_recovers_abandoned_runs(admin, claim_state):
             assert s.scalar(select(ai_runs.AIEvent.id).where(
                 ai_runs.AIEvent.run_id == run.id, ai_runs.AIEvent.stage == 'interrupted')) is not None
 
-
 def test_drain_blocks_new_claims_but_keeps_existing_owner_valid(admin):
     seed(count=2)
     with worker_registry.Registration() as node:
