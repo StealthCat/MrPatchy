@@ -1,3 +1,7 @@
+## 1.75.63 — 2026-11-19
+
+1. [PR #1183](https://github.com/StealthCat/MrPatchy/pull/1183): Administrators can configure the scheduled-scan coverage-notification grace per server (1–168 hours, default one hour). Overdue and stalled notices now use the scan interval plus that grace, and the Security tab exposes the setting. Existing policies retain the one-hour threshold and byte-identical default notice text; no schema, scheduler, scan assessment, role or response-authorization changes. Limit: a disable/re-enable cycle between alert ticks remains undetected, and YARA schedules remain out of scope.
+
 ## 1.75.62 — 2026-11-19
 
 1. [PR #1179](https://github.com/StealthCat/MrPatchy/pull/1179): Administrators now receive an admin-only in-app notification when startup migrates never-reviewed legacy AI admission controls to the shared smooth rate, or refuses a proposal that would expand admission or spend. A refusal remains visible until an explicit mode is stored, and rejected notification payloads do not block migration. Compatibility: no schema or configuration change; installations migrated earlier get no retroactive event. No admission, spend, pause, role, provider-call, SMTP/webhook or response-authorization behavior changes. Limit: the broader shared-controls acceptance remains open, and notices use the existing notifications UI.
