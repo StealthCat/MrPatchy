@@ -1,3 +1,7 @@
+## 1.75.56 — 2026-11-19
+
+1. [PR #1129](https://github.com/StealthCat/MrPatchy/pull/1129): Exact verified known-good assessments can now be reused during shared provider rate throttling or backoff without a provider call, rate admission or spend reservation. Misses, paused servers and explicit Re-triage remain held, and matches are revalidated before completion. Compatibility: no schema or API change; legacy quotas remain. Limit: existing oldest-subject scan bound remains, and production throughput is unmeasured.
+
 ## 1.75.55 — 2026-11-19
 
 1. [PR #1135](https://github.com/StealthCat/MrPatchy/pull/1135): Idle triage dispatches now perform one read-only work/recovery probe and skip the shared admission lock when idle. Pending work and expired/orphaned recovery still use the existing locked path; work arriving after an idle snapshot waits for the next poll. Compatibility: adds one bounded read to busy dispatches; no schema or authorization changes. Production throughput remains unverified.
