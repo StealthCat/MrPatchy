@@ -76,6 +76,37 @@ def test_config_first_value_wins_comments_and_defaults():
 def test_config_overlong_line_stops_reading():
     config = it.parse_config('x=' + 'a' * 1100 + '\nsystem_table_dir=/late\n')
     assert config['values']['system_table_dir'] == '/etc/incron.d'
+    assert config['gaps'] == []
+
+
+def test_config_overlong_line_is_truncated_and_still_parsed():
+    # getline(s, 1023) keeps the first 1022 bytes and sets failbit; IncronCfg::Load parses that buffer
+    # before the loop stops, so the setting applies and later lines are ignored.
+    text = 'system_table_dir = /tmp/x' + ' ' * 1000 + 'TAIL\nuser_table_dir = /late\n'
+    config = it.parse_config(text)
+    assert config['values']['system_table_dir'] == '/tmp/x'
+    assert config['values']['user_table_dir'] == '/var/spool/incron'
+    assert config['gaps'] == []
+    result = it.resolve(text, [], [], {}, ACCOUNTS, ALLOW_MISSING, {'state': 'missing'})
+    assert result['config']['system_table_dir'] == '/tmp/x'
+    assert result['complete'] is True
+
+
+def test_config_line_of_exactly_limit_is_read_whole():
+    line = 'system_table_dir=/' + 'd' * (it.CONFIG_LINE_MAX - 18)
+    assert len(line) == it.CONFIG_LINE_MAX
+    config = it.parse_config(line + '\nuser_table_dir=/u\n')
+    assert config['values']['system_table_dir'] == line.split('=', 1)[1]
+    assert config['values']['user_table_dir'] == '/u'
+
+
+def test_config_overlong_line_splitting_utf8_fails_closed():
+    text = 'system_table_dir=/' + 'a' * (it.CONFIG_LINE_MAX - 19) + '\u00e9tail\n'
+    config = it.parse_config(text)
+    assert [gap['code'] for gap in config['gaps']] == ['config_over_limit']
+    result = it.resolve(text, [], [], {}, ACCOUNTS, ALLOW_MISSING, {'state': 'missing'})
+    assert any(gap['code'] == 'config_over_limit' and gap['blocking'] for gap in result['gaps'])
+    assert result['complete'] is False
 
 
 def test_check_user_allow_then_deny_rules():

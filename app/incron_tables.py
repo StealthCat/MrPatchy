@@ -159,31 +159,51 @@ def parse_config(text: str) -> dict[str, Any]:
     """Apply ``IncronCfg::Load`` and ``ParseLine`` to ``incron.conf`` text."""
     values: dict[str, str] = {}
     notes: list[str] = []
+    gaps: list[dict[str, str]] = []
     lines = text.split('\n')
     if lines and lines[-1] == '':
         lines.pop()
     for number, line in enumerate(lines, 1):
-        if len(line.encode('utf-8')) > CONFIG_LINE_MAX:
-            notes.append(f'Line {number} is longer than {CONFIG_LINE_MAX} bytes; incrond stops reading there.')
+        last = False
+        data = line.encode('utf-8')
+        if len(data) > CONFIG_LINE_MAX:
+            # getline() stores the first CONFIG_LINE_MAX bytes and sets failbit; IncronCfg::Load still
+            # parses that truncated buffer before the loop condition stops reading.
+            last = True
+            try:
+                line = data[:CONFIG_LINE_MAX].decode('utf-8')
+            except UnicodeDecodeError:
+                gaps.append({'code': 'config_over_limit', 'detail': (
+                    f'Line {number} is longer than {CONFIG_LINE_MAX} bytes and the truncation splits a UTF-8 '
+                    'sequence; the setting incrond reads from it cannot be determined.')})
+                break
+            notes.append(f'Line {number} is longer than {CONFIG_LINE_MAX} bytes; incrond reads its first '
+                         f'{CONFIG_LINE_MAX} bytes and stops reading after it.')
+        _parse_config_line(line, number, values, notes)
+        if last:
             break
-        hash_at = line.find('#')
-        if hash_at >= 0 and not line[:hash_at].strip(' \t'):
-            continue
-        if not line or line.startswith('='):
-            continue
-        key, sep, rest = line.partition('=')
-        if not sep:
-            continue
-        key = key.strip(' \t')
-        if not key:
-            continue
-        value = rest.lstrip(' \t=').rstrip(' \t')
-        if key in values:
-            notes.append(f'Line {number} repeats "{key[:40]}"; incrond keeps the first value.')
-            continue
-        values[key] = value
     effective = {key: values.get(key, default) for key, default in DEFAULTS.items()}
-    return {'values': effective, 'notes': notes}
+    return {'values': effective, 'notes': notes, 'gaps': gaps}
+
+
+def _parse_config_line(line: str, number: int, values: dict[str, str], notes: list[str]) -> None:
+    """``IsComment`` plus ``ParseLine`` for one line; record the first value of each key."""
+    hash_at = line.find('#')
+    if hash_at >= 0 and not line[:hash_at].strip(' \t'):
+        return
+    if not line or line.startswith('='):
+        return
+    key, sep, rest = line.partition('=')
+    if not sep:
+        return
+    key = key.strip(' \t')
+    if not key:
+        return
+    value = rest.lstrip(' \t=').rstrip(' \t')
+    if key in values:
+        notes.append(f'Line {number} repeats "{key[:40]}"; incrond keeps the first value.')
+        return
+    values[key] = value
 
 
 def build_path(directory: str, name: str) -> str:
@@ -425,6 +445,8 @@ def resolve(config_text: str | None, system_listing: Any, user_listing: Any,
     config = parse_config(config_value)
     result['config'] = config['values']
     result['notes'].extend(config['notes'])
+    for gap in config['gaps']:
+        _gap(gaps, gap['code'], CONFIG_PATH, gap['detail'])
     values = config['values']
 
     def load(kind: str, listing: Any) -> None:
