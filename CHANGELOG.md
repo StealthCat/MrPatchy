@@ -1,3 +1,7 @@
+## 1.75.55 — 2026-11-19
+
+1. [PR #1135](https://github.com/StealthCat/MrPatchy/pull/1135): Idle triage dispatches now perform one read-only work/recovery probe and skip the shared admission lock when idle. Pending work and expired/orphaned recovery still use the existing locked path; work arriving after an idle snapshot waits for the next poll. Compatibility: adds one bounded read to busy dispatches; no schema or authorization changes. Production throughput remains unverified.
+
 ## 1.75.54 — 2026-11-19
 
 1. [PR #1165](https://github.com/StealthCat/MrPatchy/pull/1165): Process triage now records a retained `file_provenance` timing for controller-authenticated preparation and its transaction, including known-good cache hits. Failed preparation records an error timing with elapsed time only, and fixture timing reports include the stage. Compatibility: additive diagnostic timing using the existing event format; no schema migration or changes to authorization, evidence, cache, provider, or retry decisions; older histories remain readable. Limit: read-only admission probe timing and production throughput remain outside this measurement.
