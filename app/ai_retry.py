@@ -24,6 +24,14 @@ EVIDENCE_SIZE_BLOCKED_REASON=('This observation\'s evidence is larger than Mr Pa
 FOLLOW_UP_EVIDENCE_SIZE_BLOCKED_REASON=('The follow-up evidence collected from the server is larger than Mr Patchy shares with '
     'the AI provider, so the follow-up request was not sent. The first-stage request was sent and may be billed. '
     'Review it manually. Changing the API key or model does not help. No automatic retry is scheduled.')
+# Both requests reached the provider (#1158), so neither reason may say nothing was
+# sent, and neither is a key or quota problem. A model change still re-admits them.
+MODEL_REFUSAL_BLOCKED_REASON=('The AI model declined to assess this observation. The request was sent and may be billed. '
+    'Review it manually. Changing the API key does not help; a different model may assess it. '
+    'No automatic retry is scheduled.')
+TOKEN_BUDGET_BLOCKED_REASON=('The AI model used its whole response token budget before finishing the assessment. '
+    'The request was sent and may be billed. Select a model that completes within Mr Patchy\'s task budget, '
+    'or review it manually. Changing the API key does not help. No automatic retry is scheduled.')
 
 
 class TriageRetry(Base):
@@ -74,6 +82,8 @@ def failed(s,row,error,now):
     cause=getattr(error,'cause',None) if isinstance(error,AIError) else None
     if cause=='evidence_size':retry.reason=EVIDENCE_SIZE_BLOCKED_REASON
     elif cause=='follow_up_evidence_size':retry.reason=FOLLOW_UP_EVIDENCE_SIZE_BLOCKED_REASON
+    elif cause=='model_refusal':retry.reason=MODEL_REFUSAL_BLOCKED_REASON
+    elif cause=='token_budget':retry.reason=TOKEN_BUDGET_BLOCKED_REASON
     if isinstance(error,AIError) and error.policy_wait:
         retry.attempts=max(0,retry.attempts-1)
         retry.state='deferred';retry.next_at=now+(error.retry_after or 0)
