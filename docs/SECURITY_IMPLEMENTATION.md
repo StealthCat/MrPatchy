@@ -2363,15 +2363,6 @@ cover exact score identities, multi-version and multi-architecture RPM payloads,
 and superseding a result after a committed inventory change. Compact per-host
 state still scales with the eligible fleet. Production throughput remains open.
 
-Worker checkpoint #1150 adds a single read-only idle scoring probe. A cold
-scoring pass takes the existing lock only when an active unpaused server has a
-candidate or a scoring run needs recovery. The locked pass opens a fresh
-session and rechecks the work. Warm passes can still prune absent memo entries,
-and recovery still runs when scoring is disabled. The empty, paused-only and
-inactive-only fixtures each use one query and no scoring lock per poll. Busy
-cold passes add the probe; production throughput and independent scoring
-admission remain open.
-
 ### Fleet-wide exact-match known-good cache
 
 The administrator-only `GET /api/ai/known-good/summary` endpoint counts active and
@@ -3124,6 +3115,8 @@ elsewhere (#1027). Roadmap B acceptance remains open.
 contention/fairness" for triage under a daily cap. Each test runs real
 `worker.investigate_one()` claims against a cap with room for exactly K calls.
 The provider is a disposable fixture.
+
+Worker checkpoint #1154 keeps the triage contention fixtures within one configured budget window when UTC midnight passes. Fixtures persist a shared timezone whose local reset is several hours away, and a deterministic reservation check confirms the counted amount and reset boundary remain stable across UTC midnight. Explicit production-reset tests continue to cover actual window changes.
 
 - **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
   each for a different subject. The suite checks:
@@ -11600,3 +11593,31 @@ before and after a later successful request.
 
 This check uses the existing worker clock timestamps. Clock skew across workers
 and matched production throughput remain outside this acceptance slice.
+
+### needrestart hook contract — worker checkpoint #1148 (roadmap F)
+
+- **What it covers:** `app/needrestart_hooks.py` is a pure, versioned contract. It reports which root code Ubuntu's default `needrestart` can run after every APT transaction. The trigger is `/etc/apt/apt.conf.d/99needrestart` (`DPkg::Post-Invoke`), which runs `/usr/lib/needrestart/apt-pinvoke -m u`, which in turn execs `/usr/sbin/needrestart`.
+- **Pinned source:** the rules follow the shipped `needrestart 3.6-7ubuntu4.x` source, and other versions are gaps.
+  - `needrestart.conf` and every `sort </etc/needrestart/conf.d/*.conf>` file are passed to Perl `eval` as root. The glob skips dot-hidden names, the sort is byte order, and a matched directory is a no-op.
+  - `hook.d` entries run in natural order with no execute-bit check, until one identifies the service.
+  - `restart.d/<service>` replaces `systemctl restart` when it is executable. Under APT the restart mode is automatic unless `restart` or `ui` is configured.
+  - `notify.d` entries that are `-x` and not named `*~` or `*.dpkg-<suffix>` run as root per outdated session, until one exits 0.
+  - A missing config or `hook.d` aborts needrestart before any hook runs.
+- **Fail closed:**
+  - Perl is never evaluated. `needrestart.conf` is understood only when it matches the shipped SHA-256, and a `conf.d` file only when it holds comments and simple literal `$nrconf{key}` assignments. Other code, unread files, and any `hook_d`, `notify_d` or `restart_d` override are gaps that leave the directories unresolved.
+  - Sort::Naturally is not reimplemented. An order is reported only when a simple natural order and the byte order agree for `[a-z0-9._-]` names among the entries that can run.
+  - A modified or unknown trigger, unknown entries, special files, incomplete listings, an invalid restart mode, unsupported families or versions, and caps are all gaps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
+
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
+### Scoring idle-poll preflight — Roadmap A checkpoint #1150
+
+A cold scoring pass now takes the existing lock only when an active, unpaused server has a candidate or an update-scoring run needs recovery. One read-only probe checks both conditions; the locked pass then opens a fresh session and rechecks the work. Warm passes still prune absent memo entries, and recovery still runs when scoring is disabled. Empty, paused-only and inactive-only polls use one query and skip the scoring lock. A busy cold pass adds one probe, and work arriving after a negative probe waits until the next poll. Compatibility: no schema or response-authorization change. Independent scoring admission and measured production throughput remain open.
