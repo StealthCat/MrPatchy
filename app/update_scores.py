@@ -257,8 +257,17 @@ def run_one():
                             raise ai.AIError('Update scoring returned invalid scores or explanations; no assessment accepted.')
                     with Session() as s:
                         scores=_batch_scores(s,ids)
+                        package_ids = {identifier: score.host_id + ':' + score.name
+                                       for identifier, score in scores.items()}
+                        packages = {package.id: package for package in s.scalars(
+                            select(Package).where(Package.id.in_(package_ids.values())))}
+                        evidence_host_ids = {score.host_id for score in scores.values()}
+                        hosts = {host.id: host for host in s.execute(
+                            select(Host.id, Host.inventory).where(Host.id.in_(evidence_host_ids)))}
                         for item in rows:
-                            row=scores[item['id']];package=s.get(Package,row.host_id+':'+row.name);host=s.get(Host,row.host_id)
+                            row = scores[item['id']]
+                            package = packages.get(package_ids[row.id])
+                            host = hosts.get(row.host_id)
                             if not package or not host or not package.candidate or identity(host,package)!=row.id:
                                 row.state='superseded';row.next_at=0;row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
                             row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.next_at=0;row.completed=time.time()

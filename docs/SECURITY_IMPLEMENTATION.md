@@ -11609,6 +11609,13 @@ and matched production throughput remain outside this acceptance slice.
 - **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
 
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
 ### systemd-tmpfiles kernel-hook and startup-file contract — worker checkpoint #1097 (roadmap F)
 
 `systemd-tmpfiles-setup.service` applies `tmpfiles.d` as root at every boot. A `w /proc/sys/kernel/core_pattern - - - - |/tmp/x` line sets a program that the kernel itself runs, without going through `sysctl.d` (#1088). A line such as `f /etc/cron.d/job …`, `L+ /etc/ld.so.preload - - - - …` or `C /etc/systemd/system/x.service …` creates a startup file. No contract covered `tmpfiles.d`.
