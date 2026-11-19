@@ -11746,3 +11746,16 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
+### Release configuration review persistence — Roadmap A checkpoint #1184
+
+A newly validated release configuration review records one retained
+`result_persistence` timing while the planner applies the result to the plan
+and commits resumable progress. The stage records duration and outcome using
+the existing redacted run-event format. It excludes preliminary checkpoints,
+retained reviews reused after a deferral, provider refusals and invalid
+responses. The planner retains its existing evidence checks, checkpoints,
+provider accounting and separate approval. Focused planner fixtures cover
+successful and failed saves, rejected results and resumption with matching or
+changed evidence. Production throughput and cross-controller acceptance
+continue under the wider Roadmap A milestones.
