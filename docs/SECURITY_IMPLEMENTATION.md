@@ -11698,6 +11698,18 @@ pause and revocation between claim and reuse. The oldest-window bound and legacy
 purpose-specific hourly ceilings still apply. End-to-end production throughput
 and the remaining exact-match acceptance milestones stay open.
 
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
 ### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
 
 `grub-mkconfig` (`grub2-mkconfig` on RPM families) runs as root whenever the GRUB configuration is regenerated. That includes `update-grub`, GRUB's maintainer scripts and, on Debian and Ubuntu, every kernel install or removal through `/etc/kernel/postinst.d/zz-update-grub`. Each run sources `/etc/default/grub` (and, on Debian, `/etc/default/grub.d/*.cfg`) as shell, then runs the executable scripts in `/etc/grub.d`, whose output becomes `grub.cfg`. Neither the startup catalog nor any contract covered this root execution path.
