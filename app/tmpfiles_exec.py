@@ -27,8 +27,16 @@ Rules, checked by running the compiled ``systemd-tmpfiles`` 255
   ``~`` (the argument is base64) and ``^`` (the argument names a credential).
   Any other modifier rejects the line in v255. Newer releases accept more, so
   on a writing line that is a blocking gap.
-- Relative paths, ``w`` without an argument, invalid base64 and syntax errors
-  reject the line. Repeated and trailing slashes are simplified, and a path
+- Relative paths, ``w`` without an argument, invalid base64, repeated
+  modifiers, an invalid mode (octal above ``07777`` after ``~``/``:``) or age,
+  and syntax errors reject the line before the duplicate check, so a rejected
+  line never takes a path's slot. A user or group other than ``-``, ``root``
+  or a plain id resolves through the host's NSS, an age form not checked
+  against the binary may be rejected, and a ``C`` line is skipped when its copy
+  source is missing. Such lines are conditional: a write they shadow, or a
+  kernel setting they write, is a blocking ``line_validity_unresolved`` gap.
+- ``f``/``w``/``L``/``C`` arguments are unescaped first and then expanded, so
+  ``\x25H`` is the host name. Base64 arguments are not expanded. Repeated and trailing slashes are simplified, and a path
   with a ``..`` component is refused when applied.
 - The first line for a path wins over a later conflicting one ("Duplicate
   line"). Of ``f``/``L``/``C``/``d``/``D``/``v``/``q``/``Q``/``p``/``c``/``b``,
@@ -117,7 +125,7 @@ STARTUP_DIRS = frozenset({
 })
 WRITING = frozenset('fwLC')
 OWNERSHIP = frozenset('fLCdDvqQpcb')
-WRITE_BLOCKERS = frozenset('wxXrR')
+WRITE_BLOCKERS = frozenset('wexXrR')
 KNOWN_TYPES = frozenset('fFwdDevqQpLcbCxXrRzZtThHaA')
 GLOB_TYPES = frozenset('wexXrRzZtThHaA')
 KNOWN_MODIFIERS = frozenset('+!-=~^')
@@ -125,7 +133,7 @@ BLOCKING = frozenset({
     'input_malformed', 'too_many_files', 'duplicate_path', 'file_unreadable', 'symlink_not_followed',
     'text_over_limit', 'invalid_utf8', 'nul_byte', 'too_many_lines', 'path_specifier_unresolved',
     'argument_specifier_unresolved', 'credential_unobserved', 'modifier_unsupported', 'line_unparsed',
-    'gaps_truncated',
+    'line_validity_unresolved', 'gaps_truncated',
 })
 UNOBSERVED = (
     'Per-user tmpfiles (systemd-tmpfiles --user and user-tmpfiles.d) are not modelled.',
@@ -142,6 +150,15 @@ _CONTROL = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
 _EOL = re.compile(r'\r\n|\r|\n')
 _WS = ' \t\n\r'
 _GLOB = frozenset('*?[')
+_MODE = re.compile(r'[~:]*([0-7]+)')
+_AGE_UNITS = ('usec', 'us', '\u00b5s', '\u03bcs', 'msec', 'ms', 'seconds', 'second', 'sec', 's', 'minutes',
+              'minute', 'min', 'months', 'month', 'M', 'm', 'hours', 'hour', 'hr', 'h', 'days', 'day', 'd',
+              'weeks', 'week', 'w', 'years', 'year', 'y')
+_AGE_NUM = r'(?:\d{1,9}(?:\.\d{1,9})?|\.\d{1,9})'
+_AGE_UNIT = '(?:%s)' % '|'.join(re.escape(u) for u in _AGE_UNITS)
+_AGE = re.compile(f'(?:{_AGE_NUM}{_AGE_UNIT})*{_AGE_NUM}{_AGE_UNIT}?')
+_AGE_BY = re.compile(r'[abcmABCM]+')
+_ID = re.compile(r'0|[1-9][0-9]{0,9}')
 _SIMPLE_ESCAPES = {'a': '\a', 'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t', 'v': '\v', '\\': '\\',
                    '"': '"', "'": "'", 's': ' '}
 
@@ -294,6 +311,37 @@ def startup_location(path: str, glob: bool) -> str | None:
     return None
 
 
+def mode_valid(field: str) -> bool:
+    """v255 ``parse_mode`` after the ``~``/``:`` prefixes: octal, at most 07777, no sign."""
+    match = _MODE.fullmatch(field)
+    return bool(match) and int(match.group(1), 8) <= 0o7777
+
+
+def age_status(field: str) -> str:
+    """Classify an age field as ``valid``, ``invalid`` or ``uncertain`` (v255 ``parse_sec`` with prefixes).
+
+    Only forms checked against the reference binary are classed; anything else is ``uncertain`` so a line
+    that systemd might reject never silently takes a path's slot.
+    """
+    text = field[1:] if field.startswith('~') else field
+    if ':' in text:
+        by, text = text.split(':', 1)
+        if not _AGE_BY.fullmatch(by):
+            return 'invalid'
+    if text == 'infinity' or _AGE.fullmatch(text):
+        return 'valid'
+    if text == '' or text.startswith(('-', '~')) or not any(ch.isdigit() for ch in text):
+        return 'invalid'
+    return 'uncertain'
+
+
+def owner_resolved(field: str) -> bool:
+    """Whether a user or group field resolves without the host's NSS (``-``, ``root`` or a plain id)."""
+    if field in ('', '-', 'root'):
+        return True
+    return bool(_ID.fullmatch(field)) and int(field) < 4294967295 and int(field) != 65535
+
+
 def _decode(path: str, text: Any, gaps: list[dict[str, Any]]) -> str | None:
     if isinstance(text, bytes):
         if len(text) > MAX_TEXT:
@@ -407,11 +455,22 @@ def _parse_line(source: str, number: int, line: str, gaps: list[dict[str, Any]])
         return None
     action, path = words[0], words[1]
     modifiers = action[1:]
-    if any(m not in KNOWN_MODIFIERS for m in modifiers):
+    if any(m not in KNOWN_MODIFIERS for m in modifiers) or len(set(modifiers)) != len(modifiers):
         if writing:
             _gap(gaps, 'modifier_unsupported', source, number,
                  f'systemd 255 rejects modifiers {modifiers!r}; newer releases may accept them.')
         return None
+    fields = list(words[2:6]) + ['-'] * (6 - len(words))
+    mode, user, group, age = fields[:4]
+    if (mode not in ('', '-') and not mode_valid(mode)) or (age not in ('', '-') and age_status(age) == 'invalid'):
+        return None  # systemd logs "Invalid mode" or "Invalid age" and the line never takes the path's slot
+    conditional = []
+    if not owner_resolved(user) or not owner_resolved(group):
+        conditional.append('owner_unresolved')
+    if age not in ('', '-') and age_status(age) == 'uncertain':
+        conditional.append('age_unmodelled')
+    if base == 'C':
+        conditional.append('copy_source_unobserved')
     path, path_other = _specifiers(path)
     if not path.startswith('/'):
         return None
@@ -422,18 +481,21 @@ def _parse_line(source: str, number: int, line: str, gaps: list[dict[str, Any]])
         'glob': base in GLOB_TYPES and any(ch in _GLOB for ch in path),
         'fields': tuple(words[2:6]), 'argument': None, 'argument_other_specifier': False,
         'credential': '^' in modifiers, 'path_specifier_unresolved': path_other,
+        'conditional': tuple(conditional),
     }
     if '..' in path.split('/'):
         item['refused'] = 'path_not_normalized'
     argument = None if rest in ('', '-') else rest
     if argument is not None and base in WRITING:
-        expanded, other = _specifiers(argument)
         try:
-            text = cunescape(expanded)
+            unescaped = cunescape(argument)
         except _Unparsed as exc:
             # systemd rejects the line too, but an escape this parser does not model must not hide a write.
             _gap(gaps, 'line_unparsed', source, number, f'The argument could not be unescaped ({exc}).')
             return None
+        # v255 specifier_expansion_from_arg unescapes first and then expands specifiers, so "\x25H" is
+        # the host name. Base64 ("~") arguments are not expanded.
+        text, other = (unescaped, False) if '~' in modifiers else _specifiers(unescaped)
         data = text.encode('utf-8', 'surrogatepass')
         if '~' in modifiers:
             try:
@@ -452,18 +514,18 @@ def _identical(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return (a['fields'], a['argument']) == (b['fields'], b['argument'])
 
 
-def _admit(existing: list[dict[str, Any]], item: dict[str, Any]) -> bool:
-    """Return whether systemd keeps ``item`` after the earlier items for the same path."""
+def _blocker(existing: list[dict[str, Any]], item: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the earlier item for the same path that makes systemd drop ``item``, or ``None``."""
     for old in existing:
         if _identical(old, item):
             continue
         if item['type'] in OWNERSHIP and old['type'] in OWNERSHIP:
-            return False
+            return old
         if ('w' in (item['type'], old['type']) and item['type'] in WRITE_BLOCKERS
                 and old['type'] in WRITE_BLOCKERS):
             if not (old['type'] == item['type'] == 'w' and old['plus'] and item['plus']):
-                return False
-    return True
+                return old
+    return None
 
 
 def _program(kind: str, value: str) -> tuple[bool, str | None]:
@@ -488,6 +550,8 @@ def _public(item: dict[str, Any]) -> dict[str, Any]:
     out['argument'] = _argument(item['argument'])
     if item['credential']:
         out['credential'] = True
+    if item['conditional']:
+        out['conditional'] = list(item['conditional'])
     return out
 
 
@@ -525,8 +589,14 @@ def resolve(files: Any) -> dict[str, Any]:
                 continue
             table = globs if item['type'] in GLOB_TYPES else exact
             existing = table.setdefault(item['path'], [])
-            if not _admit(existing, item):
+            blocker = _blocker(existing, item)
+            if blocker is not None:
                 duplicates += 1
+                if blocker['conditional'] and item['type'] in WRITING:
+                    _gap(gaps, 'line_validity_unresolved', item['source'], item['line'],
+                         f'This line is dropped as a duplicate of {blocker["source"]}:{blocker["line"]}, but '
+                         f'systemd rejects that line when {"/".join(blocker["conditional"])} fails on the host, '
+                         'and then this line applies.')
                 continue
             existing.append(item)
         if budget < 0:
@@ -567,6 +637,10 @@ def resolve(files: Any) -> dict[str, Any]:
             if item['argument_other_specifier']:
                 _gap(gaps, 'argument_specifier_unresolved', item['source'], item['line'],
                      'The value uses a host-dependent specifier.')
+            if item['conditional']:
+                _gap(gaps, 'line_validity_unresolved', item['source'], item['line'],
+                     f'systemd rejects this line when {"/".join(item["conditional"])} fails on the host, '
+                     'so whether it writes the setting is not determined.')
             hook['writers'].append(public)
         location = startup_location(item['path'], item['glob'])
         if location is not None:

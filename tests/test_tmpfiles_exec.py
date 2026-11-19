@@ -218,3 +218,72 @@ def test_result_lists_unobserved_and_never_authorizes():
     assert result['complete'] is True
     assert result['unobserved'] and 'safety verdict' in result['not_a_verdict']
     assert 'authorized' not in str(result).lower()
+
+
+CORE = '/proc/sys/kernel/core_pattern'
+EVIL = f'w {CORE} - - - - |/tmp/evil\n'
+
+
+def test_invalid_mode_or_age_line_never_takes_the_slot():
+    # Observed with systemd-tmpfiles 255.4-1ubuntu8.18 --root --create --boot: "Invalid mode '9999'" and
+    # "Invalid age 'abc'" reject line 1, so the kernel gets |/tmp/evil.
+    for fields in ('9999 - - -', '~ - - -', '+644 - - -', '010000 - - -', '- - - abc', '- - - x:10d',
+                   '- - - a:~1d'):
+        text = f'w {CORE} {fields} |/usr/share/apport/apport\n' + EVIL
+        result = te.resolve([conf('/etc/tmpfiles.d/a.conf', text)])
+        core = hook(result, 'core_pattern')
+        assert core['program'] == '/tmp/evil', fields
+        assert result['complete'] is True and result['lines_rejected'] == 1, fields
+    for fields in ('644 - - -', '~:644 - - -', '07777 - - -', '- 0 0 -', '- root root -', '- - - ~a:10d',
+                   '- - - 1h30min', '- - - infinity'):
+        text = f'w {CORE} {fields} |/usr/share/apport/apport\n' + EVIL
+        result = te.resolve([conf('/etc/tmpfiles.d/a.conf', text)])
+        assert hook(result, 'core_pattern')['program'] == '/usr/share/apport/apport', fields
+        assert result['complete'] is True and result['lines_duplicate'] == 1, fields
+
+
+def test_host_resolved_owner_shadowing_a_write_is_a_blocking_gap():
+    # systemd rejects line 1 when the user does not resolve ("Failed to resolve user 'nosuchuser9'"),
+    # so the effective value depends on the host's NSS and must not be reported as complete.
+    for fields in ('- nosuchuser9 - -', '- - nosuchgroup -', '- 65535 - -', '- - - 1e3'):
+        text = f'w {CORE} {fields} |/usr/share/apport/apport\n' + EVIL
+        result = te.resolve([conf('/etc/tmpfiles.d/a.conf', text)])
+        codes = [g['code'] for g in result['gaps']]
+        assert result['complete'] is False, fields
+        assert codes.count('line_validity_unresolved') == 2, fields
+        dropped = [g for g in result['gaps'] if g['code'] == 'line_validity_unresolved' and g['line'] == 2]
+        assert dropped and 'a.conf:1' in dropped[0]['detail']
+        assert hook(result, 'core_pattern')['last_writer']['conditional']
+
+
+def test_conditional_copy_shadowing_a_startup_write_is_a_blocking_gap():
+    text = 'C /etc/ld.so.preload\nL /etc/ld.so.preload - - - - /tmp/evil.so\n'
+    result = te.resolve([conf('/etc/tmpfiles.d/a.conf', text)])
+    assert result['complete'] is False
+    assert any(g['code'] == 'line_validity_unresolved' and g['line'] == 2 for g in result['gaps'])
+    assert result['startup_writes'][0]['conditional'] == ['copy_source_unobserved']
+
+
+def test_arguments_are_unescaped_before_specifier_expansion():
+    # The binary wrote "|/tmp/<hostname>" for "\x25H" and "|/tmp/%" for "\x25\x25".
+    result = te.resolve([conf('/etc/tmpfiles.d/a.conf', f'w {CORE} - - - - |/tmp/\\x25H\n')])
+    assert result['complete'] is False
+    assert any(g['code'] == 'argument_specifier_unresolved' for g in result['gaps'])
+    result = te.resolve([conf('/etc/tmpfiles.d/a.conf', f'w {CORE} - - - - |/tmp/\\x25\\x25\n')])
+    assert hook(result, 'core_pattern')['last_writer']['argument']['text'] == '|/tmp/%'
+    assert result['complete'] is True
+    encoded = base64.b64encode(b'|/tmp/%H').decode()
+    result = te.resolve([conf('/etc/tmpfiles.d/a.conf', f'w~ {CORE} - - - - {encoded}\n')])
+    assert hook(result, 'core_pattern')['last_writer']['argument']['text'] == '|/tmp/%H'
+    assert result['complete'] is True
+
+
+def test_e_line_blocks_write_and_repeated_modifiers_are_rejected():
+    text = f'e {CORE} - - - -\nw+ {CORE} - - - - |/tmp/evil\n'
+    result = te.resolve([conf('/etc/tmpfiles.d/a.conf', text)])
+    assert hook(result, 'core_pattern')['writers'] == []
+    result = te.resolve([conf('/etc/tmpfiles.d/a.conf', f'w++ {CORE} - - - - |/tmp/evil\n')])
+    assert hook(result, 'core_pattern')['writers'] == []
+    assert any(g['code'] == 'modifier_unsupported' for g in result['gaps'])
+    result = te.resolve([conf('/etc/tmpfiles.d/a.conf', f'w+- {CORE} - - - - |/tmp/ok\n')])
+    assert hook(result, 'core_pattern')['program'] == '/tmp/ok'
