@@ -45,6 +45,46 @@ def test_ci_apt_preserves_signed_sources_and_is_idempotent(tmp_path, existing_so
         assert not any(path in first for path in paths)
 
 
+def test_ci_apt_routes_regional_ec2_mirror_to_primary_archive(tmp_path):
+    """Issue #1166: hosted runners also list a regional EC2 mirror that stalled setup."""
+    root = tmp_path / 'apt'
+    (root / 'sources.list.d').mkdir(parents=True)
+    mirrors = ('http://azure.archive.ubuntu.com/ubuntu\tpriority:1\n'
+               'http://us-east-2.ec2.archive.ubuntu.com/ubuntu\tpriority:2\n'
+               'https://eu-west-1.ec2.archive.ubuntu.com/ubuntu\tpriority:3\n'
+               'http://archive.ubuntu.com/ubuntu\tpriority:4\n'
+               'http://ec2.archive.ubuntu.com.example.net/ubuntu\tpriority:5\n')
+    (root / 'apt-mirrors.txt').write_text(mirrors)
+    sources = ('Types: deb\nURIs: mirror+file:/etc/apt/apt-mirrors.txt\n'
+               'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n\n'
+               'Types: deb\nURIs: http://us-east-2.ec2.archive.ubuntu.com/ubuntu\n'
+               'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n')
+    (root / 'sources.list.d' / 'ubuntu.sources').write_text(sources)
+    binary = tmp_path / 'bin'
+    binary.mkdir()
+    sudo = binary / 'sudo'
+    sudo.write_text('#!/bin/sh\nexec "$@"\n')
+    sudo.chmod(0o755)
+    env = {**os.environ, 'PATH': str(binary) + os.pathsep + os.environ['PATH'],
+           'MRPATCHY_CI_APT_ROOT': str(root)}
+    subprocess.run(['bash', str(SCRIPT)], env=env, check=True)
+    first = (root / 'apt-mirrors.txt').read_text()
+    assert first == ('https://archive.ubuntu.com/ubuntu\tpriority:1\n'
+                     'https://archive.ubuntu.com/ubuntu\tpriority:2\n'
+                     'https://archive.ubuntu.com/ubuntu\tpriority:3\n'
+                     'http://archive.ubuntu.com/ubuntu\tpriority:4\n'
+                     # Only the Ubuntu-operated ec2.archive host is rewritten.
+                     'http://ec2.archive.ubuntu.com.example.net/ubuntu\tpriority:5\n')
+    assert 'ec2.archive.ubuntu.com/ubuntu' not in first
+    rewritten = (root / 'sources.list.d' / 'ubuntu.sources').read_text()
+    assert rewritten == sources.replace('http://us-east-2.ec2.archive.ubuntu.com/ubuntu',
+                                        'https://archive.ubuntu.com/ubuntu')
+    assert rewritten.count('Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg') == 2
+    subprocess.run(['bash', str(SCRIPT)], env=env, check=True)
+    assert (root / 'apt-mirrors.txt').read_text() == first
+    assert (root / 'sources.list.d' / 'ubuntu.sources').read_text() == rewritten
+
+
 def test_browser_dependency_install_retries_bounded_attempts():
     import yaml
     workflow = yaml.safe_load((SCRIPT.parents[1] / 'workflows' / 'ci.yml').read_text())
