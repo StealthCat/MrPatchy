@@ -3707,8 +3707,25 @@ legacy per-purpose ceiling, including the fixed 10/hour automatic-plan allowance
   proposal, four concurrent startups applying once, the stale-revision refusal and
   controller startup. The startup case fails without the hook. The standalone
   worker hook has no dedicated test.
-- **Still open:** an in-app notification for the migration and the broader
-  shared-controls acceptance.
+- **Still open:** the broader shared-controls acceptance; the migration notification is addressed below.
+
+### Legacy AI admission migration notifications — worker checkpoint #1178
+
+The #1039 "still open" in-app notification is delivered. `app/ai_control_migration.py`
+now publishes admin-only events (source `ai-admission`, deep link `#settings/ai`):
+- **Migrated:** one `info` record naming the new shared rate, written in the same
+  transaction as the migration and its audit row. Restarts add nothing.
+- **Refused:** when the proposal would expand admission or spend, one `medium` event
+  says the hidden legacy allowances remain and that nothing was changed. Repeated
+  refused startups publish no new revision. Each `collect_alerts` pass keeps it active
+  while the stored configuration still has no `ai_control_mode`, and resolves it once
+  an administrator saves an explicit mode or a later startup migrates.
+- **Unchanged:** a rejected notification payload never blocks or rolls back the
+  migration. No schema, admission, spend, pause, role or response-authorization
+  change; no provider call; no SMTP/webhook alert.
+- **Validation:** `tests/test_ai_control_migration_notifications.py`; three of its
+  five cases fail without the change.
+- **Still open:** the broader shared-controls acceptance.
 
 ### Refuse unconfirmed AI admission/spend expansions on save — worker checkpoint #881
 
@@ -11364,7 +11381,16 @@ Administrators can now set how many failed delivery attempts trigger the admin-o
 - **Producer:** `failing_count` and the reason text use the saved threshold. Saving never sends, retries, acknowledges or resolves an alert, and it publishes nothing by itself. The next `collect_alerts` pass re-evaluates the event. Raising the threshold above every failing alert resolves an active event. If the event is already active and the threshold changes, the reason text (now naming the new count) adds one unread revision.
 - **Page:** the status line and the failing count on the Alert delivery page use the saved threshold instead of a fixed "three".
 - **Unchanged:** schema, roles, delivery and backoff, the unreadable-configuration path, admission and response authorization.
-- **Remaining:** the page lists only the 200 most recent alerts that the existing route returns.
+- **Remaining:** ~~the page lists only the 200 most recent alerts that the existing route returns.~~ Addressed by the #1180 worker checkpoint below.
+
+### Every undelivered alert on the Alert delivery page — worker checkpoint #1180
+
+The Alert delivery page used to filter open, undelivered alerts in the browser from `GET /api/operations/alerts`, which returns only the 200 newest alerts of any state. With more than 200 newer delivered, acknowledged or resolved alerts, an older open alert that was still failing delivery disappeared from the page. Its failing count could then disagree with the admin `alert-delivery` notification, which counts every alert.
+
+- **API:** new admin-only, read-only `GET /api/operations/alert-delivery/pending?offset=N`. It returns open, undelivered alerts newest first, 50 per page, without the alert message. It also returns server-side `total` and `failing` counts across every such alert, using the saved threshold (`failed_attempts`). `offset` must be from 0 to 1,000,000.
+- **Page:** the status line and failing count use the server counts. The list shows "Showing A–B of N, newest first" with **Previous alerts** and **Next alerts**. Paging replaces only the alert list and moves focus to its heading, so unsaved threshold input survives. A late page response is discarded if a newer page was requested or the administrator left the page.
+- **Unchanged:** `GET /api/operations/alerts` and the Operations panel, delivery, retries and backoff, acknowledgement, the notification producer, schema, roles, admission and response authorization. The page still never sends, retries or acknowledges anything.
+- **Remaining:** none for the page's list scope. Acknowledgement stays in the Operations panel, which still lists the 200 newest alerts.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 
@@ -11523,7 +11549,18 @@ Two re-enable paths published `overdue` straight away when the scheduler was hel
 - **No upgrade delay:** a server never seen inactive has no marker, so existing and continuously active servers keep the #816 schedule after upgrade.
 - **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
-- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
+- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope. (The grace became configurable in #1182.)
+
+### Configurable grace before scheduled-scan coverage notifications — worker checkpoint #1182
+
+Checkpoints #883 and #1043 left the one-hour grace fixed. A server that planned maintenance or slow workers routinely hold past its scan interval could only avoid repeated `overdue` or `stalled` events by turning scheduled scanning off.
+
+- **Change:** the server's Scheduled scanning policy accepts `notify_grace_hours`, an integer from 1 to 168 (default 1). Other values are rejected with 422. The policy GET default includes it, and the Security tab's Scheduled scanning form shows and saves it.
+- **Producer:** `overdue`, `stalled`, the never-scanned `enabled_since` wait, the #883 legacy marker wait and the #1043 resume clock all use the interval plus the configured grace. A missing, malformed or out-of-range stored value keeps one hour, so existing policies keep the #816 schedule after upgrade.
+- **Reason text:** with the default grace the reason is byte-identical to before, so existing events gain no unread revision on upgrade. A non-default grace names its hours in the `overdue` and `stalled` reasons, and changing the grace while an event is active adds one revision.
+- **Unchanged:** the scheduler, scan intervals, `security_coverage.assessment` and the coverage page, `failed` and `incomplete`, payload shape, roles (admin-only save, unchanged route dependency), the schema and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** seven focused tests in `tests/test_scan_coverage_grace.py` fail on main `c22fb68` and pass after the change, alongside the existing coverage-notification tests. `tests/ui_security.cjs` checks that a legacy policy shows one hour and that the saved value is sent.
+- **Remaining:** a server disabled and re-enabled between two alert ticks is still never seen inactive. YARA schedules remain out of scope.
 
 ### XDG autostart contract — worker checkpoint #889 (roadmap F)
 

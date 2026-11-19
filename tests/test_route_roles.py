@@ -193,6 +193,7 @@ EXPECTED_ROLES = {
     ('POST','/api/notifications/{event_id}/restore'):'self-service',
     ('POST','/api/notifications/read-batch'):'self-service',
     ('GET','/api/operations/alerts'):'admin',
+    ('GET','/api/operations/alert-delivery/pending'):'admin',
     ('POST','/api/operations/alerts/{alert_id}/ack'):'admin',
     ('POST','/api/operations/jobs/{job_id}/cancel'):'admin',
     ('POST','/api/operations/jobs/{job_id}/reconcile'):'admin',

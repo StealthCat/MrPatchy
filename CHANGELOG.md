@@ -1,3 +1,15 @@
+## 1.75.63 — 2026-11-19
+
+1. [PR #1183](https://github.com/StealthCat/MrPatchy/pull/1183): Administrators can configure the scheduled-scan coverage-notification grace per server (1–168 hours, default one hour). Overdue and stalled notices now use the scan interval plus that grace, and the Security tab exposes the setting. Existing policies retain the one-hour threshold and byte-identical default notice text; no schema, scheduler, scan assessment, role or response-authorization changes. Limit: a disable/re-enable cycle between alert ticks remains undetected, and YARA schedules remain out of scope.
+
+## 1.75.62 — 2026-11-19
+
+1. [PR #1179](https://github.com/StealthCat/MrPatchy/pull/1179): Administrators now receive an admin-only in-app notification when startup migrates never-reviewed legacy AI admission controls to the shared smooth rate, or refuses a proposal that would expand admission or spend. A refusal remains visible until an explicit mode is stored, and rejected notification payloads do not block migration. Compatibility: no schema or configuration change; installations migrated earlier get no retroactive event. No admission, spend, pause, role, provider-call, SMTP/webhook or response-authorization behavior changes. Limit: the broader shared-controls acceptance remains open, and notices use the existing notifications UI.
+
+## 1.75.61 — 2026-11-19
+
+1. [PR #1181](https://github.com/StealthCat/MrPatchy/pull/1181): Activity → Alert delivery now lists all open, undelivered alerts in 50-item pages with server-side totals and failure counts, including older alerts outside the existing 200-item Operations list. Adds an admin-only, read-only pending-alert endpoint; paging preserves unsaved threshold input and ignores stale responses. Compatibility: additive endpoint; existing Operations acknowledgement list remains capped at 200, and no schema, role, delivery, retry, or response-authorization behavior changes. Limit: acknowledgement remains in Operations.
+
 ## 1.75.60 — 2026-11-19
 
 1. [PR #1173](https://github.com/StealthCat/MrPatchy/pull/1173): Administrators can set the failed-delivery notification threshold (1–20 attempts, default 3) from Activity → Alert delivery. The saved setting is audited and kept separate from encrypted delivery credentials; threshold changes do not send, retry, acknowledge or resolve alerts. Compatibility: additive; existing behavior stays at 3 until changed, with no schema or role change. Limit: the page still lists the 200 most recent alerts.
