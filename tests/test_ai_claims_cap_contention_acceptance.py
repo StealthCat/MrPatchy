@@ -12,7 +12,9 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -68,14 +70,18 @@ def evidence(name):
     return {'executable': '/srv/' + name, 'sha256': 'a' * 64, 'uid': '1000', 'identity_verified': True}
 
 
-def seed(backlog, calls, mode='daily_cap'):
+def seed(backlog, calls, mode='daily_cap', *, utc_now=None):
     """backlog maps host id to its number of eligible subjects; the cap admits `calls`."""
+    utc_now = datetime.now(timezone.utc) if utc_now is None else utc_now
+    # Each test asserts behavior within one window. Keep its clock well away
+    # from local midnight, and store the choice so child workers share it.
+    budget_timezone = 'UTC' if 6 <= utc_now.hour < 18 else 'Pacific/Honolulu'
     with Session() as s:
         s.merge(Setting(key='config', value={
             'ai_enabled': True, 'ai_model': MODEL, 'ai_hourly_limit': 1000,
             'ai_control_mode': mode, 'ai_rate_per_hour': 1000,
             # Half a call of headroom over K calls: K fit, K + 1 does not.
-            'ai_daily_cap_usd': float(CALL * calls + CALL / 2), 'ai_budget_timezone': 'UTC'}))
+            'ai_daily_cap_usd': float(CALL * calls + CALL / 2), 'ai_budget_timezone': budget_timezone}))
         s.merge(Setting(key='openai_key', value={'encrypted': seal('private-key')}))
         first_seen = 1
         for host_id, count in backlog.items():
@@ -87,6 +93,22 @@ def seed(backlog, calls, mode='daily_cap'):
                 s.add(Behavior(id=name, host_id=host_id, first_seen=first_seen, evidence=evidence(name)))
                 first_seen += 1
         s.commit()
+
+
+@pytest.mark.usefixtures('priced')
+def test_contention_budget_window_stays_open_at_utc_midnight(admin, monkeypatch):
+    before_midnight = datetime(2026, 11, 18, 23, 59, 59, tzinfo=timezone.utc)
+    started = before_midnight.timestamp()
+    monkeypatch.setattr(ai_budget, 'time', SimpleNamespace(time=lambda: started))
+    seed({}, 1, utc_now=before_midnight)
+    ai_budget.reserve({'model': MODEL, 'input': 'fixture', 'max_output_tokens': 100})
+
+    with Session() as s:
+        before = ai_budget.status(s, now=started)
+        after = ai_budget.status(s, now=started + 2)
+    assert Decimal(before['counted_usd']) == CALL
+    assert Decimal(after['counted_usd']) == CALL
+    assert before['next_reset'] == after['next_reset']
 
 
 def outcome():
