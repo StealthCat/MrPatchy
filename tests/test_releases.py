@@ -4,10 +4,12 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 import uuid
+
+import httpx
 import pytest
 from app import ai_runs,releases,worker,ssh
 from app.db import Session,Host,Job,Setting
-from app.security import unseal
+from app.security import seal,unseal
 from target import release
 
 
@@ -149,7 +151,6 @@ def test_missing_previously_accepted_receipt_never_replays(admin,monkeypatch):
 
 def test_ai_blocks_secrets_before_api_call(admin,monkeypatch):
     with Session() as s:
-        from app.security import seal
         s.add(Setting(key='openai_key',value={'encrypted':seal('fixture')}))
         s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'configured-model'}));s.commit()
         monkeypatch.setattr(releases.ai.transport,'post',lambda *a,**k:pytest.fail('secret reached API'))
@@ -233,7 +234,8 @@ def test_package_defaults_are_read_from_deb_without_extracting_paths(tmp_path,mo
     assert not list((root/'review-download').glob('*.deb'))
 
 
-def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_path):
+@pytest.mark.parametrize('provider_result', ['success', 'refusal', 'token_limit', 'other_incomplete'])
+def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_path,provider_result):
     inv=inventory();content='old\n';sha=release.digest(content.encode());target=release.transition(inv)
     inspect={'inventory':inv,'fingerprint':release.fingerprint(inv),'target':target,'blockers':[],
              'custom_validator':True,'execution_files':{},'services':['nginx.service'],'runner_sha256':release.digest(Path(release.__file__).read_bytes())}
@@ -242,14 +244,51 @@ def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_
         monkeypatch.setattr(releases.apt,'DATA',tmp_path)
         monkeypatch.setattr(releases,'simulate',lambda *a:(tmp_path,tmp_path/'apt.conf',{'/etc/apt/sources.list':'deb https://deb.debian.org/debian trixie main\n'},[],[{'action':'install','package':'nginx','version':'2'}]))
         monkeypatch.setattr(releases,'vendor_files',lambda *a:{'/etc/nginx/nginx.conf':'vendor\n'})
-        monkeypatch.setattr(releases,'ai_review',lambda *a,**kw:{'content':'merged\n','reason':'Preserve local intent with new syntax','blockers':[]})
+        provider_only_text = 'private refusal /srv/provider-only-marker'
+        if provider_result == 'success':
+            monkeypatch.setattr(releases,'ai_review',lambda *a,**kw:{'content':'merged\n','reason':'Preserve local intent with new syntax','blockers':[]})
+        else:
+            s.merge(Setting(key='config', value={'ai_enabled':True, 'ai_model':'fixture-model'}))
+            s.merge(Setting(key='openai_key', value={'encrypted':seal('fixture-key')}))
+            s.commit()
+            if provider_result == 'refusal':
+                response = {'status':'completed','output':[{'content':[
+                    {'type':'refusal','refusal':provider_only_text}]}]}
+            else:
+                reason = 'max_output_tokens' if provider_result == 'token_limit' else 'other'
+                response = {'status':'incomplete','incomplete_details':{'reason':reason}}
+            monkeypatch.setattr(releases.ai.transport,'post',lambda *a,**k:
+                httpx.Response(200,json=response,request=httpx.Request('POST',releases.ai.URL)))
         def call(host,req,**kw):
             if req['action']=='release-inspect':return inspect
             assert req['action']=='release-configs'
             return {'configs':{'/etc/nginx/nginx.conf':{'package':'nginx','content':content,'sha256':sha,'uid':0,'gid':0,'mode':0o644}}}
         monkeypatch.setattr(ssh,'call',call)
-        assert releases.build(s,h,row.id)['state']=='ready'
+        outcome = releases.build(s,h,row.id)
         plan=releases.body(row)
+        if provider_result != 'success':
+            assert outcome['state'] == row.state == 'blocked'
+            assert plan['edits'] == [] and plan['reviews'] == []
+            assert 'review_progress' not in plan
+            [blocker] = plan['blockers']
+            assert outcome['blockers'] == [blocker]
+            s.rollback()
+            run = s.query(ai_runs.AIRun).filter_by(purpose='release_configuration',subject=row.id).one()
+            assert run.state == 'error' and run.calls == 1
+            assert s.query(ai_runs.AICall).filter_by(run_id=run.id).count() == 1
+            assert run.message == blocker
+            failed = s.query(ai_runs.AIEvent).filter_by(run_id=run.id,stage='failed').one()
+            assert failed.message == blocker and provider_only_text not in blocker
+            if provider_result == 'other_incomplete':
+                assert blocker == ('OpenAI did not complete the structured response. '
+                                   'No partial assessment was accepted; retry or review the model configuration.')
+            else:
+                assert 'No configuration review was accepted.' in blocker
+                assert 'may be billed' in blocker and 'manually' in blocker
+                reason = 'model refused' if provider_result == 'refusal' else 'response token budget'
+                assert reason in blocker
+            return
+        assert outcome['state']=='ready'
         assert plan['edits'][0]['after']=='merged\n'
         assert '-old\n+merged\n' in plan['edits'][0]['diff']
         assert plan['configs'][0]['sha256']==sha
