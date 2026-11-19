@@ -1,8 +1,10 @@
 """Known-good cache miss explanations (roadmap B slice, issue #763)."""
+import re
+
 import pytest
 from sqlalchemy import select
 
-from app import ai, ai_assessments, ai_runs, known_good, worker
+from app import ai, ai_assessments, ai_runs, file_status, known_good, worker
 from app.db import Behavior, Host, Session, Setting
 from app.security import seal
 from tests.test_known_good import complete, retained, sha
@@ -71,6 +73,17 @@ def run_events():
             select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id == run.id))]
 
 
+def assert_file_provenance_timing(events, outcome):
+    timings = [message for stage, message in events if stage == 'timing_file_provenance']
+    assert len(timings) == 1
+    assert re.fullmatch(r'file provenance: [0-9]+\.[0-9]{3} ms; outcome=' + outcome, timings[0])
+    with Session() as s:
+        summary = ai_runs.triage_timing_summary(s, 1)['stages']['file_provenance']
+    assert summary['samples'] == 1
+    assert summary['errors'] == (outcome == 'error')
+    assert summary['p50_ms'] == summary['p95_ms'] >= 0
+
+
 def test_worker_records_miss_reason_before_paid_investigation(client, monkeypatch):
     seed()
     monkeypatch.setattr(ai, 'investigate', lambda *a, **k: {
@@ -78,6 +91,7 @@ def test_worker_records_miss_reason_before_paid_investigation(client, monkeypatc
         'recommended_checks': 'Continue deterministic monitoring', 'requested_checks': []})
     worker.investigate_one()
     events = run_events()
+    assert_file_provenance_timing(events, 'complete')
     assert ('known_good_lookup', known_good.MISS_TEXT['no_candidate']) in events
     with Session() as s:
         behavior = s.get(Behavior, 'behavior-two')
@@ -93,7 +107,32 @@ def test_worker_records_no_miss_event_on_a_cache_hit(client, monkeypatch):
         s.add(source); known_good.publish(s, source); s.commit()
     monkeypatch.setattr(ai, 'investigate', lambda *a, **k: pytest.fail('cache hit called provider'))
     worker.investigate_one()
-    assert not [event for event in run_events() if event[0] == 'known_good_lookup']
+    events = run_events()
+    assert_file_provenance_timing(events, 'complete')
+    assert not [event for event in events if event[0] == 'known_good_lookup']
+
+
+def test_failed_provenance_preparation_records_one_redacted_error(client, monkeypatch):
+    seed()
+
+    def fail(*args, **kwargs):
+        raise RuntimeError('fixture error /private/artifact private-key')
+
+    monkeypatch.setattr(file_status, 'before_ai', fail)
+    monkeypatch.setattr(ai, 'investigate', lambda *a, **k: pytest.fail('preparation failure called provider'))
+    worker.investigate_one()
+    events = run_events()
+    assert_file_provenance_timing(events, 'error')
+    assert not [stage for stage, _ in events if stage in ('known_good_lookup', 'timing_known_good_lookup')]
+    with Session() as s:
+        behavior = s.get(Behavior, 'behavior-two')
+        assert behavior.verdict == 'error'
+        run = s.scalar(select(ai_runs.AIRun).where(ai_runs.AIRun.subject == 'behavior-two'))
+        assert run.state == 'error' and run.calls == 0
+        stored = [behavior.analysis or '', run.message or ''] + [message or '' for _, message in events]
+    # The exception text names a path and a secret; neither may be persisted.
+    for text in stored:
+        assert '/private/artifact' not in text and 'private-key' not in text, text
 
 
 def test_miss_diagnostic_failure_never_fails_triage(client, monkeypatch):
