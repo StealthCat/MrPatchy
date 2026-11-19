@@ -7,7 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
-from . import ai_budget,ai_credential_notifications,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
+from . import ai_budget,ai_control_migration,ai_credential_notifications,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
 
@@ -274,6 +274,8 @@ def collect_alerts(now=None,observing_since=None):
         # In-app only: blocked triage already shows on the Investigations status card.
         triage_block_notifications.publish(s,cfg,now)
         scoring_block_notifications.publish(s,cfg,now)
+        # In-app only: resolve a refused legacy AI admission migration once a mode is saved (#1178).
+        ai_control_migration.publish(s,now)
         from .scheduling import PatchRun
         from . import service_monitor
         from .quarantine import Quarantine

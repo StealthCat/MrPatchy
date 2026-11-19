@@ -1,3 +1,19 @@
+## 1.75.65 — 2026-11-19
+
+1. [PR #1098](https://github.com/StealthCat/MrPatchy/pull/1098): Add a pure, fail-closed systemd-tmpfiles contract for lines that write kernel execution hooks or create startup files. It reports bounded evidence, source locations, ordering and unresolved host-dependent cases. Compatibility: additive module only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: no agent collection or UI; the startup-location list is fixed, and host-dependent conditions remain explicit gaps.
+
+## 1.75.64 — 2026-11-19
+
+1. [PR #1125](https://github.com/StealthCat/MrPatchy/pull/1125): Fleet AI Activity and per-server queues show the provider retry floor after a saved model or key change, rather than a stale recovery deadline. Current-configuration failures remain blocked; schema, authorization and shared admission behavior are unchanged. Per-observation detail and broader Roadmap A acceptance remain open.
+
+## 1.75.63 — 2026-11-19
+
+1. [PR #1183](https://github.com/StealthCat/MrPatchy/pull/1183): Administrators can configure the scheduled-scan coverage-notification grace per server (1–168 hours, default one hour). Overdue and stalled notices now use the scan interval plus that grace, and the Security tab exposes the setting. Existing policies retain the one-hour threshold and byte-identical default notice text; no schema, scheduler, scan assessment, role or response-authorization changes. Limit: a disable/re-enable cycle between alert ticks remains undetected, and YARA schedules remain out of scope.
+
+## 1.75.62 — 2026-11-19
+
+1. [PR #1179](https://github.com/StealthCat/MrPatchy/pull/1179): Administrators now receive an admin-only in-app notification when startup migrates never-reviewed legacy AI admission controls to the shared smooth rate, or refuses a proposal that would expand admission or spend. A refusal remains visible until an explicit mode is stored, and rejected notification payloads do not block migration. Compatibility: no schema or configuration change; installations migrated earlier get no retroactive event. No admission, spend, pause, role, provider-call, SMTP/webhook or response-authorization behavior changes. Limit: the broader shared-controls acceptance remains open, and notices use the existing notifications UI.
+
 ## 1.75.61 — 2026-11-19
 
 1. [PR #1181](https://github.com/StealthCat/MrPatchy/pull/1181): Activity → Alert delivery now lists all open, undelivered alerts in 50-item pages with server-side totals and failure counts, including older alerts outside the existing 200-item Operations list. Adds an admin-only, read-only pending-alert endpoint; paging preserves unsaved threshold input and ignores stale responses. Compatibility: additive endpoint; existing Operations acknowledgement list remains capped at 200, and no schema, role, delivery, retry, or response-authorization behavior changes. Limit: acknowledgement remains in Operations.
