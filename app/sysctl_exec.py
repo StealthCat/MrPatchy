@@ -58,6 +58,12 @@ Fail-closed rules:
 - Glob matching is evaluated against the watched key names only; ``/proc/sys``
   is not observed, so a glob is reported as applying to a watched key whenever
   its pattern matches that key name.
+- systemd expands globs with glob(3) and ``GLOB_BRACE``. Only ``*``, ``?``
+  and bracket expressions with ``!`` negation and ranges are modelled. A glob
+  key that also uses braces, backslash escapes, ``[^`` negation or
+  ``[:class:]``/``[=x=]``/``[.x.]`` forms is never matched here: it becomes a
+  blocking ``glob_not_modelled`` gap, and every watched key without an explicit
+  entry gets the ``unmodelled_glob_may_apply`` condition.
 - Values are returned bounded with the SHA-256 of the full value. Nothing is
   labelled safe or a package default; ``origin`` is always ``not_assessed``.
 """
@@ -98,7 +104,8 @@ KERNEL_LIMITS = {'kernel/core_pattern': 127, 'kernel/modprobe': 255, 'kernel/hot
                  'kernel/poweroff_cmd': 255}
 
 BLOCKING = frozenset({'input_malformed', 'too_many_files', 'duplicate_path', 'file_unreadable', 'symlink_not_followed',
-                      'invalid_utf8', 'nul_byte', 'text_over_limit', 'too_many_assignments'})
+                      'invalid_utf8', 'nul_byte', 'text_over_limit', 'too_many_assignments',
+                      'glob_not_modelled'})
 UNOBSERVED = (
     {'code': 'kernel_command_line', 'detail': 'sysctl.<key>= parameters on the kernel command line are applied '
                                               'before systemd-sysctl and are not observed.'},
@@ -118,6 +125,9 @@ _CONTROL = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
 _EOL = re.compile(r'\r\n|\r|\n')
 _WHITESPACE = ' \t\n\r'
 _GLOB = frozenset('*?[')
+# glob(3)/GLOB_BRACE syntax that fnmatch does not reproduce: brace expansion, backslash quoting,
+# ``[^`` negation and POSIX character/equivalence/collating classes.
+_UNMODELLED_GLOB = ('{', '}', '\\', '[^', '[:', '[=', '[.')
 
 
 def _gap(gaps: list[dict[str, Any]], code: str, path: str | None = None, line: int | None = None,
@@ -168,8 +178,17 @@ def is_glob(key: str) -> bool:
     return any(c in _GLOB for c in key)
 
 
+def glob_modelled(pattern: str) -> bool:
+    """Return whether ``glob_matches`` reproduces glob(3) for this pattern."""
+    return not any(token in pattern for token in _UNMODELLED_GLOB)
+
+
 def glob_matches(pattern: str, key: str) -> bool:
-    """glob(3) over ``/proc/sys``: each path component is matched separately."""
+    """glob(3) over ``/proc/sys``: each path component is matched separately.
+
+    Patterns outside the modelled subset never match; callers report them as gaps."""
+    if not glob_modelled(pattern):
+        return False
     pattern_parts, key_parts = pattern.split('/'), key.split('/')
     return len(pattern_parts) == len(key_parts) and all(
         fnmatch.fnmatchcase(k, p) for p, k in zip(pattern_parts, key_parts))
@@ -317,6 +336,10 @@ def _parse(path: str, text: str, gaps: list[dict[str, Any]], budget: list[int]) 
             _gap(gaps, 'key_not_normalized', path, number, 'The key is too long or holds control characters.')
             continue
         key = normalize_key(key)
+        if value is not None and is_glob(key) and not glob_modelled(key):  # negative globs write nothing
+            _gap(gaps, 'glob_not_modelled', path, number,
+                 'This glob uses brace, backslash, [^ or character-class syntax that is not modelled; it may '
+                 'assign any watched key without an explicit entry.')
         if budget[0] <= 0:
             _gap(gaps, 'too_many_assignments', path, number,
                  f'More than {MAX_ASSIGNMENTS} assignments; the rest were not parsed.')
@@ -354,6 +377,8 @@ def _resolve(assignments: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Replay the ordered-hashmap semantics and return each watched key's result."""
     options: dict[str, dict[str, Any]] = {}
     history: dict[str, list[dict[str, Any]]] = {key: [] for key in WATCHED}
+    unmodelled = any(entry['value'] is not None and is_glob(entry['key'])
+                     and not glob_modelled(entry['key']) for entry in assignments)
     for entry in assignments:
         key = entry['key']
         existing = options.get(key)
@@ -404,6 +429,8 @@ def _resolve(assignments: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             result.update(state='configured', via=via, pattern=winner['key'], path=winner['path'],
                           line=winner['line'], ignore_failure=winner['ignore_failure'], executes=executes,
                           program=program, conditions=conditions, **_bounded(winner['value']))
+        if unmodelled and explicit is None:
+            result['conditions'].append('unmodelled_glob_may_apply')
         results[watched] = result
     return results
 

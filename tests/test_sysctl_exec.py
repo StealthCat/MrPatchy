@@ -203,3 +203,35 @@ def test_unreadable_file_reason_is_its_own_cause_after_gaps_cap_or_earlier_gaps(
     conf = next(x for x in r['files'] if x['path'] == '/etc/sysctl.conf')
     assert conf['status'] == 'unreadable' and conf['reason'] == 'not_regular_file'
     assert r['complete'] is False
+
+
+def test_unmodelled_glob_syntax_is_a_blocking_gap_not_a_match():
+    # Rows from the differential review against systemd-sysctl 255 (glob(3) with GLOB_BRACE).
+    for line in ('kernel.[^m]* = |/x', 'kernel.[[:lower:]]odprobe = /x', 'kernel.[[:alpha:]_]* = /x',
+                 'kernel.[![:upper:]]odprobe = /x', 'kernel.{modprobe,hotplug}* = /x', '{kernel,fs}.modprob? = /x',
+                 'kernel.{}modprobe* = /x', 'kernel.{,x}modprobe* = /x', 'kernel.[[:alpha:]* = /x',
+                 'kernel.mod\\* = /x'):
+        r = se.resolve([f('/etc/sysctl.d/10-a.conf', line + '\n')])
+        assert not r['complete'], line
+        assert [g['code'] for g in r['gaps']] == ['glob_not_modelled'], line
+        assert r['executing_keys'] == [], line
+        for k in r['keys']:
+            assert k['state'] == 'not_configured', line
+            assert 'unmodelled_glob_may_apply' in k['conditions'], line
+
+
+def test_unmodelled_glob_does_not_touch_explicit_keys_or_hide_modelled_globs():
+    r = se.resolve([f('/etc/sysctl.d/10-a.conf',
+                      'kernel.modprobe = /sbin/modprobe\nkernel.{core_pattern,x}* = |/evil\nkernel.core_patter? = core\n')])
+    assert not r['complete']
+    modprobe, core = key(r, 'kernel.modprobe'), key(r, 'kernel.core_pattern')
+    assert modprobe['via'] == 'explicit' and 'unmodelled_glob_may_apply' not in modprobe['conditions']
+    assert core['via'] == 'glob' and core['value'] == 'core'
+    assert 'unmodelled_glob_may_apply' in core['conditions']
+
+
+def test_negative_or_non_glob_keys_with_braces_are_not_gaps():
+    # A negative glob writes nothing, and a key without *?[ is an exact key in systemd.
+    r = se.resolve([f('/etc/sysctl.d/10-a.conf', '-kernel.{a,b}*\nkernel.{modprobe,hotplug} = /x\n')])
+    assert r['complete'] and r['gaps'] == []
+    assert all('unmodelled_glob_may_apply' not in k['conditions'] for k in r['keys'])
