@@ -2237,6 +2237,15 @@ open.
 
 ### Parallel execution and latency work
 
+Worker checkpoint #1163 records a separate `file_provenance` timing for the
+controller-authenticated file preparation and its transaction in process triage.
+It runs before the normal cache lookup or provider request, including when a run
+reuses a known-good result. Failed preparation records an error timing with
+elapsed time only. The existing administrator timing summary shows available
+samples and leaves percentiles empty for older runs. Fixture benchmarks retain
+the same stage in their persisted timings. Read-only admission probes and
+production throughput remain outside this measurement.
+
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run
 and persisting completed, deferred or failed outcomes for the existing five-item
 scoring batch. The same sessions still recheck current package and server evidence
