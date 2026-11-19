@@ -1,3 +1,7 @@
+## 1.75.60 — 2026-11-19
+
+1. [PR #1173](https://github.com/StealthCat/MrPatchy/pull/1173): Administrators can set the failed-delivery notification threshold (1–20 attempts, default 3) from Activity → Alert delivery. The saved setting is audited and kept separate from encrypted delivery credentials; threshold changes do not send, retry, acknowledge or resolve alerts. Compatibility: additive; existing behavior stays at 3 until changed, with no schema or role change. Limit: the page still lists the 200 most recent alerts.
+
 ## 1.75.59 — 2026-11-19
 
 1. [PR #1177](https://github.com/StealthCat/MrPatchy/pull/1177): Incident and startup advisory plan runs now retain result-persistence timing after response validation, recording elapsed milliseconds and completion or save-error outcome. Invalid responses and refusals emit no persistence timing. Compatibility: existing run-event format and retention; plan state, evidence, accounting, deferral and manual approval are unchanged. Limit: production throughput and release-plan timing remain unmeasured/out of scope.
