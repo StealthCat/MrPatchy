@@ -6546,6 +6546,31 @@ Source, scope and process data stay out of the response. No schema or agent chan
 certificate expiry, the GCP-node inventory and the unified dashboard acceptance
 remain open.
 
+### Endpoint-agent clock synchronization — worker checkpoint #342
+
+Each agent telemetry snapshot adds a version-1 `clock_sync` record. The agent
+reads the kernel clock discipline with one `adjtimex()` call with `modes=0`. This
+call is read-only: it sets no field, needs no privilege and runs no binary. The
+clock counts as `synchronized` under systemd's `ntp_synced()` rule: the kernel
+`STA_UNSYNC` flag is clear and `maxerror` is below the 16-second phase limit.
+Otherwise it is `unsynchronized`. The record also carries the kernel time state,
+the maximum and estimated error, and the offset in microseconds (nanosecond
+offsets are converted when `STA_NANO` is set). A denied, missing or malformed
+call is `unknown`, with a typed `clock-sync` gap.
+
+The endpoint-agent **Resources** column shows the clock state and its maximum
+error, plus an advisory `clock-unsynchronized` flag. The controller accepts only
+consistent records. A `synchronized` state that contradicts its own flag or error
+is shown as unknown. Like the other resource metrics, the flag never changes
+health, counts, alerts, repairs, preflight or authorization. Missing or
+future-dated telemetry shows nothing.
+
+**Limits:** this reads the kernel's own view only. It does not compare the server
+clock with the controller, identify the time source or daemon, or detect a clock
+that is disciplined to a wrong source. A service sandbox that blocks `adjtimex`
+with `EPERM` reports unknown. Certificate expiry, history and hysteresis, alert
+producers and patch/reboot preflight blockers remain open for #342.
+
 ### Expected-controller health notifications — worker checkpoint #761
 
 On the elected coordinator's tick, after the expected-worker producer, each

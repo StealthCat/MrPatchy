@@ -25,6 +25,7 @@ GAPS = [
     'Verification is a periodic read-only receipt over the management connection, not independent attestation of a compromised host.',
     'Deployment type is shown only when the retained receipt names the expected systemd unit; otherwise it is not verified.',
     'Resource metrics are the agent\'s own root file system and memory observations from the retained telemetry; they are advisory, never change the health state and are not shown when telemetry is missing or future-dated.',
+    'Clock synchronization is the kernel\'s own NTP discipline flag and error estimate read by the agent; it does not compare the server clock with the controller or name the time source, and older agents do not send it.',
     'Readiness and alerts for endpoint agents are not assessed here.',
 ]
 LOW_AVAILABLE_PERCENT = 10
@@ -70,6 +71,37 @@ def _pressure(entry):
     return round(float(value), 2)
 
 
+_CLOCK_STATES = ('synchronized', 'unsynchronized')
+_CLOCK_LIMIT = 10 ** 12
+
+
+def _microseconds(value, signed=False):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    if abs(value) > _CLOCK_LIMIT or (value < 0 and not signed):
+        return None
+    return float(value)
+
+
+def _clock(entry):
+    """Validate the agent's kernel clock-discipline record; anything inconsistent is unknown (None)."""
+    if not isinstance(entry, dict) or entry.get('state') not in _CLOCK_STATES or entry.get('unit') != 'microseconds':
+        return None
+    unsync = entry.get('kernel_unsync')
+    if not isinstance(unsync, bool):
+        return None
+    max_error = _microseconds(entry.get('max_error'))
+    estimated = _microseconds(entry.get('estimated_error'))
+    offset = _microseconds(entry.get('offset'), signed=True)
+    if max_error is None or estimated is None or offset is None:
+        return None
+    synchronized = entry['state'] == 'synchronized'
+    if synchronized and (unsync or max_error >= 16_000_000):
+        return None  # contradicts the kernel rule the agent applies
+    return {'synchronized': synchronized, 'max_error_ms': round(max_error / 1000, 3),
+            'estimated_error_ms': round(estimated / 1000, 3), 'offset_ms': round(offset / 1000, 3)}
+
+
 def _record(telemetry, key):
     record = telemetry.get(key)
     return record if isinstance(record, dict) and record.get('version') == 1 else None
@@ -82,11 +114,12 @@ def resources(telemetry, telemetry_state):
     unknown signals are ``None``. Nothing here changes the health classification.
     """
     empty = {'disk': None, 'inodes': None, 'memory': None, 'cpu_pressure_avg60': None,
-             'memory_pressure_avg60': None, 'attention': []}
+             'memory_pressure_avg60': None, 'clock': None, 'attention': []}
     if telemetry_state not in ('fresh', 'stale') or not isinstance(telemetry, dict):
         return {'state': 'unavailable', **empty}
     device, pressure = _record(telemetry, 'device_health'), _record(telemetry, 'resource_pressure')
-    if device is None and pressure is None:
+    sync = _record(telemetry, 'clock_sync')
+    if device is None and pressure is None and sync is None:
         return {'state': 'absent', **empty}
     result = {'state': 'present', **empty}
     if device is not None:
@@ -98,9 +131,13 @@ def resources(telemetry, telemetry_state):
             key: memory[key] for key in ('total', 'available', 'available_percent')}
         result['cpu_pressure_avg60'] = _pressure(pressure.get('cpu'))
         result['memory_pressure_avg60'] = _pressure(pressure.get('memory'))
+    if sync is not None:
+        result['clock'] = _clock(sync)
     for key, code in (('disk', 'disk-space-low'), ('inodes', 'disk-inodes-low'), ('memory', 'memory-low')):
         if result[key] is not None and result[key]['available_percent'] <= LOW_AVAILABLE_PERCENT:
             result['attention'].append(code)
+    if result['clock'] is not None and not result['clock']['synchronized']:
+        result['attention'].append('clock-unsynchronized')
     return result
 
 
