@@ -11609,6 +11609,13 @@ and matched production throughput remain outside this acceptance slice.
 - **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
 
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
 ### Individual anacron jobs — worker checkpoint #1156 (roadmap F)
 
 - **What it covers:** this connects the pure `app/scheduled_jobs.parse_anacrontab` contract (#711) to collection and the startup inventory. When the controller asks for parsed jobs, the agent parses `/etc/anacrontab` from exactly the bytes it hashed. For each job it reports the period (day count or `@name`), delay, job identifier, line and a bounded, redacted command. It also flags a repeated identifier, since anacron shares one timestamp file between those jobs.
