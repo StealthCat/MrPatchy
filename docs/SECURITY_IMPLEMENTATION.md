@@ -11609,6 +11609,13 @@ and matched production throughput remain outside this acceptance slice.
 - **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
 
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
 ### DNF post-transaction-actions contract — worker checkpoint #1101 (roadmap F)
 
 The dnf-plugins-core `post-transaction-actions` plugin makes root run shell commands after every RPM transaction. Each `*.action` line, `package_filter:in|out|any:command`, runs through `/bin/sh -c`, and package metadata (`$name`, `$repoid`, `$state`, …) is substituted into it without shell escaping. The startup catalog listed `/etc/dnf/plugins` as metadata only. Debian's APT (#950) and dpkg (#970) hooks were resolved, but the RPM side was not.
