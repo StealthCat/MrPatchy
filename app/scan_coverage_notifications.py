@@ -16,7 +16,8 @@ coverage page uses:
 - ``incomplete``: the receipt is missing, or it records gaps, an unavailable
   engine, stale or unverifiable signatures, or malformed coverage metadata.
 - ``overdue``: no scan has completed for longer than the configured interval
-  plus a one-hour grace period, for example because the scheduler is paused by
+  plus the notification grace period (one hour unless the policy sets
+  ``notify_grace_hours``, 1 to 168, #1182), for example because the scheduler is paused by
   a response hold, a recovery-required operation or a full queue.
 - ``stalled``: the latest scan job has been queued or running for longer than
   the configured interval plus the grace period (#839). The scheduler does not
@@ -62,6 +63,8 @@ SOURCE = 'security-scan'
 KIND = 'scheduled-scan-coverage'
 SUBJECT = 'server'
 GRACE_SECONDS = 3600
+DEFAULT_GRACE_HOURS = 1
+MAX_GRACE_HOURS = 168
 DEFAULT_INTERVAL_HOURS = 24
 CHUNK = 500
 # Server-managed first observation of an enabled, never-scanned legacy policy (#883). The prefix must not start
@@ -97,10 +100,30 @@ def _interval_hours(policy):
     return hours if type(hours) is int and 1 <= hours <= 720 else DEFAULT_INTERVAL_HOURS
 
 
+def _grace_hours(policy):
+    """Return the administrator's notification grace in hours (#1182); anything invalid keeps one hour."""
+    hours = policy.get('notify_grace_hours', DEFAULT_GRACE_HOURS)
+    return hours if type(hours) is int and 1 <= hours <= MAX_GRACE_HOURS else DEFAULT_GRACE_HOURS
+
+
+def _limit(policy):
+    """Return the configured interval plus the notification grace, in seconds."""
+    return _interval_hours(policy) * 3600 + _grace_hours(policy) * 3600
+
+
+def message(category, policy):
+    """Return the fixed reason for ``category``. The default grace keeps the original text byte for byte."""
+    text = MESSAGES[category]
+    hours = _grace_hours(policy)
+    if hours == DEFAULT_GRACE_HOURS or category not in ('stalled', 'overdue'):
+        return text
+    return text.replace('plus one hour', 'plus its %d-hour notification grace period' % hours)
+
+
 def classify(scan, attempt, policy, now):
     """Return ``'failed'``, ``'incomplete'``, ``'overdue'``, ``'stalled'``, ``'pending'`` or ``None``."""
     hours = _interval_hours(policy)
-    limit = hours * 3600 + GRACE_SECONDS
+    limit = _limit(policy)
     result = assessment(scan, attempt, now, hours * 3600)
     state = result['state']
     if state in WAITING:
@@ -213,7 +236,7 @@ def _resume_markers(session, policies, inactive, now):
             since = whole_microseconds(now)
             row.value = {'active_since': since}
         policy = policies[host_id]
-        if now - since > _interval_hours(policy) * 3600 + GRACE_SECONDS:
+        if now - since > _limit(policy):
             session.delete(row)
             continue
         enabled = policy.get('enabled_since')
@@ -267,7 +290,7 @@ def publish(session, hosts, now):
     for host_id, category in attention.items():
         notifications.publish(session, source=SOURCE, kind=KIND, subject_type=SUBJECT, subject_id=host_id,
                               host_id=host_id, subject_revision=category, severity='medium',
-                              reason=MESSAGES[category], deep_link=_link(host_id), minimum_role='admin', now=now)
+                              reason=message(category, policies[host_id]), deep_link=_link(host_id), minimum_role='admin', now=now)
     N, R = notifications.NotificationEvent, notifications.NotificationRevision
     active = session.execute(select(N.subject_id).join(R, (R.event_id == N.id) & (R.revision == N.revision)).where(
         N.source == SOURCE, N.kind == KIND, N.subject_type == SUBJECT, R.lifecycle == 'active')).scalars().all()

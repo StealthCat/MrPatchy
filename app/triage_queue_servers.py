@@ -27,7 +27,7 @@ pause, budget, schema or response authorization.
 """
 import time
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, select
 
 from . import ai_claims, ai_policy, ai_retry, ai_runs
 from .db import Behavior, Host, Setting
@@ -55,13 +55,10 @@ def status(session, now=None, limit=MAX_SERVERS):
     now = time.time() if now is None else now
     limit = max(1, min(int(limit), MAX_SERVERS))
     retry, claim = ai_retry.TriageRetry, ai_claims.Claim
-    ready = ai_retry.eligible(ai_retry.configuration(session), now)
+    signature = ai_retry.configuration(session)
+    ready = ai_retry.eligible(signature, now)
     unclaimed = claim.subject.is_(None)
-    # Same expressions as ai_runs.status(), so the rows add up to its totals.
-    blocked = and_(retry.subject.is_not(None), or_(retry.state == 'blocked', and_(
-        retry.state == 'interrupted', retry.attempts >= ai_retry.MAX_ATTEMPTS)))
-    wake = case((retry.subject.is_(None), Behavior.attempted + 3600), (retry.next_at != 0, retry.next_at),
-                else_=retry.provider_until)
+    blocked, wake = ai_retry.queue_waits(signature)
     # One ordered CASE places each row exactly once. `ready` is NULL (not false)
     # for a never-retried row inside its first hour, so negating it would drop
     # that row; falling through to the default keeps it in `retry_wait`.

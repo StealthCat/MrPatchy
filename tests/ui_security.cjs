@@ -91,7 +91,7 @@ module.exports=async(page,capture)=>{
    if(request.method()==='POST'){writes.push(url.pathname);assert.deepEqual(request.postDataJSON(),{packages:['openssh-server'],persistence:true,custom_paths:['/srv/myapp/config.json']});return route.fulfill({json:{job_id:'inspection-job'}});}
    return route.fulfill({json:{items:[{id:'inspection-job',created:Date.now()/1000,report:{state:'collected',packages:[{package:'openssh-server',state:'differences',installed_identity:'installed 1',gaps:[],findings:[{path:'/etc/ssh/sshd_config',status:'metadata_or_content_changed',checks:'??5??????',configuration_file:true}]}],persistence:{state:'collected',entries:[{path:'/etc/systemd/system/example.service',kind:'regular',sha256:'a'.repeat(64)}]}}},{id:'rpm-vendor-job',created:Date.now()/1000,report:{state:'collected',trust_basis:'controller_authenticated_rpm_artifact',packages:[],persistence:null,vendor_verification:{state:'matches_artifact_bytes',package:'Patchy_test',version:'2:1.0-1',architecture:'x86_64',examined:1,findings:[],gaps:[]},vendor_authentication:{signature_key_ids:['0123456789abcdef']}}}],more:false}});
   }
-  if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname===prefix+'/incidents/incident-fixture/plan'){assert.equal(request.postDataJSON().include_related,true);plan.content.evidence_scope={version:1,model:'fixture<script>bad()</script>',snapshot:{items:[],sources:{executions:{examined:0,more:false}},as_of:1000}};}if(url.pathname.endsWith('/policy'))assert.equal(request.postDataJSON().auto_ai_plan,true);if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve')){if(approveGate)await approveGate;plan.state='approved';}return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
+  if(['POST','PUT'].includes(request.method())){writes.push(url.pathname);if(url.pathname===prefix+'/incidents/incident-fixture/plan'){assert.equal(request.postDataJSON().include_related,true);plan.content.evidence_scope={version:1,model:'fixture<script>bad()</script>',snapshot:{items:[],sources:{executions:{examined:0,more:false}},as_of:1000}};}if(url.pathname.endsWith('/policy')){assert.equal(request.postDataJSON().auto_ai_plan,true);assert.equal(request.postDataJSON().notify_grace_hours,12);}if(url.pathname.endsWith('/incidents/incident-fixture'))incidentState=request.postDataJSON().state;if(url.pathname.endsWith('/approve')){if(approveGate)await approveGate;plan.state='approved';}return route.fulfill({json:{ok:true,job_id:'job-fixture',execution:'manual_only'}});}
   if(url.pathname.endsWith('/policy'))return route.fulfill({json:{enabled:false,interval_hours:24,paths:['/tmp']}});
   if(url.pathname===prefix)return route.fulfill({json:report});
   if(url.pathname.endsWith('/timeline'))return route.fulfill({json:{items:[{kind:'review',actor:'admin',created:Date.now()/1000,details:{reason:'Fixture reviewed'}}],more:false}});
@@ -107,6 +107,9 @@ module.exports=async(page,capture)=>{
   assert.equal(writes.length,0);
   await page.locator('#security-policy-form [name=enabled]').check();
   await page.locator('#security-policy-form [name=auto_ai_plan]').check();
+  // #1182: a legacy policy without notify_grace_hours shows the one-hour default, and the saved value is sent.
+  assert.equal(await page.locator('#security-policy-form [name=notify_grace_hours]').inputValue(),'1');
+  await page.locator('#security-policy-form [name=notify_grace_hours]').fill('12');
   await page.getByRole('button',{name:'Save scan policy',exact:true}).click();
   await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Scan policy saved'));
   assert.equal(writes.pop(),prefix+'/policy');
