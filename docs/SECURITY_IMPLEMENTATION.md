@@ -3116,6 +3116,8 @@ contention/fairness" for triage under a daily cap. Each test runs real
 `worker.investigate_one()` claims against a cap with room for exactly K calls.
 The provider is a disposable fixture.
 
+Worker checkpoint #1154 keeps the triage contention fixtures within one configured budget window when UTC midnight passes. Fixtures persist a shared timezone whose local reset is several hours away, and a deterministic reservation check confirms the counted amount and reset boundary remain stable across UTC midnight. Explicit production-reset tests continue to cover actual window changes.
+
 - **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
   each for a different subject. The suite checks:
   - Exactly K ledger rows are written, and counted spend stays within the cap.
@@ -11615,6 +11617,10 @@ from ten queries to two. Each assessment still uses the exact score identity.
 The fixture keeps an unchanged score and supersedes scores when the candidate
 or inventory changes or the package or server disappears. Independent scoring
 admission and production throughput remain open.
+
+### Scoring idle-poll preflight — Roadmap A checkpoint #1150
+
+A cold scoring pass now takes the existing lock only when an active, unpaused server has a candidate or an update-scoring run needs recovery. One read-only probe checks both conditions; the locked pass then opens a fresh session and rechecks the work. Warm passes still prune absent memo entries, and recovery still runs when scoring is disabled. Empty, paused-only and inactive-only polls use one query and skip the scoring lock. A busy cold pass adds one probe, and work arriving after a negative probe waits until the next poll. Compatibility: no schema or response-authorization change. Independent scoring admission and measured production throughput remain open.
 
 ### systemd generator contract — worker checkpoint #1151 (roadmap F)
 
