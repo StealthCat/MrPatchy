@@ -559,3 +559,48 @@ def test_resume_marker_is_removed_with_policy_or_server(admin):
     assert resume_marker() is None
     with Session() as s:
         assert s.get(Setting, 'security-policy:' + HOST).value.get('enabled') is True  # policy row untouched
+
+
+def lifecycle(client, enabled):
+    with Session() as s:
+        revision = s.get(Host, HOST).lifecycle_revision
+    response = client.put('/api/hosts/' + HOST + '/lifecycle', json={
+        'enabled': enabled, 'expected_revision': revision,
+        'reason': 'Briefly suspend server management for maintenance.'})
+    assert response.status_code == 200, response.text
+
+
+def test_disable_and_reenable_between_alert_ticks_restarts_the_resume_clock(admin):
+    # #1188: the #1043 marker was written only when a tick saw the server inactive, so a quick toggle was missed.
+    seed(interval=1)
+    now = time.time()
+    scan('old', age=2 * HOUR, signatures={'state': 'recent', 'built_at': now, 'expires': now + 60 * 24 * HOUR})
+    lifecycle(admin, False)
+    assert resume_marker() == {'inactive': True}  # recorded in the disable transaction, before any tick
+    lifecycle(admin, True)
+    set_host(state='online')
+    hold_scheduler()
+    collect()
+    assert items(admin) == []  # the two-hour-old scan does not publish overdue at once
+    marker = resume_marker()
+    assert set(marker) == {'active_since'}
+    collect(marker['active_since'] + HOUR + coverage.GRACE_SECONDS - 60)
+    assert items(admin) == []
+    collect(marker['active_since'] + HOUR + coverage.GRACE_SECONDS + 60)
+    [item] = items(admin)
+    assert item['reason'] == coverage.MESSAGES['overdue']
+    with Session() as s:
+        assert s.get(Setting, 'security-policy:' + HOST).value == {
+            'enabled': True, 'interval_hours': 1, 'paths': ['/srv']}  # policy row untouched
+
+
+def test_disable_without_an_enabled_scan_policy_writes_no_resume_marker(admin):
+    seed(enabled=False)
+    lifecycle(admin, False)
+    assert resume_marker() is None
+    with Session() as s:
+        s.delete(s.get(Setting, 'security-policy:' + HOST))
+        s.commit()
+    lifecycle(admin, True)
+    lifecycle(admin, False)
+    assert resume_marker() is None

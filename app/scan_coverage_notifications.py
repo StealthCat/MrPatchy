@@ -252,6 +252,22 @@ def _resume_markers(session, policies, inactive, now):
     return effective
 
 
+def mark_inactive(session, host_id):
+    """Record that a server with an enabled scan policy left the active set (#1188).
+
+    Called in the server-disable transaction, so a disable and re-enable between two alert ticks still restarts
+    the #1043 resume clock. The administrator's policy row is only read, never written.
+    """
+    policy = session.get(Setting, 'security-policy:' + host_id)
+    if not (policy and isinstance(policy.value, dict) and policy.value.get('enabled') is True):
+        return
+    row = session.get(Setting, RESUME_PREFIX + host_id)
+    if not row:
+        session.add(Setting(key=RESUME_PREFIX + host_id, value={'inactive': True}))
+    elif row.value != {'inactive': True}:
+        row.value = {'inactive': True}
+
+
 def _latest_attempts(session, ids):
     latest = {}
     for start in range(0, len(ids), CHUNK):
