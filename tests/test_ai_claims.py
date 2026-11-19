@@ -371,6 +371,62 @@ def test_renewal_reconciliation_and_expired_owner_cannot_release_successor(admin
     with successor:pass
 
 
+def test_idle_triage_polls_do_not_take_the_claim_lock(admin, monkeypatch):
+    seed(count=2)
+    with Session() as s:
+        s.get(Behavior, 'subject-0').verdict = 'low'
+        s.get(Behavior, 'subject-1').approved = True
+        s.add(ai_runs.AIRun(id='past-run', purpose='triage', state='complete'))
+        s.commit()
+
+    lock_calls, statements = [], []
+    original_lock = ai_claims.Lock
+
+    def observe_lock(name):
+        lock_calls.append(name)
+        return original_lock(name)
+
+    def observe_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        statements.append(statement)
+
+    monkeypatch.setattr(ai_claims, 'Lock', observe_lock)
+    event.listen(engine, 'before_cursor_execute', observe_sql)
+    try:
+        for _ in range(4):
+            assert ai_claims.acquire() is None
+    finally:
+        event.remove(engine, 'before_cursor_execute', observe_sql)
+
+    assert lock_calls == []
+    assert len(statements) == 4
+    assert all(query.lstrip().upper().startswith('SELECT') for query in statements)
+
+
+@pytest.mark.parametrize('claim_state', ['expired', 'orphaned', 'live'])
+def test_idle_triage_still_recovers_abandoned_runs(admin, claim_state):
+    seed(count=1)
+    lease = ai_claims.acquire()
+    assert lease is not None
+    with Session() as s:
+        s.get(Behavior, lease.subject).verdict = 'low'
+        claim = s.get(ai_claims.Claim, lease.subject)
+        if claim_state == 'expired':
+            claim.expires = 0
+        elif claim_state == 'orphaned':
+            s.delete(claim)
+        s.commit()
+
+    assert ai_claims.acquire() is None
+    with Session() as s:
+        claim = s.get(ai_claims.Claim, lease.subject)
+        run = s.get(ai_runs.AIRun, lease.run_id)
+        if claim_state == 'live':
+            assert claim.token == lease.token and run.state == 'running'
+        else:
+            assert claim is None and run.state == 'interrupted'
+            assert s.scalar(select(ai_runs.AIEvent.id).where(
+                ai_runs.AIEvent.run_id == run.id, ai_runs.AIEvent.stage == 'interrupted')) is not None
+
 def test_drain_blocks_new_claims_but_keeps_existing_owner_valid(admin):
     seed(count=2)
     with worker_registry.Registration() as node:
@@ -561,7 +617,7 @@ def test_staggered_waiters_reserve_after_existing_tail_with_different_clocks(adm
     with Session() as s:
         cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
         s.add(ai_retry.TriageRetry(subject='occupied-tail',configuration='sig',state='deferred',
-            attempts=0,next_at=now+7200,provider_until=0))
+            attempts=0,next_at=now+7200,provider_until=0,reason=ai_retry.RATE_WAIT_REASON))
         s.commit()
         wakes=[]
         for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
@@ -579,7 +635,7 @@ def test_provider_policy_waits_keep_exact_floor_without_rate_staggering(admin,st
     with Session() as s:
         cfg=s.get(Setting,'config');cfg.value={**cfg.value,'ai_control_mode':'rate','ai_rate_per_hour':1}
         s.add(ai_retry.TriageRetry(subject='rate-tail',configuration='sig',state='deferred',
-            attempts=0,next_at=now+7200,provider_until=0))
+            attempts=0,next_at=now+7200,provider_until=0,reason=ai_retry.RATE_WAIT_REASON))
         s.commit()
         for index,row in enumerate(s.scalars(select(Behavior).order_by(Behavior.id))):
             at=now+start_delay+index*.01

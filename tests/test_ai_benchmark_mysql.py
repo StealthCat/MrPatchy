@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -70,6 +71,30 @@ def test_the_target_url_is_read_only_from_the_environment():
     assert 'unrecognized arguments' in result.stderr
 
 
+@pytest.mark.parametrize('state', ['disconnected', 'unowned', 'reassigned'])
+def test_cleanup_refuses_to_issue_ddl_without_the_original_lock(state):
+    from sqlalchemy.exc import OperationalError
+
+    session = Mock()
+    if state == 'disconnected':
+        session.execute.side_effect = OperationalError('lock check', {}, RuntimeError(SECRET))
+    else:
+        session.execute.return_value.scalar_one.return_value = None if state == 'unowned' else 0
+    engine = Mock()
+    claim = benchmark_ai.MySQLClaim(engine, session, 'fixture-lock', 'fixture-version')
+    claim.fixture_tables.add('fixture_table')
+    with pytest.raises(benchmark_ai.DatabaseRefused, match='lock ownership could not be verified') as refusal:
+        claim.release()
+
+    statements = [str(call.args[0]) for call in session.execute.call_args_list]
+    assert statements == ['SELECT IS_USED_LOCK(:name) = CONNECTION_ID()']
+    assert SECRET not in str(refusal.value)
+    assert refusal.value.__cause__ is None
+    engine.connect.assert_not_called()
+    session.close.assert_called_once_with()
+    engine.dispose.assert_called_once_with()
+
+
 def _tables(engine):
     from sqlalchemy import text
     with engine.connect() as connection:
@@ -115,12 +140,15 @@ def test_mysql_mode_refuses_a_database_that_already_has_tables(empty_mysql):
 
 
 @needs_mysql
-def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql):
+@pytest.mark.parametrize('same_server', [False, True], ids=['cross-server', 'same-server'])
+def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql, same_server):
+    workload = ['--runs', '4', '--provider-delay-ms', '250' if same_server else '40',
+                '--ssh-delay-ms', '1', '--retained-history-rows', '25']
+    if same_server:
+        workload.append('--same-server')
     reports = []
     for concurrency in (1, 4):
-        result = run('--database', 'mysql', '--runs', '4', '--concurrency', str(concurrency),
-                     '--provider-delay-ms', '40', '--ssh-delay-ms', '1', '--retained-history-rows', '25',
-                     url=MYSQL_URL)
+        result = run('--database', 'mysql', *workload, '--concurrency', str(concurrency), url=MYSQL_URL)
         assert result.returncode == 0, result.stderr
         assert MYSQL_URL not in result.stdout and MYSQL_URL not in result.stderr
         assert _tables(empty_mysql) == []
@@ -132,11 +160,14 @@ def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(em
         assert report['runs'] == report['completed_subjects'] == 4
         assert report['provider_calls'] == 6 and report['errors'] == 0
         assert report['retained_history_rows'] == 25 and report['approved_subjects'] == 0
+        assert report['fixture_hosts'] == (1 if same_server else 4)
+        assert report['single_server_slots'] == (4 if same_server else None)
+        assert report['stages']['two_stage']['count'] == report['stages']['ssh_evidence']['count'] == 2
     assert serial['peak_provider_requests'] == 1 and parallel['peak_provider_requests'] > 1
     comparison = compare(serial, parallel)
     assert comparison['capability_equivalent'] is True
     assert comparison['baseline']['database'] == comparison['candidate']['database'] == 'mysql'
-    sqlite = run('--runs', '4', '--provider-delay-ms', '40', '--ssh-delay-ms', '1', '--retained-history-rows', '25')
+    sqlite = run(*workload)
     assert sqlite.returncode == 0, sqlite.stderr
     sqlite_report = json.loads(sqlite.stdout)
     # The same synthetic workload reaches the provider and SSH fixtures on either backend.
@@ -172,6 +203,32 @@ def test_cleanup_drops_only_fixture_tables_and_keeps_anything_else(empty_mysql, 
     with empty_mysql.connect() as connection:
         assert connection.execute(text('SELECT note FROM operator_data')).scalar_one() == 'keep me'
     assert 'left 2 table(s) or view(s) the benchmark did not create' in capsys.readouterr().err
+
+
+@needs_mysql
+def test_stale_cleanup_does_not_drop_the_next_lock_owners_table(empty_mysql):
+    from sqlalchemy import text
+
+    target = benchmark_ai.mysql_target({ENV: MYSQL_URL})
+    first = benchmark_ai.claim_empty_mysql(target)
+    first.fixture_tables.add('fixture_data')
+    first.connection.execute(text('SELECT RELEASE_LOCK(:name)'), {'name': first.lock_name})
+    first.connection.commit()
+
+    second = benchmark_ai.claim_empty_mysql(target)
+    second.fixture_tables.add('fixture_data')
+    try:
+        with empty_mysql.begin() as connection:
+            connection.execute(text('CREATE TABLE fixture_data (id INT PRIMARY KEY)'))
+            connection.execute(text('INSERT INTO fixture_data VALUES (1)'))
+        with pytest.raises(benchmark_ai.DatabaseRefused, match='cleanup skipped'):
+            first.release()
+        with empty_mysql.connect() as connection:
+            assert connection.execute(text('SELECT id FROM fixture_data')).scalar_one() == 1
+    finally:
+        second.release()
+
+    assert _tables(empty_mysql) == []
 
 
 @needs_mysql

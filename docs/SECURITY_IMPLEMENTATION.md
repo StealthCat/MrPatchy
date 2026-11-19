@@ -2237,6 +2237,15 @@ open.
 
 ### Parallel execution and latency work
 
+Worker checkpoint #1163 records a separate `file_provenance` timing for the
+controller-authenticated file preparation and its transaction in process triage.
+It runs before the normal cache lookup or provider request, including when a run
+reuses a known-good result. Failed preparation records an error timing with
+elapsed time only. The existing administrator timing summary shows available
+samples and leaves percentiles empty for older runs. Fixture benchmarks retain
+the same stage in their persisted timings. Read-only admission probes and
+production throughput remain outside this measurement.
+
 Worker checkpoint #594 batches score-row reads when linking the diagnostic run
 and persisting completed, deferred or failed outcomes for the existing five-item
 scoring batch. The same sessions still recheck current package and server evidence
@@ -2318,6 +2327,32 @@ recovery. Expiry does not prove a provider request stopped or was not billed.
 This telemetry is read-only: it does not renew, reconcile, cancel, retry or
 otherwise alter a claim. Full multi-controller failover and production
 recovery acceptance remain open.
+
+### Atomic recovery of interrupted package scores — Roadmap A checkpoint #1140
+
+The scoring worker now commits the interruption event and the failures of its
+linked running package scores together under the existing scoring lock. A
+score with a newer attempt timestamp, completed result or missing run link is
+left alone. The recovered score keeps its attempt time, so the existing
+one-hour retry interval still applies. Recovery can run with scoring disabled
+and makes no provider call or spend change.
+
+The regression verifies rollback when the score write fails and confirms
+successful scoring at the original eligibility boundary. A crash before
+linking the run and independent scoring admission remain open.
+
+### Deferred scoring eligibility in fleet status — Roadmap A checkpoint #1142
+
+The fleet status distinguishes deferred scores eligible now from the earliest
+future retry. The same aggregate retains the total queue, including rows held
+by pause or disabled scoring. Only active unpaused servers contribute an
+eligibility time while scoring is enabled. The card can therefore show ready
+work alongside the next future retry, and it explains when there is only held
+scoring work. Shared admission still governs outbound calls.
+
+The regression covers overdue and future scores, paused and inactive servers,
+and disabled scoring without adding another aggregate query. Exact scoring
+identity and provider eligibility remain checked by the scheduler.
 
 ### Update-scoring schedule-state reads
 
@@ -2640,7 +2675,16 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Notification:** the `ai-triage`/`configuration-blocked` text is now cause-neutral. It points to each investigation's retry reason and separates configuration fixes from oversized evidence. The identity, revision key, severity, role and deep link are unchanged. The **Retry blocked investigations** help text says the same.
 - **Unchanged:** retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits an evidence-size block, which is then refused locally again), admission, reservations and authorization.
 - **Validation:** `tests/test_triage_block_causes.py`. Five of six tests fail on main `c86141a` and all pass after. They cover the first-stage and follow-up evidence-size reasons, the provider-rejection reason, unchanged eligibility, the notification text and the error cause.
-- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion still use the provider/configuration reason.
+- **Remaining:** #1004's over-cap block already has its own reason. Model refusals and token-budget exhaustion now have dedicated blocked reasons (see #1158 below).
+
+
+#### Model refusal and token-budget wording — worker checkpoint #1158
+
+- **Problem:** a model refusal, and a response that used the whole `max_output_tokens` budget before completing the JSON, were blocked with the provider/configuration reason ("correct API configuration"). Neither is a key or quota problem, and both requests reached the provider and may be billed.
+- **Change:** response parsing moves unchanged into `ai.structured_result`. An output `refusal` raises with cause `model_refusal`, and `incomplete_details.reason == max_output_tokens` raises with cause `token_budget`. Every other incomplete, invalid or unexpected response keeps `provider`. `ai_retry.failed` gives each new cause its own reason: the request was sent and may be billed, and a key change does not help. The refusal reason says a different model may assess the observation, and the token-budget reason says to select a model that completes within the task budget or review it manually.
+- **Unchanged:** the diagnostic stored on the investigation, retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits either block), admission, reservations and receipt accounting, the cause-neutral `configuration-blocked` notification, roles and response authorization.
+- **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
+- **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
 
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
@@ -3090,6 +3134,8 @@ contention/fairness" for triage under a daily cap. Each test runs real
 `worker.investigate_one()` claims against a cap with room for exactly K calls.
 The provider is a disposable fixture.
 
+Worker checkpoint #1154 keeps the triage contention fixtures within one configured budget window when UTC midnight passes. Fixtures persist a shared timezone whose local reset is several hours away, and a deterministic reservation check confirms the counted amount and reset boundary remain stable across UTC midnight. Explicit production-reset tests continue to cover actual window changes.
+
 - **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
   each for a different subject. The suite checks:
   - Exactly K ledger rows are written, and counted spend stays within the cap.
@@ -3176,13 +3222,23 @@ the feature remains outstanding until runtime behavior and acceptance are delive
 A triage subject refused by the authoritative `ai_budget.reserve()` because the
 daily spend cap had no safe reservation was stored with the reason "Waiting for
 shared AI rate eligibility". `ai_retry.failed()` picked that text whenever the
-refusal carried `retry_after`, and the cap refusal does. The cap refusal now marks
-itself with `budget_wait`, and the deferred reason reads "Waiting for the daily AI
+refusal carried `retry_after`, and the cap refusal does. That change identified cap
+refusals explicitly so the deferred reason reads "Waiting for the daily AI
 spend cap to reset; no provider request was sent.". Rate-throttle, provider-backoff
 and pause waits keep their existing reasons. Deferral state, attempt refund and next
 eligibility are unchanged. `tests/test_ai_retry_deferral_reason.py`: the two cap
 cases (`daily_cap`, `rate_and_daily`) fail on main `c86141a` and pass after; the three
 other-wait cases pass on both.
+
+### Triage retry eligibility for the daily cap and rate throttle (#1112)
+
+A spend refusal records the absolute reset reported by reservation admission.
+If the reset has passed before the worker records the refusal, the observation
+is eligible for a fresh check. Rate spacing only follows other rate waiters.
+Provider floors, attempt refunds and authoritative budget checks still apply.
+Existing deferred records keep their saved dates until their next evaluation.
+Focused cases cover both capped modes, recording on either side of reset and
+rate spacing alongside cap and provider waiters.
 
 ### Rate throttle paces smoothly and defers without a charged attempt — worker checkpoint #1021
 
@@ -3878,10 +3934,13 @@ python tools/compare_ai_benchmarks.py serial.json parallel.json
 - **One run at a time:** the run holds a MySQL advisory lock named after the
   database from before the empty check until cleanup. A second run against the
   same database is refused and changes nothing.
-- **Cleanup:** on success and on failure it drops only the application's own
-  tables, so the next run can reuse the database. A table or view that someone
-  else created during the run is left in place and reported as a count on
-  stderr; the database is then no longer empty.
+- **Cleanup:** on success and on workload failure it drops only the
+  application's own tables while the original session still owns the lock
+  (#1095). If the session disconnected or ownership cannot be verified, the
+  benchmark skips cleanup and asks the operator to inspect the disposable
+  database before reusing it. A successful JSON report is emitted after
+  cleanup. A table or view outside the benchmark's table set is left in place
+  and reported as a count on stderr.
 - **No secrets in output:** refusals before the run starts are fixed text. A
   connection failure reports only the error class. The report never contains
   the URL. A failure inside the fixture itself is an ordinary Python traceback.
@@ -3900,6 +3959,11 @@ to 5.590 subjects per second. These are loopback fixture numbers on one
 machine, not a production claim. The CI `mysql` job runs a four-subject pair on
 MySQL 8.4. Multi-process workers against MySQL and matched production
 measurements remain open.
+
+Cleanup validation for #1095 covers a disconnected session, an absent lock
+and a lock assigned to another session. The native MySQL fixture verifies that
+stale cleanup leaves the subsequent holder's table intact. This is fixture
+cleanup acceptance. Production failover and throughput acceptance remain open.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -3951,6 +4015,19 @@ under the existing admission lock. It still interrupts running orphaned runs,
 preserves live leases and provider receipts, and removes expired claims with
 missing runs. The recovery fixture checks the fixed read count and idempotent
 interruption history. Production throughput remains unverified.
+
+### Idle triage admission preflight — Roadmap A checkpoint #1134
+
+The triage worker reads one boolean projection before acquiring the shared
+admission lock. If there is no unapproved pending or error observation, expired
+claim or orphaned running triage run, the dispatch ends without taking the lock.
+Otherwise a fresh session under the lock follows the existing recovery and
+claim path. Work arriving after an idle read remains queued for the next poll.
+
+Four idle dispatches took four admission locks on the base and zero after the
+change. The regression also checks expired, orphaned and live lease handling.
+Busy dispatches use one additional bounded read. Production throughput and
+independent scoring acceptance remain open.
 
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
@@ -7068,6 +7145,12 @@ for resolved notification history. Before it, only `notification_arrivals` were
 pruned. Revisions and per-user read/dismiss rows of resolved events grew without
 bound. The leader's hourly cleanup now calls `notifications.prune_resolved()` with
 the existing `history_days` cutoff, after arrival pruning.
+
+Worker checkpoint (#1099): resolved-history cleanup uses the same hourly
+leader pass as arrival cleanup. This removes repeated retention scans from
+the five-second AI dispatch path and avoids an unbound cutoff on follower
+workers. The two cleanup calls handle failures independently. Scheduler
+regressions cover the hourly cutoff, follower AI dispatch and failure isolation.
 
 - **What is pruned:** an event whose current revision is `resolved` and whose last
   update precedes the cutoff loses all of its revisions and per-user state. It then
@@ -10921,6 +11004,19 @@ checkpoint changes no runtime, schema, admission, provider call or response
 authority.
 
 
+### Same-server MySQL benchmark acceptance — Roadmap A checkpoint #1138
+
+The native MySQL suite now runs matched serial and four-worker investigations
+against one server as well as across servers. The one-server fixture declares
+four slots and uses synthetic provider latency to make real overlap observable.
+The test checks four completed subjects, six provider calls, two SSH fixture
+calls, zero approvals, the same canonical workload on SQLite, and empty MySQL
+tables after both runs.
+
+This measures the loopback benchmark on a disposable database. A reported
+throughput figure is fixture-only. Representative live-provider and production
+failover measurements remain open.
+
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
@@ -11592,3 +11688,110 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+### Provider backoff under reversed failure writes — Roadmap A checkpoint #1117
+
+Shared provider backoff retains the latest recorded failure timestamp. If an
+earlier failure acquires the shared lock after a newer one, a response from a
+request already in flight at the newer failure still cannot clear the wait.
+The regression controls lock entry to exercise this order and checks admission
+before and after a later successful request.
+
+This check uses the existing worker clock timestamps. Clock skew across workers
+and matched production throughput remain outside this acceptance slice.
+
+### needrestart hook contract — worker checkpoint #1148 (roadmap F)
+
+- **What it covers:** `app/needrestart_hooks.py` is a pure, versioned contract. It reports which root code Ubuntu's default `needrestart` can run after every APT transaction. The trigger is `/etc/apt/apt.conf.d/99needrestart` (`DPkg::Post-Invoke`), which runs `/usr/lib/needrestart/apt-pinvoke -m u`, which in turn execs `/usr/sbin/needrestart`.
+- **Pinned source:** the rules follow the shipped `needrestart 3.6-7ubuntu4.x` source, and other versions are gaps.
+  - `needrestart.conf` and every `sort </etc/needrestart/conf.d/*.conf>` file are passed to Perl `eval` as root. The glob skips dot-hidden names, the sort is byte order, and a matched directory is a no-op.
+  - `hook.d` entries run in natural order with no execute-bit check, until one identifies the service.
+  - `restart.d/<service>` replaces `systemctl restart` when it is executable. Under APT the restart mode is automatic unless `restart` or `ui` is configured.
+  - `notify.d` entries that are `-x` and not named `*~` or `*.dpkg-<suffix>` run as root per outdated session, until one exits 0.
+  - A missing config or `hook.d` aborts needrestart before any hook runs.
+- **Fail closed:**
+  - Perl is never evaluated. `needrestart.conf` is understood only when it matches the shipped SHA-256, and a `conf.d` file only when it holds comments and simple literal `$nrconf{key}` assignments. Other code, unread files, and any `hook_d`, `notify_d` or `restart_d` override are gaps that leave the directories unresolved.
+  - Sort::Naturally is not reimplemented. An order is reported only when a simple natural order and the byte order agree for `[a-z0-9._-]` names among the entries that can run.
+  - A modified or unknown trigger, unknown entries, special files, incomplete listings, an invalid restart mode, unsupported families or versions, and caps are all gaps.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
+
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
+### Scoring idle-poll preflight — Roadmap A checkpoint #1150
+
+A cold scoring pass now takes the existing lock only when an active, unpaused server has a candidate or an update-scoring run needs recovery. One read-only probe checks both conditions; the locked pass then opens a fresh session and rechecks the work. Warm passes still prune absent memo entries, and recovery still runs when scoring is disabled. Empty, paused-only and inactive-only polls use one query and skip the scoring lock. A busy cold pass adds one probe, and work arriving after a negative probe waits until the next poll. Compatibility: no schema or response-authorization change. Independent scoring admission and measured production throughput remain open.
+
+### Individual anacron jobs — worker checkpoint #1156 (roadmap F)
+
+- **What it covers:** this connects the pure `app/scheduled_jobs.parse_anacrontab` contract (#711) to collection and the startup inventory. When the controller asks for parsed jobs, the agent parses `/etc/anacrontab` from exactly the bytes it hashed. For each job it reports the period (day count or `@name`), delay, job identifier, line and a bounded, redacted command. It also flags a repeated identifier, since anacron shares one timestamp file between those jobs.
+- **Settings:** only `START_HOURS_RANGE` and `RANDOM_DELAY` values are stored, and only when valid. Other assignments are counted, never stored, because values can hold credentials.
+- **Fail closed:**
+  - Text over 64 KiB, invalid UTF-8 or NUL bytes yields `parsed: false` with no jobs.
+  - Lines anacron would reject are counted as unparsed.
+  - Jobs stop at 64 per file, with `truncated` set.
+  - Commands use the cron redaction and control-character escaping and are capped at 512 characters.
+- **Controller:** `persistence.validate_anacron` accepts the record only on a regular `/etc/anacrontab` entry, with exact key sets and bounded types. It checks named periods against their day counts and requires a duplicate reference to point at an earlier job with the same identifier. An unparsed record must be empty. Comparisons and incident evidence strip the record, so baselines stay metadata-only.
+- **UI/API:** Startup Files shows the settings and a job table with escaped identifiers and commands. It also explains older agents (`not_reported`) and unreadable tables. Search matches identifiers and commands, and the Coverage catalog row counts parsed jobs. Roles are unchanged (administrator only).
+- **Parity:** `tests/test_anacron_jobs.py` compares agent output with the pure contract on a shared corpus (jobs, duplicate links, unparsed counts and settings). It has 45 tests, and six source mutations are each caught.
+- **Remaining:** whether and how anacron is started (cron `0anacron` or a systemd timer), `/var/spool/anacron` timestamps, run-parts targets, package provenance of the default table, and AI classification. No schema, scheduling, AI or response-authorization change was made.
+
+### Scoring result-persistence timing — Roadmap A checkpoint #1159
+
+Update scoring now records the same `result_persistence` timing stage that process triage already uses. Each scoring reply that passes structured validation records one event. That event covers re-reading the current package and inventory evidence and committing the batch, including scores superseded because evidence changed. A committed batch records `outcome=complete`, and a failed write records `outcome=error`; the existing failure handling then marks the batch `error` for a normal retry. Refusals, token-budget exhaustion and malformed or mismatched replies raise before revalidation and record no event. The event uses the existing buffered, redacted timing format and run-history retention. Score identity, provider authorization, admission and retry behavior are unchanged. Compatibility: no schema, API, UI or response-authorization change. The fleet timing summary still samples triage runs only. Independent scoring admission and measured production throughput remain open.
+
+### Local known-good reuse during provider start holds — Roadmap A/B checkpoint #1128
+
+An exact verified known-good match can complete during a shared rate hold or
+provider backoff, as it can during a daily spend hold. The worker uses its
+existing bounded claim search and revalidates the match before recording reuse.
+An empty or revoked cache for the saved model skips per-item probes. A hit
+completes with no request, rate admission or spend reservation. If reuse fails
+after claiming, any paid request still goes through the shared admission checks.
+
+The regression covers rate, provider backoff, both together, explicit re-triage,
+pause and revocation between claim and reuse. The oldest-window bound and legacy
+purpose-specific hourly ceilings still apply. End-to-end production throughput
+and the remaining exact-match acceptance milestones stay open.
+
+### Release configuration review failures — Roadmap A checkpoint #1174
+
+Blocked release plans and their AI review runs distinguish a model refusal from
+response token exhaustion. Both explain that no configuration review was
+accepted, that the request may be billed, and that an operator can review the
+configuration manually or choose a suitable model. The planner retains one
+provider receipt and no proposed edit for the failed output. Real planner-path
+tests with fixture inventory and provider transport cover both causes and an
+unrelated incomplete response. Existing plan authorization, shared deferrals
+and matching completed-review reuse remain in place. Production-provider
+acceptance remains open.
+
+### Advisory plan provider failures — Roadmap A checkpoint #1170
+
+Incident and startup advisory jobs now distinguish a model refusal from response
+token-budget exhaustion in their saved job and run histories. Both diagnostics
+state that no advisory plan was accepted, the sent request may be billed, and the
+operator can review manually or choose a suitable model. The shared plan request
+retains fixed wording without provider text. Other errors and shared deferrals
+keep their behavior. Worker-path tests exercise both job kinds with synthetic
+provider responses and check that neither error persists a plan. Release-plan
+diagnostics and production provider acceptance remain separate.
+
+#### Retry failed automatic AI plans — worker checkpoint #1036
+
+Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
+
+- **Change:** `app/auto_plan_retry.py` counts a server's open, non-YARA, unplanned incidents whose only unreleased automatic attempts for their current scan are `failed`. Attempts the worker skipped because the evidence changed are not counted.
+  - Admin-only `GET /api/hosts/{id}/security/auto-plan-failed` returns `{failed}`. Unknown servers return 404.
+  - Admin-only, CSRF-protected `POST /api/hosts/{id}/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and marks up to 200 incidents' failed `security-plan` jobs with `retry_released` (plus who and when). It returns `{released, remaining}` and writes one audit row when anything was released. A disabled or deleted server releases nothing.
+  - `incidents.awaiting_auto_plan` ignores released attempts, so the ordinary `auto_plan_tick` plans the incident again.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The tick still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. A new failure blocks the incident again until another release. The failed job's state and output are kept.
+- **UI:** the Security tab's scheduled-scanning card shows **Retry failed automatic plans** to administrators only, when the count is above 0. It says to fix the cause first, that no provider request is sent now, and that the gates still apply; it refreshes the status afterwards. Operators cannot open the Security tab, so they never request the count.
+- **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
+- **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.

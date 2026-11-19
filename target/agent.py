@@ -1312,6 +1312,64 @@ def parse_at_job(data,name):
     return result
 
 
+# anacrontab(5): VAR=value assignments and "period delay job-identifier command" lines. Only
+# the START_HOURS_RANGE and RANDOM_DELAY values are disclosed; other values can hold credentials.
+ANACRONTAB = '/etc/anacrontab'
+ANACRON_TEXT_LIMIT = 65536
+ANACRON_PERIODS = {'daily':1,'weekly':7,'monthly':30,'yearly':365,'annually':365}
+_ANACRON_ASSIGN = re.compile(r'\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)')
+_ANACRON_IDENT = re.compile(r'[^\s/]{1,255}')
+_ANACRON_HOURS = re.compile(r'([0-9]{1,2})-([0-9]{1,2})')
+
+
+def _anacron_setting(name,value):
+    value=value.strip()
+    if name=='RANDOM_DELAY':return int(value) if value.isascii() and value.isdigit() and len(value)<=6 else None
+    match=_ANACRON_HOURS.fullmatch(value)
+    if not match or not (0<=int(match.group(1))<=24 and 0<=int(match.group(2))<=24):return None
+    return {'start':int(match.group(1)),'end':int(match.group(2))}
+
+
+def parse_anacrontab(data):
+    """Parse /etc/anacrontab as data, mirroring app/scheduled_jobs.parse_anacrontab. Nothing is
+    executed; environment values other than the two scheduling settings are counted, never stored.
+    Text the format does not allow is counted as unparsed, and unreadable text yields no jobs."""
+    result={'parsed':False,'jobs':[],'environment':0,'settings':{'start_hours_range':None,'random_delay':None},
+            'unparsed':0,'truncated':False,'redacted':False}
+    if len(data)>ANACRON_TEXT_LIMIT or b'\x00' in data:return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:return result
+    seen={}
+    for number,line in enumerate(text.split('\n'),1):
+        stripped=line.strip()
+        if not stripped or stripped.startswith('#'):continue
+        assign=_ANACRON_ASSIGN.fullmatch(line)
+        if assign:
+            result['environment']+=1;name=assign.group(1)
+            if name=='START_HOURS_RANGE':result['settings']['start_hours_range']=_anacron_setting(name,assign.group(2))
+            elif name=='RANDOM_DELAY':result['settings']['random_delay']=_anacron_setting(name,assign.group(2))
+            continue
+        fields=stripped.split(None,3)
+        if len(fields)<4:result['unparsed']+=1;continue
+        period,delay,ident,command=fields
+        if period.startswith('@'):days=ANACRON_PERIODS.get(period[1:]);name=period[1:]
+        else:
+            days=int(period) if period.isascii() and period.isdigit() and len(period)<=5 and int(period)>0 else None;name=None
+        if days is None or not (delay.isascii() and delay.isdigit() and len(delay)<=6) or not _ANACRON_IDENT.fullmatch(ident):
+            result['unparsed']+=1;continue
+        if len(result['jobs'])>=CRON_FILE_JOBS:result['truncated']=True;break
+        shown=_CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),command)
+        shown,redacted=redact_cron_command(shown)
+        result['redacted']=result['redacted'] or redacted
+        result['jobs'].append({'line':number,'period_days':days,'period_name':name,'delay_minutes':int(delay),
+                               'identifier':_CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),ident)[:255],
+                               'command':shown[:CRON_COMMAND_LIMIT],'command_truncated':len(shown)>CRON_COMMAND_LIMIT,
+                               'redacted':redacted,'duplicate_of_line':seen.get(ident)})
+        seen.setdefault(ident,number)
+    result['parsed']=True
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -1322,7 +1380,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;content=bytearray() if form or at_name else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;content=bytearray() if form or at_name or anacron else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1362,6 +1420,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 cron_total[0]+=len(row['cron']['jobs'])
             if at_name is not None and row['kind']=='regular':
                 row['at']=parse_at_job(bytes(content),at_name)
+            if anacron and row['kind']=='regular':
+                row['anacron']=parse_anacrontab(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
