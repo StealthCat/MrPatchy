@@ -111,7 +111,10 @@ def test_oversized_file_is_blocking():
     ('enabled = 0\n', 'config_error', 'plugin_conf_parse_error'),       # missing section header
     ('[main]\nenabled\n', 'config_error', 'plugin_conf_parse_error'),   # missing '='
     ('[main\n', 'config_error', 'plugin_conf_parse_error'),
-    ('[main] x\n', 'config_error', 'plugin_conf_parse_error'),
+    ('[main] xy\n', 'config_error', 'plugin_conf_parse_error'),
+    ('[main]x\nenabled=0\n', 'disabled', 'plugin_conf_disabled'),     # libdnf skips the last character
+    ('[main] x\nenabled=0\n', 'disabled', 'plugin_conf_disabled'),
+    ('[main]  xy \n', 'config_error', 'plugin_conf_parse_error'),
     ('[main] ; ok\n# c\n;c\nenabled=1\n', 'enabled', 'enabled'),
     ('﻿[main]\nenabled=false\n', 'disabled', 'plugin_conf_disabled'),
 ])
@@ -119,6 +122,28 @@ def test_plugin_conf_enablement(conf, state, reason):
     result = resolve(entry('a.action', 'a:in:b\n'), conf=present(conf))
     assert (result['plugin']['state'], result['plugin']['reason']) == (state, reason)
     assert result['actions'][0]['runs'] is (state == 'enabled')
+
+
+@pytest.mark.parametrize('text,sections', [
+    ('[main]x\na=1\n', {'main': {'a': '1'}}),
+    ('[main] x\na=1\n', {'main': {'a': '1'}}),
+    ('[;=]a\nb=2\n', {';=': {'b': '2'}}),
+    ('[main]x \t\r\na=1\n', {'main': {'a': '1'}}),
+])
+def test_single_trailing_character_after_section_is_accepted_like_libdnf(text, sections):
+    assert da.parse_ini(text) == sections
+
+
+@pytest.mark.parametrize('text', ['[main] xy\n', '[main]xy\n', '[main] x y\n'])
+def test_text_after_section_is_still_rejected(text):
+    with pytest.raises(da._IniError):
+        da.parse_ini(text)
+
+
+def test_single_trailing_character_in_dnf_conf_keeps_actions_running():
+    result = resolve(entry('a.action', '*:in:/usr/bin/touch /tmp/pwn\n'), dnf=present('[main]x\ngpgcheck=1\n'))
+    assert result['plugin']['state'] == 'enabled'
+    assert result['actions'][0]['runs'] is True
 
 
 def test_dnf_conf_global_switch_and_overrides():

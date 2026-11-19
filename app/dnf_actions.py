@@ -20,7 +20,9 @@ Behavior follows dnf-plugins-core ``plugins/post-transaction-actions.py`` (DNF 4
   through ``/bin/sh -c`` as the user running dnf (normally root). Substituted
   values come from package and repository metadata and are not shell-escaped.
 - An unreadable, non-regular or undecodable ``*.action`` entry makes the
-  plugin's ``open()``/``readlines()`` raise, so later actions are undetermined.
+  plugin's ``open()``/``readlines()`` raise. Every action file is read before
+  any command runs, so such a read error means the plugin runs no actions in
+  that transaction; the contract reports it as a blocking gap.
 
 Plugin enablement follows dnf ``Plugin.read_config`` and ``_check_enabled`` with
 the libdnf INI parser: ``/etc/dnf/plugins/post-transaction-actions.conf`` is
@@ -153,7 +155,9 @@ def parse_ini(text: str) -> dict[str, dict[str, str]]:
                 raise _IniError(number, 'missing_bracket')
             if end == start + 1:
                 raise _IniError(number, 'empty_section_name')
-            for ch in line[end + 1:len(body)]:
+            # libdnf loops ``idx < end`` where ``end`` is the last non-blank
+            # character, so that final character is never inspected.
+            for ch in line[end + 1:len(body) - 1]:
                 if ch in '#;':
                     break
                 if ch not in ' \t\r':
@@ -373,16 +377,20 @@ def resolve(actions_dir: Any, plugin_conf: Any = None, dnf_conf: Any = None, *,
                 continue
             if entry.get('type') != 'file':
                 files.append({'path': path, 'state': 'plugin_read_error', 'reason': 'not_regular_file'})
-                add_gap('action_entry_not_regular', 'The plugin fails opening this entry; whether it runs the '
-                        'remaining actions is undetermined.', path=path)
+                add_gap('action_entry_not_regular', 'The plugin fails opening this entry. It reads every action '
+                        'file before running any command, so this read error stops it running any action in '
+                        'the transaction.', path=path)
                 continue
             text, problem = _text(entry)
             if text is not None and total + len(text) > MAX_TOTAL_BYTES:
                 text, problem = None, 'total_limit'
             if text is None:
                 files.append({'path': path, 'state': problem})
-                add_gap(f'action_file_{problem}', 'The plugin reads this file, but its contents were not '
-                        'available to the contract.', path=path)
+                detail = 'The plugin reads this file, but its contents were not available to the contract.'
+                if problem == 'unreadable':
+                    detail += (' If the plugin cannot read it either, that read error stops it running any action '
+                               'in the transaction.')
+                add_gap(f'action_file_{problem}', detail, path=path)
                 continue
             total += len(text)
             file_actions, file_rejected = parse_action_file(text)
