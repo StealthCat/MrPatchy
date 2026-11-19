@@ -125,9 +125,14 @@ def test_failed_provenance_preparation_records_one_redacted_error(client, monkey
     assert_file_provenance_timing(events, 'error')
     assert not [stage for stage, _ in events if stage in ('known_good_lookup', 'timing_known_good_lookup')]
     with Session() as s:
-        assert s.get(Behavior, 'behavior-two').verdict == 'error'
+        behavior = s.get(Behavior, 'behavior-two')
+        assert behavior.verdict == 'error'
         run = s.scalar(select(ai_runs.AIRun).where(ai_runs.AIRun.subject == 'behavior-two'))
         assert run.state == 'error' and run.calls == 0
+        stored = [behavior.analysis or '', run.message or ''] + [message or '' for _, message in events]
+    # The exception text names a path and a secret; neither may be persisted.
+    for text in stored:
+        assert '/private/artifact' not in text and 'private-key' not in text, text
 
 
 def test_miss_diagnostic_failure_never_fails_triage(client, monkeypatch):
