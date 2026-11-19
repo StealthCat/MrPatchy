@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, or_, case, literal
+from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, case, literal
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
