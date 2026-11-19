@@ -333,7 +333,7 @@ def _observe(root, path):
 def test_real_directory_layout(tmp_path):
     root = str(tmp_path)
 
-    def put(path, body=b'#!/bin/sh\n', mode=0o755):
+    def put(path, body=b'#!/bin/sh\n', mode=0o700):
         full = os.path.join(root, path.lstrip('/'))
         os.makedirs(os.path.dirname(full), exist_ok=True)
         with open(full, 'wb') as handle:
@@ -346,7 +346,7 @@ def test_real_directory_layout(tmp_path):
     put(f'{VENDOR}/vendor-replaced')
     put(f'{VENDOR}/noexec-above')
     put(f'{ETC}/vendor-replaced')
-    put(f'{ETC}/noexec-above', mode=0o644)
+    put(f'{ETC}/noexec-above', mode=0o600)
     os.symlink('/dev/null', os.path.join(root, ETC.lstrip('/'), 'systemd-getty-generator'))
     put(f'{LOCAL}/zz-planted.dpkg-old')
     put(f'{LOCAL}/empty-mask', body=b'')
