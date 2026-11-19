@@ -19,7 +19,13 @@ from . import notifications
 from .db import Setting
 from .security import unseal
 
-FAILED_ATTEMPTS = 3
+FAILED_ATTEMPTS = 3  # Default threshold when no valid administrator setting is stored.
+# Administrator-configurable threshold (#1172). Stored apart from the encrypted delivery
+# configuration so it stays readable when that configuration cannot be decrypted, and so
+# changing it never touches delivery secrets or either delivery save path.
+THRESHOLD_KEY = 'alert-delivery-threshold'
+MINIMUM_ATTEMPTS = 1
+MAXIMUM_ATTEMPTS = 20
 IDENTITY = dict(source='alert-delivery', kind='delivery-failing',
                 subject_type='alert-delivery', subject_id='external')
 CHANNELS = {
@@ -53,11 +59,24 @@ def delivery_channel(session):
     return 'smtp' if cfg.get('channel') == 'smtp' else 'webhook'
 
 
-def failing_count(session):
+def valid_threshold(value):
+    """True for a whole-number attempt count inside the supported range (booleans are not counts)."""
+    return type(value) is int and MINIMUM_ATTEMPTS <= value <= MAXIMUM_ATTEMPTS
+
+
+def threshold(session):
+    """Saved failed-attempt threshold; the default when absent or invalid, so a bad value never disables the notice."""
+    setting = session.get(Setting, THRESHOLD_KEY)
+    value = setting.value.get('failed_attempts') if setting and isinstance(setting.value, dict) else None
+    return value if valid_threshold(value) else FAILED_ATTEMPTS
+
+
+def failing_count(session, attempts=None):
     """Open alerts not yet delivered whose repeated attempts all recorded an error."""
     from .operations import Alert
+    attempts = threshold(session) if attempts is None else attempts
     return session.scalar(select(func.count()).select_from(Alert).where(
-        Alert.state == 'open', Alert.notified == 0, Alert.attempts >= FAILED_ATTEMPTS, Alert.error != ''))
+        Alert.state == 'open', Alert.notified == 0, Alert.attempts >= attempts, Alert.error != ''))
 
 
 def undelivered_count(session):
@@ -77,9 +96,9 @@ def publish(session, now):
             notifications.publish(session, **IDENTITY, subject_revision='unreadable', severity='high',
                                   reason=UNREADABLE, deep_link=DEEP_LINK, minimum_role='admin', now=now)
             return True
-    elif channel is not None and failing_count(session):
+    elif channel is not None and failing_count(session, attempts := threshold(session)):
         notifications.publish(session, **IDENTITY, subject_revision='failing:' + channel,
-                              severity='high', reason=MESSAGE.format(channel=CHANNELS[channel], attempts=FAILED_ATTEMPTS),
+                              severity='high', reason=MESSAGE.format(channel=CHANNELS[channel], attempts=attempts),
                               deep_link=DEEP_LINK, minimum_role='admin', now=now)
         return True
     event = session.scalar(select(notifications.NotificationEvent).where(
