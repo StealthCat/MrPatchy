@@ -1,4 +1,4 @@
-"""#1030: a free exact known-good hit is claimed while the daily spend cap is exhausted.
+"""Free exact known-good hits during shared provider start holds (#1030, #1128).
 
 An exact fleet known-good hit makes no provider call and reserves nothing. The
 daily cap is a spend control, so it must not hold that verdict back until the
@@ -15,7 +15,8 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from app import ai, ai_assessments, ai_budget, ai_claims, ai_runs, known_good, worker
+from app import (ai, ai_admission, ai_assessments, ai_budget, ai_claims,
+                 ai_provider_backoff, ai_retry, ai_runs, known_good, worker)
 from app.db import Audit, Behavior, Host, Session, Setting
 from app.security import seal
 from tests.test_known_good import complete, retained
@@ -114,6 +115,13 @@ def held(subject='behavior-two'):
     return {'verdict': 'pending', 'assessments': [], 'runs': [], 'claims': False} == state(subject)
 
 
+def _revoke_only_candidate():
+    with Session() as s:
+        entry = s.scalar(select(known_good.Entry))
+        known_good.revoke(s, entry.fingerprint, entry.version, 'admin', 'Contradicted by new evidence')
+        s.commit()
+
+
 def test_exhausted_cap_still_reuses_an_exact_hit_with_zero_calls_and_no_new_reservation(client, provider):
     configure()
     exhaust()
@@ -179,10 +187,7 @@ def test_exhausted_cap_does_not_admit_a_hit_against_a_revoked_candidate(client, 
     configure()
     exhaust()
     seed()
-    with Session() as s:
-        entry = s.scalar(select(known_good.Entry))
-        known_good.revoke(s, entry.fingerprint, entry.version, 'admin', 'Contradicted by new evidence')
-        s.commit()
+    _revoke_only_candidate()
     worker.investigate_one()
     assert provider.bodies == []
     assert held()
@@ -215,3 +220,65 @@ def test_probe_is_read_only_and_agrees_with_the_worker_lookup(client, provider):
         assert not s.new and not s.dirty and not s.deleted
         assert row.evidence == evidence
         assert known_good.exact_hit_available(s, row, 'another-model') is False
+
+
+@pytest.mark.parametrize('gates', [('rate',), ('backoff',), ('rate', 'backoff')])
+def test_provider_start_holds_allow_only_exact_cache_reuse(client, provider, gates):
+    configure(ai_control_mode='rate_and_daily')
+    seed(hit=False, subject='older-miss', host='host-three', first_seen=1)
+    seed(refresh=True, subject='older-refresh', host='host-four', first_seen=2)
+    seed(subject='older-paused', host='host-five', first_seen=3)
+    seed(first_seen=4)
+    deadline = time.time() + 900
+    with Session() as s:
+        s.add(Setting(key='server-ai:host-five', value={'paused': True}))
+        if 'rate' in gates:
+            s.add(ai_admission.Admission(id='global', next_at=deadline, admitted=10))
+        if 'backoff' in gates:
+            s.add(ai_provider_backoff.ProviderBackoff(id='global', blocked_until=deadline, failures=1))
+        s.commit()
+
+    worker.investigate_one()
+    worker.investigate_one()
+
+    assert reused()
+    assert all(held(subject) for subject in ('older-miss', 'older-refresh', 'older-paused'))
+    assert provider.bodies == [] and ledger() == []
+    with Session() as s:
+        rate = s.get(ai_admission.Admission, 'global')
+        rate_state = (rate.next_at, rate.admitted) if rate else None
+        assert rate_state == ((deadline, 10) if 'rate' in gates else None)
+        backoff = s.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (backoff.blocked_until if backoff else None) == (deadline if 'backoff' in gates else None)
+
+
+def test_provider_hold_skips_evidence_probes_when_no_active_candidate(client, provider, monkeypatch):
+    configure()
+    seed()
+    _revoke_only_candidate()
+    ai_provider_backoff.failed(ai.AIError('fixture backoff', transient=True, retry_after=900))
+    probes = []
+    monkeypatch.setattr(known_good, 'exact_hit_available', lambda *args: probes.append(1) or False)
+    worker.investigate_one()
+    assert probes == [] and provider.bodies == []
+    assert held()
+
+
+def test_revocation_after_claim_cannot_send_during_provider_backoff(client, provider, monkeypatch):
+    configure()
+    seed()
+    ai_provider_backoff.failed(ai.AIError('fixture backoff', transient=True, retry_after=900))
+    assess = worker._assess_behavior
+
+    def revoke_before_assessment(*args):
+        _revoke_only_candidate()
+        return assess(*args)
+
+    monkeypatch.setattr(worker, '_assess_behavior', revoke_before_assessment)
+    worker.investigate_one()
+
+    assert provider.bodies == [] and ledger() == []
+    assert state()['runs'] == [('deferred', 0)] and not state()['claims']
+    with Session() as s:
+        retry = s.get(ai_retry.TriageRetry, 'behavior-two')
+        assert retry.state == 'deferred' and retry.attempts == 0

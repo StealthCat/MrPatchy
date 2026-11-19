@@ -72,6 +72,71 @@ def test_failed_tick_does_not_skip_other_ticks_or_dispatch(admin, monkeypatch, c
     assert TICKS[failed][0] in caplog.text
 
 
+@pytest.mark.parametrize(('leader', 'failed_pruner'), [
+    (False, None), (True, None), (True, 'arrivals'), (True, 'resolved'),
+])
+def test_notification_retention_runs_only_in_hourly_leader_cleanup(
+    admin, monkeypatch, caplog, leader, failed_pruner,
+):
+    from app.db import config
+
+    offsets = iter([0, 5, 15, 3601, 3606])
+    base = time.time()
+    with Session() as session:
+        retention = config(session)['history_days'] * 86400
+    now = base
+    calls = []
+    dispatched = []
+
+    class Pool:
+        def __init__(self, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def submit(self, fn, *args):
+            if fn in (worker.investigate_one, worker.update_scores.run_one):
+                dispatched.append(now)
+            future = Future()
+            future.set_result(None)
+            return future
+
+    def wait(_):
+        nonlocal now
+        offset = next(offsets, None)
+        if offset is None:
+            return True
+        now = base + offset
+        return False
+
+    def prune(kind, cutoff):
+        calls.append((kind, cutoff))
+        if failed_pruner == kind:
+            raise RuntimeError('Fixture notification cleanup failure')
+
+    lock = SimpleNamespace(acquire=lambda _: leader, owned=lambda: leader, release=lambda: None)
+    monkeypatch.setattr(worker, 'Lock', lambda _: lock)
+    monkeypatch.setattr(worker.concurrent.futures, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(worker.stop, 'wait', wait)
+    monkeypatch.setattr(worker, 'time', SimpleNamespace(time=lambda: now, sleep=lambda _: None))
+    monkeypatch.setattr(worker, 'periodic_ticks', lambda *_: None)
+    monkeypatch.setattr(worker, 'reconcile_interrupted_advisory_jobs', lambda: None)
+    monkeypatch.setattr(worker.operations, 'collect_alerts', lambda **_: None)
+    monkeypatch.setattr(worker, 'prune_history', lambda *_: None)
+    monkeypatch.setattr(worker.notifications, 'prune_arrivals', lambda cutoff: prune('arrivals', cutoff))
+    monkeypatch.setattr(worker.notifications, 'prune_resolved', lambda cutoff: prune('resolved', cutoff))
+    reporter = SimpleNamespace(capacity={'polls': 1, 'jobs': 1, 'ai': 1}, heartbeat=lambda *args: False)
+    worker._loop(reporter)
+
+    assert dispatched == [base + offset for offset in (0, 5, 15, 3601, 3606)]
+    expected = [
+        (kind, base + offset - retention)
+        for offset in (0, 3601) for kind in ('arrivals', 'resolved')
+    ]
+    assert calls == (expected if leader else [])
+    assert caplog.text.count('Notification arrival pruning failed') == (2 if failed_pruner == 'arrivals' else 0)
+    assert caplog.text.count('Resolved notification pruning failed') == (2 if failed_pruner == 'resolved' else 0)
+    assert 'UnboundLocalError' not in caplog.text
+
+
 def test_retry_backoff_is_bounded_and_success_restores_normal_cadence(monkeypatch):
     for _, module, attribute in TICKS:
         monkeypatch.setattr(module, attribute, lambda now: None)
