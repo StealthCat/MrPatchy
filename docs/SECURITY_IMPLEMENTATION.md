@@ -3116,6 +3116,13 @@ contention/fairness" for triage under a daily cap. Each test runs real
 `worker.investigate_one()` claims against a cap with room for exactly K calls.
 The provider is a disposable fixture.
 
+Worker checkpoint #1154 keeps the contention fixtures in one budget window,
+including when the host clock crosses UTC midnight. The fixture persists a
+timezone whose reset is several hours away, so subprocesses share the same
+window. A deterministic check keeps the reservation counted across UTC
+midnight in that fixture. The explicit reset tests continue to cover actual
+budget-window transitions.
+
 - **Threads:** ten threads race in `daily_cap`. Exactly K paid calls are sent,
   each for a different subject. The suite checks:
   - Exactly K ledger rows are written, and counted spend stays within the cap.
