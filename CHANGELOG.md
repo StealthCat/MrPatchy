@@ -1,3 +1,19 @@
+## 1.75.54 — 2026-11-19
+
+1. [PR #1165](https://github.com/StealthCat/MrPatchy/pull/1165): Process triage now records a retained `file_provenance` timing for controller-authenticated preparation and its transaction, including known-good cache hits. Failed preparation records an error timing with elapsed time only, and fixture timing reports include the stage. Compatibility: additive diagnostic timing using the existing event format; no schema migration or changes to authorization, evidence, cache, provider, or retry decisions; older histories remain readable. Limit: read-only admission probe timing and production throughput remain outside this measurement.
+
+## 1.75.53 — 2026-11-19
+
+1. [PR #1167](https://github.com/StealthCat/MrPatchy/pull/1167): Hosted-runner dependency setup now rewrites regional EC2 Ubuntu archive entries to `https://archive.ubuntu.com/ubuntu`, alongside Azure entries, while preserving signature settings, unrelated repositories, idempotence and bounded retries. Compatibility: CI-only; no application, schema, API, installer or runtime change. Limit: the primary archive can still be slow; existing bounded retries/timeouts remain and installation failures still fail the job.
+
+## 1.75.52 — 2026-11-19
+
+1. [PR #1161](https://github.com/StealthCat/MrPatchy/pull/1161): Update scoring now records the existing `result_persistence` timing after validated replies enter revalidation, covering evidence reads and commit or supersede outcomes. Failed writes record `error`; refused or malformed replies record no persistence event. Compatibility: extra timing events use existing retention; no schema, API, UI, role, admission, accounting or response-authorization change. Limit: fleet timing summaries remain triage-only; independent scoring admission and production throughput remain open.
+
+## 1.75.51 — 2026-11-19
+
+1. [PR #1139](https://github.com/StealthCat/MrPatchy/pull/1139): Extends the optional native MySQL triage benchmark with matched same-server serial and four-worker runs, checking workload parity, provider overlap, completed investigations, required SSH follow-ups, no approvals, equivalent SQLite workload and database cleanup. Compatibility: tests and documentation only; no production runtime, schema, API or response-authorization change. Limit: synthetic provider and disposable database only; production throughput and failover remain unverified.
+
 ## 1.75.50 — 2026-11-19
 
 1. [PR #1160](https://github.com/StealthCat/MrPatchy/pull/1160): Blocked process investigations now distinguish model refusals and response token-budget exhaustion from provider/configuration failures. Both reasons state the request was sent and may be billed; eligibility, attempts and retry behavior are unchanged. Compatibility: existing blocked rows keep their stored reason until retried; no schema, API, UI, role, admission, accounting or response-authorization change. Limit: update-scoring and advisory-plan failure wording is unchanged.

@@ -10930,6 +10930,19 @@ checkpoint changes no runtime, schema, admission, provider call or response
 authority.
 
 
+### Same-server MySQL benchmark acceptance — Roadmap A checkpoint #1138
+
+The native MySQL suite now runs matched serial and four-worker investigations
+against one server as well as across servers. The one-server fixture declares
+four slots and uses synthetic provider latency to make real overlap observable.
+The test checks four completed subjects, six provider calls, two SSH fixture
+calls, zero approvals, the same canonical workload on SQLite, and empty MySQL
+tables after both runs.
+
+This measures the loopback benchmark on a disposable database. A reported
+throughput figure is fixture-only. Representative live-provider and production
+failover measurements remain open.
+
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
@@ -11653,3 +11666,7 @@ A cold scoring pass now takes the existing lock only when an active, unpaused se
 - **UI/API:** Startup Files shows the settings and a job table with escaped identifiers and commands. It also explains older agents (`not_reported`) and unreadable tables. Search matches identifiers and commands, and the Coverage catalog row counts parsed jobs. Roles are unchanged (administrator only).
 - **Parity:** `tests/test_anacron_jobs.py` compares agent output with the pure contract on a shared corpus (jobs, duplicate links, unparsed counts and settings). It has 45 tests, and six source mutations are each caught.
 - **Remaining:** whether and how anacron is started (cron `0anacron` or a systemd timer), `/var/spool/anacron` timestamps, run-parts targets, package provenance of the default table, and AI classification. No schema, scheduling, AI or response-authorization change was made.
+
+### Scoring result-persistence timing — Roadmap A checkpoint #1159
+
+Update scoring now records the same `result_persistence` timing stage that process triage already uses. Each scoring reply that passes structured validation records one event. That event covers re-reading the current package and inventory evidence and committing the batch, including scores superseded because evidence changed. A committed batch records `outcome=complete`, and a failed write records `outcome=error`; the existing failure handling then marks the batch `error` for a normal retry. Refusals, token-budget exhaustion and malformed or mismatched replies raise before revalidation and record no event. The event uses the existing buffered, redacted timing format and run-history retention. Score identity, provider authorization, admission and retry behavior are unchanged. Compatibility: no schema, API, UI or response-authorization change. The fleet timing summary still samples triage runs only. Independent scoring admission and measured production throughput remain open.
