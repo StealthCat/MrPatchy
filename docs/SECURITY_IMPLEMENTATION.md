@@ -3965,6 +3965,18 @@ and a lock assigned to another session. The native MySQL fixture verifies that
 stale cleanup leaves the subsequent holder's table intact. This is fixture
 cleanup acceptance. Production failover and throughput acceptance remain open.
 
+### Advisory plan result-persistence timing — Roadmap A checkpoint #1176
+
+Incident and startup plan runs record a retained `result_persistence` timing
+after structured validation. The timing includes existing evidence revalidation
+and the plan transaction. A saved plan records completion and a failed save
+records an error. Provider refusals and invalid structured plans never enter
+this stage. The run timeline uses the existing redacted duration and outcome
+format. Worker fixtures exercise both plan types through a successful write,
+a failed write, an invalid response and a refusal. Existing plan state,
+evidence, manual approval and provider accounting retain their behavior.
+Production throughput and release-plan timings remain separate.
+
 ### Retained process-triage timing sample — worker checkpoint #522
 
 The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
