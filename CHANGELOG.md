@@ -1,3 +1,7 @@
+## 1.75.62 — 2026-11-19
+
+1. [PR #1179](https://github.com/StealthCat/MrPatchy/pull/1179): Administrators now receive an admin-only in-app notification when startup migrates never-reviewed legacy AI admission controls to the shared smooth rate, or refuses a proposal that would expand admission or spend. A refusal remains visible until an explicit mode is stored, and rejected notification payloads do not block migration. Compatibility: no schema or configuration change; installations migrated earlier get no retroactive event. No admission, spend, pause, role, provider-call, SMTP/webhook or response-authorization behavior changes. Limit: the broader shared-controls acceptance remains open, and notices use the existing notifications UI.
+
 ## 1.75.61 — 2026-11-19
 
 1. [PR #1181](https://github.com/StealthCat/MrPatchy/pull/1181): Activity → Alert delivery now lists all open, undelivered alerts in 50-item pages with server-side totals and failure counts, including older alerts outside the existing 200-item Operations list. Adds an admin-only, read-only pending-alert endpoint; paging preserves unsaved threshold input and ignores stale responses. Compatibility: additive endpoint; existing Operations acknowledgement list remains capped at 200, and no schema, role, delivery, retry, or response-authorization behavior changes. Limit: acknowledgement remains in Operations.
