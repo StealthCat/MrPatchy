@@ -1,3 +1,15 @@
+## 1.75.61 — 2026-11-19
+
+1. [PR #1181](https://github.com/StealthCat/MrPatchy/pull/1181): Activity → Alert delivery now lists all open, undelivered alerts in 50-item pages with server-side totals and failure counts, including older alerts outside the existing 200-item Operations list. Adds an admin-only, read-only pending-alert endpoint; paging preserves unsaved threshold input and ignores stale responses. Compatibility: additive endpoint; existing Operations acknowledgement list remains capped at 200, and no schema, role, delivery, retry, or response-authorization behavior changes. Limit: acknowledgement remains in Operations.
+
+## 1.75.60 — 2026-11-19
+
+1. [PR #1173](https://github.com/StealthCat/MrPatchy/pull/1173): Administrators can set the failed-delivery notification threshold (1–20 attempts, default 3) from Activity → Alert delivery. The saved setting is audited and kept separate from encrypted delivery credentials; threshold changes do not send, retry, acknowledge or resolve alerts. Compatibility: additive; existing behavior stays at 3 until changed, with no schema or role change. Limit: the page still lists the 200 most recent alerts.
+
+## 1.75.59 — 2026-11-19
+
+1. [PR #1177](https://github.com/StealthCat/MrPatchy/pull/1177): Incident and startup advisory plan runs now retain result-persistence timing after response validation, recording elapsed milliseconds and completion or save-error outcome. Invalid responses and refusals emit no persistence timing. Compatibility: existing run-event format and retention; plan state, evidence, accounting, deferral and manual approval are unchanged. Limit: production throughput and release-plan timing remain unmeasured/out of scope.
+
 ## 1.75.58 — 2026-11-19
 
 1. [PR #1171](https://github.com/StealthCat/MrPatchy/pull/1171): Incident and startup advisory jobs now give plan-specific blocked diagnostics for model refusal and response token exhaustion, state that no plan was accepted and the request may be billed, and tell operators what to do next. Raw refusal text is excluded; failed calls keep one provider receipt and no saved plan, while unrelated incomplete responses retain their wording. Compatibility: no schema or permission change; eligibility, deferral, accounting and authorization remain unchanged. Limit: production-provider acceptance remains unverified.
