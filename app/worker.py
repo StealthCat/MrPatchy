@@ -824,13 +824,14 @@ def _assess_active_behavior(s,row,cfg,secret):
     # Resolve authenticated file provenance before cache lookup or provider input.
     # This never approves a behavior: authentic programs can be abused.
     from . import file_status
-    if lease:
-        with lease.mutation() as (write,saved):
-            saved.evidence=file_status.before_ai(write,saved)
-        row.evidence=copy.deepcopy(saved.evidence)
-    else:
-        row.evidence=file_status.before_ai(s,row)
-        s.commit()
+    with ai_runs.measure('file_provenance'):
+        if lease:
+            with lease.mutation() as (write,saved):
+                saved.evidence=file_status.before_ai(write,saved)
+            row.evidence=copy.deepcopy(saved.evidence)
+        else:
+            row.evidence=file_status.before_ai(s,row)
+            s.commit()
 
     missed={}
     def reuse(write,saved):
