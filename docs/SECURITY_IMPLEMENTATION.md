@@ -3710,6 +3710,24 @@ legacy per-purpose ceiling, including the fixed 10/hour automatic-plan allowance
 - **Still open:** an in-app notification for the migration and the broader
   shared-controls acceptance.
 
+### Legacy AI admission migration notifications — worker checkpoint #1178
+
+The #1039 "still open" in-app notification is delivered. `app/ai_control_migration.py`
+now publishes admin-only events (source `ai-admission`, deep link `#settings/ai`):
+- **Migrated:** one `info` record naming the new shared rate, written in the same
+  transaction as the migration and its audit row. Restarts add nothing.
+- **Refused:** when the proposal would expand admission or spend, one `medium` event
+  says the hidden legacy allowances remain and that nothing was changed. Repeated
+  refused startups publish no new revision. Each `collect_alerts` pass keeps it active
+  while the stored configuration still has no `ai_control_mode`, and resolves it once
+  an administrator saves an explicit mode or a later startup migrates.
+- **Unchanged:** a rejected notification payload never blocks or rolls back the
+  migration. No schema, admission, spend, pause, role or response-authorization
+  change; no provider call; no SMTP/webhook alert.
+- **Validation:** `tests/test_ai_control_migration_notifications.py`; three of its
+  five cases fail without the change.
+- **Still open:** the broader shared-controls acceptance.
+
 ### Refuse unconfirmed AI admission/spend expansions on save — worker checkpoint #881
 
 The #871 limitation is closed. An expanding save is no longer just audited; the
