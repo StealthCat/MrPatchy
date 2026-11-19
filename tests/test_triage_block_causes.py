@@ -172,3 +172,87 @@ def test_oversized_follow_up_evidence_says_the_first_call_was_sent(admin, monkey
     assert 'nothing was sent' not in reason and 'first-stage request was sent' in reason
     assert 'does not help' in reason and 'correct API configuration' not in reason
     assert '64 KB' in analysis
+
+
+class ShapedProvider(Provider):
+    """Returns a fixed provider response body that the request reached and may bill."""
+    def __init__(self, body):
+        super().__init__()
+        self.body = body
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        usage = {'input_tokens': 10, 'output_tokens': 10, 'total_tokens': 20}
+        return httpx.Response(200, request=httpx.Request('POST', ai.URL),
+                              json={'model': kwargs['json']['model'], 'usage': usage, **self.body})
+
+
+REFUSAL = {'status': 'completed', 'output': [{'content': [{'type': 'refusal', 'refusal': 'No.'}]}]}
+TOKENS = {'status': 'incomplete', 'incomplete_details': {'reason': 'max_output_tokens'}, 'output': []}
+
+
+def test_model_refusal_block_names_the_refusal_not_the_key(admin, monkeypatch, ssh):
+    """#1158: a refusal reached the provider; a key or quota fix cannot clear it."""
+    configure()
+    add('host-refuse', SMALL)
+    provider = ShapedProvider(REFUSAL)
+    monkeypatch.setattr(ai.transport, 'post', provider)
+    worker.investigate_one()
+    assert provider.calls == 1
+    (state, reason, next_at), analysis = retry('subject-host-refuse')
+    assert state == 'blocked' and next_at == 0
+    assert reason == ai_retry.MODEL_REFUSAL_BLOCKED_REASON
+    assert 'declined' in reason and 'was sent and may be billed' in reason
+    assert 'API key does not help' in reason and 'correct API configuration' not in reason
+    assert 'declined the request' in analysis
+
+
+def test_token_budget_block_names_the_budget_not_the_key(admin, monkeypatch, ssh):
+    """#1158: the model ran out of response tokens after the request was sent."""
+    configure()
+    add('host-tokens', SMALL)
+    provider = ShapedProvider(TOKENS)
+    monkeypatch.setattr(ai.transport, 'post', provider)
+    worker.investigate_one()
+    assert provider.calls == 1
+    (state, reason, next_at), analysis = retry('subject-host-tokens')
+    assert state == 'blocked' and next_at == 0
+    assert reason == ai_retry.TOKEN_BUDGET_BLOCKED_REASON
+    assert 'response token budget' in reason and 'was sent and may be billed' in reason
+    assert 'API key does not help' in reason and 'correct API configuration' not in reason
+    assert 'token budget' in analysis
+
+
+@pytest.mark.parametrize('body', [REFUSAL, TOKENS])
+def test_refusal_and_token_causes_change_only_wording_not_eligibility(admin, monkeypatch, ssh, body):
+    configure()
+    add('host-same', SMALL)
+    monkeypatch.setattr(ai.transport, 'post', ShapedProvider(body))
+    worker.investigate_one()
+    with Session() as s:
+        signature = ai_retry.configuration(s)
+        row = s.get(ai_retry.TriageRetry, 'subject-host-same')
+        assert row.state == 'blocked' and row.configuration == signature and row.attempts == 1
+        eligible = s.scalar(select(ai_retry.TriageRetry.subject).join(
+            Behavior, Behavior.id == ai_retry.TriageRetry.subject).where(ai_retry.eligible(signature, time.time())))
+        assert eligible is None
+        assert triage_block_notifications.blocked_count(s, time.time())[0] == 1
+    # A model change still re-admits the block exactly as for a provider rejection.
+    configure(ai_model='other-model')
+    with Session() as s:
+        summary = ai_retry.summary(s.get(ai_retry.TriageRetry, 'subject-host-same'),
+                                   ai_retry.configuration(s), time.time())
+        assert summary['state'] == 'ready'
+
+
+def test_other_incomplete_and_invalid_responses_keep_the_provider_cause():
+    """Only an explicit refusal or max_output_tokens exhaustion gets the new causes."""
+    cases = [({'status': 'incomplete', 'incomplete_details': {'reason': 'content_filter'}, 'output': []}, 'provider'),
+             ({'status': 'completed', 'output': [{'content': [{'type': 'output_text', 'text': 'not json'}]}]},
+              'provider'),
+             (REFUSAL, ai.MODEL_REFUSAL), (TOKENS, ai.TOKEN_BUDGET)]
+    assert len({ai.EVIDENCE_SIZE, ai.FOLLOW_UP_EVIDENCE_SIZE, ai.MODEL_REFUSAL, ai.TOKEN_BUDGET, 'provider'}) == 5
+    for body, cause in cases:
+        with pytest.raises(ai.AIError) as error:
+            ai.structured_result(body)
+        assert error.value.cause == cause and not error.value.transient and not error.value.policy_wait

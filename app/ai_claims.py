@@ -13,7 +13,7 @@ from decimal import Decimal
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
-from sqlalchemy import String, Double, select, func, union_all
+from sqlalchemy import String, Double, select, func, or_, union_all
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
 from .coordination import Lock
@@ -163,7 +163,22 @@ def _free_hit(s,model,election_filters):
     return None
 
 
+def _needs_admission_lock(s, now):
+    """One read probes for possible work or recovery without selecting evidence."""
+    pending = select(Behavior.id).where(Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')))
+    expired = select(Claim.subject).where(Claim.expires <= now)
+    runs = ai_runs.AIRun
+    has_claim = select(Claim.subject).where(Claim.run_id == runs.id).exists()
+    orphaned = select(runs.id).where(runs.purpose == 'triage', runs.state == 'running', ~has_claim)
+    return s.scalar(select(or_(pending.exists(), expired.exists(), orphaned.exists())))
+
+
 def acquire(owner=None):
+    # Close the preflight snapshot before taking the distributed lock. A positive
+    # answer only enters the normal election and recovery path in a fresh session.
+    with Session() as s:
+        if not _needs_admission_lock(s, time.time()):
+            return None
     lock=Lock('ai-triage')
     lock_started=perf_counter()
     if not lock.acquire():return None
