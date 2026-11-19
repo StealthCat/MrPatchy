@@ -11549,7 +11549,18 @@ Two re-enable paths published `overdue` straight away when the scheduler was hel
 - **No upgrade delay:** a server never seen inactive has no marker, so existing and continuously active servers keep the #816 schedule after upgrade.
 - **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
-- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
+- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope. (The grace became configurable in #1182.)
+
+### Configurable grace before scheduled-scan coverage notifications — worker checkpoint #1182
+
+Checkpoints #883 and #1043 left the one-hour grace fixed. A server that planned maintenance or slow workers routinely hold past its scan interval could only avoid repeated `overdue` or `stalled` events by turning scheduled scanning off.
+
+- **Change:** the server's Scheduled scanning policy accepts `notify_grace_hours`, an integer from 1 to 168 (default 1). Other values are rejected with 422. The policy GET default includes it, and the Security tab's Scheduled scanning form shows and saves it.
+- **Producer:** `overdue`, `stalled`, the never-scanned `enabled_since` wait, the #883 legacy marker wait and the #1043 resume clock all use the interval plus the configured grace. A missing, malformed or out-of-range stored value keeps one hour, so existing policies keep the #816 schedule after upgrade.
+- **Reason text:** with the default grace the reason is byte-identical to before, so existing events gain no unread revision on upgrade. A non-default grace names its hours in the `overdue` and `stalled` reasons, and changing the grace while an event is active adds one revision.
+- **Unchanged:** the scheduler, scan intervals, `security_coverage.assessment` and the coverage page, `failed` and `incomplete`, payload shape, roles (admin-only save, unchanged route dependency), the schema and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** seven focused tests in `tests/test_scan_coverage_grace.py` fail on main `c22fb68` and pass after the change, alongside the existing coverage-notification tests. `tests/ui_security.cjs` checks that a legacy policy shows one hour and that the saved value is sent.
+- **Remaining:** a server disabled and re-enabled between two alert ticks is still never seen inactive. YARA schedules remain out of scope.
 
 ### XDG autostart contract — worker checkpoint #889 (roadmap F)
 

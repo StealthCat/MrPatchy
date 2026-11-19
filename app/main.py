@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.62"
+APP_VERSION = "1.75.63"
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -3463,12 +3463,14 @@ class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False
     interval_hours:int=Field(default=24,ge=1,le=720)
+    # Hours past the interval before coverage notifications publish overdue or stalled (#1182).
+    notify_grace_hours:int=Field(default=1,strict=True,ge=1,le=168)
 
 @app.get('/api/hosts/{host_id}/security/policy')
 def security_policy(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
-        return row.value if row else {'enabled':False,'interval_hours':24,'paths':['/usr/local/bin','/tmp']}
+        return row.value if row else {'enabled':False,'interval_hours':24,'notify_grace_hours':1,'paths':['/usr/local/bin','/tmp']}
 
 @app.put('/api/hosts/{host_id}/security/policy')
 def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_user)):
