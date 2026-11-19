@@ -1,3 +1,7 @@
+## 1.75.65 — 2026-11-19
+
+1. [PR #1098](https://github.com/StealthCat/MrPatchy/pull/1098): Add a pure, fail-closed systemd-tmpfiles contract for lines that write kernel execution hooks or create startup files. It reports bounded evidence, source locations, ordering and unresolved host-dependent cases. Compatibility: additive module only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: no agent collection or UI; the startup-location list is fixed, and host-dependent conditions remain explicit gaps.
+
 ## 1.75.64 — 2026-11-19
 
 1. [PR #1125](https://github.com/StealthCat/MrPatchy/pull/1125): Fleet AI Activity and per-server queues show the provider retry floor after a saved model or key change, rather than a stale recovery deadline. Current-configuration failures remain blocked; schema, authorization and shared admission behavior are unchanged. Per-observation detail and broader Roadmap A acceptance remain open.
