@@ -140,12 +140,15 @@ def test_mysql_mode_refuses_a_database_that_already_has_tables(empty_mysql):
 
 
 @needs_mysql
-def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql):
+@pytest.mark.parametrize('same_server', [False, True], ids=['cross-server', 'same-server'])
+def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql, same_server):
+    workload = ['--runs', '4', '--provider-delay-ms', '250' if same_server else '40',
+                '--ssh-delay-ms', '1', '--retained-history-rows', '25']
+    if same_server:
+        workload.append('--same-server')
     reports = []
     for concurrency in (1, 4):
-        result = run('--database', 'mysql', '--runs', '4', '--concurrency', str(concurrency),
-                     '--provider-delay-ms', '40', '--ssh-delay-ms', '1', '--retained-history-rows', '25',
-                     url=MYSQL_URL)
+        result = run('--database', 'mysql', *workload, '--concurrency', str(concurrency), url=MYSQL_URL)
         assert result.returncode == 0, result.stderr
         assert MYSQL_URL not in result.stdout and MYSQL_URL not in result.stderr
         assert _tables(empty_mysql) == []
@@ -157,11 +160,14 @@ def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(em
         assert report['runs'] == report['completed_subjects'] == 4
         assert report['provider_calls'] == 6 and report['errors'] == 0
         assert report['retained_history_rows'] == 25 and report['approved_subjects'] == 0
+        assert report['fixture_hosts'] == (1 if same_server else 4)
+        assert report['single_server_slots'] == (4 if same_server else None)
+        assert report['stages']['two_stage']['count'] == report['stages']['ssh_evidence']['count'] == 2
     assert serial['peak_provider_requests'] == 1 and parallel['peak_provider_requests'] > 1
     comparison = compare(serial, parallel)
     assert comparison['capability_equivalent'] is True
     assert comparison['baseline']['database'] == comparison['candidate']['database'] == 'mysql'
-    sqlite = run('--runs', '4', '--provider-delay-ms', '40', '--ssh-delay-ms', '1', '--retained-history-rows', '25')
+    sqlite = run(*workload)
     assert sqlite.returncode == 0, sqlite.stderr
     sqlite_report = json.loads(sqlite.stdout)
     # The same synthetic workload reaches the provider and SSH fixtures on either backend.
