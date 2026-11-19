@@ -104,6 +104,40 @@ def test_older_parallel_success_does_not_clear_a_newer_failure(admin):
         assert row.failures==0 and row.blocked_until==0
 
 
+def test_reversed_failure_writes_keep_newer_provider_floor(admin, monkeypatch):
+    original_lock = ai_provider_backoff.Lock
+
+    @contextmanager
+    def allow_newer_failure_first(name):
+        with monkeypatch.context() as inner:
+            inner.setattr(ai_provider_backoff, 'Lock', original_lock)
+            newer = ai.AIError('provider wait', transient=True, retry_after=120)
+            ai_provider_backoff.failed(newer, now=102)
+        with original_lock(name):
+            yield
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ai_provider_backoff, 'Lock', allow_newer_failure_first)
+        earlier = ai.AIError('provider wait', transient=True, retry_after=30)
+        assert ai_provider_backoff.failed(earlier, now=100) == 122
+
+    # This request was already in flight when the newer failure was observed,
+    # even though the earlier failure was recorded last.
+    ai_provider_backoff.succeeded(request_started=101, now=103)
+    with pytest.raises(ai.AIError) as waiting:
+        ai_provider_backoff.admit(now=103)
+    assert waiting.value.provider_wait_until == 222
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.failures, row.blocked_until, row.updated) == (2, 222, 102)
+
+    ai_provider_backoff.succeeded(request_started=223, now=224)
+    ai_provider_backoff.admit(now=224)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.failures, row.blocked_until) == (0, 0)
+
+
 @pytest.mark.parametrize('state', ['absent', 'clear', 'newer'])
 def test_healthy_completion_skips_global_lock_and_update(admin, monkeypatch, state):
     configure()
