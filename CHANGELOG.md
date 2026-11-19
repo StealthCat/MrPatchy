@@ -1,3 +1,7 @@
+## 1.75.64 — 2026-11-19
+
+1. [PR #1125](https://github.com/StealthCat/MrPatchy/pull/1125): Fleet AI Activity and per-server queues show the provider retry floor after a saved model or key change, rather than a stale recovery deadline. Current-configuration failures remain blocked; schema, authorization and shared admission behavior are unchanged. Per-observation detail and broader Roadmap A acceptance remain open.
+
 ## 1.75.63 — 2026-11-19
 
 1. [PR #1183](https://github.com/StealthCat/MrPatchy/pull/1183): Administrators can configure the scheduled-scan coverage-notification grace per server (1–168 hours, default one hour). Overdue and stalled notices now use the scan interval plus that grace, and the Security tab exposes the setting. Existing policies retain the one-hour threshold and byte-identical default notice text; no schema, scheduler, scan assessment, role or response-authorization changes. Limit: a disable/re-enable cycle between alert ticks remains undetected, and YARA schedules remain out of scope.

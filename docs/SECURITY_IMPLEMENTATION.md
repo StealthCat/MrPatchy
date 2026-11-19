@@ -27,6 +27,20 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+### Retry eligibility after a saved AI configuration change — Roadmap A checkpoint #1124
+
+Fleet AI Activity and the per-server triage queue now show a timed provider
+wait when the saved model or key has changed since an investigation was
+blocked. The displayed deadline comes from the provider floor. An earlier
+attempt's recovery deadline does not extend the wait after a configuration
+change. Investigations blocked under the current configuration still show
+that an administrator must review them.
+
+The regression exercises configuration-blocked and exhausted interrupted
+attempts before and at the provider deadline. Shared rate, spend, pause and
+other admission gates still apply. Independent scoring admission and
+production throughput acceptance remain open.
+
 ## Dependency vulnerability gate (partial #201)
 
 The CI `static` job runs `pip-audit` (pinned in `requirements-audit.txt`) against the

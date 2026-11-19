@@ -109,6 +109,36 @@ def test_rows_add_up_to_the_fleet_status_totals(admin):
     assert sum(row['blocked'] for row in servers if not row['paused']) == fleet['blocked'] - 1
 
 
+@pytest.mark.parametrize('subject', ['busy-blocked', 'busy-spent'])
+def test_changed_configuration_waits_only_for_its_provider_floor(admin, monkeypatch, subject):
+    now = seed()
+    floor = now + 90
+    with Session() as s:
+        item = s.get(ai_retry.TriageRetry, subject)
+        item.configuration = 'earlier'
+        item.provider_until = floor
+        item.next_at = now + 5400  # a superseded attempt deadline
+        s.commit()
+
+    monkeypatch.setattr(ai_runs.time, 'time', lambda: now)
+    held = breakdown(now)['servers'][0]
+    with Session() as s:
+        fleet = ai_runs.status(s)
+    assert (held['blocked'], held['retry_wait'], held['eligible']) == (1, 4, 4)
+    assert held['next_retry_at'] == pytest.approx(floor)
+    assert fleet['blocked'] == 2  # includes the last attempt with an active claim
+    assert fleet['retry_at'] == pytest.approx(floor)
+
+    monkeypatch.setattr(ai_runs.time, 'time', lambda: floor)
+    due = breakdown(floor)['servers'][0]
+    with Session() as s:
+        fleet_due = ai_runs.status(s)
+    assert due['eligible'] == 5 and due['retry_wait'] == 3
+    assert due['next_retry_at'] == pytest.approx(now + 600)
+    assert fleet_due['eligible_unclaimed'] == fleet['eligible_unclaimed'] + 1
+    assert fleet_due['retry_at'] == pytest.approx(now + 600)
+
+
 def test_limit_uses_the_admission_lease_count_when_a_claimed_behavior_leaves_the_pending_scope(admin):
     now = seed()
     with Session() as s:
