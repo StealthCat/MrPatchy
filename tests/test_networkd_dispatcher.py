@@ -174,3 +174,28 @@ def test_report_never_claims_origin_or_verdict():
     result = run([script(f'{ETC}/routable.d/a')])
     assert result['origin'] == 'not_assessed' and 'not a safety verdict' in result['note']
     assert any('overrides' in item for item in result['unobserved'])
+
+
+def test_unlisted_higher_directory_leaves_lower_script_unresolved():
+    # scripts_in_path takes the first directory holding a name, so a lower
+    # entry cannot be reported as running while a higher <state>.d is unlisted.
+    lower = [script(f'{LIB}/routable.d/50-x')]
+    for etc in ({'path': f'{ETC}/routable.d', 'state': 'unreadable'}, None):
+        directories = [{'path': ETC, 'state': 'listed', 'subdirectories': ['routable.d']},
+                       {'path': LIB, 'state': 'listed', 'subdirectories': ['routable.d']},
+                       {'path': f'{LIB}/routable.d', 'state': 'listed', 'lstat': ROOT_DIR}]
+        if etc is not None:
+            directories.append(etc)
+        result = run(lower, directories)
+        assert result['complete'] is False
+        assert names(result) == []
+        assert by_path(result)[f'{LIB}/routable.d/50-x']['status'] == 'unresolved'
+    unreadable_base = run(lower, [{'path': ETC, 'state': 'unreadable'},
+                                  {'path': LIB, 'state': 'listed', 'subdirectories': ['routable.d']},
+                                  {'path': f'{LIB}/routable.d', 'state': 'listed', 'lstat': ROOT_DIR}])
+    assert names(unreadable_base) == [] and unreadable_base['complete'] is False
+    # A higher base that is absent, or lists no such state directory, cannot shadow.
+    for etc in ({'path': ETC, 'state': 'absent'}, {'path': ETC, 'state': 'listed', 'subdirectories': []}):
+        result = run(lower, [etc, {'path': LIB, 'state': 'listed', 'subdirectories': ['routable.d']},
+                             {'path': f'{LIB}/routable.d', 'state': 'listed', 'lstat': ROOT_DIR}])
+        assert names(result) == [f'{LIB}/routable.d/50-x'] and result['complete'] is True

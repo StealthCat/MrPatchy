@@ -6224,6 +6224,10 @@ captured directory and file metadata and the text of
   - duplicate or malformed entries;
   - over-limit input.
 
+  An entry whose name an unlisted (unobserved or unreadable) higher-priority
+  directory for the same state could hold is reported `unresolved`, not
+  `runs`, and is left out of the ordered script list.
+
   `origin` is always `not_assessed`. Each result names what it cannot observe:
   package and service state, unit overrides, link states, the daemon's
   inherited environment and script contents.

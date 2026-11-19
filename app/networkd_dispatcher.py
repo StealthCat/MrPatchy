@@ -444,6 +444,19 @@ def evaluate(files: Any, *, directories: Any = None, defaults: Any = None) -> di
                 _gap(gaps, 'input_malformed', entry['path'], 'A file was supplied for a directory not reported listed.')
             by_state.setdefault(state, {}).setdefault(name, {})[base] = entry
 
+    def unlisted(base: str, state: str) -> bool:
+        """True when this ``<state>.d`` may hold names that were not observed."""
+        base_obs = observed.get(base)
+        if base_obs is None or base_obs['state'] == 'unreadable':
+            return True
+        if base_obs['state'] == 'absent':
+            return False
+        sub = observed.get(posixpath.join(base, state + '.d'))
+        if sub is None:
+            listed = base_obs.get('subdirectories')
+            return listed is None or state + '.d' in listed
+        return sub['state'] == 'unreadable'
+
     result['service_condition'] = _service_condition(entries, observed)
     for state, names in by_state.items():
         order = 0
@@ -453,6 +466,10 @@ def evaluate(files: Any, *, directories: Any = None, defaults: Any = None) -> di
             for base in script_dirs:
                 entry = names[name].get(base)
                 if entry is None:
+                    # scripts_in_path takes the first directory holding the name,
+                    # so an unlisted higher-priority directory may shadow it.
+                    if winner is None and unlisted(base, state):
+                        undetermined = True
                     continue
                 if winner is not None or undetermined:
                     status, reason = ('overridden', 'overridden') if winner is not None else (None, 'unresolved')
