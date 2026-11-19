@@ -11609,6 +11609,13 @@ and matched production throughput remain outside this acceptance slice.
 - **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
 
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
 ### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
 
 `grub-mkconfig` (`grub2-mkconfig` on RPM families) runs as root whenever the GRUB configuration is regenerated. That includes `update-grub`, GRUB's maintainer scripts and, on Debian and Ubuntu, every kernel install or removal through `/etc/kernel/postinst.d/zz-update-grub`. Each run sources `/etc/default/grub` (and, on Debian, `/etc/default/grub.d/*.cfg`) as shell, then runs the executable scripts in `/etc/grub.d`, whose output becomes `grub.cfg`. Neither the startup catalog nor any contract covered this root execution path.
