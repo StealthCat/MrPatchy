@@ -11766,3 +11766,13 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
+### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
+
+New disposable SQLite and MySQL benchmark reports require one successful
+result-persistence timing per completed investigation and one successful
+evidence-persistence timing per requested follow-up. A report is refused when
+either stage is missing, duplicated, malformed, unsuccessful or assigned to the
+wrong run, even when the fixture completed all investigations. Successful
+reports retain the existing format. This guards fixture evidence only.
+Production and live-provider performance comparisons remain open.
