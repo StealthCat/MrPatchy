@@ -76,13 +76,23 @@ class MySQLClaim:
         from sqlalchemy import text
         from sqlalchemy.exc import SQLAlchemyError
 
+        connection = self.connection
         try:
+            # Named locks belong to the session. A replacement connection cannot
+            # distinguish this run's tables from a later owner's tables.
             try:
-                self.connection.execute(text('SELECT 1'))
-                connection = self.connection
+                owns_lock = connection.execute(
+                    text('SELECT IS_USED_LOCK(:name) = CONNECTION_ID()'),
+                    {'name': self.lock_name},
+                ).scalar_one() == 1
             except SQLAlchemyError:
-                # The lock died with its connection; cleanup of our own tables is still safe.
-                connection = self.engine.connect()
+                owns_lock = False
+            if not owns_lock:
+                raise DatabaseRefused(
+                    'Benchmark MySQL lock ownership could not be verified; cleanup skipped. '
+                    'Inspect the disposable database before reusing it.'
+                )
+
             foreign = 0
             owned = self.fixture_tables | set(self.metadata.tables if self.metadata is not None else ())
             connection.execute(text('SET FOREIGN_KEY_CHECKS=0'))
@@ -94,12 +104,14 @@ class MySQLClaim:
             connection.execute(text('SET FOREIGN_KEY_CHECKS=1'))
             connection.execute(text('SELECT RELEASE_LOCK(:name)'), {'name': self.lock_name})
             connection.commit()
-            connection.close()
             if foreign:
                 print(f'warning: left {foreign} table(s) or view(s) the benchmark did not create in the '
                       'MySQL database; it is no longer empty', file=sys.stderr)
         finally:
-            self.engine.dispose()
+            try:
+                connection.close()
+            finally:
+                self.engine.dispose()
 
 
 def claim_empty_mysql(url):
@@ -351,7 +363,7 @@ def main():
                     return {'count': 0, 'p50_ms': None, 'p95_ms': None}
                 ordered=sorted(values)
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
-            print(json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
+            report = json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
                 'fixture_hosts':len(set(observed_hosts.values())), 'single_server_slots':single_server_slots,
                 'peak_provider_requests':peak_provider_requests,
                 'database':args.database, 'database_version':database_version,
@@ -363,9 +375,17 @@ def main():
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
                 'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'completed_subjects':completed_subjects,'approved_subjects':approved_subjects,
                 'errors':0,'cost_status':'unavailable: synthetic model/usage, no paid API calls','initial_fixture_queue_age_seconds':args.queue_age_seconds,
-                'notes':'Loopback provider, SSH delay, queue age and the optional receipt/usage persistence delay are synthetic; no production/TLS/database speed claim. Admission includes lock/query/run creation; run includes persistence.'},indent=2))
+                'notes':'Loopback provider, SSH delay, queue age and the optional receipt/usage persistence delay are synthetic; no production/TLS/database speed claim. Admission includes lock/query/run creation; run includes persistence.'},indent=2)
         finally:
             if hasattr(ai,'transport'):ai.transport.close()
             server.shutdown();server.server_close();thread.join();engine.dispose()
 
-if __name__ == '__main__':main()
+    # ExitStack runs the MySQL cleanup before a successful report is emitted.
+    print(report)
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except DatabaseRefused as refusal:
+        sys.exit(str(refusal))
