@@ -272,7 +272,7 @@ def run_one():
                     # One timing per reply that reaches revalidation: re-reading current
                     # package evidence and committing (or superseding) the validated batch.
                     # Refused and malformed replies raise above and are not timed here.
-                    with ai_runs.measure('result_persistence'),Session() as s
+                    with ai_runs.measure('result_persistence'),Session() as s:
                         package_ids = {identifier: score.host_id + ':' + score.name
                                        for identifier, score in scores.items()}
                         packages = {package.id: package for package in s.scalars(
