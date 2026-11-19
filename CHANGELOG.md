@@ -1,3 +1,7 @@
+## 1.75.48 — 2026-11-19
+
+1. [PR #1152](https://github.com/StealthCat/MrPatchy/pull/1152): Idle package scoring skips the fleet lock when a cold memo has neither an active unpaused candidate nor an unfinished scoring run. The lock still protects recovery and candidate processing, and warm passes retain memo pruning. A busy cold poll adds one read-only existence probe; work arriving after a negative probe waits for the next poll. Compatibility: no schema, API or response-authorization change; independent scoring admission and production throughput remain open.
+
 ## 1.75.47 — 2026-11-19
 
 1. [PR #1155](https://github.com/StealthCat/MrPatchy/pull/1155): Stabilizes daily-cap contention fixtures across UTC midnight by persisting a shared timezone with its reset outside the test window and checking a real reservation before and after midnight. Compatibility: test-only; runtime, schema, provider behavior and operator configuration are unchanged. Explicit tests continue to cover real budget resets.
