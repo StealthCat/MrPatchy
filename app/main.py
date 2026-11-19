@@ -3425,7 +3425,7 @@ class SecurityScanPolicy(SecurityScanInput):
     auto_ai_plan:bool=False
     interval_hours:int=Field(default=24,ge=1,le=720)
     # Hours past the interval before coverage notifications publish overdue or stalled (#1182).
-    notify_grace_hours:int=Field(default=1,ge=1,le=168)
+    notify_grace_hours:int=Field(default=1,strict=True,ge=1,le=168)
 
 @app.get('/api/hosts/{host_id}/security/policy')
 def security_policy(host_id:str,user=Depends(admin_user)):

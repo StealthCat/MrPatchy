@@ -19,7 +19,7 @@ def test_policy_save_accepts_and_validates_notify_grace_hours(admin):
     assert put_policy(admin, notify_grace_hours=12)['notify_grace_hours'] == 12
     assert stored_policy()['notify_grace_hours'] == 12
     assert put_policy(admin)['notify_grace_hours'] == 1  # omitted: one hour, as before
-    for bad in (0, 169, -1, 'soon', 1.5):
+    for bad in (0, 169, -1, 'soon', 1.5, True, 1.0, '12', None):
         body = {'enabled': True, 'interval_hours': 1, 'paths': ['/srv'], 'notify_grace_hours': bad}
         response = admin.put('/api/hosts/' + HOST + '/security/policy', json=body)
         assert response.status_code == 422, (bad, response.text)
