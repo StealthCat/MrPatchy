@@ -6036,11 +6036,17 @@ exist, and performs no I/O.
     state was not observed;
   - `/etc/inittab.d` contains `*.tab` files, which this slice does not
     resolve yet;
-  - the input has invalid UTF-8 or NUL bytes, or is over the limit.
+  - the input has invalid UTF-8 or NUL bytes, or is over the limit;
+  - the `initdefault` runlevels contain non-ASCII bytes. `get_init_default()`
+    keeps the highest plain `char`, which is signed on x86_64 (those bytes
+    never win) and unsigned on arm (they do), so the default runlevel and
+    prompt are left unresolved.
 
   Every result names what it cannot observe: whether PID 1 is sysvinit
   (systemd ignores the file, and BusyBox init uses another format), the
-  runlevel in use, the programs an entry runs, and respawn throttling. `origin`
+  runlevel in use, the programs an entry runs, respawn throttling, and how
+  much of a shell-mode process init copies (`spawn()` sizes that copy with
+  `strlen()` on an uninitialised buffer). `origin`
   is always `not_assessed`, and no result is a safety verdict.
 
 **Not covered:** `/etc/inittab.d` parsing, agent collection, catalog wiring,

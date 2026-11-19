@@ -30,7 +30,9 @@ whose ``read_inittab()`` and ``spawn()`` are identical:
   ``~~:S:wait:/sbin/sulogin``.
 - ``initdefault`` uses the highest runlevel character of the first such entry,
   uppercased; one outside ``0-9S``, or no entry, makes init prompt on the
-  console.
+  console. Non-ASCII runlevel bytes leave the default unresolved with a
+  blocking gap, because x86_64 (signed ``char``) and arm (unsigned ``char``)
+  init pick differently.
 - ``spawn()`` drops one leading ``+`` (which also stops utmp/wtmp records).
   When ``/etc/initscript`` is readable and the runlevel is not ``S``, it runs
   ``/bin/sh /etc/initscript <id> <runlevels> <action> <process>``, minus a
@@ -93,12 +95,15 @@ TRIGGERS = {
 }
 BLOCKING = frozenset({'text_not_observed', 'over_limit', 'invalid_utf8', 'binary', 'entries_over_limit',
                       'inittab_d_not_observed', 'inittab_d_not_modelled', 'initscript_not_observed',
-                      'gaps_truncated'})
+                      'gaps_truncated', 'default_runlevel_char_signedness'})
 NOT_OBSERVED = (
     'Whether PID 1 is sysvinit init; systemd ignores /etc/inittab, and BusyBox init uses a different format.',
     'The current and default runlevel actually in use, so which runlevel entries are running now.',
     'The contents of programs or scripts an entry runs.',
     'Whether respawn entries are currently disabled for respawning too fast (10 starts in 120 seconds).',
+    ('How much of a shell-mode process init copies: spawn() strncpy()s it into a buffer whose length it measures '
+     'with strlen() on uninitialised memory, so shell_text is the text init intends to run and may be truncated at '
+     'spawn time.'),
 )
 
 
@@ -297,6 +302,14 @@ def evaluate(text: str | bytes | None, *, state: str = 'present', inittab_d: Any
     result['entries'] = entries
     result['rejected'] = rejected
     default = next((e for e in entries if e['action'] == 'initdefault'), None)
+    if default and not default['runlevels'].isascii():
+        # get_init_default() keeps the highest plain ``char``: signed on x86_64, so bytes >= 0x80 never win, but
+        # unsigned on arm/aarch64, where they do. The host architecture is not observed, so do not guess.
+        _gap(gaps, 'default_runlevel_char_signedness', default['line'],
+             'The initdefault runlevels contain non-ASCII bytes; which runlevel init picks depends on whether the '
+             'host C char type is signed (x86_64) or unsigned (arm), which was not observed.')
+        result.update(default_runlevel=None, default_runlevel_prompt=None)
+        return _finish(result, gaps)
     level = max(default['runlevels']) if default and default['runlevels'] else ''
     level = level.upper()
     if level and level in '0123456789S':

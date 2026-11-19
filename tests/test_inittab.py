@@ -122,6 +122,20 @@ def test_default_runlevel():
     assert run('id:3:initdefault:\ni2:5:initdefault:\n')['default_runlevel'] == '3'
 
 
+def test_non_ascii_initdefault_runlevels_depend_on_char_signedness():
+    # get_init_default() keeps the highest plain char: x86_64 (signed) ignores the UTF-8 bytes and boots 3, while
+    # arm (unsigned) picks a byte >= 0x80 and prompts. The architecture is not observed, so this must not resolve.
+    result = run('id:3\u00e9:initdefault:\n')
+    assert result['default_runlevel'] is None
+    assert result['default_runlevel_prompt'] is None
+    assert result['complete'] is False
+    gap = next(g for g in result['gaps'] if g['code'] == 'default_runlevel_char_signedness')
+    assert gap['line'] == 1 and gap['blocking'] is True
+    ascii_only = run('id:35:initdefault:\n')
+    assert ascii_only['complete'] is True and ascii_only['default_runlevel'] == '5'
+    assert not any(g['code'] == 'default_runlevel_char_signedness' for g in ascii_only['gaps'])
+
+
 def test_spawn_dispatch():
     assert it.command('/bin/a b')['mode'] == 'exec'
     shell = it.command('/bin/a > /dev/null')
