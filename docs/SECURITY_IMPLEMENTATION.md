@@ -11609,6 +11609,13 @@ and matched production throughput remain outside this acceptance slice.
 - **Validation:** `tests/test_needrestart_hooks.py` has 26 tests and cannot run on main, where the module does not exist. A Perl reference test compares the conf.d glob and sort, and the notify.d skip regex, against real `perl`. Nine mutations are each caught.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, dpkg provenance for the shipped hook files, and UI.
 
+Worker checkpoint #1146 batches live evidence reads after a scoring response.
+A five-package fixture spanning five servers reduces package and inventory reads
+from ten queries to two. Each assessment still uses the exact score identity.
+The fixture keeps an unchanged score and supersedes scores when the candidate
+or inventory changes or the package or server disappears. Independent scoring
+admission and production throughput remain open.
+
 ### Python site startup-hook contract — worker checkpoint #1144 (roadmap F)
 
 Every CPython start without `-S` imports `site`, including root services. `site` executes each `.pth` line that starts with `import ` or `import\t` in every processed site directory, then imports `sitecustomize`, and `usercustomize` when the user site is enabled. This is a known persistence hook (MITRE ATT&CK T1546.018). Neither the startup catalog nor any contract covered it.
