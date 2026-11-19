@@ -119,6 +119,16 @@ def test_defaults_file_controls_startup_triggers_and_script_dirs():
     assert result['complete'] is True
 
 
+def test_defaults_file_without_the_variable_runs_with_no_arguments():
+    for text in ('# networkd_dispatcher_args="--run-startup-triggers"\n', '', 'OTHER=1\n',
+                 'networkd_dispatcher_args=\n'):
+        result = run([script(f'{ETC}/routable.d/a')], defaults={'state': 'present', 'text': text})
+        assert result['startup_triggers'] is False and result['script_directories_source'] == 'default'
+        assert result['script_directories'] == [ETC, LIB]
+        assert names(result) == [f'{ETC}/routable.d/a']
+        assert not any(gap['code'] == 'arguments_unparsed' for gap in result['gaps'])
+
+
 def test_argument_parsing_follows_argparse():
     parse = nd.parse_arguments
     assert parse(['--script-dir=/a', '--run']) == {'script_dir': '/a', 'startup_triggers': True}

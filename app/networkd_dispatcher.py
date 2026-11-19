@@ -236,7 +236,8 @@ def _script_dirs(defaults: Any, gaps: list[dict[str, Any]]) -> tuple[list[str] |
         _gap(gaps, 'input_malformed', DEFAULTS_PATH, 'The service arguments observation is malformed or too large.')
         return list(DEFAULT_SCRIPT_DIRS), 'default_unconfirmed', None
     value, parsed = parse_defaults(text)
-    options = parse_arguments(value.split()) if parsed else None
+    # An unassigned variable expands to no arguments in ExecStart, like an empty assignment.
+    options = parse_arguments((value or '').split()) if parsed else None
     if options is None:
         _gap(gaps, 'arguments_unparsed', DEFAULTS_PATH,
              'networkd_dispatcher_args could not be parsed exactly; the script directories are not confirmed.')
