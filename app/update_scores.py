@@ -143,6 +143,11 @@ def _load_scoring_hosts(s, host_ids):
     return prepared
 
 
+def _scoring_package_filters():
+    return (Package.candidate != '', Package.host_id.not_in(ai_policy.paused_ids()),
+            Package.host_id.in_(host_lifecycle.active_ids()))
+
+
 def scoring_candidates(s):
     """Read ordered candidates and exact/deferred score state in bounded chunks.
 
@@ -153,8 +158,7 @@ def scoring_candidates(s):
     cursor = None
     hosts = {}
     while True:
-        query=select(Package).where(Package.candidate!='',Package.host_id.not_in(ai_policy.paused_ids()),
-            Package.host_id.in_(host_lifecycle.active_ids()))
+        query=select(Package).where(*_scoring_package_filters())
         if cursor is not None:
             query=query.where(or_(Package.available_since>cursor[0],
                 and_(Package.available_since==cursor[0],Package.id>cursor[1])))
@@ -193,6 +197,16 @@ def _batch_scores(s, ids):
 
 
 def run_one():
+    if not _MEMO:
+        # A warm memo still uses the locked pass so an exhausted walk can prune
+        # absent hosts. This probe only skips idle work. The worker rechecks
+        # candidates and recovery under the same lock on a fresh session.
+        unfinished = select(ai_runs.AIRun.id).where(
+            ai_runs.AIRun.purpose == 'update_scoring', ai_runs.AIRun.state == 'running').exists()
+        candidates = select(Package.id).where(*_scoring_package_filters()).exists()
+        with Session() as s:
+            if not s.scalar(select(or_(unfinished, candidates))):
+                return
     lock=Lock('ai-update-scoring')
     if not lock.acquire(False):return
     try:

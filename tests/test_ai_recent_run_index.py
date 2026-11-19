@@ -5,7 +5,7 @@ from sqlalchemy import event, insert, inspect, select, text
 
 from app import ai_claims, ai_runs, db, update_scores
 from app.ai_runs import AIRun
-from app.db import Behavior, Host, Setting
+from app.db import Behavior, Host, Package, Setting
 from app.security import seal
 
 
@@ -53,6 +53,8 @@ def test_recent_run_reads_use_purpose_and_time_range(admin, monkeypatch):
         session.merge(Setting(key='worker:heartbeat', value={'seen': now}))
         session.add(Host(id='host', name='Fixture', address='192.0.2.1', fingerprint=''))
         session.add(Behavior(id='eligible', host_id='host', attempted=0, evidence={}))
+        session.add(Package(id='host:fixture', host_id='host', name='fixture',
+                            installed='1', candidate='2'))
         session.execute(insert(AIRun), [
             {'id': f'history-{i}', 'purpose': 'triage' if i % 2 else 'update_scoring',
              'started': now - 7200, 'state': 'complete'}
