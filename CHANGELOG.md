@@ -1,3 +1,7 @@
+## 1.75.45 — 2026-11-18
+
+1. [PR #1149](https://github.com/StealthCat/MrPatchy/pull/1149): Adds a pure, versioned contract that identifies root-executable Ubuntu `needrestart` configuration and hook paths after APT transactions from captured observations and known package hashes. Unknown versions, modified Perl configuration, uncertain ordering and incomplete observations remain explicit coverage gaps. Compatibility: no runtime caller, collection wiring, UI, schema, route, role, target-helper or response-authorization change; startup-inventory integration, a catalog entry, dpkg provenance and non-Ubuntu coverage remain open.
+
 ## 1.75.44 — 2026-11-18
 
 1. [PR #1143](https://github.com/StealthCat/MrPatchy/pull/1143): AI Activity now shows the retained deferred-scoring total, counts scores eligible now only on active unpaused servers while scoring is enabled, and reports the earliest future retry separately. When deferred work is held and no competing operation applies, the card explains the hold. Compatibility: the administrator status adds `scoring_ready`, and `scoring_next_at` now means a future retry; the single aggregate read remains. Scheduler identity checks, shared provider admission, schema and response authorization are unchanged. Independent scoring admission and measured production throughput remain open.
