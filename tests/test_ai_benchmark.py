@@ -25,6 +25,7 @@ def test_ssh_delay_benchmark_preserves_the_followup(tmp_path):
     assert report['runs'] == 2 and report['provider_calls'] == 3 and report['errors'] == 0
     assert report['stages']['ssh_evidence']['count'] == 1
     assert report['stages']['ssh_evidence']['p50_ms'] >= 40
+    assert report['persisted_stages']['file_provenance']['count'] == report['runs']
     assert report['stages']['one_stage']['count'] == report['stages']['two_stage']['count'] == 1
 
 
