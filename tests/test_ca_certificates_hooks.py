@@ -198,7 +198,7 @@ def _kind(st):
 def _hook(path, log, status=0):
     with open(path, 'w') as fh:
         fh.write(f'#!/bin/sh\necho "== $0 [$*]" >> {log}\ncat >> {log}\nexit {status}\n')
-    os.chmod(path, 0o755)
+    os.chmod(path, 0o700)
 
 
 @real
@@ -219,7 +219,7 @@ def test_differential_against_real_update_ca_certificates(tmp_path, extra):
     for name in ('zz-last', 'A_first', 'Mid-1', 'fails', 'x.sh', '.hidden', 'old~', 'pkg.dpkg-dist'):
         _hook(str(hooks / name), log, 3 if name == 'fails' else 0)
     _hook(str(hooks / 'plain'), log)
-    os.chmod(hooks / 'plain', 0o644)
+    os.chmod(hooks / 'plain', 0o600)
     (hooks / 'subdir').mkdir()
     os.symlink(str(hooks / 'Mid-1'), str(hooks / 'linked'))
     os.symlink(str(tmp_path / 'missing'), str(hooks / 'dangling'))
