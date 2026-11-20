@@ -11923,6 +11923,23 @@ latency is unmeasured. This status work leaves scheduling, provider admission
 and response authorization intact.
 
 
+### Batch awaiting-incident summaries — Roadmap A checkpoint #1238
+
+The fleet automatic AI plan status now reads per-server counts and oldest
+timestamps in one database statement. Each listed host's subquery applies
+the same automatic-candidate exclusions and its existing limit before
+aggregating. An extra qualifying row still signals truncation. The
+single-server status uses the same summary and the fleet totals still
+describe the listed servers only. SQLite and newer MySQL versions correlate
+the bounded read. MySQL releases before 8.0.14 use one UNION statement
+with an independent bounded read per server.
+
+The SQLite fleet fixture used one incident-summary statement with both 12
+and 100 hosts, down from 12 and 100. Both layouts now use 12 total status
+reads. The measured improvement is in database round trips. Production load
+time remains unmeasured. Scheduling, provider admission and response
+authorization remain outside this status change.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
