@@ -1,3 +1,11 @@
+## 1.76.0 — 2026-11-20
+
+1. [PR #1212](https://github.com/StealthCat/MrPatchy/pull/1212): Add a standalone, versioned D-Bus activation contract that resolves captured service files, bus-name precedence and start paths, including system-bus `User` checks, launch-helper filename lookup and systemd handoff; parsing and start behavior were differentially checked against dbus-daemon 1.14.10. Compatibility: additive module, tests and documentation only; no collection, schema, route, UI, AI, scheduling or response-authorization change. Limits: the caller supplies captured directories; user-database resolution and AppArmor/SELinux mediation are not modeled, and collection, inventory/UI and AI wiring remain out of scope.
+
+## 1.75.79 — 2026-11-20
+
+1. [PR #1187](https://github.com/StealthCat/MrPatchy/pull/1187): Require each completed disposable triage benchmark run to retain exactly one successful result-persistence timing and each requested follow-up to retain its successful evidence-persistence timing. The fixture report is refused for missing, duplicate, unexpected, malformed or failed timing evidence, with a stage-specific diagnostic and no JSON output. Compatibility: valid serial and parallel fixture reports retain their format, workload and provider calls; no runtime, schema, authorization or comparator behavior changes. Limits: this validates disposable loopback fixtures only; production and live-provider performance acceptance remains open.
+
 ## 1.75.78 — 2026-11-20
 
 1. [PR #1191](https://github.com/StealthCat/MrPatchy/pull/1191): Add an activity selector to the administrator AI stage timing summary and allow the bounded timing API to sample retained `update_scoring` runs as well as process triage. Compatibility: requests without `purpose` retain the triage sample; the response adds the selected purpose, while roles, schema, AI state, admission, budgets and response authorization remain unchanged. Limits: summaries include only retained completed or failed runs; triage-only stages have no scoring samples, and matched production throughput remains unmeasured.
