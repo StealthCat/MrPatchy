@@ -1,3 +1,7 @@
+## 1.77.0 — 2026-11-20
+
+1. [PR #1226](https://github.com/StealthCat/MrPatchy/pull/1226): Add a pure contract for the keyscript, askpass and check programs cryptsetup runs while processing captured `/etc/crypttab`, including option validation, arguments and fail-closed gaps; differentially checked against cryptsetup 2.7.0 and 2.8.4. Compatibility: additive contract, tests and security checkpoint only; no runtime, schema, API, authentication, scheduling or response-authorization change. Limits: not wired to agent collection, catalog, persistence, baselines or alerts, UI, provenance or AI; path facts are caller-supplied, boot-path selection and source-device presence are not determined, and program contents and retry counts are not assessed.
+
 ## 1.76.2 — 2026-11-20
 
 1. [PR #1222](https://github.com/StealthCat/MrPatchy/pull/1222): Make the Settings unsaved-changes browser test deterministic by dropping guard-driven history moves during the Discard case and waiting for the guard's full retry budget instead of a fixed delay. Compatibility: test-only; no runtime, schema, API or response-authorization change. Limit: the natural timer race did not reproduce in the sandbox; validation used an injected stale retry. Reopen #1221 with the hosted job link if the browser assertion recurs.
