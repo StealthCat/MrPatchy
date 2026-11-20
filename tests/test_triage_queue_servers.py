@@ -159,6 +159,17 @@ def test_a_corrupt_per_server_limit_is_reported_as_the_fail_closed_minimum(admin
     assert quiet['host_id'] == 'quiet' and quiet['investigation_limit'] == 1
 
 
+@pytest.mark.parametrize('value', [['corrupt'], 'paused', None])
+def test_a_non_object_policy_is_reported_as_the_admission_minimum(admin, value):
+    now = seed()
+    with Session() as s:
+        s.merge(Setting(key='server-ai:quiet', value=value))
+        s.commit()
+    quiet = breakdown(now)['servers'][2]
+    # Same limit ai_claims.acquire applies to a present non-object policy (#1233).
+    assert quiet['host_id'] == 'quiet' and quiet['investigation_limit'] == 1
+
+
 def test_list_is_bounded_and_reports_truncation(admin):
     now = seed()
     result = breakdown(now, limit=2)
