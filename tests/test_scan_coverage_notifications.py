@@ -559,3 +559,94 @@ def test_resume_marker_is_removed_with_policy_or_server(admin):
     assert resume_marker() is None
     with Session() as s:
         assert s.get(Setting, 'security-policy:' + HOST).value.get('enabled') is True  # policy row untouched
+
+
+def lifecycle(client, enabled):
+    with Session() as s:
+        revision = s.get(Host, HOST).lifecycle_revision
+    response = client.put('/api/hosts/' + HOST + '/lifecycle', json={
+        'enabled': enabled, 'expected_revision': revision,
+        'reason': 'Briefly suspend server management for maintenance.'})
+    assert response.status_code == 200, response.text
+
+
+def test_disable_and_reenable_between_alert_ticks_restarts_the_resume_clock(admin):
+    # #1188: the #1043 marker was written only when a tick saw the server inactive, so a quick toggle was missed.
+    seed(interval=1)
+    now = time.time()
+    scan('old', age=2 * HOUR, signatures={'state': 'recent', 'built_at': now, 'expires': now + 60 * 24 * HOUR})
+    lifecycle(admin, False)
+    assert resume_marker() == {'inactive': True}  # recorded in the disable transaction, before any tick
+    lifecycle(admin, True)
+    set_host(state='online')
+    hold_scheduler()
+    collect()
+    assert items(admin) == []  # the two-hour-old scan does not publish overdue at once
+    marker = resume_marker()
+    assert set(marker) == {'active_since'}
+    collect(marker['active_since'] + HOUR + coverage.GRACE_SECONDS - 60)
+    assert items(admin) == []
+    collect(marker['active_since'] + HOUR + coverage.GRACE_SECONDS + 60)
+    [item] = items(admin)
+    assert item['reason'] == coverage.MESSAGES['overdue']
+    with Session() as s:
+        assert s.get(Setting, 'security-policy:' + HOST).value == {
+            'enabled': True, 'interval_hours': 1, 'paths': ['/srv']}  # policy row untouched
+
+
+def test_disable_without_an_enabled_scan_policy_writes_no_resume_marker(admin):
+    seed(enabled=False)
+    lifecycle(admin, False)
+    assert resume_marker() is None
+    with Session() as s:
+        s.delete(s.get(Setting, 'security-policy:' + HOST))
+        s.commit()
+    lifecycle(admin, True)
+    lifecycle(admin, False)
+    assert resume_marker() is None
+
+
+def test_alert_cleanup_cannot_delete_an_inactive_marker_written_by_a_concurrent_disable(admin):
+    # #1188 review: an alert transaction decided to delete an expired ``active_since`` marker, then a disable and
+    # re-enable committed in other transactions. Committing the alert transaction deleted the newer inactive
+    # marker, so the next tick had no restart clock. The marker read now holds the write lock until commit.
+    import threading
+
+    from app import host_lifecycle
+
+    seed(interval=1)
+    now = time.time()
+    with Session() as s:
+        s.add(Setting(key=coverage.RESUME_PREFIX + HOST, value={'active_since': now - 30 * 24 * HOUR}))
+        s.commit()
+    tick = Session()
+    try:
+        policies, inactive = coverage._enabled_policies(tick, tick.scalars(select(Host)).all())
+        assert HOST in policies and not inactive
+        coverage._resume_markers(tick, policies, inactive, now)  # queues the expired marker's deletion
+
+        errors = []
+
+        def toggle():
+            try:
+                for enabled in (False, True):
+                    with Session() as s:
+                        host = s.get(Host, HOST)
+                        host_lifecycle.set_enabled(s, host, enabled, host.lifecycle_revision, 'admin',
+                                                   'Briefly suspend server management for maintenance.')
+                        s.commit()
+            except Exception as error:  # surfaced by the assertion below
+                errors.append(error)
+
+        writer = threading.Thread(target=toggle)
+        writer.start()
+        writer.join(1)
+        assert writer.is_alive()  # the disable waits for the alert transaction's marker lock
+        tick.commit()
+    finally:
+        tick.close()
+    writer.join(60)
+    assert not writer.is_alive() and errors == []
+    assert resume_marker() == {'inactive': True}  # the next tick restarts the coverage clock from the return
+    with Session() as s:
+        assert s.get(Host, HOST).enabled is True
