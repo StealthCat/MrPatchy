@@ -1,3 +1,7 @@
+## 1.79.0 — 2026-11-20
+
+1. [PR #1232](https://github.com/StealthCat/MrPatchy/pull/1232): Add a daily-cap mode to the serial and parallel triage benchmark. The disposable loopback fixture uses synthetic pricing and verifies one settled reservation per provider call, including follow-ups; the comparator requires matching workloads and complete settlement evidence while retaining legacy and unthrottled report compatibility. Compatibility: benchmark tooling and tests only; no application runtime, provider, schema, published pricing, or response-authorization change. Limits: synthetic cap reports do not measure production performance; exhausted-cap, deferral, restart, and rate-paced scenarios remain separate work.
+
 ## 1.78.0 — 2026-11-20
 
 1. [PR #1230](https://github.com/StealthCat/MrPatchy/pull/1230): Add a fail-closed, pure contract for which certbot renewal-hook scripts run as root, their ordering, renewal events and environment (Roadmap F slice). Compatibility: additive module, tests and documentation only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: renewal `.conf`/ `cli.ini` hook commands and `--config-dir` overrides are not modeled; collection, catalog, provenance, persistence, UI and AI wiring remain out of scope; hook contents and safety are not assessed.
