@@ -151,7 +151,8 @@ _RELEASE_REVIEW_FAILURES = {
 }
 
 
-def ai_review(s,target,path,current,vendor,news,host_id='',plan_id=''):
+def ai_review(s,target,path,current,vendor,news,host_id='',plan_id='',*,persist=None):
+    """Validate one review and, when supplied, save it within the tracked run."""
     from . import ai_policy
     ai_policy.require([host_id] if host_id else [])
     settings=config(s);key=s.get(Setting,'openai_key')
@@ -174,6 +175,9 @@ def ai_review(s,target,path,current,vendor,news,host_id='',plan_id=''):
             raise ai.AIError(message, retry_after=error.retry_after, cause=error.cause) from None
         if set(result)!=set(schema['required']) or not isinstance(result['content'],str) or len(result['content'].encode())>131072 or not isinstance(result['reason'],str) or not isinstance(result['blockers'],list) or any(not isinstance(x,str) for x in result['blockers']):raise ValueError('Invalid AI configuration response')
         if '\x00' in result['content'] or SECRET.search(result['content']):raise ValueError('AI introduced sensitive/invalid configuration')
+        if persist is not None:
+            with ai_runs.measure('result_persistence'):
+                persist(result)
         return result
 
 def build(s,host,identifier):
@@ -244,6 +248,21 @@ def build(s,host,identifier):
             news=reviewed_packages[package].get('_news','')
             context_hash=digest(canonical({'base_hash':base_hash,'path':name,
                 'vendor_sha256':digest(vendor.encode()),'news_sha256':digest(news.encode())}))
+
+            def persist_review(result):
+                progress['results'][name]={'context_hash':context_hash,'result':result}
+                plan['blockers'].extend(name+': '+x for x in result['blockers'])
+                after=result['content'];modified=after!=item['content']
+                plan['reviews'].append({'path':name,'reason':result['reason'],'changed':modified})
+                if modified or after!=vendor:
+                    if not validator(name):
+                        if not inspection['custom_validator']:plan['blockers'].append('A root-owned release-validate hook is required for '+name)
+                        plan['custom_validation']=True
+                    plan['edits'].append({'path':name,'before_sha256':item['sha256'],'vendor_sha256':digest(vendor.encode()),'after':after,
+                        'mode':item['mode'],'uid':item['uid'],'gid':item['gid'],'reason':result['reason'],
+                        'diff':''.join(difflib.unified_diff(item['content'].splitlines(True),after.splitlines(True),fromfile=name+' (current)',tofile=name+' (planned)'))})
+                checkpoint()
+
             saved=cached.get(name,{})
             if saved.get('context_hash')==context_hash and isinstance(saved.get('result'),dict):
                 result=saved['result']
@@ -251,23 +270,13 @@ def build(s,host,identifier):
                     or not isinstance(result['reason'],str) or not isinstance(result['blockers'],list)
                     or any(not isinstance(value,str) for value in result['blockers'])):
                     raise ValueError('Saved release configuration review is invalid')
+                persist_review(result)
             else:
                 # Seal all accepted earlier stages before another provider call. A
                 # controlled wait can therefore resume without repeating them.
                 checkpoint()
-                result=ai_review(s,plan['target'],name,item['content'],vendor,news,host_id=host.id,plan_id=identifier)
-            progress['results'][name]={'context_hash':context_hash,'result':result}
-            plan['blockers'].extend(name+': '+x for x in result['blockers'])
-            after=result['content'];modified=after!=item['content']
-            plan['reviews'].append({'path':name,'reason':result['reason'],'changed':modified})
-            if modified or after!=vendor:
-                if not validator(name):
-                    if not inspection['custom_validator']:plan['blockers'].append('A root-owned release-validate hook is required for '+name)
-                    plan['custom_validation']=True
-                plan['edits'].append({'path':name,'before_sha256':item['sha256'],'vendor_sha256':digest(vendor.encode()),'after':after,
-                    'mode':item['mode'],'uid':item['uid'],'gid':item['gid'],'reason':result['reason'],
-                    'diff':''.join(difflib.unified_diff(item['content'].splitlines(True),after.splitlines(True),fromfile=name+' (current)',tofile=name+' (planned)'))})
-            checkpoint()
+                ai_review(s,plan['target'],name,item['content'],vendor,news,host_id=host.id,
+                          plan_id=identifier,persist=persist_review)
         plan.pop('review_progress',None)
         if len(canonical(plan))>3_000_000:raise ValueError('Release plan exceeds 3 MiB')
     except Exception as error:
