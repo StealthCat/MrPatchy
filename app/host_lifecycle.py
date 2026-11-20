@@ -150,6 +150,9 @@ def set_enabled(s,host,enabled,expected,actor,reason,deleting=False):
         # deletion publishes its own resolution instead.
         from . import agent_spool_health
         agent_spool_health.resolve_host_notification(s,host.id,'server-disabled')
+        # A quick re-enable between alert ticks must still restart the scan-coverage clock (#1188).
+        from . import scan_coverage_notifications
+        scan_coverage_notifications.mark_inactive(s,host.id)
     audit(s,'enable server' if enabled else 'disable server',host.id+' '+actor+' '+reason+'; cancelled='+str(cancelled))
     return cancelled
 
