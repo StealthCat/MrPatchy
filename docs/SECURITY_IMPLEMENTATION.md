@@ -3585,6 +3585,18 @@ counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
 
+### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
+
+The shared AI start gates and automatic AI plan status now fetch each legacy
+hourly allowance count and reopening time in one statement. When the window
+is exhausted, the lookup counts back from the newest matching entry using the
+configured allowance. This preserves exact counts and the strict one-hour
+boundary while bounding the ordered lookup. Admission and configuration
+retain their existing behavior. In an overfilled fixture with 259 scoring runs
+and an allowance of three, the status read went from two statements to one.
+The time remained correct when entries tied at the boundary. Production latency
+and the broader shared-controls acceptance remain open.
+
 ### Two-call follow-up reservations under a daily cap — worker checkpoint #988
 
 `tests/test_ai_budget_followup_acceptance.py` covers the milestone 4 item

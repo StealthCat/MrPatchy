@@ -229,5 +229,39 @@ def test_legacy_allowances_match_actual_admission_refusals(admin, monkeypatch):
     assert limits['triage']['state'] == 'exhausted' and limits['triage']['next_at'] == now - 30 + 3600
 
 
+def test_legacy_window_count_and_deadline_use_one_statement(admin):
+    from sqlalchemy import event
+
+    from app.ai_runs import AIRun
+    from app.db import engine
+
+    now = 2_000_000_000.0
+    older = tuple(now - 3500 + index for index in range(256))
+    add_history(scoring=(*older, now - 10, now - 10, now - 3, now - 3600),
+                triage=(now - 1,))
+    scenarios = (
+        (now, 3, (259, True, now + 3590)),
+        (now + 3590, 3, (1, False, None)),
+        (now + 3600, 3, (0, False, None)),
+        (now, 0, (259, True, None)),
+    )
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        with Session() as session:
+            for clock, limit, expected in scenarios:
+                statements.clear()
+                result = ai_control_status._window(
+                    session, AIRun.started, (AIRun.purpose == 'update_scoring',), limit, clock)
+                assert result == expected
+                assert len(statements) == 1
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+
+
 def test_control_snapshot_requires_admin(client):
     assert client.get('/api/settings/ai-control-status').status_code in (401, 403)
