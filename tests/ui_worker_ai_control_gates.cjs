@@ -7,7 +7,7 @@ module.exports=async(page,capture)=>{
  const snapshots={
   open:{generated_at:now,mode:'rate',can_start_now:true,next_start_at:null,blockers:[],limitations},
   finite:{generated_at:now,mode:'rate_and_daily',can_start_now:false,next_start_at:now+1800,blockers:[
-   {code:'rate_throttle',message:'The shared smooth-rate throttle is waiting for its next start.',next_at:now+1800,recheck_at:null}],limitations},
+   {code:'provider_backoff',message:'Provider Retry-After exceeds 24 hours and was capped; an administrator may clear it after review.',next_at:now+1800,recheck_at:null}],limitations},
   malformed:{can_start_now:false,next_start_at:'<b>x</b>',blockers:[{code:'<img src=x onerror=window.__workerGateInjected=true>',message:'<img src=x onerror=window.__workerGateInjected=true>',next_at:'soon'}],limitations:['<img src=x onerror=window.__workerGateInjected=true>']},
  };
  const gates=route=>{requests++;return mode==='error'?route.fulfill({status:500,json:{detail:'boom'}}):route.fulfill({json:snapshots[mode]});};
@@ -23,7 +23,8 @@ module.exports=async(page,capture)=>{
   await open();
   await card.getByText('held by 1 shared gate',{exact:false}).waitFor();
   const text=await card.innerText();
-  assert.match(text,/Smooth-rate throttle/);assert.match(text,/Next eligible start:/);
+  assert.match(text,/Provider Retry-After exceeds 24 hours and was capped/);
+  assert.match(text,/Next eligible start:/);
   assert.match(text,/per-server pause and lifecycle checks still apply/);
   assert.equal(await page.locator('#ai-control-gates').count(),1);
   // After the registered runtimes and before the controllers.
