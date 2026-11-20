@@ -3,6 +3,7 @@ import json
 import time
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 
 from app import agent_fleet_health as fleet
 from app.db import Host, Session, Setting, Audit, Job
@@ -287,14 +288,18 @@ def test_uninterpretable_host_record_does_not_fail_the_fleet_page(admin, monkeyp
 
 def test_huge_stored_values_keep_both_fleet_pages_available(admin):
     now = time.time()
-    add('huge', {**receipt(), 'checked': HUGE}, collected=now)
     add('ok', receipt(checked=now - 10), collected=now)
     record = pressure()
     record['cpu']['some']['avg60'] = HUGE
-    with Session() as s:
-        stored = s.get(Host, 'huge')
-        stored.telemetry = {**stored.telemetry, 'collected': HUGE, 'resource_pressure': record}
-        s.commit()
+    # MySQL's JSON type refuses numbers beyond double range at write time; SQLite retains them.
+    try:
+        with Session() as s:
+            s.add(Host(id='huge', name='huge', address='192.0.2.1', fingerprint='', state='online',
+                       telemetry={'collected': HUGE, 'resource_pressure': record}))
+            s.add(Setting(key='agent-status:huge', value={**receipt(), 'checked': HUGE}))
+            s.commit()
+    except DBAPIError:
+        pytest.skip('this database refuses integers beyond float range')
     with Session() as s:
         if s.get(Host, 'huge').telemetry.get('collected') != HUGE:
             pytest.skip('this database cannot retain integers beyond float range')
