@@ -147,6 +147,44 @@ def test_rainerscript_strings_comments_and_rulesets():
         ('/bin/r', 'remote', 7), ('/bin/caret', None, 9), ('/bin/then', None, 10)]
 
 
+@pytest.mark.parametrize('text', [
+    'if $msg contains "zzzz-never" then stop else ^/x/probe\n',
+    '^/x/probe\n',
+    '*.* {\n  ^/x/probe\n}\n',
+    'if 1 == 1 then {\n  ^/x/probe\n}\n',
+    'if 1 == 1 then ^/x/probe\n',
+])
+def test_shell_execute_wherever_a_statement_starts(text):
+    # Observed with the real rsyslogd 8.2312.0: each of these runs the probe as root.
+    result = run(text)
+    assert [(a['kind'], a['program'], a['status']) for a in result['actions']] == [
+        ('shell_execute', '/x/probe', 'runs')]
+    assert result['complete'] is True
+
+
+@pytest.mark.parametrize('text', [
+    '$ModLoad omprog\n$ActionOMProgBinary /x/probe\nif $msg contains "n" then stop else :omprog:\n',
+    '$ModLoad omprog\n$ActionOMProgBinary /x/probe\n:omprog:\n',
+    '$ModLoad omprog\n$ActionOMProgBinary /x/probe\n*.* {\n  :omprog:\n}\n',
+])
+def test_legacy_omprog_wherever_a_statement_starts(text):
+    result = run(text)
+    assert [(a['kind'], a['program'], a['status']) for a in result['actions']] == [
+        ('legacy_omprog', '/x/probe', 'runs')]
+
+
+def test_statement_start_legacy_action_keeps_ruleset_and_line():
+    text = ('ruleset(name="remote") {\n'
+            '  ^/bin/in-block\n'
+            '  if $msg contains "y" then ^/bin/then-in-block\n'
+            '}\n'
+            '^/bin/top\n'
+            'if $msg contains "^/not-an-action" then stop\n')
+    result = run(text)
+    assert [(a['program'], a['ruleset'], a['line']) for a in result['actions']] == [
+        ('/bin/in-block', 'remote', 2), ('/bin/then-in-block', 'remote', 3), ('/bin/top', None, 5)]
+
+
 def test_include_order_follows_sorted_glob():
     files = {'/etc/rsyslog.d/b.conf': 'module(load="omprog")\n',
              '/etc/rsyslog.d/a.conf': '*.* action(type="omprog" binary="/bin/inc")\n'}
@@ -256,6 +294,10 @@ def _expected(conf, probe):
     ('*.* ^{p};RSYSLOG_TraditionalFileFormat\n$PrivDropToUserID 4242\n', 4242, 0),
     ('module(load="omprog")\n*.* action(type="omprog" binary="{p} a\\"b c\\"d e  ")\n', 0, 0),
     ('module(load="omprog")\nif $msg contains "hello" then ^{p}\n', 0, 0),
+    ('if $msg contains "zzzz-never" then stop else ^{p}\n', 0, 0),
+    ('^{p}\n', 0, 0),
+    ('*.* {{\n  ^{p}\n}}\n', 0, 0),
+    ('if 1 == 1 then {{\n  ^{p}\n}}\n', 0, 0),
 ])
 def test_live_differential(body, uid, gid):
     workdir = tempfile.mkdtemp(prefix='rsyslog-diff-', dir='/tmp')  # created 0o700

@@ -342,17 +342,19 @@ def _legacy(state: _State, text: str, path: str, line: int, depth: int) -> None:
         state.legacy_ruleset = word
 
 
-def _legacy_action(state: _State, text: str, index: int, path: str, line: int) -> int | None:
+def _legacy_action(state: _State, text: str, index: int, path: str, line: int,
+                   ruleset: str | None = None) -> int | None:
     """Handle a legacy action at ``index``; return the end of line, or None for a RainerScript action."""
     end = text.find('\n', index)
     end = len(text) if end < 0 else end
     action = text[index:end]
+    ruleset = state.legacy_ruleset if ruleset is None else ruleset
     if action.startswith(':omprog:'):
-        _program_action(state, 'legacy_omprog', path, line, state.legacy_ruleset, state.legacy_binary, 'omprog')
+        _program_action(state, 'legacy_omprog', path, line, ruleset, state.legacy_binary, 'omprog')
         return end
     if action.startswith('^'):
         program = action[1:].split(';', 1)[0].rstrip(' \t\r')
-        _program_action(state, 'shell_execute', path, line, state.legacy_ruleset, program, None)
+        _program_action(state, 'shell_execute', path, line, ruleset, program, None)
         return end
     if action.startswith('action') or action.startswith('{') or action.startswith('call'):
         return None
@@ -408,6 +410,11 @@ def _scan(state: _State, text: str, path: str, depth: int) -> None:
             line += text.count('\n', index, value_end)
             index = value_end
             continue
+        if not in_expr and (char == '^' or text.startswith(':omprog:', index)):
+            # rsyslog's lexer accepts a legacy action wherever a statement may start: at top level, after
+            # ``else``, inside ``{ ... }`` blocks and after ``&``, not only after a selector or ``then``.
+            index = _legacy_action(state, text, index, path, line, rulesets[-1] if rulesets else None)
+            continue
         if char == '{':
             rulesets.append(pending_ruleset if pending_ruleset is not None else (rulesets[-1] if rulesets else None))
             pending_ruleset = None
@@ -432,7 +439,8 @@ def _scan(state: _State, text: str, path: str, depth: int) -> None:
             after = _skip_space(text, index, path)
             if text.startswith(':omprog:', after) or text.startswith('^', after):
                 line += text.count('\n', index, after)
-                index = _legacy_action(state, text, after, path, line) or after
+                index = _legacy_action(state, text, after, path, line,
+                                       rulesets[-1] if rulesets else None) or after
             continue
         after = _skip_space(text, index, path)
         if word not in ('action', 'module', 'global', 'include', 'ruleset') or after >= len(text) \
