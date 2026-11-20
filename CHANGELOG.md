@@ -1,3 +1,7 @@
+## 1.77.1 — 2026-11-20
+
+1. [PR #1224](https://github.com/StealthCat/MrPatchy/pull/1224): Batch fleet automatic AI plan readiness reads and classify malformed stored pause policy as paused. In the 100-server SQLite fixture, readiness queries fell from 1,000 to eight; the 12-server fixture remained at eight. Compatibility: per-server state precedence, API fields, roles, redaction, scheduling, provider admission and response authorization are preserved; no schema change. Limits: incident counts remain per server, these are database-read measurements only, production latency is unmeasured, and broader Roadmap A acceptance remains open.
+
 ## 1.77.0 — 2026-11-20
 
 1. [PR #1226](https://github.com/StealthCat/MrPatchy/pull/1226): Add a pure contract for the keyscript, askpass and check programs cryptsetup runs while processing captured `/etc/crypttab`, including option validation, arguments and fail-closed gaps; differentially checked against cryptsetup 2.7.0 and 2.8.4. Compatibility: additive contract, tests and security checkpoint only; no runtime, schema, API, authentication, scheduling or response-authorization change. Limits: not wired to agent collection, catalog, persistence, baselines or alerts, UI, provenance or AI; path facts are caller-supplied, boot-path selection and source-device presence are not determined, and program contents and retry counts are not assessed.

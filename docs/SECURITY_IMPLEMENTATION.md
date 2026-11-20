@@ -11889,6 +11889,20 @@ times both selections sort by descending job ID. The fleet still lists at most
 to one while preserving the result for each server. Incident counts and server
 readiness still make per-server reads. Production load time remains unmeasured.
 
+### Batch fleet automatic AI plan readiness — Roadmap A checkpoint #1223
+
+The automatic AI plan status batches credential presence, server pause, holds
+and lifecycle reads for the listed fleet page. The same classification feeds
+the individual-server view. It reports malformed stored pause policies as
+paused, matching the provider gate. The precedence remains policy opt-in,
+global configuration, server pause, holds, then lifecycle.
+
+With 100 ready servers the disposable SQLite fixture reduced readiness queries
+from 1,000 to eight. Incident-count reads remain per server and production
+latency is unmeasured. This status work leaves scheduling, provider admission
+and response authorization intact.
+
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
