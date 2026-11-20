@@ -155,17 +155,13 @@ def live_postfix(tmp_path):
     subprocess.run(['postconf', '-e'] + [f'{k}={v}' for k, v in settings.items()], check=True, capture_output=True)
     if subprocess.run(['postfix', 'status'], capture_output=True).returncode != 0:
         subprocess.run(['postfix', 'start'], check=True, capture_output=True)
-    outdir = Path('/var/tmp/mrpatchy-postfix-diff')
-    outdir.mkdir(exist_ok=True)
-    outdir.chmod(0o777)  # noqa: S103 - local(8) runs the probe command as an unprivileged user
     try:
-        yield outdir
+        yield Path(settings['maillog_file'])
     finally:
         for path, data in saved.items():
             Path(path).write_bytes(data)
         subprocess.run(['newaliases'], capture_output=True)
         subprocess.run(['postfix', 'reload'], capture_output=True)
-        shutil.rmtree(outdir, ignore_errors=True)
 
 
 def install(aliases, **main_cf):
@@ -234,22 +230,29 @@ def test_local_delivers_exactly_the_contract_command_and_file_targets(live_postf
     ('nobody', 'daemon', 'daemon'),
 ])
 def test_commands_run_as_the_contract_user(live_postfix, privs, owner, expected):
-    probe = live_postfix / f'runas-{privs}-{owner}'
-    aliases = f'postmaster: root\nprobe: "|/usr/bin/id -un > {probe}"\n'
+    # The probe exits 1, so local(8) bounces the message and logs the command
+    # output (the run-as user) without the test needing a writable directory.
+    tag = f'RUNAS-{privs}-{owner}'
+    aliases = f'postmaster: root\nprobe: "|echo {tag}=$(/usr/bin/id -un); exit 1"\n'
     install(aliases, default_privs=privs)
     shutil.chown('/etc/aliases.db', user=owner)
     subprocess.run(['postfix', 'reload'], check=True, capture_output=True)
     time.sleep(1)
+    pattern = re.compile(re.escape(tag) + r'=(\S+)')
     try:
         subprocess.run(['sendmail', 'probe'], input=b'Subject: probe\n\nprobe\n', check=True)
+        actual = []
         for _ in range(100):
-            if probe.exists() and probe.read_text().strip():
+            log = live_postfix.read_text(errors='replace') if live_postfix.exists() else ''
+            actual = pattern.findall(log)[-1:]
+            if actual:
                 break
             time.sleep(0.2)
-        actual = probe.read_text().strip()
     finally:
         shutil.chown('/etc/aliases.db', user='root')
         subprocess.run(['postconf', '-e', 'default_privs=nobody'], capture_output=True)
+        if live_postfix.exists():
+            live_postfix.write_text('')
     contract = ma.resolve({'observed': True, 'text': aliases, 'default_privs': privs,
                            'owner': {'trusted': owner == 'root', 'user': owner}})
-    assert [e['run_as'] for e in contract['executions']] == [expected] == [actual]
+    assert [e['run_as'] for e in contract['executions']] == [expected] == actual
