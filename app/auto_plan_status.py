@@ -24,7 +24,7 @@ authorization are unchanged and plans remain manual-only.
 """
 import time
 
-from sqlalchemy import JSON, func, literal, select, type_coerce
+from sqlalchemy import JSON, func, literal, select, type_coerce, union_all
 from sqlalchemy.orm import aliased
 
 from . import ai_control_status, ai_policy, host_lifecycle, incidents
@@ -65,28 +65,46 @@ def _readiness(session, host_ids, cfg):
     return states
 
 
+def _awaiting_candidates(host_id):
+    incident = incidents.Incident
+    return (
+        select(incident.updated)
+        .where(incident.host_id == host_id, *incidents.awaiting_auto_plan(),
+               incidents.automatic_candidate_sql())
+        .order_by(incident.updated, incident.id)
+        .limit(AWAITING_LIMIT + 1)
+    )
+
+
+def _awaiting_query(host_ids, *, outer_references):
+    # Cap the rows fed to each aggregate and include one extra match to detect truncation.
+    if not outer_references:
+        # MySQL before 8.0.14 cannot correlate a derived table. Each union
+        # arm keeps the same limit without referring to an outer query.
+        arms = []
+        for host_id in host_ids:
+            bounded = _awaiting_candidates(host_id).subquery()
+            arms.append(select(literal(host_id), func.count(), func.min(bounded.c.updated)))
+        return union_all(*arms) if len(arms) > 1 else arms[0]
+
+    bounded = _awaiting_candidates(Host.id).correlate(Host).subquery()
+    # Aggregate count and oldest in one bounded scan, returning both in a scalar.
+    summary = select(func.json_array(func.count(), func.min(bounded.c.updated))).scalar_subquery()
+    return select(Host.id, type_coerce(summary, JSON)).where(Host.id.in_(host_ids))
+
+
 def _awaiting(session, host_ids):
     """Read capped counts and oldest matching timestamps in one statement."""
     if not host_ids:
         return {}
-    incident = incidents.Incident
-    candidates = (
-        select(incident.updated)
-        .where(incident.host_id == Host.id, *incidents.awaiting_auto_plan(),
-               incidents.automatic_candidate_sql())
-        .order_by(incident.updated, incident.id)
-        .correlate(Host)
-    )
-    # Cap the rows fed to the aggregate and use one extra match to detect truncation.
-    bounded = candidates.limit(AWAITING_LIMIT + 1).subquery()
-    # Both supported databases return a JSON pair from the scalar subquery.
-    # Count and oldest share the same bounded scan of qualifying rows.
-    summary = select(func.json_array(func.count(), func.min(bounded.c.updated))).scalar_subquery()
-    rows = session.execute(select(Host.id, type_coerce(summary, JSON)).where(Host.id.in_(host_ids)))
+    dialect = session.connection().dialect
+    outer_references = dialect.name != 'mysql' or dialect.server_version_info >= (8, 0, 14)
+    rows = session.execute(_awaiting_query(host_ids, outer_references=outer_references))
+    values = ((host_id, *summary) for host_id, summary in rows) if outer_references else rows
     return {
         host_id: (min(found, AWAITING_LIMIT), found > AWAITING_LIMIT,
                   float(first) if first is not None else None)
-        for host_id, (found, first) in rows
+        for host_id, found, first in values
     }
 
 

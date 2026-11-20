@@ -11910,7 +11910,9 @@ timestamps in one database statement. Each listed host's subquery applies
 the same automatic-candidate exclusions and its existing limit before
 aggregating. An extra qualifying row still signals truncation. The
 single-server status uses the same summary and the fleet totals still
-describe the listed servers only.
+describe the listed servers only. SQLite and newer MySQL versions correlate
+the bounded read. MySQL releases before 8.0.14 use one UNION statement
+with an independent bounded read per server.
 
 The SQLite fleet fixture used one incident-summary statement with both 12
 and 100 hosts, down from 12 and 100. Both layouts now use 12 total status

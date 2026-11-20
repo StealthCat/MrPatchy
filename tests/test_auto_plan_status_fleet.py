@@ -91,7 +91,12 @@ def test_fleet_database_reads_are_bounded_by_page_not_server_count(admin, monkey
     assert totals[12] == totals[100] <= 12
 
 
-def test_batched_awaiting_keeps_each_server_cap_oldest_and_exclusions(admin, monkeypatch):
+@pytest.mark.parametrize('legacy_mysql', [False, True], ids=['default', 'early-mysql-query'])
+def test_batched_awaiting_keeps_each_server_cap_oldest_and_exclusions(admin, monkeypatch, legacy_mysql):
+    if legacy_mysql:
+        if engine.dialect.name != 'mysql':
+            pytest.skip('Exercise the legacy query against MySQL')
+        monkeypatch.setattr(engine.dialect, 'server_version_info', (8, 0, 13))
     now = seed()
     monkeypatch.setattr(auto_plan_status, 'AWAITING_LIMIT', 2)
     for host_id in ('beta', 'empty', 'gamma'):
