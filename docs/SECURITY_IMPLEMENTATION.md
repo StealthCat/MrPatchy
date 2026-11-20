@@ -12311,11 +12311,14 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
   - auto mode, because the recommended profile is not modeled;
   - variables in `include=`;
   - a `[variables] include=` file;
-  - any `${f:exec:` call;
+  - any `exec` function call, including one whose name is assembled from a variable or a nested function result, which is found by substituting `[variables]` values textually before reading each `{f:` name;
+  - a function name that is not a literal word after that substitution (`function_expansion_not_modeled`);
+  - a reference to a variable the loaded profile does not define, because the daemon's variable store outlives a single load (`variable_undefined`);
+  - `${i:PROFILE_DIR}` in a profile whose directory name contains a backslash, which `re.sub` treats as a template escape (`profile_dir_escape_not_modeled`);
   - an invalid regex or priority that is only reached when an earlier regex of the same unit matches the host (`apply_refusal_conditional`).
 
   A parse error, an unknown or missing profile, an invalid priority or regex reached unconditionally, an invalid mode or a multi-word post-loaded profile is reported as `load_refused` with no invocations, because the daemon then loads nothing. CPU/uname regexes and per-device scripts are reported as conditions, not as definite runs.
-- **Validation:** `tests/test_tuned_profiles.py` has 15 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in two worker sessions, so there is no live differential yet. A second source review of `units/manager.py` found that the check order makes some invalid priorities host-dependent; that is now modeled.
+- **Validation:** `tests/test_tuned_profiles.py` has 19 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in two worker sessions, so there is no live differential. A second source review of `units/manager.py` found that the check order makes some invalid priorities host-dependent; that is now modeled. A third review of `profiles/variables.py` and `profiles/functions/functions.py` found that `exec` could be assembled from a variable or a nested function result and that `${i:PROFILE_DIR}` is a `re.sub` template; both now fail closed. Run as text over all 38 stock profiles in the 2.21.0 package, the contract resolves 30 completely. The other 8 are blocked by their `[variables] include=` file or a function in `include=`, as before.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change.
 - **Remaining:**
   - a differential against the real loader;

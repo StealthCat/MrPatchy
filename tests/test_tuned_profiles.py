@@ -149,7 +149,8 @@ def test_apply_checks_follow_unit_manager_order_regex_then_uname_then_priority()
         f'{ETC}/custom': '[a]\nuname_regex=el9\npriority=x\n[b]\npriority=y\n[script]\nscript=s\n'}))
     assert both['status'] == 'load_refused' and both['detail'] == {'reason': 'priority_invalid', 'subject': 'b'}
     # TuneD expands variables in regexes before matching, so a $-value is never judged uncompilable.
-    expanded = tp.evaluate(_capture({f'{ETC}/custom': '[script]\nscript=s\nuname_regex=${x}(\n'}))
+    expanded = tp.evaluate(_capture({
+        f'{ETC}/custom': '[variables]\nx=)\n[script]\nscript=s\nuname_regex=(${x}\n'}))
     assert expanded['status'] == 'resolved' and _runs(expanded) == [('script', '/etc/tuned/custom/s')]
 
 
@@ -240,3 +241,46 @@ def test_include_cycle_is_bounded_by_processed_file_skipping():
     }, active='a'))
     assert result['status'] == 'resolved'
     assert result['loaded_files'] == ['/etc/tuned/a/tuned.conf', '/etc/tuned/b/tuned.conf']
+
+
+def test_exec_assembled_by_variables_or_nested_functions_is_never_missed():
+    # TuneD expands ${VAR} statically before functions, and nested function results
+    # feed the outer call, so the literal text need not contain "${f:exec:".
+    cases = {
+        'variable_supplies_name': '[variables]\nX=exec\n[sysctl]\nk=${f:${X}:/tmp/evil}\n',
+        'variable_supplies_dollar': '[variables]\nD=$\n[sysctl]\nk=${D}{f:exec:/tmp/evil}\n',
+        'stored_function_result': '[variables]\nD=${f:strip:$}{f\n[sysctl]\nk=${D}:exec:/tmp/evil}\n',
+        'nested_name': '[sysctl]\nk=${f:${f:strip:exec}:/tmp/evil}\n',
+        'split_name': '[variables]\nE=e\n[sysctl]\nk=${f:${E}xec:/tmp/evil}\n',
+    }
+    for label, text in cases.items():
+        result = tp.evaluate(_capture({f'{ETC}/custom': text}))
+        assert result['complete'] is False, label
+        assert _gaps(result) & {'function_exec', 'function_expansion_not_modeled'}, label
+        assert result['invocations'] == [], label
+
+
+def test_static_variables_and_ordinary_functions_stay_complete():
+    result = tp.evaluate(_capture({
+        f'{ETC}/custom': '[variables]\ncores=1-3\nmask=${f:cpulist2hex:${cores}}\n'
+                         '[sysctl]\nk=${mask} \\${literal}\n[script]\nscript=s.sh\n',
+    }))
+    assert result['complete'] is True and _runs(result) == [('script', '/etc/tuned/custom/s.sh')]
+
+
+def test_undefined_variable_reference_is_a_blocking_gap():
+    # TuneD keeps one Variables store for the daemon's lifetime, so an undefined
+    # name may resolve to a value left by a previously loaded profile.
+    result = tp.evaluate(_capture({f'{ETC}/custom': '[sysctl]\nk=${leftover}\n[script]\nscript=s.sh\n'}))
+    assert result['complete'] is False and 'variable_undefined' in _gaps(result)
+
+
+def test_profile_dir_with_backslash_is_not_substituted_literally():
+    # re.sub treats the profile directory as a replacement template, so a backslash
+    # in an included directory name changes or breaks the expansion.
+    capture = _capture({
+        f'{ETC}/custom': '[main]\ninclude=we\\1ird\n',
+        f'{ETC}/we\\1ird': '[script]\nscript=${i:PROFILE_DIR}/s.sh\n',
+    })
+    result = tp.evaluate(capture)
+    assert result['complete'] is False and 'profile_dir_escape_not_modeled' in _gaps(result)

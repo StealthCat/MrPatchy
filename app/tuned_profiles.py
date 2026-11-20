@@ -67,10 +67,20 @@ Semantics come from the TuneD 2.21.0 source as packaged in Ubuntu 24.04
   conditional.
 * ``${f:exec:...}`` in an expanded value runs that command as root while the
   profile is loaded or applied. ``[variables]`` values are expanded as soon as
-  the profile loads. Variable and function expansion is not modelled beyond
-  detection: an ``exec`` call, a variable or function in an include and a
-  ``[variables] include=`` file are blocking gaps. Script paths are never
-  expanded by TuneD beyond ``${i:PROFILE_DIR}``, so they are reported literally.
+  the profile loads. ``Variables.expand`` substitutes ``${NAME}`` statically
+  first and then runs functions, innermost first, so ``exec`` can be assembled
+  from a variable or another function's result. The contract substitutes
+  variables textually, leaving every function call in place, and then reads
+  each ``{f:`` name: ``exec`` is a blocking ``function_exec`` gap, and a name
+  that is not a literal word is a blocking ``function_expansion_not_modeled``
+  gap. The daemon keeps one variable store for its lifetime, so a reference to
+  a name the profile does not define may resolve to a value left by an earlier
+  profile; that is a blocking ``variable_undefined`` gap. A variable or
+  function in an include and a ``[variables] include=`` file are blocking gaps.
+  ``${i:PROFILE_DIR}`` is substituted with ``re.sub``, which treats a backslash
+  in the directory as a template escape, so that case is a blocking gap too.
+  Script paths are never expanded by TuneD beyond ``${i:PROFILE_DIR}``, so they
+  are reported literally.
 
 It performs no I/O and never authorizes a response action. Unobserved family,
 installation state, files or listings, malformed input and over-limit input are
@@ -110,14 +120,19 @@ BLOCKING = frozenset({
     'state_file_unobserved', 'state_file_unreadable', 'recommended_profile_not_modeled',
     'listing_unobserved', 'path_unobserved', 'file_unreadable', 'include_expansion_not_modeled',
     'function_exec', 'variables_file_not_modeled',
-    'include_depth_exceeded', 'apply_refusal_conditional',
+    'include_depth_exceeded', 'apply_refusal_conditional', 'function_expansion_not_modeled',
+    'variable_undefined', 'profile_dir_escape_not_modeled',
 })
 
 _SAFE_NAME = re.compile(r'^[a-zA-Z0-9_.-]+$')
 _PROFILE_DIR = re.compile(r'(?<!\\)\$\{i:PROFILE_DIR\}')
 _INCLUDE_SPLIT = re.compile(r'\s*[,;]\s*')
 _DROP_SPLIT = re.compile(r'\b\s*[,;]\s*')
-_EXEC_CALL = re.compile(r'\$\{f:exec:')
+_VAR_REF = re.compile(r'(?<!\\)\$\{(\w+)\}')
+_VAR_UNESCAPE = re.compile(r'\\(\$\{\w+\})')
+_FUNC_OPEN = re.compile(r'\{f:')
+_FUNC_NAME = re.compile(r'\w+(?=[:}])')
+_VAR_NAME = re.compile(r'\w+$')
 _TRUE = ('True', 'true', '1')
 
 
@@ -268,7 +283,11 @@ class _Resolver:
         for section in parser.sections():
             values: dict[str, Any] = {}
             for option in parser.options(section):
-                values[option] = _PROFILE_DIR.sub(lambda _m: directory, parser.get(section, option, raw=True))
+                value = parser.get(section, option, raw=True)
+                if '\\' in directory and _PROFILE_DIR.search(value):
+                    # TuneD passes the directory to re.sub as a replacement template.
+                    raise _Incomplete(('profile_dir_escape_not_modeled', path))
+                values[option] = _PROFILE_DIR.sub(lambda _m: directory, value)
             if values.get('script') is not None:
                 values['script'] = [posixpath.normpath(posixpath.join(directory, values['script']))]
             config[section] = values
@@ -304,6 +323,30 @@ def _regex_compiles(pattern: Any) -> bool:
     except (re.error, RecursionError, OverflowError):
         return False
     return True
+
+
+def _expand_static(text: str, defined: dict[str, str], undefined: list[str]) -> str:
+    """Textual ``Variables.expand_static``: one pass over defined names, then unescape.
+
+    Function calls are left in place, so the result holds every character a
+    function result could contribute; unescaped names not defined here are
+    collected because the daemon's variable store outlives a single load.
+    """
+    undefined.extend(name for name in _VAR_REF.findall(text) if name not in defined)
+    text = _VAR_REF.sub(lambda m: defined.get(m.group(1), m.group(0)), text)
+    return _VAR_UNESCAPE.sub(r'\1', text)
+
+
+def _function_calls(text: str) -> tuple[bool, bool]:
+    """Return (calls exec, has a function name the contract cannot read literally)."""
+    calls_exec = opaque = False
+    for match in _FUNC_OPEN.finditer(text):
+        name = _FUNC_NAME.match(text, match.end())
+        if name is None:
+            opaque = True
+        elif name.group(0) == 'exec':
+            calls_exec = True
+    return calls_exec, opaque
 
 
 def _strings(value: Any) -> list[str]:
@@ -421,15 +464,33 @@ def _resolve(capture: dict, resolver: _Resolver, result: dict, default_priority:
         for key, value in variables.options.items():
             if key == 'include':
                 raise _Incomplete(('variables_file_not_modeled', str(value)))
-    for unit in ([variables] if variables else []) + list(final.units.values()):
+    defined: dict[str, str] = {}
+    undefined: list[str] = []
+    opaque: str | None = None
+    expanded: list[tuple[str, str]] = []
+    for key, value in (variables.options.items() if variables else ()):
+        if not _VAR_NAME.match(str(key)) or not isinstance(value, str):
+            continue
+        defined[key] = _expand_static(value, defined, undefined)
+        expanded.append(('variables', defined[key]))
+    for unit in final.units.values():
         values = [*unit.options.values(), unit.script_pre, unit.script_post, unit.devices,
                   unit.cpuinfo_regex, unit.uname_regex]
         for value in values:
             for text in _strings(value):
-                if _EXEC_CALL.search(text):
-                    result['function_exec'].append({'unit': unit.name, 'value': text[:512]})
+                expanded.append((unit.name, _expand_static(text, defined, undefined)))
+    for unit_name, text in expanded:
+        calls_exec, unreadable = _function_calls(text)
+        if calls_exec:
+            result['function_exec'].append({'unit': unit_name, 'value': text[:512]})
+        if unreadable and opaque is None:
+            opaque = unit_name
     if result['function_exec']:
         raise _Incomplete(('function_exec', result['function_exec'][0]['unit']))
+    if opaque is not None:
+        raise _Incomplete(('function_expansion_not_modeled', opaque))
+    if undefined:
+        raise _Incomplete(('variable_undefined', undefined[0]))
     ordered = []
     definite_refusal: tuple[str, str] | None = None
     conditional_refusal: str | None = None
