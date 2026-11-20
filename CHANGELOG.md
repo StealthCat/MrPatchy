@@ -1,3 +1,7 @@
+## 1.75.77 — 2026-11-20
+
+1. [PR #1209](https://github.com/StealthCat/MrPatchy/pull/1209): Add a pure, fail-closed contract for which commands smartd runs on disk warnings, including the warning script, `smartd_warning.d` plugins, `-M exec` or `mail`, Debian's `smartd-runner` and the execution user, from `/etc/smartd.conf` and observed `-w`/`-u` options. Compatibility: no runtime, schema, route, UI, AI, role or response-authorization change. Limits: hook-directory listings and hook contents are not inspected; non-mail directive arguments are not validated, so the contract may over-report but not under-report; no real-binary differential is available; collection, catalog, provenance, UI and AI remain future work.
+
 ## 1.75.76 — 2026-11-20
 
 1. [PR #1206](https://github.com/StealthCat/MrPatchy/pull/1206): Batch active-job and latest automatic-plan status reads into one query for listed fleet servers, retaining the existing filters, deterministic job-ID tie breaks and response shape. Compatibility: administrator access, incident totals, readiness, scheduling and response authorization are unchanged. Limit: a 12-server fixture measured 24 history reads reduced to one; production latency remains unmeasured.

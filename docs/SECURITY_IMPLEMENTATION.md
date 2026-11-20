@@ -12118,6 +12118,26 @@ never reads a sourced file.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** agent collection of both directories and the resolvconf installation state, a catalog entry, package provenance, UI and AI classification.
 
+### smartd warning-command contract — worker checkpoint #1207 (roadmap F)
+
+- **Outcome:** `app/smartd_warnings.py` is a pure, I/O-free contract. From the text of `/etc/smartd.conf` and the observed smartd `-w/--warnexec` and `-u/--warn-as-user` options, it reports which commands smartd runs as root (or as the `-u` user) when it warns about a disk, and for which entries. Those commands are the warning script, the `smartd_warning.d` plugins, the `-M exec` program or `mail`, and Debian's `smartd-runner` → `run-parts --lsbsysinit /etc/smartmontools/run.d`.
+- **Semantics:** they come from smartmontools 7.4 `smartd.cpp` (`ParseConfigFile`, `ParseConfigLine`, `ParseToken`, `MailWarning`) and the Ubuntu 24.04 7.4-2build1 package scripts:
+  - a 256-byte line limit and a 1023-byte continued-line limit;
+  - `#` comments and backslash continuation;
+  - `DEFAULT` inheritance and reset;
+  - parsing stops at `DEVICESCAN`;
+  - whole-file rejection on syntax errors;
+  - `@plugin` handling, including skipping the mailer when only plugins are addressed;
+  - `<nomailer>` exec with no arguments.
+- **Fails closed:** unobserved or unreadable configs, unobserved daemon options, malformed input, rejected configs and over-limit input are blocking gaps. No entry is reported from a rejected file.
+- **Validation:** tests use vectors derived from the source. Running the downloaded smartd binary for a differential was not permitted in the worker environment, so a live differential is still to do.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - the `run.d` and `smartd_warning.d` listings;
+  - argument validation of non-mail directives (the contract over-reports, never under-reports);
+  - a real-binary differential;
+  - agent collection, a catalog entry, provenance, UI and AI classification.
+
 ### auditd dispatcher-plugin contract — worker checkpoint #1217
 
 `app/auditd_plugins.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/audit/auditd.conf`, the effective plugin directory and stat metadata for the plugin programs. It reports which programs auditd's built-in dispatcher forks and `execve`s as root on every auditd start and reconfigure, with which arguments, and why every other plugin file starts nothing.
