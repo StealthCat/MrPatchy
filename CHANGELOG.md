@@ -1,3 +1,7 @@
+## 1.78.0 — 2026-11-20
+
+1. [PR #1230](https://github.com/StealthCat/MrPatchy/pull/1230): Add a fail-closed, pure contract for which certbot renewal-hook scripts run as root, their ordering, renewal events and environment (Roadmap F slice). Compatibility: additive module, tests and documentation only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: renewal `.conf`/ `cli.ini` hook commands and `--config-dir` overrides are not modeled; collection, catalog, provenance, persistence, UI and AI wiring remain out of scope; hook contents and safety are not assessed.
+
 ## 1.77.1 — 2026-11-20
 
 1. [PR #1224](https://github.com/StealthCat/MrPatchy/pull/1224): Batch fleet automatic AI plan readiness reads and classify malformed stored pause policy as paused. In the 100-server SQLite fixture, readiness queries fell from 1,000 to eight; the 12-server fixture remained at eight. Compatibility: per-server state precedence, API fields, roles, redaction, scheduling, provider admission and response authorization are preserved; no schema change. Limits: incident counts remain per server, these are database-read measurements only, production latency is unmeasured, and broader Roadmap A acceptance remains open.
