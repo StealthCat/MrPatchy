@@ -46,20 +46,24 @@ def _window(session, column, conditions, limit, now):
     """Count one legacy sliding window and when it next drops below ``limit``.
 
     Admission counts entries with ``column > now - 3600``. Once ``count >= limit``
-    the gate reopens only after the oldest ``count - limit + 1`` entries leave
-    the window, so the opening time is that entry plus one hour, not merely the
-    oldest entry plus one hour.
+    the gate reopens when the ``limit``-th newest entry leaves the window. Read
+    the count and that timestamp in the same statement. The ordered lookup is
+    bounded by the allowance even when the window is heavily overfilled.
     """
-    from sqlalchemy import func, select
+    from sqlalchemy import case, func, select
+
     start = now - WINDOW_SECONDS
     where = (column > start, *conditions)
-    used = session.scalar(select(func.count()).where(*where)) or 0
-    if used < limit:
-        return used, False, None
+    count = select(func.count().label('used')).where(*where)
     if limit < 1:
-        return used, True, None
-    pivot = session.scalar(select(column).where(*where).order_by(column).offset(used - limit).limit(1))
-    return used, True, None if pivot is None else float(pivot) + WINDOW_SECONDS
+        return session.scalar(count), True, None
+    total = count.subquery()
+    pivot = (
+        select(column).where(*where)
+        .order_by(column.desc()).offset(limit - 1).limit(1).scalar_subquery()
+    )
+    used, timestamp = session.execute(select(total.c.used, case((total.c.used >= limit, pivot)))).one()
+    return used, used >= limit, None if timestamp is None else float(timestamp) + WINDOW_SECONDS
 
 
 def _legacy_purpose_limits(session, settings, now):
