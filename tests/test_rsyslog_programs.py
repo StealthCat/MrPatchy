@@ -185,6 +185,24 @@ def test_statement_start_legacy_action_keeps_ruleset_and_line():
         ('/bin/in-block', 'remote', 2), ('/bin/then-in-block', 'remote', 3), ('/bin/top', None, 5)]
 
 
+def test_selector_legacy_action_inside_ruleset_keeps_ruleset():
+    # Review follow-up on ae7011c5: a legacy action after a selector or ``&`` inside a RainerScript ruleset
+    # block carried no ruleset label, while ``action()`` on the same selector and a bare ``^`` did.
+    text = ('$ModLoad omprog\n'
+            '$ActionOMProgBinary /bin/legacy\n'
+            'ruleset(name="remote") {\n'
+            '  *.* ^/bin/selector\n'
+            '  & ^/bin/amp\n'
+            '  :msg, contains, "x" :omprog:\n'
+            '  *.* action(type="omprog" binary="/bin/rainer")\n'
+            '}\n'
+            '*.* ^/bin/top\n')
+    result = run(text)
+    assert [(a['program'], a['ruleset'], a['line']) for a in result['actions']] == [
+        ('/bin/selector', 'remote', 4), ('/bin/amp', 'remote', 5), ('/bin/legacy', 'remote', 6),
+        ('/bin/rainer', 'remote', 7), ('/bin/top', None, 9)]
+
+
 def test_include_order_follows_sorted_glob():
     files = {'/etc/rsyslog.d/b.conf': 'module(load="omprog")\n',
              '/etc/rsyslog.d/a.conf': '*.* action(type="omprog" binary="/bin/inc")\n'}

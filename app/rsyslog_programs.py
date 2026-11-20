@@ -390,7 +390,9 @@ def _scan(state: _State, text: str, path: str, depth: int) -> None:
             if char == '&':
                 match = re.compile(r'&[ \t]*').match(text, index)
             if match:
-                end = _legacy_action(state, text, match.end(), path, line)
+                # A selector or ``&`` line inside ``ruleset(){}`` binds its action to that ruleset, exactly like
+                # a RainerScript ``action()`` on the same line.
+                end = _legacy_action(state, text, match.end(), path, line, rulesets[-1] if rulesets else None)
                 index = match.end() if end is None else end
                 continue
         line_start = False
