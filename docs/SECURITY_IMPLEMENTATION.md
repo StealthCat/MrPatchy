@@ -11940,6 +11940,21 @@ reads. The measured improvement is in database round trips. Production load
 time remains unmeasured. Scheduling, provider admission and response
 authorization remain outside this status change.
 
+### Shared holds on automatic plan status — Roadmap A checkpoint #1249
+
+Security Coverage and Server → Security show the recorded shared AI start gates alongside
+automatic plan status in explicit control modes. Both surfaces read the existing admin-only
+control snapshot once per load, independently of the plan-status response. They distinguish
+the latest shared eligibility time, a reset recheck, and holds without a scheduled release.
+Worker slots, server readiness and call-specific checks can still defer a request after the
+shared gates open. If the snapshot fails or its mode differs from the plan status, the plan
+counts, job history and readiness remain visible with an unavailable timing state.
+
+Acceptance covers timed and indefinite holds, open and unavailable snapshots, legacy pacing,
+escaped text and fleet and server layouts at 320, 768 and 1440 pixels. Queue admission, provider
+accounting and response authorization retain their existing behavior. Deferred work and
+per-call admission across all AI purposes remain tracked under the wider Roadmap A milestones.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
