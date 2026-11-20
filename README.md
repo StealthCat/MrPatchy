@@ -578,6 +578,8 @@ response. See the [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md).
 
 Use **File integrity → Browse startup files** to search bounded stored startup metadata, review baseline-change labels and inspect mechanism/collection gaps. Updated agents also list individual cron jobs parsed from `/etc/crontab`, `/etc/cron.d` and user crontabs: line, schedule, account and a bounded command. Credential redaction of the command is best-effort and pattern-based, and standard input after an unescaped `%` is not stored. Comparisons, incidents and AI evidence stay metadata-only. Run-parts scripts, anacron and at queues, referenced scripts and origin remain unassessed.
 
+A separate pure D-Bus activation contract evaluates captured `.service` directory entries and reports bus-name winners and start paths without reading files, starting services or authorizing actions. Evidence gaps remain unresolved; the contract is not connected to endpoint collection or inventory.
+
 After **Finish and verify installation**, Mr Patchy follows the deployment job and opens that server’s Overview only after backend verification succeeds. This tab retains the success notice and restores pending progress after reload. Failures stay on the verification step with Activity and explicit retry controls. An unconfirmed submission is checked against server job history rather than replayed; ambiguous results require Activity review. Closing the dialog does not cancel work. **Stop tracking** clears only this tab’s progress, not the server or job. Progress is scoped to the signed-in account in browser session storage; a different browser/tab can use Manage → Finish / verify installation and existing active deployment jobs.
 
 Server workspaces use primary **Overview / Packages / Security / Settings** tabs (subject to role and server state), plus **More sections** grouped into updates/history, investigations/evidence and administration. Existing deep links still work. Package search and Updates only filters are remembered per server and separately for the fleet view while signed in, including when refreshing or returning with Back/Forward. Signing out or reloading clears these in-memory filters; patch selections are never restored. See [UI design and migration inventory](docs/UI_DESIGN.md#screen-migration-inventory).
@@ -1103,7 +1105,7 @@ and other roles are unchanged.
 
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
-provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
+provider. The fixture runner publishes a comparison report only when every completed run retains one successful result-persistence timing and each required follow-up retains its successful evidence-persistence timing; missing or invalid timing evidence is rejected. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
 [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
 reuse is validated. Benchmark comparisons also verify that independently rounded
 run counts, elapsed time and throughput can describe the same execution before
