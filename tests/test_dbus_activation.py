@@ -5,6 +5,8 @@ differential at the end re-checks them against a local dbus-daemon when one is
 installed and skips otherwise.
 """
 import os
+import pwd
+import re
 import shutil
 import subprocess
 import tempfile
@@ -228,3 +230,260 @@ def test_differential_against_dbus_daemon(case):
     contract = sorted(names(da.resolve([d(sdir, {'g.service': raw})])))
     # dbus-send prints a value up to its first newline; compare that view.
     assert observed == sorted(n.split('\n')[0] for n in contract)
+
+
+# --- Start path: bus type, systemd activation and the system-bus launch helper ----------------
+
+def start(result, name):
+    return next(n for n in result['names'] if n['name'] == name)['start']
+
+
+def test_bus_type_required_for_start_and_validated():
+    result = da.resolve([d('/s', {'org.ex.A.service': svc('org.ex.A')})])
+    assert start(result, 'org.ex.A') == {'status': 'not_determined', 'reason': 'bus_type_not_supplied'}
+    assert result['bus'] is None
+    with pytest.raises(ValueError):
+        da.resolve([], bus='user')
+
+
+def test_session_bus_runs_exec_as_bus_user_without_user_key():
+    result = da.resolve([d('/s', {'x.service': svc('org.ex.A')})], bus='session', systemd_activation=False)
+    assert start(result, 'org.ex.A') == {'status': 'starts', 'via': 'exec', 'run_as': 'bus_user',
+                                         'exec': '/bin/true', 'directory': '/s', 'file': 'x.service'}
+
+
+def test_system_bus_daemon_refuses_winner_without_user():
+    result = da.resolve([d('/s', {'org.ex.A.service': svc('org.ex.A')})], bus='system', systemd_activation=False)
+    assert start(result, 'org.ex.A') == {'status': 'refused', 'by': 'dbus-daemon', 'reason': 'user_missing'}
+    # The name is still listed as activatable: ListActivatableNames does not apply the check.
+    assert names(result) == {'org.ex.A': 'activatable'}
+
+
+def test_system_bus_helper_runs_exact_file_as_first_user():
+    result = da.resolve([d('/s', {'org.ex.A.service': svc('org.ex.A', 'User=root\nUser=nobody\n')})],
+                        bus='system', systemd_activation=False)
+    assert start(result, 'org.ex.A') == {'status': 'starts', 'via': 'launch_helper', 'run_as': 'root',
+                                         'exec': '/bin/true', 'user_resolution': 'not_assessed',
+                                         'directory': '/s', 'file': 'org.ex.A.service'}
+
+
+def test_system_bus_empty_user_passes_daemon_and_reaches_helper():
+    result = da.resolve([d('/s', {'org.ex.A.service': svc('org.ex.A', 'User=\n')})], bus='system',
+                        systemd_activation=False)
+    assert start(result, 'org.ex.A')['run_as'] == ''
+
+
+def test_system_bus_non_exact_winner_starts_later_exact_file():
+    result = da.resolve([d('/a', {'other.service': svc('org.ex.A', 'User=root\n')}),
+                         d('/b', {'org.ex.A.service': svc('org.ex.A', 'User=nobody\n')})],
+                        bus='system', systemd_activation=False)
+    assert winner(result, 'org.ex.A') == ('/a', 'other.service')
+    got = start(result, 'org.ex.A')
+    assert (got['status'], got['directory'], got['file'], got['run_as']) == (
+        'starts', '/b', 'org.ex.A.service', 'nobody')
+
+
+def test_system_bus_non_exact_winner_without_exact_file_is_refused():
+    result = da.resolve([d('/a', {'other.service': svc('org.ex.A', 'User=root\n')})], bus='system',
+                        systemd_activation=False)
+    assert start(result, 'org.ex.A') == {'status': 'refused', 'by': 'launch_helper',
+                                         'reason': 'helper_file_not_found', 'file': 'org.ex.A.service'}
+
+
+def test_system_bus_helper_takes_first_parsing_exact_file():
+    mismatch = da.resolve([d('/a', {'org.ex.A.service': svc('org.ex.Other', 'User=root\n')}),
+                           d('/b', {'org.ex.A.service': svc('org.ex.A', 'User=root\n')})],
+                          bus='system', systemd_activation=False)
+    assert winner(mismatch, 'org.ex.A') == ('/b', 'org.ex.A.service')
+    assert start(mismatch, 'org.ex.A')['reason'] == 'helper_name_mismatch'
+    assert start(mismatch, 'org.ex.A')['directory'] == '/a'
+    no_exec = da.resolve([d('/a', {'org.ex.A.service': '[D-BUS Service]\nName=org.ex.A\nUser=root\n'}),
+                          d('/b', {'org.ex.A.service': svc('org.ex.A', 'User=root\n')})],
+                         bus='system', systemd_activation=False)
+    assert start(no_exec, 'org.ex.A')['reason'] == 'helper_exec_missing'
+    no_user = da.resolve([d('/a', {'other.service': svc('org.ex.A', 'User=root\n')}),
+                          d('/b', {'org.ex.A.service': svc('org.ex.A')})],
+                         bus='system', systemd_activation=False)
+    assert start(no_user, 'org.ex.A')['reason'] == 'helper_user_missing'
+    rejected = da.resolve([d('/a', {'org.ex.A.service': svc('org.ex.A', 'User=root\njunk\n')}),
+                           d('/b', {'org.ex.A.service': svc('org.ex.A', 'User=root\n')})],
+                          bus='system', systemd_activation=False)
+    assert start(rejected, 'org.ex.A')['status'] == 'starts'
+    assert start(rejected, 'org.ex.A')['directory'] == '/b'
+
+
+def test_system_bus_helper_lookup_fails_closed():
+    unobserved = da.resolve([d('/a', {'other.service': svc('org.ex.A', 'User=root\n')}),
+                             d('/b', {}, observed=False)], bus='system', systemd_activation=False)
+    assert names(unobserved) == {'org.ex.A': 'activatable'}
+    assert start(unobserved, 'org.ex.A') == {'status': 'unresolved', 'reason': 'helper_directory_not_observed'}
+    text_missing = da.resolve([d('/a', {'other.service': svc('org.ex.A', 'User=root\n')}),
+                               d('/b', {'org.ex.A.service': {'kind': 'file', 'text': None}})],
+                              bus='system', systemd_activation=False)
+    assert start(text_missing, 'org.ex.A')['reason'] == 'helper_file_not_observed'
+    odd = da.resolve([d('/a', {'other.service': svc('org.ex.A', 'User=root\n'),
+                               'org.ex.A.service': {'kind': 'dangling'}})], bus='system', systemd_activation=False)
+    assert start(odd, 'org.ex.A')['status'] == 'unresolved'
+    many = [d(f'/x{i}', {}) for i in range(da.MAX_DIRECTORIES - 1)]
+    many += [d('/a', {'other.service': svc('org.ex.A', 'User=root\n')}), d('/late', {})]
+    assert start(da.resolve(many, bus='system', systemd_activation=False), 'org.ex.A')['status'] == 'unresolved'
+
+
+def test_systemd_activation_hands_off_systemd_service_without_user():
+    text = svc('org.ex.A', 'SystemdService=a.service\n')
+    on = da.resolve([d('/s', {'org.ex.A.service': text})], bus='system', systemd_activation=True)
+    assert start(on, 'org.ex.A') == {'status': 'starts', 'via': 'systemd', 'unit': 'a.service'}
+    off = da.resolve([d('/s', {'org.ex.A.service': text})], bus='system', systemd_activation=False)
+    assert start(off, 'org.ex.A') == {'status': 'refused', 'by': 'dbus-daemon', 'reason': 'user_missing'}
+    unknown = da.resolve([d('/s', {'org.ex.A.service': text})], bus='system')
+    assert start(unknown, 'org.ex.A') == {'status': 'unresolved', 'reason': 'systemd_activation_not_observed'}
+    plain = da.resolve([d('/s', {'org.ex.B.service': svc('org.ex.B', 'User=root\n')})], bus='system',
+                       systemd_activation=True)
+    assert start(plain, 'org.ex.B')['via'] == 'launch_helper'
+
+
+def test_start_not_determined_for_ambiguous_names():
+    result = da.resolve([d('/a', {'a.service': svc('org.ex.A', 'User=root\n'),
+                                  'z.service': svc('org.ex.A', 'User=root\n')})], bus='system',
+                        systemd_activation=False)
+    assert start(result, 'org.ex.A') == {'status': 'not_determined', 'reason': 'name_ambiguous'}
+
+
+# --- System-bus differential --------------------------------------------------------------------
+# The setuid launch helper ignores the bus configuration: it reads the system bus configuration and
+# searches the standard system service directories, and it only runs for the configured bus user. A
+# faithful differential therefore writes uniquely named files into two of those real directories, so
+# it runs only as root and only when explicitly enabled (MRPATCHY_DBUS_SYSTEM_DIFFERENTIAL=1).
+
+HELPER = '/usr/lib/dbus-1.0/dbus-daemon-launch-helper'
+SYSTEM_DIRS = ('/usr/local/share/dbus-1/system-services', '/usr/share/dbus-1/system-services')
+
+
+def _system_differential_available():
+    if os.environ.get('MRPATCHY_DBUS_SYSTEM_DIFFERENTIAL') != '1':
+        return False
+    if not (DAEMON and SEND and os.path.exists(HELPER) and hasattr(os, 'geteuid') and os.geteuid() == 0):
+        return False
+    try:
+        pwd.getpwnam('messagebus')
+    except KeyError:
+        return False
+    return True
+
+
+def _exec_line(marks, tag):
+    return f'Exec=/bin/sh -c "id -un > {marks}/{tag}"\n'
+
+
+def _system_scenarios(prefix):
+    # (requested name, {(dir_index, filename): text with {X:tag} exec placeholders}, systemd_activation)
+    def n(s):
+        return f'{prefix}.{s}'
+
+    return {
+        'exact_root': (n('A'), {(1, n('A') + '.service'): ('[D-BUS Service]\nName=' + n('A') + '\n{X:A}User=root\n')}),
+        'no_user': (n('B'), {(1, n('B') + '.service'): ('[D-BUS Service]\nName=' + n('B') + '\n{X:B}')}),
+        'non_exact_only': (n('C'), {(1, 'x' + n('C') + '.service'):
+                                    ('[D-BUS Service]\nName=' + n('C') + '\n{X:C}User=root\n')}),
+        'non_exact_then_exact': (n('D'), {
+            (0, 'x' + n('D') + '.service'): '[D-BUS Service]\nName=' + n('D') + '\n{X:D1}User=root\n',
+            (1, n('D') + '.service'): '[D-BUS Service]\nName=' + n('D') + '\n{X:D2}User=root\n'}),
+        'exact_name_mismatch': (n('E'), {
+            (0, n('E') + '.service'): '[D-BUS Service]\nName=' + n('E') + 'x\n{X:E1}User=root\n',
+            (1, n('E') + '.service'): '[D-BUS Service]\nName=' + n('E') + '\n{X:E2}User=root\n'}),
+        'exact_rejected_then_valid': (n('K'), {
+            (0, n('K') + '.service'): '[D-BUS Service]\nName=' + n('K') + '\n{X:K1}User=root\njunk\n',
+            (1, n('K') + '.service'): '[D-BUS Service]\nName=' + n('K') + '\n{X:K2}User=root\n'}),
+        'exact_no_exec_then_valid': (n('L'), {
+            (0, n('L') + '.service'): '[D-BUS Service]\nName=' + n('L') + '\nUser=root\n',
+            (1, n('L') + '.service'): '[D-BUS Service]\nName=' + n('L') + '\n{X:L2}User=root\n'}),
+        'helper_exact_without_user': (n('M'), {
+            (0, 'x' + n('M') + '.service'): '[D-BUS Service]\nName=' + n('M') + '\n{X:M1}User=root\n',
+            (1, n('M') + '.service'): '[D-BUS Service]\nName=' + n('M') + '\n{X:M2}'}),
+        'first_user_wins': (n('I'), {(1, n('I') + '.service'):
+                                     '[D-BUS Service]\nName=' + n('I') + '\n{X:I}User=root\nUser=nobody\n'}),
+        'systemd_service_ignored': (n('H'), {(1, n('H') + '.service'):
+                                             '[D-BUS Service]\nName=' + n('H') + '\n{X:H}User=root\nSystemdService=h.service\n'}),
+    }
+
+
+def _render(text, marks):
+    return re.sub(r'\{X:([A-Za-z0-9]+)\}', lambda m: _exec_line(marks, m.group(1)), text)
+
+
+@pytest.mark.skipif(not _system_differential_available(),
+                    reason='system-bus differential needs root, the launch helper and MRPATCHY_DBUS_SYSTEM_DIFFERENTIAL=1')
+def test_system_bus_differential_against_launch_helper():
+    prefix = f'org.mrpatchy.difftest.p{os.getpid()}'
+    scenarios = _system_scenarios(prefix)
+    written = []
+    with tempfile.TemporaryDirectory() as tmp:
+        marks = os.path.join(tmp, 'marks')
+        os.mkdir(marks, 0o700)
+        try:
+            for path in SYSTEM_DIRS:
+                os.makedirs(path, exist_ok=True)
+            for _name, files in scenarios.values():
+                for (index, filename), text in files.items():
+                    target = os.path.join(SYSTEM_DIRS[index], filename)
+                    with open(target, 'w', encoding='utf-8') as fh:
+                        fh.write(_render(text, marks))
+                    written.append(target)
+            sock = os.path.join(tmp, 'sock')
+            conf = os.path.join(tmp, 'bus.conf')
+            with open(conf, 'w', encoding='utf-8') as fh:
+                fh.write(f'<busconfig><type>system</type><user>messagebus</user>'
+                         f'<listen>unix:path={sock}</listen><auth>EXTERNAL</auth>'
+                         f'<servicehelper>{HELPER}</servicehelper>'
+                         '<policy context="default"><allow send_destination="*"/><allow own="*"/>'
+                         '<allow user="*"/><allow receive_sender="*"/></policy>'
+                         + ''.join(f'<servicedir>{x}</servicedir>' for x in SYSTEM_DIRS) + '</busconfig>')
+            proc = subprocess.Popen([DAEMON, f'--config-file={conf}', '--nofork', '--nopidfile'],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                for _ in range(100):
+                    if os.path.exists(sock):
+                        break
+                    time.sleep(0.05)
+                observed = {}
+                for case, (name, _files) in scenarios.items():
+                    reply = subprocess.run([SEND, f'--bus=unix:path={sock}', '--print-reply', '--reply-timeout=1500',
+                                            '--dest=org.freedesktop.DBus', '/org/freedesktop/DBus',
+                                            'org.freedesktop.DBus.StartServiceByName', f'string:{name}', 'uint32:0'],
+                                           capture_output=True, text=True, timeout=15, check=False)
+                    observed[case] = reply.stdout + reply.stderr
+            finally:
+                proc.terminate()
+                proc.wait(timeout=10)
+            time.sleep(0.5)
+            ran = {}
+            for tag in os.listdir(marks):
+                with open(os.path.join(marks, tag), encoding='utf-8') as fh:
+                    ran[tag] = fh.read().strip()
+        finally:
+            for target in written:
+                try:
+                    os.unlink(target)
+                except FileNotFoundError:
+                    pass
+        listings = []
+        for index, path in enumerate(SYSTEM_DIRS):
+            entries = {}
+            for _name, files in scenarios.values():
+                for (i, filename), text in files.items():
+                    if i == index:
+                        entries[filename] = {'kind': 'file', 'text': _render(text, marks)}
+            listings.append({'path': path, 'observed': True, 'entries': entries})
+        contract = da.resolve(listings, bus='system', systemd_activation=False)
+    for case, (name, files) in scenarios.items():
+        got = start(contract, name)
+        started = [tag for tag in ran if any(f'{{X:{tag}}}' in t for t in files.values())]
+        if got['status'] == 'starts':
+            text = files[(SYSTEM_DIRS.index(got['directory']), got['file'])]
+            tag = re.search(r'\{X:([A-Za-z0-9]+)\}', text).group(1)
+            assert started == [tag], (case, observed[case], ran)
+            assert ran[tag] == got['run_as'], case
+        else:
+            assert got['status'] == 'refused', (case, got)
+            assert started == [], (case, observed[case], ran)
+            assert 'org.freedesktop.DBus.Error.Spawn' in observed[case], (case, observed[case])

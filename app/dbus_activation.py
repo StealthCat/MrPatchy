@@ -41,8 +41,35 @@ started with chosen ``<servicedir>`` lists and queried with
   directory the winner follows ``readdir`` order, which is unspecified, so the
   contract reports that name as ambiguous rather than guessing.
 
-Not modeled: the launch-helper checks the system bus applies when it starts a
-service (file name and ``User``), AppArmor/SELinux mediation and the bus
+How a name is started (``start``) depends on the bus type the caller passes
+(``bus='session'`` or ``bus='system'``) and on whether the bus runs with
+``--systemd-activation``. These rules were checked with a differential against
+a real ``<type>system</type>`` bus running as ``messagebus`` with the setuid
+``dbus-daemon-launch-helper`` from the same release:
+
+- With systemd activation, a winner that declares ``SystemdService`` is handed
+  to systemd as that unit on either bus type; no ``User`` is needed. Without
+  systemd activation the key is ignored. When the caller does not say whether
+  systemd activation is on, such names are ``unresolved``.
+- On the session bus the winner's ``Exec`` runs directly as the bus user.
+- On the system bus (``bus='system'`` means the standard configuration with a
+  ``<servicehelper>``) the daemon first refuses a winner without ``User``
+  (``Spawn.FileInvalid``). An empty ``User`` value passes this check.
+- The launch helper then resolves the file again on its own, by file name
+  only: it takes the first service directory holding ``<Name>.service`` that
+  parses, skipping files that fail to parse. That file can differ from the
+  daemon's winner: a non-exact winner (the daemon logs that it "will not work
+  with system bus activation") starts a later directory's ``<Name>.service``
+  if one exists, and fails with ``ServiceNotFound`` otherwise. In the chosen
+  file, a different or missing ``Name`` is refused (``PermissionsInvalid``),
+  as are a missing ``Exec`` (the helper exits 1) and a missing ``User``.
+  Otherwise its ``Exec`` runs as its ``User``. Whether that user exists is not
+  assessed: unknown, empty and numeric users fail at start with
+  ``FailedToSetup``.
+- The contract assumes the helper's directories (from the system bus
+  configuration) are the directories supplied, in the same order.
+
+Not modeled: AppArmor/SELinux mediation, user-database lookups and the bus
 configuration that chooses the directories; the caller supplies them in bus
 order.
 
@@ -73,6 +100,8 @@ _RECORDED_KEYS = ('Name', 'Exec', 'User', 'SystemdService', 'AssumedAppArmorLabe
 FILE_STATUSES = ('wins', 'shadowed', 'ambiguous', 'not_service', 'skipped_non_file',
                  'skipped_incomplete', 'rejected', 'unresolved')
 NAME_STATUSES = ('activatable', 'ambiguous', 'unresolved')
+START_STATUSES = ('starts', 'refused', 'unresolved', 'not_determined')
+BUS_TYPES = ('session', 'system')
 
 
 class ParseError(ValueError):
@@ -165,19 +194,77 @@ def _digest(data: bytes | str | None) -> str | None:
     return hashlib.sha256(raw).hexdigest()
 
 
-def resolve(directories: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def _helper_start(name: str, scan: list[dict[str, Any] | None], truncated: bool) -> dict[str, Any]:
+    """Model ``dbus-daemon-launch-helper``'s own lookup of ``<name>.service``."""
+    wanted = name + SUFFIX
+    for state in scan:
+        if state is None:
+            return {'status': 'unresolved', 'reason': 'helper_directory_not_observed'}
+        found = state['files'].get(wanted)
+        if found is None:
+            continue
+        kind, section, record = found
+        if kind == 'skip':
+            continue
+        if kind == 'unknown':
+            return {'status': 'unresolved', 'reason': 'helper_file_not_observed',
+                    'directory': record['directory'], 'file': wanted}
+        where = {'directory': record['directory'], 'file': wanted}
+        if section.get('Name') != name:
+            return {'status': 'refused', 'by': 'launch_helper', 'reason': 'helper_name_mismatch', **where}
+        if 'Exec' not in section:
+            return {'status': 'refused', 'by': 'launch_helper', 'reason': 'helper_exec_missing', **where}
+        if 'User' not in section:
+            return {'status': 'refused', 'by': 'launch_helper', 'reason': 'helper_user_missing', **where}
+        return {'status': 'starts', 'via': 'launch_helper', 'run_as': section['User'],
+                'exec': section['Exec'], 'user_resolution': 'not_assessed', **where}
+    if truncated:
+        return {'status': 'unresolved', 'reason': 'helper_directory_not_observed'}
+    return {'status': 'refused', 'by': 'launch_helper', 'reason': 'helper_file_not_found', 'file': wanted}
+
+
+def _start(entry: Mapping[str, Any], bus: str | None, systemd_activation: bool | None,
+           scan: list[dict[str, Any] | None], truncated: bool) -> dict[str, Any]:
+    if bus is None:
+        return {'status': 'not_determined', 'reason': 'bus_type_not_supplied'}
+    if entry['status'] != 'activatable':
+        return {'status': 'not_determined', 'reason': 'name_' + entry['status']}
+    declared = entry['declared']
+    if 'SystemdService' in declared:
+        if systemd_activation is None:
+            return {'status': 'unresolved', 'reason': 'systemd_activation_not_observed'}
+        if systemd_activation:
+            return {'status': 'starts', 'via': 'systemd', 'unit': declared['SystemdService']}
+    if bus == 'session':
+        return {'status': 'starts', 'via': 'exec', 'run_as': 'bus_user', 'exec': declared['Exec'],
+                'directory': entry['directory'], 'file': entry['file']}
+    if 'User' not in declared:
+        return {'status': 'refused', 'by': 'dbus-daemon', 'reason': 'user_missing'}
+    return _helper_start(entry['name'], scan, truncated)
+
+
+def resolve(directories: Iterable[Mapping[str, Any]], *, bus: str | None = None,
+            systemd_activation: bool | None = None) -> dict[str, Any]:
     """Resolve activatable names from captured service directories in bus order.
 
     Each directory is ``{'path': str, 'observed': bool, 'entries': {filename:
     {'kind': 'file' | 'dir' | 'dangling' | 'other', 'text': bytes | str | None}}}``
-    where ``kind`` already follows symlinks.
+    where ``kind`` already follows symlinks. ``bus`` is ``'session'``,
+    ``'system'`` or ``None`` (start path not determined); ``systemd_activation``
+    says whether the bus runs with ``--systemd-activation`` (``None``: unknown).
     """
+    if bus is not None and bus not in BUS_TYPES:
+        raise ValueError(f'unsupported bus type: {bus!r}')
     dirs = list(directories)
     gaps: list[dict[str, Any]] = []
     files: list[dict[str, Any]] = []
-    if len(dirs) > MAX_DIRECTORIES:
+    truncated = len(dirs) > MAX_DIRECTORIES
+    if truncated:
         gaps.append({'reason': 'too_many_directories', 'limit': MAX_DIRECTORIES})
         dirs = dirs[:MAX_DIRECTORIES]
+    # Per directory, what the launch helper would see for each service file:
+    # None for an unobserved directory, else {'files': {name: (kind, section, record)}}.
+    scan: list[dict[str, Any] | None] = []
     # blocked_from: first directory index at which an unobserved input could
     # provide any name; winners at or after it are unresolved.
     blocked_from: int | None = None
@@ -187,12 +274,16 @@ def resolve(directories: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
         if not directory.get('observed'):
             gaps.append({'reason': 'directory_not_observed', 'directory': path})
             blocked_from = index if blocked_from is None else blocked_from
+            scan.append(None)
             continue
         entries = directory.get('entries') or {}
         if len(entries) > MAX_ENTRIES:
             gaps.append({'reason': 'too_many_entries', 'directory': path, 'limit': MAX_ENTRIES})
             blocked_from = index if blocked_from is None else blocked_from
+            scan.append(None)
             continue
+        seen: dict[str, tuple[str, dict[str, str], dict[str, Any]]] = {}
+        scan.append({'files': seen})
         for filename in sorted(entries):
             entry = entries[filename] or {}
             record: dict[str, Any] = {'directory': path, 'file': filename, 'directory_index': index,
@@ -204,16 +295,20 @@ def resolve(directories: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             kind = entry.get('kind')
             if kind in ('dir', 'dangling', 'other'):
                 record['status'] = 'skipped_non_file'
+                # Not checked against the helper: fail closed if it is the exact name.
+                seen[filename] = ('unknown', {}, record)
                 continue
             text = entry.get('text')
             if kind != 'file' or text is None:
                 record.update(status='unresolved', reason='text_not_observed')
+                seen[filename] = ('unknown', {}, record)
                 gaps.append({'reason': 'file_not_observed', 'directory': path, 'file': filename})
                 blocked_from = index if blocked_from is None else blocked_from
                 continue
             raw = text.encode('utf-8', 'surrogatepass') if isinstance(text, str) else bytes(text)
             if len(raw) > MAX_TEXT:
                 record.update(status='unresolved', reason='text_over_limit')
+                seen[filename] = ('unknown', {}, record)
                 gaps.append({'reason': 'file_over_limit', 'directory': path, 'file': filename, 'limit': MAX_TEXT})
                 blocked_from = index if blocked_from is None else blocked_from
                 continue
@@ -222,8 +317,10 @@ def resolve(directories: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
                 groups = parse_service_file(raw)
             except ParseError as exc:
                 record.update(status='rejected', reason=str(exc))
+                seen[filename] = ('skip', {}, record)
                 continue
             section = groups.get(SERVICE_GROUP, {})
+            seen[filename] = ('parsed', section, record)
             if 'Name' not in section or 'Exec' not in section:
                 missing = [key for key in ('Name', 'Exec') if key not in section]
                 record.update(status='skipped_incomplete', missing=missing)
@@ -263,10 +360,14 @@ def resolve(directories: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             entry['candidates'] = [{'directory': r['directory'], 'file': r['file']}
                                    for index, r in providers if index == first]
         names.append(entry)
+    for entry in names:
+        entry['start'] = _start(entry, bus, systemd_activation, scan, truncated)
     return {
         'contract': 'dbus_activation',
         'contract_version': CONTRACT_VERSION,
         'source_versions': list(SOURCE_VERSIONS),
+        'bus': bus,
+        'systemd_activation': systemd_activation,
         'complete': not gaps,
         'gaps': gaps,
         'names': names,
