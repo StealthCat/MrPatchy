@@ -21,6 +21,8 @@ def investigation_limit(s,host_id):
 
 
 def investigation_limit_value(value):
+    # A manually corrupted policy must reduce admission rather than widen it.
+    if not isinstance(value,dict):return MIN_CONCURRENCY
     raw=value.get('concurrency_limit')
     if raw is None:return DEFAULT_CONCURRENCY
     if type(raw) is int and MIN_CONCURRENCY<=raw<=MAX_CONCURRENCY:return raw
@@ -44,11 +46,15 @@ def stored_paused(value,present=True):
 
 
 def status(s,host_id):
-    row=s.get(Setting,PREFIX+host_id);value=row.value if row else {}
-    paused=value.get('paused',False) is not False
+    row=s.get(Setting,PREFIX+host_id);stored=row.value if row else {}
+    # Share the provider gate's fail-closed reading: a non-object policy is
+    # paused at minimum capacity, and reports no revision so an administrator
+    # can repair it by saving.
+    paused=stored_paused(stored,row is not None)
+    value=stored if isinstance(stored,dict) else {}
     cfg=config(s)
     return {**value,'paused':paused,'revision':value.get('revision',''),
-        'concurrency_limit':investigation_limit(s,host_id),
+        'concurrency_limit':investigation_limit_value(stored),
         'concurrency_limit_min':MIN_CONCURRENCY,'concurrency_limit_max':MAX_CONCURRENCY,
         'state':'paused' if paused else 'eligible' if cfg['ai_enabled'] else 'globally_disabled',
         'global_enabled':bool(cfg['ai_enabled'])}

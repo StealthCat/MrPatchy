@@ -1,3 +1,7 @@
+## 1.79.1 — 2026-11-20
+
+1. [PR #1234](https://github.com/StealthCat/MrPatchy/pull/1234): Treat a non-object stored per-server AI policy as paused at minimum capacity, so malformed values no longer crash automatic fleet planning, policy reads or the repair endpoint. Compatibility: valid policy objects behave as before; no schema, API-shape, auth or response-authorization change. Limits: the SQL `paused_ids()` summary still does not classify non-objects as paused (the provider gate remains fail-closed), and malformed `security-policy:<host>` values are separate work.
+
 ## 1.79.0 — 2026-11-20
 
 1. [PR #1232](https://github.com/StealthCat/MrPatchy/pull/1232): Add a daily-cap mode to the serial and parallel triage benchmark. The disposable loopback fixture uses synthetic pricing and verifies one settled reservation per provider call, including follow-ups; the comparator requires matching workloads and complete settlement evidence while retaining legacy and unthrottled report compatibility. Compatibility: benchmark tooling and tests only; no application runtime, provider, schema, published pricing, or response-authorization change. Limits: synthetic cap reports do not measure production performance; exhausted-cap, deferral, restart, and rate-paced scenarios remain separate work.
