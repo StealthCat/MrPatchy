@@ -12261,3 +12261,42 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
 - **Validation:** `tests/test_certbot_hooks.py` has 58 tests. Four differential tests load certbot's real `hooks.py` and `compat` modules (only logging/display and unused helpers are stubbed) and execute real hooks through `/bin/sh` from temporary directories. They compare what ran, its order, deduplication, environment, the `renew`/other-verb split, dry-run and `--no-directory-hooks` behavior, a name with a space, and a non-directory hook path with the contract. They run when `MRPATCHY_CERTBOT_SOURCE` points at an unpacked certbot wheel or certbot is installed, and are skipped otherwise. Seven mutations are each caught.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** agent collection of the directories and the certbot installation state, a catalog entry, provenance, persistence, UI and AI classification. Hook commands in `/etc/letsencrypt/renewal/*.conf` and `cli.ini`, and `--config-dir` overrides, are not modeled.
+
+### TuneD profile script contract — worker checkpoint #1237 (roadmap F)
+
+`app/tuned_profiles.py` is a pure, versioned, I/O-free roadmap F contract. Its input is captured TuneD state: `active_profile`, `profile_mode`, `post_loaded_profile`, the `/usr/lib/tuned` and `/etc/tuned` listings, and the candidate `tuned.conf` texts. From that it reports which executables the TuneD daemon starts as root for the active profile, with which arguments, in which order and under which conditions.
+
+- **Why it matters:** TuneD is installed and enabled by default on RHEL-family servers. On every boot and profile switch it runs:
+  - each `[script]` unit's `script=` executable with `start`, and with `stop` on unload;
+  - any unit's `script_pre`/`script_post` once per device;
+  - `${f:exec:...}` calls.
+
+  A custom `/etc/tuned/<name>/tuned.conf` shadows the stock profile of the same name. A custom profile can also add scripts through `include=`. No existing contract reported any of this.
+- **Source of the semantics:** TuneD 2.21.0 as packaged in Ubuntu 24.04. The files read were `profiles/{locator,loader,merger,profile,unit,variables}.py`, `plugins/{base,plugin_script}.py`, `units/manager.py`, `daemon/daemon.py` and `utils/commands.py`. The contract models:
+  - the profile-mode rules: an empty mode means manual when an active profile is set, auto mode is a blocking gap, and an invalid mode refuses the load;
+  - the single post-loaded profile;
+  - the known-name check before `safe_name` filtering;
+  - `/etc/tuned` taking precedence over `/usr/lib/tuned`, with processed files skipped and the search falling through to the next directory;
+  - optional `-name` includes and depth-first `include=` loading;
+  - parsing with the same `configparser` settings TuneD uses;
+  - `${i:PROFILE_DIR}` expansion and `script=` normalization;
+  - TuneD's merge rules: `replace`, `drop`, `enabled`, overwritten regexes and device scripts, and `script` concatenation, which repeats the earlier scripts when a later `[script]` unit sets none;
+  - integer priority ordering;
+  - relative `script_pre`/`script_post` paths, which never run.
+- **Fail closed:** blocking gaps cover:
+  - an unobserved family or installation state;
+  - an unobserved or unreadable state file, listing or path;
+  - malformed or over-limit input;
+  - auto mode, because the recommended profile is not modeled;
+  - variables in `include=`;
+  - a `[variables] include=` file;
+  - any `${f:exec:` call.
+
+  A parse error, an unknown or missing profile, an invalid priority, an invalid mode or a multi-word post-loaded profile is reported as `load_refused` with no invocations, because the daemon then loads nothing. CPU/uname regexes and per-device scripts are reported as conditions, not as definite runs.
+- **Validation:** `tests/test_tuned_profiles.py` has 14 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in the worker session, so there is no live differential yet.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change.
+- **Remaining:**
+  - a differential against the real loader;
+  - agent collection of the TuneD files and installation state;
+  - a catalog entry, provenance, persistence, UI and AI classification;
+  - recommended-profile (`recommend.d`) resolution, variable expansion and `tuned-main.conf` `default_instance_priority` collection.
