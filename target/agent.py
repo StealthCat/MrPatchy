@@ -368,7 +368,11 @@ def _read_adjtimex():
     return {'state':state,'status':value.status,'maxerror':value.maxerror,'esterror':value.esterror,'offset':value.offset}
 
 def clock_sync(read=_read_adjtimex,collected=None):
-    """Report whether the kernel clock is NTP-disciplined (systemd's ntp_synced() rule). Never changes the clock."""
+    """Report whether the kernel clock is NTP-disciplined. Never changes the clock.
+
+    Uses systemd timedated's ntp_synced() rule (NTPSynchronized): synchronized when maxerror is below the
+    16 s phase limit. STA_UNSYNC is reported but not used, because chrony/ntpd keep it set while disciplining
+    the clock when RTC sync is off (it stops the kernel's 11-minute RTC writes)."""
     observed=time.time() if collected is None else collected
     result={'version':1,'collected':observed,'source':'adjtimex','scope':{'kind':'host'},'gaps':[]}
     try:
@@ -383,7 +387,7 @@ def clock_sync(read=_read_adjtimex,collected=None):
         status=fields['status']
         unsync=bool(status&STA_UNSYNC)
         offset_us=fields['offset']/1000 if status&STA_NANO else float(fields['offset'])
-        result.update({'applicability':'supported','state':'unsynchronized' if unsync or fields['maxerror']>=NTP_PHASE_LIMIT_US else 'synchronized',
+        result.update({'applicability':'supported','state':'unsynchronized' if fields['maxerror']>=NTP_PHASE_LIMIT_US else 'synchronized',
                        'kernel_unsync':unsync,'time_state':_TIME_STATES[fields['state']],'unit':'microseconds',
                        'max_error':fields['maxerror'],'estimated_error':fields['esterror'],'offset':offset_us})
         return result

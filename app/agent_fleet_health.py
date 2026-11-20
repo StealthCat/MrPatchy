@@ -96,8 +96,8 @@ def _clock(entry):
     if max_error is None or estimated is None or offset is None:
         return None
     synchronized = entry['state'] == 'synchronized'
-    if synchronized and (unsync or max_error >= 16_000_000):
-        return None  # contradicts the kernel rule the agent applies
+    if synchronized != (max_error < 16_000_000):
+        return None  # contradicts the maxerror rule the agent applies (STA_UNSYNC is informational)
     return {'synchronized': synchronized, 'max_error_ms': round(max_error / 1000, 3),
             'estimated_error_ms': round(estimated / 1000, 3), 'offset_ms': round(offset / 1000, 3)}
 

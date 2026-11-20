@@ -30,12 +30,21 @@ def test_microsecond_offset_without_sta_nano():
 
 
 @pytest.mark.parametrize('fields', [
-    {'status': 0x0041, 'state': 5},            # STA_UNSYNC, TIME_ERROR: no NTP daemon disciplining the clock
+    {'status': 0x0041, 'state': 5, 'maxerror': 16_000_000},  # no NTP daemon: STA_UNSYNC, TIME_ERROR, maxerror capped
     {'status': 0x0001, 'maxerror': 16_000_000},  # error grew past the kernel's phase limit
 ])
 def test_undisciplined_clock_is_unsynchronized(fields):
     result = agent.clock_sync(raw(**fields), 1)
     assert result['state'] == 'unsynchronized' and result['applicability'] == 'supported'
+
+
+def test_sta_unsync_alone_does_not_mark_a_disciplined_clock_unsynchronized():
+    # chrony/ntpd with RTC sync off keep STA_UNSYNC set while disciplining the clock; systemd timedated's
+    # NTPSynchronized ignores the flag and uses maxerror < 16 s, so the agent must agree.
+    result = agent.clock_sync(raw(status=0x2041, state=5, maxerror=40_000), 1)
+    assert result['state'] == 'synchronized' and result['kernel_unsync'] is True and result['time_state'] == 'error'
+    summary = fleet.resources({'clock_sync': agent.clock_sync(raw(status=0x2041, maxerror=40_000), NOW - 30)}, 'fresh')
+    assert summary['clock']['synchronized'] is True and summary['attention'] == []
 
 
 @pytest.mark.parametrize('error, reason', [
@@ -89,7 +98,7 @@ def test_fleet_summary_reports_clock_and_advisory_attention():
     result = fleet.resources({'clock_sync': record()}, 'fresh')
     assert result['state'] == 'present' and result['attention'] == []
     assert result['clock'] == {'synchronized': True, 'max_error_ms': 25.0, 'estimated_error_ms': 0.3, 'offset_ms': -0.013}
-    unsync = fleet.resources({'clock_sync': record(status=0x0041, state=5)}, 'stale')
+    unsync = fleet.resources({'clock_sync': record(status=0x0041, state=5, maxerror=16_000_000)}, 'stale')
     assert unsync['clock']['synchronized'] is False and unsync['attention'] == ['clock-unsynchronized']
 
 
@@ -97,8 +106,8 @@ def test_fleet_summary_reports_clock_and_advisory_attention():
     lambda r: r.update(state='unknown'),
     lambda r: r.update(unit='seconds'),
     lambda r: r.update(kernel_unsync='no'),
-    lambda r: r.update(kernel_unsync=True),          # contradicts "synchronized"
     lambda r: r.update(max_error=16_000_000),        # contradicts "synchronized"
+    lambda r: r.update(state='unsynchronized'),      # contradicts max_error below the phase limit
     lambda r: r.update(max_error=-1),
     lambda r: r.update(offset=float('nan')),
     lambda r: r.update(estimated_error=True),
@@ -113,11 +122,11 @@ def test_malformed_or_contradictory_clock_records_are_unknown(mutate):
 def test_clock_withheld_for_untrusted_telemetry_and_other_versions():
     assert fleet.resources({'clock_sync': {**record(), 'version': 2}}, 'fresh')['state'] == 'absent'
     for state in ('missing', 'invalid'):
-        assert fleet.resources({'clock_sync': record(status=0x41)}, state)['clock'] is None
+        assert fleet.resources({'clock_sync': record(status=0x41, maxerror=16_000_000)}, state)['clock'] is None
 
 
 def test_unsynchronized_clock_never_changes_health():
-    healthy = Host(id='h', name='web', state='online', telemetry={'collected': NOW - 30, 'clock_sync': record(status=0x41, state=5)})
+    healthy = Host(id='h', name='web', state='online', telemetry={'collected': NOW - 30, 'clock_sync': record(status=0x41, state=5, maxerror=16_000_000)})
     receipt = {'state': 'current', 'checked': NOW - 60, 'repairable': True, 'issues': [],
                'report': {'version': 1, 'unit_path': fleet.SYSTEMD_UNIT, 'files': {}}}
     row = fleet.classify(healthy, receipt, NOW)

@@ -6551,17 +6551,19 @@ remain open.
 Each agent telemetry snapshot adds a version-1 `clock_sync` record. The agent
 reads the kernel clock discipline with one `adjtimex()` call with `modes=0`. This
 call is read-only: it sets no field, needs no privilege and runs no binary. The
-clock counts as `synchronized` under systemd's `ntp_synced()` rule: the kernel
-`STA_UNSYNC` flag is clear and `maxerror` is below the 16-second phase limit.
-Otherwise it is `unsynchronized`. The record also carries the kernel time state,
+clock counts as `synchronized` under systemd-timedated's `ntp_synced()`
+(`NTPSynchronized`) rule: `maxerror` is below the 16-second phase limit.
+Otherwise it is `unsynchronized`. The kernel `STA_UNSYNC` flag is reported as
+`kernel_unsync` but does not decide the state, because chrony and ntpd keep it
+set while disciplining the clock when RTC synchronization is off. The record also carries the kernel time state,
 the maximum and estimated error, and the offset in microseconds (nanosecond
 offsets are converted when `STA_NANO` is set). A denied, missing or malformed
 call is `unknown`, with a typed `clock-sync` gap.
 
 The endpoint-agent **Resources** column shows the clock state and its maximum
 error, plus an advisory `clock-unsynchronized` flag. The controller accepts only
-consistent records. A `synchronized` state that contradicts its own flag or error
-is shown as unknown. Like the other resource metrics, the flag never changes
+consistent records. A state that contradicts its own maximum error is shown as
+unknown. Like the other resource metrics, the flag never changes
 health, counts, alerts, repairs, preflight or authorization. Missing or
 future-dated telemetry shows nothing.
 
