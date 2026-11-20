@@ -11814,6 +11814,18 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 - **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
 - **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
 - **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
+
+### Batch fleet automatic AI plan job status — Roadmap A checkpoint #1205
+
+The automatic AI plan status reads the active plan and latest automatic attempt
+for all listed servers in one query. Two per-server selections run inside that
+query and return only state and creation time. Each selection uses the same
+host, action and state filters as the individual server view. For equal creation
+times both selections sort by descending job ID. The fleet still lists at most
+100 opted-in servers. A 12-server fixture reduced this part of its read from 24 statements
+to one while preserving the result for each server. Incident counts and server
+readiness still make per-server reads. Production load time remains unmeasured.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
@@ -11995,6 +12007,21 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
 - **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
 
+### Update-scoring stage timings in the fleet summary — Roadmap A checkpoint #1190
+
+`GET /api/ai/triage/timings` now accepts an optional `purpose` of `triage`
+(the default, with the previous sample) or `update_scoring`; other values return
+400. The response names the sampled `purpose`. Only completed or failed runs of
+that purpose are sampled, with the same 100-run and 2,048-event bounds, malformed
+event discard and no message, run ID or evidence exposure. The **AI stage timings**
+card on fleet AI logs adds an **Activity** selector (Process triage / Update
+importance); changing it clears the previous table and ignores late responses for
+the old selection. Scoring runs record provider admission, provider, receipt and
+usage persistence, result persistence and run timings; triage-only stages show no
+samples. Compatibility: admin-only as before, no schema, collection, admission,
+budget or response-authorization change. Matched serial/parallel production
+throughput remains open.
+
 ### Release configuration review persistence — Roadmap A checkpoint #1184
 
 A newly validated release configuration review records one retained
@@ -12105,6 +12132,26 @@ never reads a sourced file.
 - **Validation:** `tests/test_resolvconf_hooks.py` has 31 tests, including a differential against the real debianutils `run-parts --test` on real files. Four mutations are each caught: allowing dots in names, ignoring noexec, invoking `update-libc.d` whenever `libc` is listed, and locale-style ordering.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** agent collection of both directories and the resolvconf installation state, a catalog entry, package provenance, UI and AI classification.
+
+### smartd warning-command contract — worker checkpoint #1207 (roadmap F)
+
+- **Outcome:** `app/smartd_warnings.py` is a pure, I/O-free contract. From the text of `/etc/smartd.conf` and the observed smartd `-w/--warnexec` and `-u/--warn-as-user` options, it reports which commands smartd runs as root (or as the `-u` user) when it warns about a disk, and for which entries. Those commands are the warning script, the `smartd_warning.d` plugins, the `-M exec` program or `mail`, and Debian's `smartd-runner` → `run-parts --lsbsysinit /etc/smartmontools/run.d`.
+- **Semantics:** they come from smartmontools 7.4 `smartd.cpp` (`ParseConfigFile`, `ParseConfigLine`, `ParseToken`, `MailWarning`) and the Ubuntu 24.04 7.4-2build1 package scripts:
+  - a 256-byte line limit and a 1023-byte continued-line limit;
+  - `#` comments and backslash continuation;
+  - `DEFAULT` inheritance and reset;
+  - parsing stops at `DEVICESCAN`;
+  - whole-file rejection on syntax errors;
+  - `@plugin` handling, including skipping the mailer when only plugins are addressed;
+  - `<nomailer>` exec with no arguments.
+- **Fails closed:** unobserved or unreadable configs, unobserved daemon options, malformed input, rejected configs and over-limit input are blocking gaps. No entry is reported from a rejected file.
+- **Validation:** tests use vectors derived from the source. Running the downloaded smartd binary for a differential was not permitted in the worker environment, so a live differential is still to do.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - the `run.d` and `smartd_warning.d` listings;
+  - argument validation of non-mail directives (the contract over-reports, never under-reports);
+  - a real-binary differential;
+  - agent collection, a catalog entry, provenance, UI and AI classification.
 
 ### mdadm alert-program contract — worker checkpoint #1213 (roadmap F)
 

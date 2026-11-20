@@ -101,15 +101,21 @@ TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_pe
 
 
 TIMING_SUMMARY_RUN_LIMIT = 100
+TIMING_SUMMARY_PURPOSES = ('triage', 'update_scoring')
 TIMING_SUMMARY_EVENT_LIMIT = 2048
 _TIMING_MESSAGE = re.compile(r'([a-z ]{1,32}): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
 
 
-def triage_timing_summary(s, limit):
-    """Summarize a bounded sample of retained process-triage timing events."""
+def triage_timing_summary(s, limit, purpose='triage'):
+    """Summarize a bounded sample of retained timing events for one AI activity.
+
+    Process triage is the default; update scoring records the same stage events.
+    """
+    if purpose not in TIMING_SUMMARY_PURPOSES:
+        raise ValueError('unsupported timing summary purpose')
     run_ids = list(s.scalars(
         select(AIRun.id)
-        .where(AIRun.purpose == 'triage', AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
+        .where(AIRun.purpose == purpose, AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
         .order_by(AIRun.started.desc(), AIRun.id)
         .limit(limit)
     ))
@@ -148,6 +154,7 @@ def triage_timing_summary(s, limit):
             'p95_ms': samples[(size * 95 + 99) // 100 - 1] if size else None,
         }
     return {
+        'purpose': purpose,
         'run_limit': limit, 'event_limit': TIMING_SUMMARY_EVENT_LIMIT,
         'sampled_runs': len(run_ids), 'runs_without_samples': len(run_ids) - len(covered_runs),
         'discarded_events': discarded, 'events_truncated': len(rows) > TIMING_SUMMARY_EVENT_LIMIT,
