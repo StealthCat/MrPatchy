@@ -194,3 +194,15 @@ def test_config_path_follows_f_and_nut_confpath():
 def test_fingerprint_is_stable_and_input_sensitive():
     assert run()['fingerprint'] == run()['fingerprint']
     assert run()['fingerprint'] != run(SAMPLE + 'NOTIFYCMD /n\n')['fingerprint']
+
+
+def test_cases_confirmed_by_the_upstream_differential():
+    # Each expectation was checked against NUT v2.8.1 parseconf.c, the
+    # upsmon.c directive handlers and glibc getopt (see PR #1248).
+    words = nu.tokenize('A\x7fB "x\x01y" \\\x02z\n')
+    assert words == [(1, ['A\x7fB', 'xy', 'z'], False)]  # 0x7f kept, controls dropped
+    r = run(SAMPLE + 'RUN_AS_USER ""\n')
+    assert r['run_as_user']['name'] == '' and r['run_as_user']['source'] == 'config'
+    assert nu.parse_argv(['-Dpuadmin'])['split'] is False
+    assert nu.parse_argv(['-Dpuadmin'])['user'] == 'admin'
+    assert nu.parse_argv(['-P', '123'])['exits'] == []

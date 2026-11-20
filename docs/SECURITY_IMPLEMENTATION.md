@@ -12306,4 +12306,5 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
 - **Remaining:**
   - Startup-fatal `MONITOR` and `MINSUPPLIES` conditions are not modeled. The contract can over-report commands for a daemon that exits, but it does not under-report.
   - Reload behavior is not modeled: split-mode parents ignore a changed `SHUTDOWNCMD`, and the account is not re-applied.
-  - Not yet done: account resolution, a differential against the real parser, agent collection, a catalog entry, package provenance, UI and AI classification.
+  - Not yet done: account resolution, agent collection, a catalog entry, package provenance, UI and AI classification.
+- **Differential:** the tokenizer and directive handling were compared with the real NUT v2.8.1 `parseconf.c` and the `upsmon.c` `parse_conf_arg`, `set_notifyflag` and `set_notifymsg` handlers, compiled into a harness. There were 0 mismatches in 13,000 random configs; the 60 configs that hit the fatal 5-word `MONITOR` exit were excluded, as documented. `parse_argv` matched glibc `getopt` with the upsmon optstring on 3,000 random argv lists.
