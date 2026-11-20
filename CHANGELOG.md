@@ -1,3 +1,7 @@
+## 1.75.67 — 2026-11-20
+
+1. [PR #1185](https://github.com/StealthCat/MrPatchy/pull/1185): Record redacted result-persistence duration and outcome while saving each newly validated release-configuration review into resumable plan progress, including failed saves. Preliminary checkpoints, reused reviews, refusals, waits and invalid responses remain excluded. Compatibility: additive timing event only; no schema or UI change. Limits: production throughput and cross-controller acceptance remain under the broader Roadmap A work.
+
 ## 1.75.66 — 2026-11-20
 
 1. [PR #1089](https://github.com/StealthCat/MrPatchy/pull/1089): Add a pure systemd-sysctl contract for effective kernel execution-hook settings in captured `sysctl.d` input, including precedence, source locations, bounded evidence and fail-closed coverage gaps. Key normalization follows systemd v255, and unsupported glob syntax that may affect watched keys is reported as a blocking gap. Compatibility: additive module, tests and documentation only; no collection, schema, route, UI, AI, role, scheduling or response-authorization change. Limits: collection, catalog wiring, persistence, provenance, UI and AI classification remain follow-ups; glob matching covers only the documented subset.

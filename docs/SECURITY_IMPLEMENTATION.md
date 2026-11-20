@@ -11912,3 +11912,16 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and nothing is labelled safe.
 - **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
 - **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
+
+### Release configuration review persistence — Roadmap A checkpoint #1184
+
+A newly validated release configuration review records one retained
+`result_persistence` timing while the planner applies the result to the plan
+and commits resumable progress. The stage records duration and outcome using
+the existing redacted run-event format. It excludes preliminary checkpoints,
+retained reviews reused after a deferral, provider refusals and invalid
+responses. The planner retains its existing evidence checks, checkpoints,
+provider accounting and separate approval. Focused planner fixtures cover
+successful and failed saves, rejected results and resumption with matching or
+changed evidence. Production throughput and cross-controller acceptance
+continue under the wider Roadmap A milestones.
