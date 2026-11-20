@@ -234,7 +234,9 @@ def test_package_defaults_are_read_from_deb_without_extracting_paths(tmp_path,mo
     assert not list((root/'review-download').glob('*.deb'))
 
 
-@pytest.mark.parametrize('provider_result', ['success', 'refusal', 'token_limit', 'other_incomplete'])
+@pytest.mark.parametrize('provider_result', [
+    'success', 'save_failed', 'invalid', 'refusal', 'token_limit', 'other_incomplete',
+])
 def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_path,provider_result):
     inv=inventory();content='old\n';sha=release.digest(content.encode());target=release.transition(inv)
     inspect={'inventory':inv,'fingerprint':release.fingerprint(inv),'target':target,'blockers':[],
@@ -245,20 +247,33 @@ def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_
         monkeypatch.setattr(releases,'simulate',lambda *a:(tmp_path,tmp_path/'apt.conf',{'/etc/apt/sources.list':'deb https://deb.debian.org/debian trixie main\n'},[],[{'action':'install','package':'nginx','version':'2'}]))
         monkeypatch.setattr(releases,'vendor_files',lambda *a:{'/etc/nginx/nginx.conf':'vendor\n'})
         provider_only_text = 'private refusal /srv/provider-only-marker'
-        if provider_result == 'success':
-            monkeypatch.setattr(releases,'ai_review',lambda *a,**kw:{'content':'merged\n','reason':'Preserve local intent with new syntax','blockers':[]})
+        s.merge(Setting(key='config', value={'ai_enabled':True, 'ai_model':'fixture-model'}))
+        s.merge(Setting(key='openai_key', value={'encrypted':seal('fixture-key')}))
+        s.commit()
+        if provider_result in ('success', 'save_failed', 'invalid'):
+            result = {'content':'merged\n','reason':'Preserve local intent with new syntax','blockers':[]}
+            if provider_result == 'invalid':
+                result.pop('reason')
+            response = {'status':'completed','output':[{'content':[
+                {'type':'output_text','text':json.dumps(result)}]}]}
+        elif provider_result == 'refusal':
+            response = {'status':'completed','output':[{'content':[
+                {'type':'refusal','refusal':provider_only_text}]}]}
         else:
-            s.merge(Setting(key='config', value={'ai_enabled':True, 'ai_model':'fixture-model'}))
-            s.merge(Setting(key='openai_key', value={'encrypted':seal('fixture-key')}))
-            s.commit()
-            if provider_result == 'refusal':
-                response = {'status':'completed','output':[{'content':[
-                    {'type':'refusal','refusal':provider_only_text}]}]}
-            else:
-                reason = 'max_output_tokens' if provider_result == 'token_limit' else 'other'
-                response = {'status':'incomplete','incomplete_details':{'reason':reason}}
-            monkeypatch.setattr(releases.ai.transport,'post',lambda *a,**k:
-                httpx.Response(200,json=response,request=httpx.Request('POST',releases.ai.URL)))
+            reason = 'max_output_tokens' if provider_result == 'token_limit' else 'other'
+            response = {'status':'incomplete','incomplete_details':{'reason':reason}}
+        monkeypatch.setattr(releases.ai.transport,'post',lambda *a,**k:
+            httpx.Response(200,json=response,request=httpx.Request('POST',releases.ai.URL)))
+        if provider_result == 'save_failed':
+            original_store = releases.store
+
+            def fail_review_checkpoint(plan_row, contents):
+                if contents.get('review_progress', {}).get('results'):
+                    raise RuntimeError('fixture persistence failure')
+                return original_store(plan_row, contents)
+
+            monkeypatch.setattr(releases, 'store', fail_review_checkpoint)
+
         def call(host,req,**kw):
             if req['action']=='release-inspect':return inspect
             assert req['action']=='release-configs'
@@ -266,16 +281,34 @@ def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_
         monkeypatch.setattr(ssh,'call',call)
         outcome = releases.build(s,h,row.id)
         plan=releases.body(row)
+        run = s.query(ai_runs.AIRun).filter_by(purpose='release_configuration', subject=row.id).one()
+        assert run.calls == 1
+        assert s.query(ai_runs.AICall).filter_by(run_id=run.id).count() == 1
+        timings = s.query(ai_runs.AIEvent).filter_by(run_id=run.id, stage='timing_result_persistence').all()
+        expected = {'success':'complete', 'save_failed':'error'}.get(provider_result)
+        if expected:
+            assert len(timings) == 1
+            [timing] = timings
+            assert timing.message.startswith('result persistence: ')
+            assert timing.message.endswith(f'; outcome={expected}')
+        else:
+            assert timings == []
+        if provider_result == 'save_failed':
+            assert outcome['state'] == row.state == 'blocked'
+            assert run.state == 'error'
+            assert 'fixture persistence failure' not in run.message
+            assert 'review_progress' not in plan
+            return
         if provider_result != 'success':
             assert outcome['state'] == row.state == 'blocked'
             assert plan['edits'] == [] and plan['reviews'] == []
             assert 'review_progress' not in plan
             [blocker] = plan['blockers']
             assert outcome['blockers'] == [blocker]
-            s.rollback()
-            run = s.query(ai_runs.AIRun).filter_by(purpose='release_configuration',subject=row.id).one()
-            assert run.state == 'error' and run.calls == 1
-            assert s.query(ai_runs.AICall).filter_by(run_id=run.id).count() == 1
+            assert run.state == 'error'
+            if provider_result == 'invalid':
+                assert blocker == 'Invalid AI configuration response'
+                return
             assert run.message == blocker
             failed = s.query(ai_runs.AIEvent).filter_by(run_id=run.id,stage='failed').one()
             assert failed.message == blocker and provider_only_text not in blocker
@@ -288,7 +321,7 @@ def test_planner_freezes_ai_diff_and_configuration_hashes(admin,monkeypatch,tmp_
                 reason = 'model refused' if provider_result == 'refusal' else 'response token budget'
                 assert reason in blocker
             return
-        assert outcome['state']=='ready'
+        assert outcome['state']=='ready' and run.state == 'complete'
         assert plan['edits'][0]['after']=='merged\n'
         assert '-old\n+merged\n' in plan['edits'][0]['diff']
         assert plan['configs'][0]['sha256']==sha
@@ -318,15 +351,29 @@ def test_release_plan_deferral_resumes_only_exact_completed_reviews(admin,monkey
     monkeypatch.setattr(ssh,'call',lambda host,request,**kw: inspection if request['action']=='release-inspect'
         else {'configs':configs} if request['action']=='release-configs' else pytest.fail(request['action']))
     calls=[]
-    def pause_second(session,target,path,current,vendor,news,**kwargs):
+    request = releases.ai.request
+
+    def defer_second_once(payload, *args, **kwargs):
+        path = json.loads(payload['input'])['path']
         calls.append(path)
-        if path==second:raise releases.ai.AIError('Daily cap reached.',policy_wait=True,retry_after=90)
-        return {'content':current+'planned\n','reason':'Preserve the first local setting','blockers':[]}
-    monkeypatch.setattr(releases,'ai_review',pause_second)
+        if calls == [first, second]:
+            raise releases.ai.AIError('Daily cap reached.', policy_wait=True, retry_after=90)
+        return request(payload, *args, **kwargs)
+
+    def provider(url, **kwargs):
+        current = json.loads(kwargs['json']['input'])['current']
+        result = {'content':current+'planned\n','reason':'Preserve the local setting','blockers':[]}
+        return httpx.Response(200, json={'status':'completed','output':[{'content':[
+            {'type':'output_text','text':json.dumps(result)}]}]}, request=httpx.Request('POST', url))
+
+    monkeypatch.setattr(releases.ai,'request',defer_second_once)
+    monkeypatch.setattr(releases.ai.transport,'post',provider)
     with Session() as session:
         host=Host(id='release-resume-host',name='Release resume host',address='192.0.2.40',fingerprint='fixture')
         row=releases.ReleasePlan(id=str(uuid.uuid4()),host_id=host.id)
         job=Job(id=str(uuid.uuid4()),host_id=host.id,action='release-plan',payload={'plan_id':row.id})
+        session.merge(Setting(key='config', value={'ai_enabled':True, 'ai_model':'fixture-model'}))
+        session.merge(Setting(key='openai_key', value={'encrypted':seal('fixture-key')}))
         row.job_id=job.id;session.add_all([host,row,job]);session.commit();job_id=job.id;plan_id=row.id
     worker.execute(job_id)
     with Session() as session:
@@ -338,19 +385,19 @@ def test_release_plan_deferral_resumes_only_exact_completed_reviews(admin,monkey
         job.next_at=0;session.commit()
     if change_completed_evidence:
         configs[first]={**configs[first],'content':'changed one\n','sha256':release.digest(b'changed one\n')}
-    resumed=[]
-    def finish(session,target,path,current,vendor,news,**kwargs):
-        resumed.append(path)
-        return {'content':current+'planned\n','reason':'Preserve the current local setting','blockers':[]}
-    monkeypatch.setattr(releases,'ai_review',finish)
     worker.execute(job_id)
     with Session() as session:
         job=session.get(Job,job_id);row=session.get(releases.ReleasePlan,plan_id);plan=releases.body(row)
         assert job.state=='complete' and '_ai_deferred' not in job.payload
         assert row.state=='ready' and 'review_progress' not in plan
         assert [review['path'] for review in plan['reviews']]==[first,second]
-    assert calls==[first,second]
-    assert resumed==([first,second] if change_completed_evidence else [second])
+        run_ids = session.query(ai_runs.AIRun.id).filter_by(purpose='release_configuration', subject=plan_id)
+        timings = session.query(ai_runs.AIEvent).filter(
+            ai_runs.AIEvent.run_id.in_(run_ids), ai_runs.AIEvent.stage=='timing_result_persistence').all()
+        assert len(timings) == (3 if change_completed_evidence else 2)
+        assert all(timing.message.endswith('; outcome=complete') for timing in timings)
+        assert session.query(ai_runs.AICall).filter(ai_runs.AICall.run_id.in_(run_ids)).count() == len(timings)
+    assert calls==([first,second,first,second] if change_completed_evidence else [first,second,second])
 
 
 def test_service_recovery_ignores_transient_login_sessions():
