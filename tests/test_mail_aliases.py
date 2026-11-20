@@ -67,6 +67,19 @@ def test_unquoted_single_word_command_and_files():
     assert kinds == ['file', 'home_file']
 
 
+def test_home_files_bounce_without_a_home_directory():
+    # Root-owned database: default_privs carries no home, so "~/..." bounces.
+    result = run('b: ~/mbox, ~bob/mbox\n')
+    targets = by_name(result)['b']['targets']
+    assert [t['delivery_rights'] for t in targets] == ['bounced', 'bounced']
+    assert [t['bounce_reason'] for t in targets] == ['no_home_with_default_privs', 'home_user_syntax']
+    assert result['executions'] == []
+    # A non-root owner supplies a home: "~/..." is delivered, "~user" still bounces.
+    owned = run('b: ~/mbox, ~bob/mbox\n', owner={'trusted': False, 'user': 'list'})
+    assert [(e['kind'], e['value'], e['run_as']) for e in owned['executions']] == [('home_file', '~/mbox', 'list')]
+    assert by_name(owned)['b']['targets'][1]['delivery_rights'] == 'bounced'
+
+
 def test_unquoted_command_with_arguments_is_unresolved_not_guessed():
     result = run('a: |/opt/hook arg\n')
     assert by_name(result)['a']['status'] == 'unresolved'

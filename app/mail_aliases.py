@@ -36,6 +36,9 @@ sandbox, so there is no live differential.
   trusted owner (root), commands and files run as ``default_privs``
   (default ``nobody``). Otherwise they run as the database owner. With an
   unknown owner, delivery is deferred.
+- ``local/token.c`` bounces a ``~user/...`` target, and a ``~/...`` target
+  delivered with ``default_privs``, because that reset user context has no
+  home directory. Neither is reported as an execution.
 - ``allow_mail_to_commands`` and ``allow_mail_to_files`` (default
   ``alias, forward``) must include ``alias`` or the delivery bounces as
   restricted.
@@ -271,6 +274,15 @@ def resolve(source: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             if kind == 'address':
                 continue
+            if kind == 'home_file' and run_as is not None:
+                # deliver_token_home bounces "~user/..." and, with default
+                # rights (a trusted database owner), any "~/..." because the
+                # reset user attributes carry no home directory.
+                bounce = ('home_user_syntax' if target['value'][1:2] != '/'
+                          else 'no_home_with_default_privs' if delivery == 'default_privs' else None)
+                if bounce:
+                    target.update(allowed=False, delivery_rights='bounced', bounce_reason=bounce, run_as=None)
+                    continue
             rights_kind = 'command' if kind == 'command' else 'file'
             allowed = _allowed(allow[rights_kind])
             target.update(
