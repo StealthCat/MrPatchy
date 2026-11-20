@@ -6282,6 +6282,57 @@ mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
 response-authorization change.
 
+### rsyslog program-action contract — worker checkpoint #1227
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/rsyslog_programs.py` is a pure, versioned contract for the programs
+rsyslogd starts: `omprog` and `mmexternal` actions and the legacy `^program`
+shell-execute action. These run as rsyslogd's user, root unless the
+configuration drops privileges. It takes captured configuration text and
+captured include-directory listings, and performs no I/O.
+
+- **Source.** Behaviour observed by running the real rsyslogd 8.2312.0
+  (Ubuntu 24.04 `rsyslog_8.2312.0-3ubuntu9.4`) with a probe program that
+  recorded its argv, uid and gid. The opt-in live differential in
+  `tests/test_rsyslog_programs.py` reruns these cases.
+- **argv.** A `binary` value splits at its first space into the program and
+  the rest, and the rest splits at single spaces outside double quotes. Quotes
+  stay in the argument, and single quotes and backslashes are ordinary
+  characters. Two spaces make an empty argument, a trailing empty argument is
+  dropped, and a tab is not a separator. A value that starts with a space has
+  an empty program, so it is `rejected`. `^program` runs the program with the
+  formatted message as its only argument.
+- **Modules.** `omprog`/`mmexternal` actions need `module(load=...)` or
+  `$ModLoad` earlier in configuration order, include order included.
+  Otherwise the action is `module_not_loaded`. `$ActionOMProgBinary` takes one
+  word and is only known after omprog loads. A legacy `:omprog:` action uses
+  the latest value, and is `rejected` without one.
+- **Account.** `$PrivDropToUser[ID]`/`$PrivDropToGroup[ID]` are global and the
+  last one wins. Every program child runs as the dropped user. Without a group
+  directive, the group stays root. In 8.2312.0,
+  `global(privilege.dropToUser=...)` is an unknown parameter and drops
+  nothing. A note records it.
+- **Includes.** `include(file=...)` and `$IncludeConfig` expand a glob in the
+  last path component, in sorted order and skipping dotfiles. A glob with no
+  matches includes nothing.
+- **Fail closed.** These mark the result incomplete:
+  - an unobserved file or listing;
+  - a directory, relative or glob-in-directory include, or `include(text=)`;
+  - backtick values;
+  - unterminated strings or comments, or malformed objects;
+  - invalid UTF-8, NUL bytes, or over-limit input or include depth.
+
+  Actions in a file with a syntax error are `unresolved`. Every result names
+  what it cannot observe: whether rsyslogd runs, and its command line; which
+  messages reach each action; program existence and contents; whether the
+  account exists; other releases; and whether rsyslogd's own grammar accepts
+  the file. `origin` is always `not_assessed`, and no result is a safety
+  verdict.
+
+**Not covered:** agent collection, catalog wiring, persistence, baselines and
+alerts, UI, provenance and AI classification. No schema, API, auth or
+response-authorization change.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
