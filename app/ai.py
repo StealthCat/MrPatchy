@@ -64,9 +64,10 @@ def defer_until(error, now=None):
     return eligible
 
 
-def retry_after(response):
-    """Read only the standard delay header; never persist its untrusted text."""
-    value=response.headers.get('retry-after','')
+MAX_RETRY_DELAY=315360000  # ten years; beyond this a provider delay is unrepresentable
+
+
+def _standard_retry_after(value):
     if len(value)>128:return 0
     try:
         if re.fullmatch(r'[0-9]+',value):delay=int(value)
@@ -76,9 +77,29 @@ def retry_after(response):
             delay=date.timestamp()-time.time()
         # Excessive/unrepresentable delays block automatic scheduling rather than
         # clamping a provider floor and accidentally retrying earlier than asked.
-        if not math.isfinite(delay) or delay>315360000:return None
+        if not math.isfinite(delay) or delay>MAX_RETRY_DELAY:return None
         return max(float(delay),0)
     except (ValueError,TypeError,OverflowError):return 0
+
+
+def _millisecond_retry_after(value):
+    """OpenAI's retry-after-ms: plain non-negative decimal milliseconds only."""
+    if len(value)>32 or not re.fullmatch(r'[0-9]+(?:\.[0-9]+)?',value):return 0
+    delay=float(value)/1000
+    if not math.isfinite(delay) or delay>MAX_RETRY_DELAY:return None
+    return delay
+
+
+def retry_after(response):
+    """Read only the delay headers; never persist their untrusted text.
+
+    When both are valid the longer delay wins, so a retry is never earlier than
+    either header asks. None means a delay outside supported bounds.
+    """
+    standard=_standard_retry_after(response.headers.get('retry-after',''))
+    precise=_millisecond_retry_after(response.headers.get('retry-after-ms',''))
+    if standard is None or precise is None:return None
+    return max(standard,precise)
 
 
 CODES={

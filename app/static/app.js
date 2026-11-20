@@ -476,12 +476,13 @@ function agentResourceBytes(value){const units=['B','KiB','MiB','GiB','TiB','PiB
 function agentResources(resources,telemetryState){
  if(!resources||resources.state==='unavailable')return '<span class="help">No current telemetry</span>';
  if(resources.state==='absent')return '<span class="help">Not reported by this agent</span><small>Older agents do not send resource observations.</small>';
- const labels={'disk-space-low':'Low disk space','disk-inodes-low':'Few free inodes','memory-low':'Low available memory'};
+ const labels={'disk-space-low':'Low disk space','disk-inodes-low':'Few free inodes','memory-low':'Low available memory','clock-unsynchronized':'Clock not synchronized'};
  const pressure=value=>value===null||value===undefined?'unknown':esc(value)+'%';
  const lines=[resources.disk?`Disk ${esc(resources.disk.used_percent)}% used · ${esc(agentResourceBytes(resources.disk.available))} available`:'Disk: unknown',
   resources.inodes?`Inodes ${esc(resources.inodes.used_percent)}% used`:'Inodes: unknown',
   resources.memory?`Memory ${esc(resources.memory.available_percent)}% available of ${esc(agentResourceBytes(resources.memory.total))}`:'Memory: unknown',
-  `Stall (60 s avg): CPU ${pressure(resources.cpu_pressure_avg60)} · memory ${pressure(resources.memory_pressure_avg60)}`];
+  `Stall (60 s avg): CPU ${pressure(resources.cpu_pressure_avg60)} · memory ${pressure(resources.memory_pressure_avg60)}`,
+  resources.clock?`Clock ${resources.clock.synchronized?'synchronized':'not synchronized'} · max error ${esc(resources.clock.max_error_ms)} ms`:'Clock sync: unknown'];
  const attention=(resources.attention||[]).filter(code=>labels[code]).map(code=>`<span class="agent-resource-attention">${labels[code]}</span>`).join('');
  return `${attention?`<span class="agent-resource-flags">${attention}</span>`:''}${lines.map(line=>`<small>${line}</small>`).join('')}${telemetryState==='stale'?'<small>From stale telemetry; current values are unknown.</small>':''}`;
 }
