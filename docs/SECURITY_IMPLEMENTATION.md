@@ -6280,6 +6280,7 @@ crypttab text, root's view of the paths the options name and
 **Not covered:** agent collection of `/etc/crypttab` and path facts, catalog
 mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
+response-authorization change.
 
 ### rsyslog program-action contract — worker checkpoint #1227
 
