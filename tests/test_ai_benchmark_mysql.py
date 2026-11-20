@@ -141,9 +141,10 @@ def test_mysql_mode_refuses_a_database_that_already_has_tables(empty_mysql):
 
 @needs_mysql
 @pytest.mark.parametrize('same_server', [False, True], ids=['cross-server', 'same-server'])
-def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql, same_server):
+@pytest.mark.parametrize('mode', ['legacy', 'daily_cap'])
+def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql, same_server, mode):
     workload = ['--runs', '4', '--provider-delay-ms', '250' if same_server else '40',
-                '--ssh-delay-ms', '1', '--retained-history-rows', '25']
+                '--ssh-delay-ms', '1', '--retained-history-rows', '25', '--control-mode', mode]
     if same_server:
         workload.append('--same-server')
     reports = []
@@ -163,7 +164,12 @@ def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(em
         assert report['fixture_hosts'] == (1 if same_server else 4)
         assert report['single_server_slots'] == (4 if same_server else None)
         assert report['stages']['two_stage']['count'] == report['stages']['ssh_evidence']['count'] == 2
-    assert serial['peak_provider_requests'] == 1 and parallel['peak_provider_requests'] > 1
+        if mode == 'daily_cap':
+            assert report['fixture_budget']['settled_calls'] == 6
+            assert report['fixture_budget']['settled_microusd'] == 120
+    assert serial['peak_provider_requests'] == 1
+    if mode == 'legacy':
+        assert parallel['peak_provider_requests'] > 1
     comparison = compare(serial, parallel)
     assert comparison['capability_equivalent'] is True
     assert comparison['baseline']['database'] == comparison['candidate']['database'] == 'mysql'

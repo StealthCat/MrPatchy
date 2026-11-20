@@ -69,19 +69,19 @@ def test_reports_from_different_modes_are_refused(baseline_mode, candidate_mode)
         compare(baseline, candidate)
 
 
-@pytest.mark.parametrize('value', ['rate', 'daily_cap', 'rate_and_daily', 'Unthrottled', '', None, 1, ['legacy']])
+@pytest.mark.parametrize('value', ['rate', 'rate_and_daily', 'Unthrottled', '', None, 1, ['legacy']])
 def test_unknown_or_malformed_modes_are_refused(value):
-    with pytest.raises(ComparisonError, match='candidate.ai_control_mode must be one of legacy, unthrottled'):
+    with pytest.raises(ComparisonError, match='candidate.ai_control_mode must be one of legacy, unthrottled, daily_cap'):
         compare(report(ai_control_mode='legacy'), report('parallel', 4, ai_control_mode=value))
 
 
 def test_comparator_modes_match_the_benchmark_choices():
     help_text = run('--help', timeout=30).stdout
-    assert '--control-mode {legacy,unthrottled}' in help_text
-    assert compare_ai_benchmarks.CONTROL_MODES == ('legacy', 'unthrottled')
+    assert '--control-mode {legacy,unthrottled,daily_cap}' in help_text
+    assert compare_ai_benchmarks.CONTROL_MODES == ('legacy', 'unthrottled', 'daily_cap')
 
 
-@pytest.mark.parametrize('value', ['rate', 'daily_cap', 'rate_and_daily', 'LEGACY', ''])
+@pytest.mark.parametrize('value', ['rate', 'rate_and_daily', 'LEGACY', ''])
 def test_benchmark_refuses_unsupported_modes_before_starting(value):
     result = run('--control-mode', value, timeout=30)
     assert result.returncode == 2 and result.stdout == ''
@@ -127,3 +127,44 @@ def test_unthrottled_serial_and_parallel_pair_is_equivalent_and_keeps_the_worklo
     assert legacy['workload_fingerprint'] == parallel['workload_fingerprint']
     with pytest.raises(ComparisonError, match='ai_control_mode differs'):
         compare(serial, legacy)
+
+
+def capped_budget():
+    return {'pricing_version': 'synthetic-v1', 'cap_usd': 10, 'timezone': 'UTC',
+            'settled_calls': 12, 'settled_microusd': 240}
+
+
+@pytest.mark.parametrize('budget', [
+    None, {**capped_budget(), 'settled_calls': 11}, {**capped_budget(), 'settled_microusd': 0},
+    {**capped_budget(), 'settled_microusd': 239}, {**capped_budget(), 'cap_usd': 100},
+    {**capped_budget(), 'timezone': 'Europe/London'}, {**capped_budget(), 'pricing_version': 'deployment'},
+])
+def test_capped_comparison_requires_complete_synthetic_settlement(budget):
+    baseline = report(ai_control_mode='daily_cap', fixture_budget=capped_budget())
+    candidate = report('parallel', 4, ai_control_mode='daily_cap', fixture_budget=budget)
+    with pytest.raises(ComparisonError, match=r'candidate\.fixture_budget'):
+        compare(baseline, candidate)
+
+
+def test_budget_evidence_cannot_be_attached_to_an_uncapped_report():
+    with pytest.raises(ComparisonError, match='fixture_budget applies only to daily_cap'):
+        compare(report(), report('parallel', 4, fixture_budget=capped_budget()))
+
+
+@pytest.mark.parametrize('layout', [(), ('--same-server',)], ids=['cross-server', 'same-server'])
+def test_daily_cap_serial_and_parallel_settle_all_calls_without_changing_the_workload(layout):
+    serial = _benchmark(1, '--control-mode', 'daily_cap', *layout)
+    parallel = _benchmark(4, '--control-mode', 'daily_cap', *layout)
+    for item in (serial, parallel):
+        assert item['runs'] == item['completed_subjects'] == 4
+        assert item['approved_subjects'] == item['errors'] == 0
+        assert item['provider_calls'] == 6 and item['stages']['ssh_evidence']['count'] == 2
+        assert item['fixture_budget'] == {**capped_budget(), 'settled_calls': 6, 'settled_microusd': 120}
+        assert 'no paid API calls' in item['cost_status']
+    result = compare(serial, parallel)
+    assert result['capability_equivalent'] is True
+    assert result['capability']['fixture_budget'] == serial['fixture_budget']
+    uncapped = _benchmark(1, '--control-mode', 'unthrottled', *layout)
+    assert uncapped['workload_fingerprint'] == parallel['workload_fingerprint']
+    with pytest.raises(ComparisonError, match='ai_control_mode differs'):
+        compare(uncapped, parallel)
