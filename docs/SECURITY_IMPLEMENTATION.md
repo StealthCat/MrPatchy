@@ -12007,6 +12007,31 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
 - **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
 
+### Update-scoring stage timings in the fleet summary — Roadmap A checkpoint #1190
+
+`GET /api/ai/triage/timings` now accepts an optional `purpose` of `triage`
+(the default, with the previous sample) or `update_scoring`; other values return
+400. The response names the sampled `purpose`. Only completed or failed runs of
+that purpose are sampled, with the same 100-run and 2,048-event bounds, malformed
+event discard and no message, run ID or evidence exposure. The **AI stage timings**
+card on fleet AI logs adds an **Activity** selector (Process triage / Update
+importance); changing it clears the previous table and ignores late responses for
+the old selection. Scoring runs record provider admission, provider, receipt and
+usage persistence, result persistence and run timings; triage-only stages show no
+samples. Compatibility: admin-only as before, no schema, collection, admission,
+budget or response-authorization change. Matched serial/parallel production
+throughput remains open.
+
+### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
+
+New disposable SQLite and MySQL benchmark reports require one successful
+result-persistence timing per completed investigation and one successful
+evidence-persistence timing per requested follow-up. A report is refused when
+either stage is missing, duplicated, malformed, unsuccessful or assigned to the
+wrong run, even when the fixture completed all investigations. Successful
+reports retain the existing format. This guards fixture evidence only.
+Production and live-provider performance comparisons remain open.
+
 ### Release configuration review persistence — Roadmap A checkpoint #1184
 
 A newly validated release configuration review records one retained
@@ -12192,3 +12217,11 @@ contract. From entry metadata for `/etc/ca-certificates/update.d`, it reports:
 - **Remaining:** agent collection of the directory and the `ca-certificates`
   installation state, a catalog entry, package provenance, persistence, UI and
   AI classification. RPM `update-ca-trust` is not modeled.
+
+
+
+### D-Bus bus-activation contract — Roadmap F checkpoint #1211
+
+`app/dbus_activation.py` is a pure, versioned contract for captured, ordered D-Bus service-directory entries and `.service` text. It reports parsed files, bus-name precedence/winners and declared `Exec`, `User` and `SystemdService` values. When the caller supplies bus type and systemd-activation state, it also reports whether a name starts, is refused, remains unresolved or cannot yet be determined, including system-bus `User` checks and the launch helper's independent `<Name>.service` lookup. Parsing and start behavior were differentially observed against dbus-daemon 1.14.10 on session and system buses.
+
+The contract performs no file or bus I/O, starts no helper or command, does not assess origin and does not authorize a response. Unobserved inputs fail closed. User-database lookups and AppArmor/SELinux mediation are not modeled; the caller supplies directories in bus order. Collection, inventory, UI and AI wiring remain outside this checkpoint. The system-bus helper differential is opt-in and requires root because it uses the installed setuid helper and writes uniquely named fixtures under system service directories, then removes them.
