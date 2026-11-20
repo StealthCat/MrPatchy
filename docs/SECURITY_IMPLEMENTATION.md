@@ -12281,3 +12281,51 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
 - **Validation:** `tests/test_certbot_hooks.py` has 58 tests. Four differential tests load certbot's real `hooks.py` and `compat` modules (only logging/display and unused helpers are stubbed) and execute real hooks through `/bin/sh` from temporary directories. They compare what ran, its order, deduplication, environment, the `renew`/other-verb split, dry-run and `--no-directory-hooks` behavior, a name with a space, and a non-directory hook path with the contract. They run when `MRPATCHY_CERTBOT_SOURCE` points at an unpacked certbot wheel or certbot is installed, and are skipped otherwise. Seven mutations are each caught.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** agent collection of the directories and the certbot installation state, a catalog entry, provenance, persistence, UI and AI classification. Hook commands in `/etc/letsencrypt/renewal/*.conf` and `cli.ini`, and `--config-dir` overrides, are not modeled.
+
+### apcupsd event-script contract — worker checkpoint #1243 (roadmap F)
+
+`app/apcupsd_events.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are `/etc/apcupsd/apcupsd.conf` text, the effective `apcupsd.service` `ExecStart` and entry metadata for `/etc/apcupsd`. From these it reports which programs apcupsd runs as root on UPS power events:
+
+- the `apccontrol` program the daemon execs from the effective `SCRIPTDIR`;
+- the `/etc/apcupsd/config` file the packaged `apccontrol` sources as shell;
+- which `/etc/apcupsd/<event>` scripts run, for each of the 19 daemon events and for `killpower` at final shutdown.
+
+**Why it matters.** Every executable named after a UPS event in `/etc/apcupsd` runs as root whenever that event fires. A `SCRIPTDIR` line makes the daemon run a different `apccontrol` entirely. Both are event-triggered root execution paths that no existing contract reported.
+
+**Source of the semantics.** apcupsd 3.14.14 (`src/lib/apcconfig.c`, `src/lib/apcexec.c`, `src/action.c`, `src/apcupsd.c`) and the Ubuntu 24.04 package `3.14.14-3.1build2` (`apccontrol`, `apcupsd.service`, `apcupsd_shutdown`):
+
+- **Config parsing.** The config is read with `fgets` into 256 bytes, so the tail of an overlong line, including the tail of a comment, is parsed as its own line. Keywords are upper-cased up to the first whitespace. The value is cut at the first `#` anywhere, trailing whitespace is removed, and the last `SCRIPTDIR` wins.
+- **Program path.** `SCRIPTDIR` + `/apccontrol` is formatted into a 256-byte buffer and exec'd with `EVENT UPSNAME CONNECTED POWERED` after `chdir("/")`. An empty or relative `SCRIPTDIR` therefore resolves from `/`.
+- **Packaged `apccontrol`.** It hardcodes `SCRIPTDIR=/etc/apcupsd` and sources `/etc/apcupsd/config` when `[ -f ]` holds. It runs `/etc/apcupsd/EVENT` when `[ -f p -a -x p ]` holds: symlinks are followed and, for root, any execute bit passes. Exit status 99 skips the built-in action (`/sbin/shutdown` for `doshutdown`/`doreboot`).
+- **Shutdown hook.** `/lib/systemd/system-shutdown/apcupsd_shutdown` runs `apccontrol killpower` when the powerfail flag exists.
+- **Missing config.** apcupsd aborts at startup without its config file, so the daemon runs no events.
+
+**Fail closed.** Each of the following is a blocking gap:
+
+- an unobserved or non-Debian family, or unknown installation state;
+- an unobserved or non-default `ExecStart`;
+- an unobserved, unreadable or over-limit config;
+- a non-default, relative or path-truncated `SCRIPTDIR`;
+- an `apccontrol` not authenticated as the unchanged packaged file;
+- a sourced `/etc/apcupsd/config`;
+- unobserved, unreadable or truncated listings, malformed entries, missing metadata or unobserved symlink targets.
+
+Unobserved mount flags are non-blocking. Unresolved entries are never reported as running. Scripts are reported as they would run if apcupsd starts; the contract does not check whether an unknown keyword or bad value aborts startup, which over-reports rather than under-reports.
+
+**Validation.** `tests/test_apcupsd_events.py` has 21 tests, covering:
+
+- `fgets` chunk splitting, `#` truncation, case folding, last-wins, empty and relative values, and the 245/255-byte path boundary;
+- the sourced config file, symlinks, noexec mounts, directories and special files;
+- truncated listings, malformed input and the gap bound.
+
+A root-only differential runs the packaged `[ -f p -a -x p ]` test through `/bin/sh` on temporary files and compares it with the contract. Six mutations are each caught.
+
+There is no live differential against a built apcupsd: this session's classifier refused building the downloaded source. The config-parsing rules come from reading the source.
+
+**Unchanged.** There is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+
+**Remaining:**
+
+- agent collection of the config, `ExecStart`, directory metadata and package authentication of `apccontrol`;
+- a catalog entry, provenance, persistence, UI and AI classification;
+- RPM/EPEL layouts, `multimon.conf`/CGI and the contents of the sourced `config` are not modeled.
