@@ -205,14 +205,16 @@ cat >/dev/null
 """
 
 
-def _live(body, workdir):
+def _live(body, workdir, uid, gid):
     conf = os.path.join(workdir, 'rsyslog.conf')
     sock = os.path.join(workdir, 'sock')
     with open(conf, 'w') as handle:
         handle.write(f'module(load="imuxsock" SysSock.Use="off")\ninput(type="imuxsock" Socket="{sock}")\n{body}')
     out = os.path.join(workdir, 'probe.sh.out')
-    open(out, 'w').close()
-    os.chmod(out, 0o666)
+    # Only root and the account the probe is expected to run as may touch the fixture.
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.fchown(fd, uid, gid)
+    os.close(fd)
     proc = subprocess.Popen([RSYSLOGD, '-n', '-M', MODDIR, '-f', conf, '-i', os.path.join(workdir, 'pid')],
                             stderr=subprocess.DEVNULL)
     try:
@@ -243,25 +245,28 @@ def _expected(conf, probe):
 
 @pytest.mark.skipif(not (RSYSLOGD and MODDIR and LOGGER and hasattr(os, 'geteuid') and os.geteuid() == 0),
                     reason='set MRPATCHY_RSYSLOGD and MRPATCHY_RSYSLOG_MODDIR and run as root')
-@pytest.mark.parametrize('body', [
-    'module(load="omprog")\n*.* action(type="omprog" binary="{p} one \\"two three\\" \'four five\' six  seven ")\n',
-    'module(load="omprog")\n$PrivDropToUserID 4242\n$PrivDropToGroupID 4343\n'
-    '*.* action(type="omprog" binary="{p} u")\n',
-    'module(load="mmexternal")\n*.* action(type="mmexternal" binary="{p} m \\"q r\\" s")\n',
-    '$ModLoad omprog\n$ActionOMProgBinary {p} ignored\n*.* :omprog:\n',
-    '*.* ^{p};RSYSLOG_TraditionalFileFormat\n$PrivDropToUserID 4242\n',
-    'module(load="omprog")\n*.* action(type="omprog" binary="{p} a\\"b c\\"d e  ")\n',
-    'module(load="omprog")\nif $msg contains "hello" then ^{p}\n',
+# Each case states the effective IDs the probe must run as, independently of the parser under test.
+@pytest.mark.parametrize('body, uid, gid', [
+    ('module(load="omprog")\n*.* action(type="omprog" binary="{p} one \\"two three\\" \'four five\' six  seven ")\n',
+     0, 0),
+    ('module(load="omprog")\n$PrivDropToUserID 4242\n$PrivDropToGroupID 4343\n'
+     '*.* action(type="omprog" binary="{p} u")\n', 4242, 4343),
+    ('module(load="mmexternal")\n*.* action(type="mmexternal" binary="{p} m \\"q r\\" s")\n', 0, 0),
+    ('$ModLoad omprog\n$ActionOMProgBinary {p} ignored\n*.* :omprog:\n', 0, 0),
+    ('*.* ^{p};RSYSLOG_TraditionalFileFormat\n$PrivDropToUserID 4242\n', 4242, 0),
+    ('module(load="omprog")\n*.* action(type="omprog" binary="{p} a\\"b c\\"d e  ")\n', 0, 0),
+    ('module(load="omprog")\nif $msg contains "hello" then ^{p}\n', 0, 0),
 ])
-def test_live_differential(body):
-    workdir = tempfile.mkdtemp(prefix='rsyslog-diff-', dir='/tmp')
-    os.chmod(workdir, 0o755)
+def test_live_differential(body, uid, gid):
+    workdir = tempfile.mkdtemp(prefix='rsyslog-diff-', dir='/tmp')  # created 0o700
+    os.chown(workdir, uid, gid)
     try:
         probe = os.path.join(workdir, 'probe.sh')
-        with open(probe, 'w') as handle:
+        fd = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o700)
+        with os.fdopen(fd, 'w') as handle:
             handle.write(PROBE)
-        os.chmod(probe, 0o755)
-        output, conf = _live(body.format(p=probe), workdir)
+            os.fchown(handle.fileno(), uid, gid)
+        output, conf = _live(body.format(p=probe), workdir, uid, gid)
         # The shell-execute argument is the formatted message, which ends in a newline.
         observed = ['arg[<msg>]' if 'hello' in line else line for line in output.splitlines()]
         observed = [line for line in observed if line.startswith(('uid=', 'arg['))]
