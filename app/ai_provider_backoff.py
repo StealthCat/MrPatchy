@@ -14,6 +14,8 @@ from .db import Base, Session
 MAX_PROVIDER_DELAY=86400  # a longer provider Retry-After is capped and flagged for administrator review
 FAILURE_WINDOW=3600  # consecutive transient failures reset after this idle period
 CAPPED_REASON='Provider Retry-After exceeds 24 hours and was capped; an administrator may clear it after review.'
+RETRY_AFTER_REASON='Provider Retry-After floor is active.'
+TRANSIENT_REASON='Transient provider or transport failure; bounded exponential backoff is active.'
 # In-app notification policy: a single short transient backoff is routine and
 # silent. Only a capped (>24 h) floor or a sustained run of failures needs an
 # administrator, so neither per-failure timing nor provider text is announced.
@@ -77,17 +79,16 @@ def failed(error,now=None):
             provider=min(provider,MAX_PROVIDER_DELAY)
             error.provider_retry_after=provider
             delay=provider if provider>0 else random.uniform(30,min(1800,60*2**(row.failures-1)))
-            # A shorter failure never lowers the floor, so while an earlier
-            # capped floor still dominates it keeps its capped reason; otherwise
-            # the administrator review cue and notification would be lost.
-            capped=capped or (row.reason==CAPPED_REASON and (row.blocked_until or 0)>now+delay)
-            row.blocked_until=max(row.blocked_until or 0,now+delay)
+            deadline=now+delay
+            previous_deadline=row.blocked_until or 0
+            # Keep the reason for the deadline that still holds. A capped
+            # request sharing that deadline takes precedence for review.
+            if deadline>previous_deadline or (deadline==previous_deadline and capped):
+                row.reason=CAPPED_REASON if capped else RETRY_AFTER_REASON if provider>0 else TRANSIENT_REASON
+            row.blocked_until=max(previous_deadline,deadline)
             # Failure timestamps are sampled before lock acquisition. Preserve the
             # newest one so an in-flight success cannot clear its backoff floor.
             row.updated=max(row.updated or 0,now)
-            row.reason=(CAPPED_REASON if capped else
-                'Provider Retry-After floor is active.' if provider>0 else
-                'Transient provider or transport failure; bounded exponential backoff is active.')
             session.commit()
             return max(0,row.blocked_until-now)
 
