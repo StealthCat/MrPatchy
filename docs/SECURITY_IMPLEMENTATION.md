@@ -27,6 +27,20 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+### Retry eligibility after a saved AI configuration change — Roadmap A checkpoint #1124
+
+Fleet AI Activity and the per-server triage queue now show a timed provider
+wait when the saved model or key has changed since an investigation was
+blocked. The displayed deadline comes from the provider floor. An earlier
+attempt's recovery deadline does not extend the wait after a configuration
+change. Investigations blocked under the current configuration still show
+that an administrator must review them.
+
+The regression exercises configuration-blocked and exhausted interrupted
+attempts before and at the provider deadline. Shared rate, spend, pause and
+other admission gates still apply. Independent scoring admission and
+production throughput acceptance remain open.
+
 ## Dependency vulnerability gate (partial #201)
 
 The CI `static` job runs `pip-audit` (pinned in `requirements-audit.txt`) against the
@@ -2316,6 +2330,22 @@ the faster-AI milestone.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
 
+### Millisecond provider retry delay — Roadmap A checkpoint #1193
+
+Transient provider failures now honor OpenAI's `retry-after-ms` header as well as
+the standard `Retry-After` header. Only plain non-negative decimal milliseconds
+are accepted. If both headers are valid, the longer delay is used, so a retry is
+never earlier than either header asks. A malformed millisecond value is ignored
+and the standard header still applies. A value beyond the existing ten-year bound
+blocks automatic retry, as an excessive `Retry-After` already does. The redacted
+transport snapshot keeps this one extra header. Header text is never persisted or
+shown. Non-transient classifications still ignore both headers. The shared
+24-hour cap, per-item attempt jitter, notifications, pause, budget and response
+authorization are unchanged. Before this change, a response with only the
+millisecond header fell back to a random local delay of 30 seconds or more. That
+was slower than a short provider floor and could retry earlier than a long one.
+Production throughput remains unmeasured.
+
 ### Live process-triage lease telemetry
 
 The administrator investigation status API reports
@@ -2685,6 +2715,13 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Unchanged:** the diagnostic stored on the investigation, retry states, attempts, eligibility, the configuration signature (a model or key change still re-admits either block), admission, reservations and receipt accounting, the cause-neutral `configuration-blocked` notification, roles and response authorization.
 - **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
 - **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
+
+#### Model refusal and token-budget wording in the Settings model test — worker checkpoint #1219
+
+- **Problem:** after #1158, process triage, advisory plans and release configuration reviews name a refusal and `max_output_tokens` exhaustion (update scoring follows in #1162). The Settings **Test model** action (`POST /api/settings/ai-test`) still returned and recorded the triage diagnostic, for example "Review this observation manually; no safety assessment was accepted". The test supplies no observation, and the text never said the request reached the provider and may be billed.
+- **Change:** `main._ai_test_investigate()` maps cause `model_refusal` and cause `token_budget` to test-specific text: the model declined (or exhausted its budget on) the compatibility test, the request was sent and may be billed, changing the API key does not help, and a different model (or one that completes within the task budget) should be selected. The rewritten `AIError` keeps the cause, so the `connection_test` run history stores the same text. Transient and policy-wait errors and every other cause are re-raised unchanged; provider refusal text is never returned or stored.
+- **Unchanged:** the 502 status, the `Test failed for model … Your saved model was not changed.` framing, the one-minute test interval, the connection-test lock, run tracking and cost receipts, admission, roles/CSRF, the saved model and response authorization.
+- **Validation:** `tests/test_ai_test_block_causes.py` drives the real route with only the provider transport as a fixture. Restoring main's call site fails both cause tests and leaves the four invariant guards passing: invalid output, other incomplete responses, rejected key, and rate limit/lock release after a refusal.
 
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
@@ -3555,6 +3592,18 @@ counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
 
+### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
+
+The shared AI start gates and automatic AI plan status now fetch each legacy
+hourly allowance count and reopening time in one statement. When the window
+is exhausted, the lookup counts back from the newest matching entry using the
+configured allowance. This preserves exact counts and the strict one-hour
+boundary while bounding the ordered lookup. Admission and configuration
+retain their existing behavior. In an overfilled fixture with 259 scoring runs
+and an allowance of three, the status read went from two statements to one.
+The time remained correct when entries tied at the boundary. Production latency
+and the broader shared-controls acceptance remain open.
+
 ### Two-call follow-up reservations under a daily cap — worker checkpoint #988
 
 `tests/test_ai_budget_followup_acceptance.py` covers the milestone 4 item
@@ -3707,8 +3756,25 @@ legacy per-purpose ceiling, including the fixed 10/hour automatic-plan allowance
   proposal, four concurrent startups applying once, the stale-revision refusal and
   controller startup. The startup case fails without the hook. The standalone
   worker hook has no dedicated test.
-- **Still open:** an in-app notification for the migration and the broader
-  shared-controls acceptance.
+- **Still open:** the broader shared-controls acceptance; the migration notification is addressed below.
+
+### Legacy AI admission migration notifications — worker checkpoint #1178
+
+The #1039 "still open" in-app notification is delivered. `app/ai_control_migration.py`
+now publishes admin-only events (source `ai-admission`, deep link `#settings/ai`):
+- **Migrated:** one `info` record naming the new shared rate, written in the same
+  transaction as the migration and its audit row. Restarts add nothing.
+- **Refused:** when the proposal would expand admission or spend, one `medium` event
+  says the hidden legacy allowances remain and that nothing was changed. Repeated
+  refused startups publish no new revision. Each `collect_alerts` pass keeps it active
+  while the stored configuration still has no `ai_control_mode`, and resolves it once
+  an administrator saves an explicit mode or a later startup migrates.
+- **Unchanged:** a rejected notification payload never blocks or rolls back the
+  migration. No schema, admission, spend, pause, role or response-authorization
+  change; no provider call; no SMTP/webhook alert.
+- **Validation:** `tests/test_ai_control_migration_notifications.py`; three of its
+  five cases fail without the change.
+- **Still open:** the broader shared-controls acceptance.
 
 ### Refuse unconfirmed AI admission/spend expansions on save — worker checkpoint #881
 
@@ -5924,6 +5990,85 @@ derive `key_user_rc` from the `authorized_keys` contract and, for certificate
 logins, the certificate's `permit-user-rc` extension, then persistence, UI and
 AI classification.
 
+### sysctl.d kernel program-execution contract — worker checkpoint #1088
+
+This is a contract increment only. The startup-awareness requirement stays
+incomplete.
+
+`app/sysctl_exec.py` is a pure, versioned contract for the boot-time
+`systemd-sysctl` assignments that make the kernel itself execute a program as
+root:
+
+- `kernel.core_pattern` beginning with `|` runs on every core dump.
+- `kernel.modprobe` runs on every module autoload request.
+- `kernel.hotplug` runs on every uevent, on `CONFIG_UEVENT_HELPER` kernels.
+- `kernel.poweroff_cmd` runs on an orderly poweroff.
+- `fs.binfmt_misc.register` registers a binfmt_misc interpreter, if
+  binfmt_misc is mounted when the value is written.
+
+The contract takes captured file text, performs no I/O and authorizes nothing.
+
+- **Source.** The rules come from systemd v255 `src/sysctl/sysctl.c`,
+  `src/basic/sysctl-util.c` and `conf-files.c`, not from memory.
+  - **Files.** Only `*.conf` files in `/etc`, `/run`, `/usr/local/lib`,
+    `/usr/lib` and `/lib` `sysctl.d` are read. A same-name file in a
+    higher-priority directory replaces the lower one, and a link to `/dev/null`
+    masks it. Files are processed in byte-order name order.
+  - **Lines.** Lines are stripped. `#` and `;` start comments. `\r`, `\n` and
+    `\r\n` all end a line, and there are no continuation lines.
+  - **Prefix and keys.** A `-` prefix before an assignment ignores a failed
+    write. A bare `-key` is a negative match that excludes the key from globs.
+    Keys may use `.` or `/` as the separator, following `sysctl_normalize`.
+    That includes systemd's `path_simplify()` step, ported exactly: leading
+    `..` components of an absolute key are dropped, so
+    `/../kernel/core_pattern` sets `kernel.core_pattern`. Inner `..` stays,
+    and a component longer than 255 bytes stops simplification. A
+    differential run of 4,500 key spellings against systemd-sysctl 255
+    agreed on every watched key written (#1089 coordinator review).
+  - **Order.** A changed later value replaces the earlier one and moves to
+    the end of the apply order. A repeated value keeps the earlier position.
+  - **Globs.** A glob applies per path component, and only to keys that have
+    no explicit or negative-match entry, whatever the file order. Only `*`,
+    `?` and bracket expressions with `!` and ranges are modelled. systemd
+    globs with glob(3) and `GLOB_BRACE`, so a glob that also uses braces,
+    backslashes, `[^` or `[:class:]`-style forms matches nothing here. It
+    becomes a blocking `glob_not_modelled` gap, and every watched key without
+    an explicit entry gets `unmodelled_glob_may_apply`. Differential runs
+    against systemd-sysctl 255 in a private mount namespace found 0 results
+    reported complete but wrong in 4,000 random trees.
+- **Output.** Each watched key reports its state (`configured`,
+  `not_configured` or `excluded_from_globs`) and whether the value makes the
+  kernel run a program.
+  - It names the program path, the source file and line, whether the key was
+    set explicitly or by a glob, and the full assignment history.
+  - The value is bounded and comes with the SHA-256 of the full value.
+  - It lists conditions: the uevent-helper kernel option, a split-usr build
+    for `/lib` entries, and the kernel's 127-byte or 255-byte truncation.
+  - `origin` is always `not_assessed`, and nothing is called safe or a
+    package default.
+- **Fail-closed rules.**
+  - These inputs are blocking gaps that mark the result incomplete:
+    malformed input, too many files or assignments, duplicate paths,
+    unreadable files, unfollowed links, invalid UTF-8, NUL bytes and
+    over-limit text.
+  - An unreadable winning file still shadows a lower-priority file of the
+    same name.
+  - systemd-sysctl reads `/etc/sysctl.conf` only through a `sysctl.d` link.
+    When that file is supplied but not linked, its watched assignments are
+    listed under `other_readers` for procps `sysctl --system`.
+  - Every result lists what it cannot see: the `sysctl.*=` kernel command
+    line, the `sysctl.extra` credential, runtime writes (for example apport,
+    `systemd-coredump` or `sysctl -w`), the live `/proc/sys` value and the
+    keys present there.
+- **Validation.** `tests/test_sysctl_exec.py` has 28 tests. Each of 12 source
+  mutations is caught by at least one test: precedence, masking, comment
+  characters, line endings, same-value retention, glob re-ordering,
+  component-wise glob matching, explicit-over-glob, key normalization and the
+  split-usr condition.
+- **Remaining.** Agent collection of `sysctl.d` text, catalog wiring,
+  persistence, UI, provenance and AI classification. There are no schema,
+  API, auth or response-authorization changes.
+
 ### PAM service-stack contract — worker checkpoint #967
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -6078,6 +6223,62 @@ expression. It takes a captured listing, captured rule-file text and the
 
 **Not covered:** agent collection of the directory, rule text and `OPTIONS`,
 catalog `entries_parsed` wiring, persistence, baselines and alerts, UI,
+provenance and AI classification. No schema, API, auth or
+response-authorization change.
+
+### crypttab keyscript contract — worker checkpoint #1225
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/crypttab_keyscripts.py` is a pure, versioned contract for the programs
+Debian and Ubuntu cryptsetup run as root while unlocking `/etc/crypttab`
+mappings at boot. A `keyscript=` program is `exec`'d with the third crypttab
+field as its argument and its output becomes the key; on the cryptdisks init
+path a `check=` program also runs on every unlocked device. It takes captured
+crypttab text, root's view of the paths the options name and
+`$CRYPTDISKS_CHECK`, and performs no I/O.
+
+- **Source.** `debian/functions`, `debian/cryptdisks-functions` and
+  `debian/initramfs/scripts/local-top/cryptroot` in Ubuntu `cryptsetup`
+  2.7.0-1ubuntu4 and 2.8.4-1ubuntu4. The only differences between them
+  (`tcrypt-system`, `x-initrd.attach`) cannot change a keyscript or check
+  outcome. An opt-in differential test sources the real `debian/functions`
+  under dash for 600 random crypttabs per version. It gave 0 mismatches for
+  both versions, and three deliberate model mutations each made it fail.
+- **Lines.** Fields are split as `IFS=" \t" read -r name source key options`:
+  the fourth field keeps inner spaces, so `luks, keyscript=x` has an ignored
+  unknown option ` keyscript` and runs no keyscript. A name starting with `#`
+  is a comment. An entry missing its source or key is skipped. A final line
+  without a newline is never processed.
+- **Options.** Comma-split words are validated as `crypttab_validate_option`
+  does, including aliases, required values, `grep -Ex` numeric checks and the
+  `[ -x ] && [ -f ]` test on `keyscript` (relative names resolve under
+  `/lib/cryptsetup/scripts`) and `check` (under `/lib/cryptsetup/checks`).
+  `header` must exist because both boot paths pass `--missing-path=fail`. A
+  bare `check` uses `$CRYPTDISKS_CHECK` and is dropped when that is empty.
+  Unknown options are ignored. A later option replaces an earlier one, and any
+  invalid value rejects the whole entry.
+- **Programs.** An accepted entry reports its unlock method: `keyscript`
+  (argv `[program, key field]`, with `CRYPTTAB_KEY` and the other `CRYPTTAB_*`
+  variables exported), `askpass` (key field `none`: `/lib/cryptsetup/askpass`
+  with a prompt), `keyfile` (nothing runs) or `exec_fails` (a keyscript of
+  `/lib/cryptsetup/askpass` with a real key reaches `exec ""`). On the
+  cryptdisks path it also reports the `check` argv and whether `noauto` or
+  `noearly` keep the entry out of automatic boot. The initramfs path never
+  runs `check`.
+- **Fail closed.** Unobserved crypttab text, path facts or
+  `$CRYPTDISKS_CHECK`, a relative `header`, a backslash (`printf '%b'`
+  decoding is not modelled), a glob character in the unquoted options
+  expansion, NUL bytes, invalid UTF-8 and over-limit input are blocking gaps
+  and leave entries `unresolved`. Every result names what it cannot observe:
+  which boot path handles each entry (the initramfs only unlocks entries its
+  hook copied, and systemd-cryptsetup-generator, which does not support
+  `keyscript=`, may handle the rest), whether the source device exists, the
+  programs' contents and the number of unlock attempts. `origin` is always
+  `not_assessed`, `authorizes_response` is False and no result is a safety
+  verdict.
+
+**Not covered:** agent collection of `/etc/crypttab` and path facts, catalog
+mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
 response-authorization change.
 
@@ -6581,6 +6782,35 @@ Source, scope and process data stay out of the response. No schema or agent chan
 **Limits:** endpoint-agent readiness, alerts, history/hysteresis, time sync and
 certificate expiry, the GCP-node inventory and the unified dashboard acceptance
 remain open.
+
+### Endpoint-agent clock synchronization — worker checkpoint #342
+
+Each agent telemetry snapshot adds a version-1 `clock_sync` record. The agent
+reads the kernel clock discipline with one `adjtimex()` call with `modes=0`. This
+call is read-only: it sets no field, needs no privilege and runs no binary. The
+clock counts as `synchronized` under systemd-timedated's `ntp_synced()`
+(`NTPSynchronized`) rule: `maxerror` is below the 16-second phase limit.
+Otherwise it is `unsynchronized`. The kernel `STA_UNSYNC` flag is reported as
+`kernel_unsync` but does not decide the state, because chrony and ntpd keep it
+set while disciplining the clock when RTC synchronization is off. The record also carries the kernel time state,
+the maximum and estimated error, and the offset in microseconds (nanosecond
+offsets are converted when `STA_NANO` is set). A denied, missing or malformed
+call is `unknown`, with a typed `clock-sync` gap.
+
+The endpoint-agent **Resources** column shows the clock state and its maximum
+error, plus an advisory `clock-unsynchronized` flag. The controller accepts only
+consistent records. A state that contradicts its own maximum error is shown as
+unknown, as are negative, non-finite and out-of-range values. Bounds are checked
+before any float conversion, so an integer beyond float range is rejected instead
+of raising `OverflowError`. Like the other resource metrics, the flag never changes
+health, counts, alerts, repairs, preflight or authorization. Missing or
+future-dated telemetry shows nothing.
+
+**Limits:** this reads the kernel's own view only. It does not compare the server
+clock with the controller, identify the time source or daemon, or detect a clock
+that is disciplined to a wrong source. A service sandbox that blocks `adjtimex`
+with `EPERM` reports unknown. Certificate expiry, history and hysteresis, alert
+producers and patch/reboot preflight blockers remain open for #342.
 
 ### Expected-controller health notifications — worker checkpoint #761
 
@@ -11410,7 +11640,7 @@ The producer is read-only. It never sends, retries, changes backoff or acknowled
 
 **Remaining:**
 - ~~The event has no deep link, because the Operations panel is a modal with no route.~~ Addressed by the #824 worker checkpoint below.
-- The threshold is fixed.
+- ~~The threshold is fixed.~~ Addressed by the #1172 worker checkpoint below.
 - ~~A delivery configuration that cannot be decrypted stops attempts before any are counted, so on its own it raises no event.~~ Addressed by the #812 worker checkpoint below.
 
 ### Alert-delivery notification deep link — worker checkpoint #824
@@ -11420,7 +11650,27 @@ The admin-only `alert-delivery`/`delivery-failing` event now links to a routable
 - **Page:** it shows the delivery channel (SMTP email, webhook, disabled or unreadable configuration) and the open alerts that have not been delivered, with server, kind, raised time, attempts and the stored sanitized error class. All text is escaped. No URL, token, password or recipient is shown. **Open delivery settings** opens the existing Operations panel, where configuration changes and acknowledgement remain. The page only reads the existing admin-only `GET /api/operations/alerts` and `GET /api/operations/notifications` routes, so it never sends, retries or acknowledges anything. Non-admins see the administrator-required state and no data request is made.
 - **Upgrade impact:** the link is part of the notification payload fingerprint. An event that is already active therefore gains one unread revision on the first collection pass after upgrade. Later passes add none.
 - **Unchanged:** schema, roles, routes, delivery and backoff, admission and response authorization.
-- **Remaining:** the threshold is still fixed, and the page lists only the 200 most recent alerts that the existing route returns.
+- **Remaining:** ~~the threshold is still fixed~~ (addressed by the #1172 worker checkpoint below), and the page lists only the 200 most recent alerts that the existing route returns.
+
+### Configurable alert-delivery notification threshold — worker checkpoint #1172
+
+Administrators can now set how many failed delivery attempts trigger the admin-only `alert-delivery`/`delivery-failing` notification. This closes the "threshold is fixed" item from checkpoints #792 and #824.
+
+- **Setting:** a whole number from 1 to 20 on Activity → Alert delivery (**Failure notification**). The default stays 3. It is stored in its own `alert-delivery-threshold` setting, outside the encrypted SMTP/webhook configuration. That keeps it readable and editable when the delivery configuration cannot be decrypted, and neither delivery save path nor any secret is touched. A missing or invalid stored value (out of range, boolean, non-integer, malformed) falls back to 3, so a bad value never silences the notice.
+- **API:** admin-only `GET`/`PUT /api/operations/alert-delivery-threshold`. `PUT` requires strict integers `failed_attempts` and `expected_failed_attempts`. It returns 400 outside the range, 409 when the saved value no longer matches the expected one, and it is serialized with a `worker.Lock`. Each change writes one `alert delivery threshold` audit entry with actor, before and after. Saving the same value writes nothing.
+- **Producer:** `failing_count` and the reason text use the saved threshold. Saving never sends, retries, acknowledges or resolves an alert, and it publishes nothing by itself. The next `collect_alerts` pass re-evaluates the event. Raising the threshold above every failing alert resolves an active event. If the event is already active and the threshold changes, the reason text (now naming the new count) adds one unread revision.
+- **Page:** the status line and the failing count on the Alert delivery page use the saved threshold instead of a fixed "three".
+- **Unchanged:** schema, roles, delivery and backoff, the unreadable-configuration path, admission and response authorization.
+- **Remaining:** ~~the page lists only the 200 most recent alerts that the existing route returns.~~ Addressed by the #1180 worker checkpoint below.
+
+### Every undelivered alert on the Alert delivery page — worker checkpoint #1180
+
+The Alert delivery page used to filter open, undelivered alerts in the browser from `GET /api/operations/alerts`, which returns only the 200 newest alerts of any state. With more than 200 newer delivered, acknowledged or resolved alerts, an older open alert that was still failing delivery disappeared from the page. Its failing count could then disagree with the admin `alert-delivery` notification, which counts every alert.
+
+- **API:** new admin-only, read-only `GET /api/operations/alert-delivery/pending?offset=N`. It returns open, undelivered alerts newest first, 50 per page, without the alert message. It also returns server-side `total` and `failing` counts across every such alert, using the saved threshold (`failed_attempts`). `offset` must be from 0 to 1,000,000.
+- **Page:** the status line and failing count use the server counts. The list shows "Showing A–B of N, newest first" with **Previous alerts** and **Next alerts**. Paging replaces only the alert list and moves focus to its heading, so unsaved threshold input survives. A late page response is discarded if a newer page was requested or the administrator left the page.
+- **Unchanged:** `GET /api/operations/alerts` and the Operations panel, delivery, retries and backoff, acknowledgement, the notification producer, schema, roles, admission and response authorization. The page still never sends, retries or acknowledges anything.
+- **Remaining:** none for the page's list scope. Acknowledgement stays in the Operations panel, which still lists the 200 newest alerts.
 
 ### Repository-refresh failure in-app notifications — worker checkpoint #767
 
@@ -11579,7 +11829,28 @@ Two re-enable paths published `overdue` straight away when the scheduler was hel
 - **No upgrade delay:** a server never seen inactive has no marker, so existing and continuously active servers keep the #816 schedule after upgrade.
 - **Unchanged:** `failed`, `incomplete` and `stalled`, legacy first-observed markers, payloads, revisions, resolution, roles, the scheduler, `security_coverage.assessment`, the schema and response authorization. The producer still never enqueues, retries or cancels scans.
 - **Validation:** five focused tests in `tests/test_scan_coverage_notifications.py` fail on main `c86141a` and pass after the change. A sixth pins the no-delay upgrade behavior and passes on both. The related notification, incident and scan suites pass on SQLite (238 passed, 1 skipped).
-- **Remaining:** a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart. YARA schedules and a configurable grace period remain out of scope.
+- **Remaining:** ~~a server disabled and re-enabled between two alert ticks (about 30 seconds) is never seen inactive, so its clock does not restart.~~ Addressed by the #1188 worker checkpoint below. YARA schedules and a configurable grace period remain out of scope. (The grace became configurable in #1182.)
+
+### Quick disable and re-enable in coverage notifications — worker checkpoint #1188
+
+The #1043 limitation: the `security-scan-resumed:<host>` `{"inactive": true}` marker was written only when an alert tick (about every 30 seconds) saw the server outside the active set. A disable followed by a re-enable between two ticks was never observed. The returning server then published `overdue` straight away if its last scan was old while the scheduler was held.
+
+- **Change:** `host_lifecycle.set_enabled` now writes the marker in the server-disable transaction, through `scan_coverage_notifications.mark_inactive`, when the server's scheduled-scan policy is enabled. The next tick that sees the server active converts the marker to `active_since` through the existing #1043 path, so the interval plus the configured grace restarts from the return.
+- **Unchanged:** nothing is written when the policy is missing or disabled, or when the server is being deleted. The administrator's `security-policy:<host>` row is only read. The tick-observed path, payloads, revisions, resolution, the scheduler, the schema, roles and response authorization are unchanged.
+- **Validation:** `test_disable_and_reenable_between_alert_ticks_restarts_the_resume_clock` drives the lifecycle API. On main `6bfec3be` it publishes `overdue` at the first tick after the re-enable; after the change it holds until the interval plus grace from the return. A second test pins that no marker is written without an enabled policy. The coverage, grace, host-lifecycle and execution-scan suites pass on SQLite (107 passed).
+- **Concurrency (review follow-up):** an alert transaction that read an expired `active_since` marker could queue its deletion, let a disable and re-enable commit in other transactions, and then delete the newer inactive marker on commit. The alert tick and the disable now read resume markers under the existing write-lock pattern (a no-op UPDATE for SQLite's write lock, then a locking read that sees the latest commit on MySQL), so the two writers serialize. `test_alert_cleanup_cannot_delete_an_inactive_marker_written_by_a_concurrent_disable` runs that two-session ordering on SQLite and MySQL.
+- **Remaining:** server state changes that do not go through a disable, such as re-enrolment, still depend on a tick observing them. YARA schedules remain out of scope.
+
+### Configurable grace before scheduled-scan coverage notifications — worker checkpoint #1182
+
+Checkpoints #883 and #1043 left the one-hour grace fixed. A server that planned maintenance or slow workers routinely hold past its scan interval could only avoid repeated `overdue` or `stalled` events by turning scheduled scanning off.
+
+- **Change:** the server's Scheduled scanning policy accepts `notify_grace_hours`, an integer from 1 to 168 (default 1). Other values are rejected with 422. The policy GET default includes it, and the Security tab's Scheduled scanning form shows and saves it.
+- **Producer:** `overdue`, `stalled`, the never-scanned `enabled_since` wait, the #883 legacy marker wait and the #1043 resume clock all use the interval plus the configured grace. A missing, malformed or out-of-range stored value keeps one hour, so existing policies keep the #816 schedule after upgrade.
+- **Reason text:** with the default grace the reason is byte-identical to before, so existing events gain no unread revision on upgrade. A non-default grace names its hours in the `overdue` and `stalled` reasons, and changing the grace while an event is active adds one revision.
+- **Unchanged:** the scheduler, scan intervals, `security_coverage.assessment` and the coverage page, `failed` and `incomplete`, payload shape, roles (admin-only save, unchanged route dependency), the schema and response authorization. The producer still never enqueues, retries or cancels scans.
+- **Validation:** seven focused tests in `tests/test_scan_coverage_grace.py` fail on main `c22fb68` and pass after the change, alongside the existing coverage-notification tests. `tests/ui_security.cjs` checks that a legacy policy shows one hour and that the saved value is sent.
+- **Remaining:** a server disabled and re-enabled between two alert ticks is still never seen inactive. YARA schedules remain out of scope.
 
 ### XDG autostart contract — worker checkpoint #889 (roadmap F)
 
@@ -11648,6 +11919,21 @@ Roadmap A requires worker health to show the blocked reason and next eligible st
 - **Validation:** the new `tests/ui_worker_ai_control_gates.cjs` times out on main `68887ce` (no card) and passes after the change. It covers the finite, open, malformed (injection) and error/retry states, placement, refresh, pagination, a slow snapshot with a discarded late response, the viewer case, and no horizontal scroll at 320, 768 and 1440 px. `ui_workers.cjs` and `ui_ai_control_gates.cjs` still pass.
 - **Remaining:** the card is display-only and promises no start. Per-worker gate state and full queue/spend dashboard acceptance remain open.
 
+### Explain shared provider waits — Roadmap A checkpoint #1201
+
+The shared AI start gates on Investigations and Activity → Workers explain
+whether the recorded deadline came from provider Retry-After, local transient
+backoff, or a provider delay capped at 24 hours. The administrator-only endpoint
+returns only known application messages, with a generic fallback for unknown
+stored text. It excludes provider response details and request identifiers.
+
+When failures overlap, the stored explanation follows the deadline that holds.
+A shorter failure keeps the earlier explanation, and a capped wait takes
+precedence at an equal deadline. Existing rows keep their recorded reason until
+the backoff clears or a later failure takes precedence. Eligibility, retry accounting,
+admission and response authorization follow the existing rules. Per-worker
+eligibility and matched production throughput measurements remain open.
+
 ### Fleet automatic AI plan status — worker checkpoint #936
 
 This closes the #922 limitation that automatic AI plan status was readable only one server at a time.
@@ -11658,6 +11944,18 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 - **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
 - **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
 - **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
+
+### Batch fleet automatic AI plan job status — Roadmap A checkpoint #1205
+
+The automatic AI plan status reads the active plan and latest automatic attempt
+for all listed servers in one query. Two per-server selections run inside that
+query and return only state and creation time. Each selection uses the same
+host, action and state filters as the individual server view. For equal creation
+times both selections sort by descending job ID. The fleet still lists at most
+100 opted-in servers. A 12-server fixture reduced this part of its read from 24 statements
+to one while preserving the result for each server. Incident counts and server
+readiness still make per-server reads. Production load time remains unmeasured.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
@@ -11813,3 +12111,191 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
+
+### systemd-tmpfiles kernel-hook and startup-file contract — worker checkpoint #1097 (roadmap F)
+
+`systemd-tmpfiles-setup.service` applies `tmpfiles.d` as root at every boot. A `w /proc/sys/kernel/core_pattern - - - - |/tmp/x` line sets a program that the kernel itself runs, without going through `sysctl.d` (#1088). A line such as `f /etc/cron.d/job …`, `L+ /etc/ld.so.preload - - - - …` or `C /etc/systemd/system/x.service …` creates a startup file. No contract covered `tmpfiles.d`.
+
+- **Change:** a new pure module, `app/tmpfiles_exec.py`. From captured `tmpfiles.d` text it reports two things:
+  - the effective lines that write `kernel.core_pattern`, `kernel.modprobe`, the uevent helper (`kernel.hotplug` or `/sys/kernel/uevent_helper`), `kernel.poweroff_cmd` or `fs.binfmt_misc.register`, in apply order with the last writer and the program it names;
+  - every effective `f`/`L`/`C`/`w` line that creates, replaces, writes or links into a listed startup location, with its condition (`if_absent`, `replace`, `write_if_present` or `append_if_present`).
+
+  Each entry gives the source file and line, the type, the modifiers (`!` boot only, `-` ignore errors) and the argument, bounded to 512 bytes, with its SHA-256.
+- **Reference:** systemd 255 (255.4-1ubuntu8.18). The rules were derived by running the compiled `systemd-tmpfiles --root … --create --boot` on fixture trees:
+  - Precedence is `/etc` → `/run` → `/usr/local/lib` → `/usr/lib`. Only `*.conf` files are read, in name order, and a link to `/dev/null` masks a file.
+  - Field quoting and C escapes are applied. In the argument, quotes are kept, escapes are decoded first and then `%%` becomes `%` (so `\x25H` is the host name). `~` means base64, which is not expanded.
+  - Duplicate-line rules: the first `f`/`L`/`C`/`d`/`p`/… line for a path wins unless the later one is identical. A `w` line conflicts with a `w`/`e`/`x`/`X`/`r`/`R` line for the same path, except that `w+` lines after a `w+` all apply.
+  - Map order: all non-glob-type lines apply before the glob-type map (`w`, `x`, `z`, …), and each map applies in the order its paths first appeared. So `f+` runs before `w`, and among `w` lines a later-appearing path or pattern is written later.
+  - `f` writes only when it creates the file, so it never changes a kernel setting. `f+` truncates and writes. `w` writes only to an existing file. Only `w` expands globs, and `*` does not match `/` or hidden names.
+  - Rejected lines include relative paths, `w` without an argument, invalid base64, modifiers unknown to v255 (such as `$`) or repeated (`w++`), and an invalid mode or age. A rejected line never takes a path's slot.
+  - Conditional lines: a user or group other than `-`, `root` or a plain id (resolved through the host's NSS), an age form not checked against the binary, and `C` lines (skipped when the copy source is missing) may be rejected on the host. A write such a line shadows, or a kernel setting it writes, is a blocking `line_validity_unresolved` gap.
+  - A seeded random comparison of 10,000 fixture trees found no difference in any stand-in kernel value or in the set of created startup files. It simulates regular-file overwrite and append, and covers precedence, masking, duplicate and conflict rules, globs, modifiers, escapes, base64 and simplified paths.
+- **Fail-closed gaps, which mark the result incomplete:** unreadable, over-limit, invalid UTF-8 or NUL input; an unfollowed symlink, which never falls back to a lower-priority file; malformed or duplicate input; host-dependent specifiers in the path of a writing line or in a relevant argument; credential (`^`) values; modifiers newer releases may accept; arguments or fields this parser cannot unescape; and conditional lines that shadow a write or write a kernel setting. `multiple_writers` is non-blocking: every writer is listed.
+- **Unobserved, stated in every result:** `--user` tmpfiles; the live `/proc/sys` value and kernel write failures or truncation; later `sysctl.d` or runtime writes; credential and `/usr/share/factory` contents; whether a target already exists; startup locations outside the fixed list; and removal, mode and ACL lines.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and nothing is labelled safe.
+- **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
+- **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
+
+### Update-scoring stage timings in the fleet summary — Roadmap A checkpoint #1190
+
+`GET /api/ai/triage/timings` now accepts an optional `purpose` of `triage`
+(the default, with the previous sample) or `update_scoring`; other values return
+400. The response names the sampled `purpose`. Only completed or failed runs of
+that purpose are sampled, with the same 100-run and 2,048-event bounds, malformed
+event discard and no message, run ID or evidence exposure. The **AI stage timings**
+card on fleet AI logs adds an **Activity** selector (Process triage / Update
+importance); changing it clears the previous table and ignores late responses for
+the old selection. Scoring runs record provider admission, provider, receipt and
+usage persistence, result persistence and run timings; triage-only stages show no
+samples. Compatibility: admin-only as before, no schema, collection, admission,
+budget or response-authorization change. Matched serial/parallel production
+throughput remains open.
+
+### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
+
+New disposable SQLite and MySQL benchmark reports require one successful
+result-persistence timing per completed investigation and one successful
+evidence-persistence timing per requested follow-up. A report is refused when
+either stage is missing, duplicated, malformed, unsuccessful or assigned to the
+wrong run, even when the fixture completed all investigations. Successful
+reports retain the existing format. This guards fixture evidence only.
+Production and live-provider performance comparisons remain open.
+
+### Release configuration review persistence — Roadmap A checkpoint #1184
+
+A newly validated release configuration review records one retained
+`result_persistence` timing while the planner applies the result to the plan
+and commits resumable progress. The stage records duration and outcome using
+the existing redacted run-event format. It excludes preliminary checkpoints,
+retained reviews reused after a deferral, provider refusals and invalid
+responses. The planner retains its existing evidence checks, checkpoints,
+provider accounting and separate approval. Focused planner fixtures cover
+successful and failed saves, rejected results and resumption with matching or
+changed evidence. Production throughput and cross-controller acceptance
+continue under the wider Roadmap A milestones.
+
+### bash-completion compat-directory contract — worker checkpoint #1197
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/bash_completion_d.py` is a pure, versioned contract for a startup location
+no catalog mechanism listed yet. When bash-completion is installed, every
+interactive bash shell that loads `/usr/share/bash-completion/bash_completion`
+sources each eligible compat file as the account opening the shell, including
+root. A dropped file needs no execute bit. The contract takes the upstream
+version, the loader path and directory-entry metadata. It performs no I/O and
+never reads a sourced file.
+
+- **Source.** The rules were read from the upstream `bash_completion` script at
+  tags 2.10, 2.11, 2.12.0, 2.13.0, 2.14.0, 2.15.0, 2.16.0 and 2.17.0, not
+  recalled. They form four families:
+  - **2.10–2.11:** one directory, `/etc/bash_completion.d`. The backup glob uses
+    `dpkg*`, and `acroread.sh` is block-listed.
+  - **2.12–2.14:** `@(dpkg|ucf)-*` replaces `dpkg*`. A second directory is
+    derived from the loader path, which for the packaged loader is
+    `/usr/etc/bash_completion.d`.
+  - **2.15–2.16:** the glob is expanded with `LC_COLLATE=C`, `nullglob` and no
+    `dotglob`.
+  - **2.17:** adds the `.zs-old` suffix.
+
+  `upstream_version` strips dpkg/RPM epochs and revisions, for example
+  `1:2.11-8` gives `2.11`.
+- **Rules.** Names that are hidden, match the version's backup glob, start with
+  `Makefile` or are block-listed are skipped. Then `-f` follows symlinks and
+  accepts only a regular file, so directories, special files and dangling links
+  are skipped silently. `-r` lets root read any regular file. Other accounts use
+  one owner, group or other class, giving `sourced`, `skipped` (`not_readable`)
+  or `depends_on_account`. Every expansion is quoted, so names with spaces or
+  glob characters are sourced as themselves.
+- **Order.** All of `/etc/bash_completion.d` is sourced first, then the second
+  directory, in byte order. Before 2.15 the shell's locale collation can reorder
+  names, which adds a non-blocking `order_locale_dependent` gap. A hidden name
+  adds a non-blocking `hidden_name_dotglob` gap, because a shell with `dotglob`
+  set would also source it.
+- **Activation.** A missing loader is `inactive`. An unobserved or unsupported
+  version, or a loader path that is not absolute and normalized, is blocking.
+- **Fail closed.** These are blocking (`complete: false`), and outside a
+  `listed` directory nothing is reported as sourced:
+  - an unobserved, unreadable or truncated listing of any scanned directory;
+  - malformed or duplicate entries;
+  - missing mode, uid or gid;
+  - an unobserved symlink target;
+  - over-limit input.
+
+  A supplied directory that this version does not scan gets a non-blocking
+  `directory_not_scanned` gap.
+- **Validation.** `tests/test_bash_completion_d.py` has 72 tests.
+  - A cross-check runs real bash extglob matching on the verbatim upstream
+    patterns for each family, over 51 names, and requires exactly the names the
+    contract keeps.
+  - A live test runs each family's compat loop in real bash on real files: a
+    mode-0 file, a directory, a FIFO, and dangling and followed links. It
+    compares the sourced set, and the byte order from 2.15.
+  - The downloaded upstream scripts were read, not executed.
+  - The live test ran as root here. Its non-root branch, where the account owns
+    every file, runs only on unprivileged CI.
+- **Unobserved, stated in every result:**
+  - which shells load bash-completion (`/etc/profile.d/bash_completion.sh`,
+    `/etc/bash.bashrc`, per-user `~/.bashrc`);
+  - the `BASH_COMPLETION_COMPAT_DIR` and `BASH_COMPLETION_COMPAT_IGNORE`
+    environment overrides;
+  - per-user `~/.bash_completion` and the lazily loaded `completions/`
+    directories;
+  - ACLs and directory search permission for non-root accounts.
+- **Unchanged:** no collection, schema, route, UI, AI, role or
+  response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the bash-completion package version and
+  both directories, a catalog entry, package provenance, persistence, UI and AI
+  classification.
+
+
+### Endpoint-agent fleet view: out-of-range retained values — bug fix #1195 (roadmap H)
+
+- **Defect:** `app/agent_fleet_health.py` converted retained agent values to float before checking their range. An integer beyond float range (such as `10**400`, which `json.loads` accepts) in `resource_pressure.{cpu,memory}.some.avg60`, `telemetry.collected` or the receipt's `checked` raised `OverflowError`. One enrolled host's snapshot could therefore fail Activity → Workers → **Endpoint agents** and the unified **Deployment health** summary for every server.
+- **Fix:**
+  - Pressure bounds (`0..100`) are now compared before any float conversion, and finiteness is checked only on floats.
+  - An integer timestamp beyond float range is unknown, exactly like an infinite float. A large but representable integer is still a future time.
+  - `page()` classifies each host under a narrow guard (`ArithmeticError`, `TypeError`, `ValueError`). A host whose retained records cannot be interpreted is listed as **unknown** with a fixed reason, and every other host is unaffected.
+- **Unchanged:** no ingest, schema, route, UI, role or response-authorization change. The view still never inspects, repairs or authorizes anything, and resource metrics still never change the health state.
+- **Validation:** `tests/test_agent_fleet_health.py` adds regressions for `10**400`, `-10**400` and `2**1024` in `avg60`, `collected` and `checked`, the per-host guard, and an end-to-end store of the huge values through both admin APIs. Nine of the new tests fail on `d3f72fe4`.
+
+
+### resolvconf hook contract — worker checkpoint #1199
+
+`app/resolvconf_hooks.py` is a pure, versioned, I/O-free roadmap F contract. From entry metadata for `/etc/resolvconf/update.d` and `/etc/resolvconf/update-libc.d`, it reports which scripts the Debian `resolvconf` package runs as root, in what order and on which triggers.
+
+- **Source of the semantics:** resolvconf 1.78ubuntu7 `/sbin/resolvconf` and `/etc/resolvconf/update.d/libc`, downloaded from archive.ubuntu.com and read, plus debianutils `run-parts`.
+  - `resolvconf -a`, `-d` and `-u` run `run-parts [--arg=…] /etc/resolvconf/update.d` without `--exit-on-error` or `--lsbsysinit`. Interface hooks call them on every DNS change. A postponed update runs on `--enable-updates` at boot.
+  - The packaged `update.d/libc` runs `run-parts /etc/resolvconf/update-libc.d` only after the generated content changes and while `/etc/resolv.conf` is symlinked to the dynamic file. So `update-libc.d` scripts are `runs_if_libc` when `libc` runs, `not_invoked` when it does not, and `unresolved` when that cannot be decided.
+  - Names must match `^[A-Za-z0-9_-]+$`. Order is bytewise. Symlinks are followed. Directories, dangling links, non-executable files, noexec mounts and special files are skipped, each with a stated reason.
+- **Fail closed:** blocking gaps cover an unobserved or unsupported family, an unknown installation state, unobserved, unreadable or truncated listings, malformed or duplicate entries, missing metadata, an unobserved symlink target and over-limit input. Unobserved mount flags are a non-blocking gap.
+- **Validation:** `tests/test_resolvconf_hooks.py` has 31 tests, including a differential against the real debianutils `run-parts --test` on real files. Four mutations are each caught: allowing dots in names, ignoring noexec, invoking `update-libc.d` whenever `libc` is listed, and locale-style ordering.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of both directories and the resolvconf installation state, a catalog entry, package provenance, UI and AI classification.
+
+### smartd warning-command contract — worker checkpoint #1207 (roadmap F)
+
+- **Outcome:** `app/smartd_warnings.py` is a pure, I/O-free contract. From the text of `/etc/smartd.conf` and the observed smartd `-w/--warnexec` and `-u/--warn-as-user` options, it reports which commands smartd runs as root (or as the `-u` user) when it warns about a disk, and for which entries. Those commands are the warning script, the `smartd_warning.d` plugins, the `-M exec` program or `mail`, and Debian's `smartd-runner` → `run-parts --lsbsysinit /etc/smartmontools/run.d`.
+- **Semantics:** they come from smartmontools 7.4 `smartd.cpp` (`ParseConfigFile`, `ParseConfigLine`, `ParseToken`, `MailWarning`) and the Ubuntu 24.04 7.4-2build1 package scripts:
+  - a 256-byte line limit and a 1023-byte continued-line limit;
+  - `#` comments and backslash continuation;
+  - `DEFAULT` inheritance and reset;
+  - parsing stops at `DEVICESCAN`;
+  - whole-file rejection on syntax errors;
+  - `@plugin` handling, including skipping the mailer when only plugins are addressed;
+  - `<nomailer>` exec with no arguments.
+- **Fails closed:** unobserved or unreadable configs, unobserved daemon options, malformed input, rejected configs and over-limit input are blocking gaps. No entry is reported from a rejected file.
+- **Validation:** tests use vectors derived from the source. Running the downloaded smartd binary for a differential was not permitted in the worker environment, so a live differential is still to do.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - the `run.d` and `smartd_warning.d` listings;
+  - argument validation of non-mail directives (the contract over-reports, never under-reports);
+  - a real-binary differential;
+  - agent collection, a catalog entry, provenance, UI and AI classification.
+
+
+### D-Bus bus-activation contract — Roadmap F checkpoint #1211
+
+`app/dbus_activation.py` is a pure, versioned contract for captured, ordered D-Bus service-directory entries and `.service` text. It reports parsed files, bus-name precedence/winners and declared `Exec`, `User` and `SystemdService` values. When the caller supplies bus type and systemd-activation state, it also reports whether a name starts, is refused, remains unresolved or cannot yet be determined, including system-bus `User` checks and the launch helper's independent `<Name>.service` lookup. Parsing and start behavior were differentially observed against dbus-daemon 1.14.10 on session and system buses.
+
+The contract performs no file or bus I/O, starts no helper or command, does not assess origin and does not authorize a response. Unobserved inputs fail closed. User-database lookups and AppArmor/SELinux mediation are not modeled; the caller supplies directories in bus order. Collection, inventory, UI and AI wiring remain outside this checkpoint. The system-bus helper differential is opt-in and requires root because it uses the installed setuid helper and writes uniquely named fixtures under system service directories, then removes them.

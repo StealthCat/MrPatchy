@@ -26,6 +26,12 @@ PRICING_MESSAGES = {
 
 CREDENTIAL_MESSAGE = ('The saved API key cannot be decrypted with this controller\'s encryption key. Restore the '
                       'matching encryption key or save the API key again before provider calls can start.')
+PROVIDER_WAIT_REASONS = (
+    ai_provider_backoff.RETRY_AFTER_REASON,
+    ai_provider_backoff.TRANSIENT_REASON,
+    ai_provider_backoff.CAPPED_REASON,
+)
+GENERIC_PROVIDER_WAIT = 'Shared provider backoff is waiting after a transient failure.'
 
 
 def _money_exhausted(value):
@@ -40,20 +46,24 @@ def _window(session, column, conditions, limit, now):
     """Count one legacy sliding window and when it next drops below ``limit``.
 
     Admission counts entries with ``column > now - 3600``. Once ``count >= limit``
-    the gate reopens only after the oldest ``count - limit + 1`` entries leave
-    the window, so the opening time is that entry plus one hour, not merely the
-    oldest entry plus one hour.
+    the gate reopens when the ``limit``-th newest entry leaves the window. Read
+    the count and that timestamp in the same statement. The ordered lookup is
+    bounded by the allowance even when the window is heavily overfilled.
     """
-    from sqlalchemy import func, select
+    from sqlalchemy import case, func, select
+
     start = now - WINDOW_SECONDS
     where = (column > start, *conditions)
-    used = session.scalar(select(func.count()).where(*where)) or 0
-    if used < limit:
-        return used, False, None
+    count = select(func.count().label('used')).where(*where)
     if limit < 1:
-        return used, True, None
-    pivot = session.scalar(select(column).where(*where).order_by(column).offset(used - limit).limit(1))
-    return used, True, None if pivot is None else float(pivot) + WINDOW_SECONDS
+        return session.scalar(count), True, None
+    total = count.subquery()
+    pivot = (
+        select(column).where(*where)
+        .order_by(column.desc()).offset(limit - 1).limit(1).scalar_subquery()
+    )
+    used, timestamp = session.execute(select(total.c.used, case((total.c.used >= limit, pivot)))).one()
+    return used, used >= limit, None if timestamp is None else float(timestamp) + WINDOW_SECONDS
 
 
 def _legacy_purpose_limits(session, settings, now):
@@ -114,7 +124,9 @@ def snapshot(session, now=None):
         if not pricing['ok']:
             add('pricing', PRICING_MESSAGES[pricing['code']])
     if provider['blocked']:
-        add('provider_backoff', 'Shared provider backoff is waiting after a transient failure.', provider['next_at'])
+        reason = provider['reason']
+        message = reason if reason in PROVIDER_WAIT_REASONS else GENERIC_PROVIDER_WAIT
+        add('provider_backoff', message, provider['next_at'])
     if admission['mode'] in ('rate', 'rate_and_daily') and admission['next_at'] and admission['next_at'] > now:
         add('rate_throttle', 'The shared smooth-rate throttle is waiting for its next start.', admission['next_at'])
     if budget['enabled'] and _money_exhausted(budget['remaining_usd']):

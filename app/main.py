@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.59"
+APP_VERSION = '1.77.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1630,6 +1630,25 @@ def retry_blocked_update_scores(user=Depends(admin_user)):
         s.commit()
     return {'retried':retried,'detail':(str(retried)+' blocked update score'+('' if retried==1 else 's')+' queued for the next scoring pass. AI pause, shared rate and daily-cap admission still apply.') if retried else 'No update scores are blocked under the current AI configuration.'}
 
+# The model test supplies no server evidence, so the triage wording for a refusal or
+# token-budget exhaustion ("review this observation") does not fit (#1219). Both
+# reached the provider and may be billed; a key change does not help.
+AI_TEST_MODEL_REFUSAL=('The model declined the compatibility test, so it cannot be used for Mr Patchy\'s structured AI tasks. '
+    'The request was sent and may be billed. Changing the API key does not help; select a different model.')
+AI_TEST_TOKEN_BUDGET=('The model used its whole response token budget before finishing the compatibility test. '
+    'The request was sent and may be billed. Changing the API key does not help; select a model that completes '
+    'within Mr Patchy\'s task budget.')
+_AI_TEST_FAILURES={ai.MODEL_REFUSAL:AI_TEST_MODEL_REFUSAL,ai.TOKEN_BUDGET:AI_TEST_TOKEN_BUDGET}
+
+
+def _ai_test_investigate(evidence,model,key):
+    try:return ai.investigate(evidence,model,key)
+    except ai.AIError as error:
+        message=_AI_TEST_FAILURES.get(error.cause)
+        if message is None or error.transient or error.policy_wait:raise
+        raise ai.AIError(message,retry_after=error.retry_after,cause=error.cause) from None
+
+
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}
     expected_model:str|None=Field(default=None,max_length=100)
@@ -1652,7 +1671,7 @@ def ai_test(body:AITestInput|None=None,user=Depends(admin_user)):
         try:
             with ai_runs.track('connection_test',cfg['ai_model'],subject=user['username']) as run_id:
                 key=unseal(encrypted)
-                ai.investigate({'diagnostic':'Connection and JSON-schema compatibility test only. No process or server evidence was supplied. Return unknown risk and request no checks.'},cfg['ai_model'],key)
+                _ai_test_investigate({'diagnostic':'Connection and JSON-schema compatibility test only. No process or server evidence was supplied. Return unknown risk and request no checks.'},cfg['ai_model'],key)
         except Exception as error:
             return JSONResponse({'detail':'Test failed for model '+cfg['ai_model']+'. '+ai_runs.safe_error(error)+' Your saved model was not changed.', 'model':cfg['ai_model'],'run_id':run_id},status_code=502)
         return {'ok':True,'model':cfg['ai_model'],'run_id':run_id,'detail':'OpenAI connection and structured-output test passed for model '+cfg['ai_model']+'. No server evidence was sent.'}
@@ -2020,9 +2039,48 @@ def notifications(body:NotificationInput,user=Depends(admin_user)):
         retain_notification_secret(previous if previous.get('channel','webhook')=='webhook' else {},value,'token',body.clear_token,('url',))
         s.merge(Setting(key='notifications',value={'encrypted':seal(json.dumps(value))}));s.commit()
     return {'ok':True}
+
+class AlertDeliveryThresholdInput(BaseModel):
+    failed_attempts:int=Field(strict=True)
+    expected_failed_attempts:int=Field(strict=True)
+
+def alert_delivery_threshold_view(s):
+    from . import alert_delivery_notifications as delivery
+    return {'failed_attempts':delivery.threshold(s),'default':delivery.FAILED_ATTEMPTS,
+            'minimum':delivery.MINIMUM_ATTEMPTS,'maximum':delivery.MAXIMUM_ATTEMPTS}
+
+@app.get('/api/operations/alert-delivery-threshold')
+def get_alert_delivery_threshold(user=Depends(admin_user)):
+    with Session() as s:return alert_delivery_threshold_view(s)
+
+@app.put('/api/operations/alert-delivery-threshold')
+def save_alert_delivery_threshold(body:AlertDeliveryThresholdInput,user=Depends(admin_user)):
+    """Set when the admin alert-delivery notice fires (#1172). Never sends, retries or acknowledges alerts."""
+    from . import alert_delivery_notifications as delivery
+    if not delivery.valid_threshold(body.failed_attempts):
+        raise HTTPException(400,f'Use a whole number of failed attempts from {delivery.MINIMUM_ATTEMPTS} to {delivery.MAXIMUM_ATTEMPTS}')
+    with worker.Lock('alert-delivery-threshold'),Session() as s:
+        before=delivery.threshold(s)
+        if body.expected_failed_attempts!=before:raise HTTPException(409,'Alert delivery threshold changed; reload it before editing')
+        if body.failed_attempts!=before:
+            s.merge(Setting(key=delivery.THRESHOLD_KEY,value={'failed_attempts':body.failed_attempts}))
+            audit(s,'alert delivery threshold',json.dumps({'actor':user['username'],'before':before,'after':body.failed_attempts},sort_keys=True))
+            s.commit()
+        return alert_delivery_threshold_view(s)
 @app.get('/api/operations/alerts')
 def alerts(user=Depends(admin_user)):
     with Session() as s:return [object_dict(a) for a in s.scalars(select(operations.Alert).order_by(operations.Alert.created.desc()).limit(200))]
+@app.get('/api/operations/alert-delivery/pending')
+def pending_alert_deliveries(offset:int=Query(0,ge=0,le=1_000_000),user=Depends(admin_user)):
+    """Open alerts not yet delivered, newest first, paged (#1180). Read-only: never sends, retries or acknowledges."""
+    from . import alert_delivery_notifications as delivery
+    limit=50
+    with Session() as s:
+        attempts=delivery.threshold(s)
+        query=select(operations.Alert).where(operations.Alert.state=='open',operations.Alert.notified==0)
+        rows=s.scalars(query.order_by(operations.Alert.created.desc(),operations.Alert.id).offset(offset).limit(limit)).all()
+        return {'items':[object_dict(a,('message',)) for a in rows],'offset':offset,'limit':limit,
+                'total':delivery.undelivered_count(s),'failing':delivery.failing_count(s,attempts),'failed_attempts':attempts}
 @app.post('/api/operations/alerts/{alert_id}/ack')
 def acknowledge_alert(alert_id:str,user=Depends(admin_user)):
     with Session() as s:
@@ -2472,11 +2530,14 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(adm
     return {'ok':True}
 
 @app.get('/api/ai/triage/timings')
-def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, user=Depends(admin_user)):
+def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, purpose: str = 'triage',
+                      user=Depends(admin_user)):
     if not 1 <= limit <= ai_runs.TIMING_SUMMARY_RUN_LIMIT:
         raise HTTPException(400, 'Invalid timing sample limit')
+    if purpose not in ai_runs.TIMING_SUMMARY_PURPOSES:
+        raise HTTPException(400, 'Invalid timing summary activity')
     with Session() as s:
-        return ai_runs.triage_timing_summary(s, limit)
+        return ai_runs.triage_timing_summary(s, limit, purpose)
 
 
 @app.get('/api/ai/runs')
@@ -3424,12 +3485,14 @@ class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False
     interval_hours:int=Field(default=24,ge=1,le=720)
+    # Hours past the interval before coverage notifications publish overdue or stalled (#1182).
+    notify_grace_hours:int=Field(default=1,strict=True,ge=1,le=168)
 
 @app.get('/api/hosts/{host_id}/security/policy')
 def security_policy(host_id:str,user=Depends(admin_user)):
     with Session() as s:
         host_or_404(s,host_id);row=s.get(Setting,'security-policy:'+host_id)
-        return row.value if row else {'enabled':False,'interval_hours':24,'paths':['/usr/local/bin','/tmp']}
+        return row.value if row else {'enabled':False,'interval_hours':24,'notify_grace_hours':1,'paths':['/usr/local/bin','/tmp']}
 
 @app.put('/api/hosts/{host_id}/security/policy')
 def security_policy_save(host_id:str,body:SecurityScanPolicy,user=Depends(admin_user)):
