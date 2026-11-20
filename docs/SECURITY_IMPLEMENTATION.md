@@ -11913,6 +11913,19 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
 - **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
 
+### Release configuration review persistence — Roadmap A checkpoint #1184
+
+A newly validated release configuration review records one retained
+`result_persistence` timing while the planner applies the result to the plan
+and commits resumable progress. The stage records duration and outcome using
+the existing redacted run-event format. It excludes preliminary checkpoints,
+retained reviews reused after a deferral, provider refusals and invalid
+responses. The planner retains its existing evidence checks, checkpoints,
+provider accounting and separate approval. Focused planner fixtures cover
+successful and failed saves, rejected results and resumption with matching or
+changed evidence. Production throughput and cross-controller acceptance
+continue under the wider Roadmap A milestones.
+
 ### Endpoint-agent fleet view: out-of-range retained values — bug fix #1195 (roadmap H)
 
 - **Defect:** `app/agent_fleet_health.py` converted retained agent values to float before checking their range. An integer beyond float range (such as `10**400`, which `json.loads` accepts) in `resource_pressure.{cpu,memory}.some.avg60`, `telemetry.collected` or the receipt's `checked` raised `OverflowError`. One enrolled host's snapshot could therefore fail Activity → Workers → **Endpoint agents** and the unified **Deployment health** summary for every server.
