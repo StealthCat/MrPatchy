@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import statistics
 import socket
 import sqlite3
@@ -20,6 +21,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 MYSQL_URL_ENV = 'AI_BENCHMARK_MYSQL_URL'
+PERSISTENCE_TIMING = re.compile(r'([a-z ]+): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
+
+
+class BenchmarkTimingError(ValueError):
+    """The disposable workload did not retain complete timing evidence."""
 
 
 class DatabaseRefused(Exception):
@@ -160,6 +166,34 @@ def workload_fingerprint(provider_requests, ssh_requests):
     ssh = [canonical({**request, 'checks': sorted(request['checks'])}) for request in ssh_requests]
     workload = {'version': 1, 'provider': sorted(provider), 'ssh': sorted(ssh)}
     return {'version': workload['version'], 'sha256': hashlib.sha256(canonical(workload).encode()).hexdigest()}
+
+
+def collect_persisted_timings(events, expected_persistence):
+    """Collect timings only after checking each fixture run's persistence evidence."""
+    remaining = {stage: set(run_ids) for stage, run_ids in expected_persistence.items()}
+    samples = {}
+    for event in events:
+        stage = event.stage.removeprefix('timing_')
+        if stage in remaining:
+            if event.run_id not in expected_persistence[stage]:
+                raise BenchmarkTimingError(f'{stage}: unexpected timing sample')
+            if event.run_id not in remaining[stage]:
+                raise BenchmarkTimingError(f'{stage}: duplicate timing sample')
+            message = event.message
+            match = PERSISTENCE_TIMING.fullmatch(message) if isinstance(message, str) else None
+            if match is None or match[1] != stage.replace('_', ' '):
+                raise BenchmarkTimingError(f'{stage}: malformed timing sample')
+            if match[3] != 'complete':
+                raise BenchmarkTimingError(f'{stage}: failed timing sample')
+            remaining[stage].remove(event.run_id)
+            value = float(match[2])
+        else:
+            value = float(event.message.split(': ', 1)[1].split(' ms;', 1)[0])
+        samples.setdefault(stage, []).append(value)
+    for stage, missing in remaining.items():
+        if missing:
+            raise BenchmarkTimingError(f'{stage}: missing {len(missing)} timing sample(s)')
+    return samples
 
 
 def main():
@@ -352,11 +386,15 @@ def main():
                 # Report the mode the application actually applied, not only the flag.
                 control_mode = config(s)['ai_control_mode']
                 assert control_mode == args.control_mode, control_mode
-            persisted_timings={}
-            with Session() as s:
-                for event in s.query(ai_runs.AIEvent).filter(ai_runs.AIEvent.stage.like('timing_%')):
-                    stage=event.stage.removeprefix('timing_')
-                    persisted_timings.setdefault(stage,[]).append(float(event.message.split(': ',1)[1].split(' ms;',1)[0]))
+                follow_up_subjects = {subjects[index] for index in follow_up_indices}
+                expected_persistence = {
+                    'result_persistence': {run.id for run in runs},
+                    'evidence_persistence': {run.id for run in runs if run.subject in follow_up_subjects},
+                }
+                persisted_timings = collect_persisted_timings(
+                    s.query(ai_runs.AIEvent).filter(ai_runs.AIEvent.stage.like('timing_%')),
+                    expected_persistence,
+                )
             assert all(p['model']=='fixture-model' and p['max_output_tokens']==1600 and p['text']['format']['schema']==ai.SCHEMA for p in requests)
             def summary(values):
                 if not values:
@@ -387,5 +425,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except DatabaseRefused as refusal:
+    except (DatabaseRefused, BenchmarkTimingError) as refusal:
         sys.exit(str(refusal))
