@@ -1,3 +1,7 @@
+## 1.75.69 — 2026-11-20
+
+1. [PR #1194](https://github.com/StealthCat/MrPatchy/pull/1194): Honor OpenAI's `retry-after-ms` alongside `Retry-After` for transient failures, using the longer valid delay. Malformed millisecond values fall back to the standard header; excessive values block automatic retry. Compatibility: additive redacted-header handling only; no schema, API, UI, authentication or response-authorization change. Limits: non-transient errors ignore both headers, the shared 24-hour cap and per-item jitter remain, and production throughput is unmeasured.
+
 ## 1.75.68 — 2026-11-20
 
 1. [PR #1189](https://github.com/StealthCat/MrPatchy/pull/1189): Restart the scan-coverage clock when a scheduled-scan server is disabled and re-enabled between alert ticks, and serialize marker reads/cleanup with disable writes so concurrent alert processing cannot discard the newer inactive marker. Compatibility: no schema or response-authorization change; only enabled scan policies receive the marker, and deletion behavior is unchanged. Limits: re-enrollment state changes still depend on a tick, and YARA scheduling remains separate.

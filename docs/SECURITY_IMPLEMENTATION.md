@@ -2330,6 +2330,22 @@ the faster-AI milestone.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
 
+### Millisecond provider retry delay — Roadmap A checkpoint #1193
+
+Transient provider failures now honor OpenAI's `retry-after-ms` header as well as
+the standard `Retry-After` header. Only plain non-negative decimal milliseconds
+are accepted. If both headers are valid, the longer delay is used, so a retry is
+never earlier than either header asks. A malformed millisecond value is ignored
+and the standard header still applies. A value beyond the existing ten-year bound
+blocks automatic retry, as an excessive `Retry-After` already does. The redacted
+transport snapshot keeps this one extra header. Header text is never persisted or
+shown. Non-transient classifications still ignore both headers. The shared
+24-hour cap, per-item attempt jitter, notifications, pause, budget and response
+authorization are unchanged. Before this change, a response with only the
+millisecond header fell back to a random local delay of 30 seconds or more. That
+was slower than a short provider floor and could retry earlier than a long one.
+Production throughput remains unmeasured.
+
 ### Live process-triage lease telemetry
 
 The administrator investigation status API reports
