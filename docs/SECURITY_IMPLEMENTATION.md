@@ -5955,6 +5955,85 @@ derive `key_user_rc` from the `authorized_keys` contract and, for certificate
 logins, the certificate's `permit-user-rc` extension, then persistence, UI and
 AI classification.
 
+### sysctl.d kernel program-execution contract — worker checkpoint #1088
+
+This is a contract increment only. The startup-awareness requirement stays
+incomplete.
+
+`app/sysctl_exec.py` is a pure, versioned contract for the boot-time
+`systemd-sysctl` assignments that make the kernel itself execute a program as
+root:
+
+- `kernel.core_pattern` beginning with `|` runs on every core dump.
+- `kernel.modprobe` runs on every module autoload request.
+- `kernel.hotplug` runs on every uevent, on `CONFIG_UEVENT_HELPER` kernels.
+- `kernel.poweroff_cmd` runs on an orderly poweroff.
+- `fs.binfmt_misc.register` registers a binfmt_misc interpreter, if
+  binfmt_misc is mounted when the value is written.
+
+The contract takes captured file text, performs no I/O and authorizes nothing.
+
+- **Source.** The rules come from systemd v255 `src/sysctl/sysctl.c`,
+  `src/basic/sysctl-util.c` and `conf-files.c`, not from memory.
+  - **Files.** Only `*.conf` files in `/etc`, `/run`, `/usr/local/lib`,
+    `/usr/lib` and `/lib` `sysctl.d` are read. A same-name file in a
+    higher-priority directory replaces the lower one, and a link to `/dev/null`
+    masks it. Files are processed in byte-order name order.
+  - **Lines.** Lines are stripped. `#` and `;` start comments. `\r`, `\n` and
+    `\r\n` all end a line, and there are no continuation lines.
+  - **Prefix and keys.** A `-` prefix before an assignment ignores a failed
+    write. A bare `-key` is a negative match that excludes the key from globs.
+    Keys may use `.` or `/` as the separator, following `sysctl_normalize`.
+    That includes systemd's `path_simplify()` step, ported exactly: leading
+    `..` components of an absolute key are dropped, so
+    `/../kernel/core_pattern` sets `kernel.core_pattern`. Inner `..` stays,
+    and a component longer than 255 bytes stops simplification. A
+    differential run of 4,500 key spellings against systemd-sysctl 255
+    agreed on every watched key written (#1089 coordinator review).
+  - **Order.** A changed later value replaces the earlier one and moves to
+    the end of the apply order. A repeated value keeps the earlier position.
+  - **Globs.** A glob applies per path component, and only to keys that have
+    no explicit or negative-match entry, whatever the file order. Only `*`,
+    `?` and bracket expressions with `!` and ranges are modelled. systemd
+    globs with glob(3) and `GLOB_BRACE`, so a glob that also uses braces,
+    backslashes, `[^` or `[:class:]`-style forms matches nothing here. It
+    becomes a blocking `glob_not_modelled` gap, and every watched key without
+    an explicit entry gets `unmodelled_glob_may_apply`. Differential runs
+    against systemd-sysctl 255 in a private mount namespace found 0 results
+    reported complete but wrong in 4,000 random trees.
+- **Output.** Each watched key reports its state (`configured`,
+  `not_configured` or `excluded_from_globs`) and whether the value makes the
+  kernel run a program.
+  - It names the program path, the source file and line, whether the key was
+    set explicitly or by a glob, and the full assignment history.
+  - The value is bounded and comes with the SHA-256 of the full value.
+  - It lists conditions: the uevent-helper kernel option, a split-usr build
+    for `/lib` entries, and the kernel's 127-byte or 255-byte truncation.
+  - `origin` is always `not_assessed`, and nothing is called safe or a
+    package default.
+- **Fail-closed rules.**
+  - These inputs are blocking gaps that mark the result incomplete:
+    malformed input, too many files or assignments, duplicate paths,
+    unreadable files, unfollowed links, invalid UTF-8, NUL bytes and
+    over-limit text.
+  - An unreadable winning file still shadows a lower-priority file of the
+    same name.
+  - systemd-sysctl reads `/etc/sysctl.conf` only through a `sysctl.d` link.
+    When that file is supplied but not linked, its watched assignments are
+    listed under `other_readers` for procps `sysctl --system`.
+  - Every result lists what it cannot see: the `sysctl.*=` kernel command
+    line, the `sysctl.extra` credential, runtime writes (for example apport,
+    `systemd-coredump` or `sysctl -w`), the live `/proc/sys` value and the
+    keys present there.
+- **Validation.** `tests/test_sysctl_exec.py` has 28 tests. Each of 12 source
+  mutations is caught by at least one test: precedence, masking, comment
+  characters, line endings, same-value retention, glob re-ordering,
+  component-wise glob matching, explicit-over-glob, key normalization and the
+  split-usr condition.
+- **Remaining.** Agent collection of `sysctl.d` text, catalog wiring,
+  persistence, UI, provenance and AI classification. There are no schema,
+  API, auth or response-authorization changes.
+
 ### PAM service-stack contract — worker checkpoint #967
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -11847,3 +11926,16 @@ The comparator regressions cover observed overlap, a parallel run without
 provider overlap, historical inputs and invalid peaks. Both retained comparison
 records are regenerated from the original SQLite fixture inputs. Matched
 production throughput and the broader faster-triage acceptance remain open.
+
+### Release configuration review persistence — Roadmap A checkpoint #1184
+
+A newly validated release configuration review records one retained
+`result_persistence` timing while the planner applies the result to the plan
+and commits resumable progress. The stage records duration and outcome using
+the existing redacted run-event format. It excludes preliminary checkpoints,
+retained reviews reused after a deferral, provider refusals and invalid
+responses. The planner retains its existing evidence checks, checkpoints,
+provider accounting and separate approval. Focused planner fixtures cover
+successful and failed saves, rejected results and resumption with matching or
+changed evidence. Production throughput and cross-controller acceptance
+continue under the wider Roadmap A milestones.
