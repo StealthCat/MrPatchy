@@ -12281,3 +12281,29 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
 - **Validation:** `tests/test_certbot_hooks.py` has 58 tests. Four differential tests load certbot's real `hooks.py` and `compat` modules (only logging/display and unused helpers are stubbed) and execute real hooks through `/bin/sh` from temporary directories. They compare what ran, its order, deduplication, environment, the `renew`/other-verb split, dry-run and `--no-directory-hooks` behavior, a name with a space, and a non-directory hook path with the contract. They run when `MRPATCHY_CERTBOT_SOURCE` points at an unpacked certbot wheel or certbot is installed, and are skipped otherwise. Seven mutations are each caught.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** agent collection of the directories and the certbot installation state, a catalog entry, provenance, persistence, UI and AI classification. Hook commands in `/etc/letsencrypt/renewal/*.conf` and `cli.ini`, and `--config-dir` overrides, are not modeled.
+
+### NUT upsmon command contract — worker checkpoint #1247 (roadmap F)
+
+- **Outcome:** `app/nut_upsmon.py` is a pure contract with no I/O. It takes the text of `upsmon.conf`, the observed `upsmon` argv and the daemon's `NUT_CONFPATH`, and reports which commands Network UPS Tools' `upsmon` runs through `/bin/sh`, as which user and on which events:
+  - `SHUTDOWNCMD` runs as root. In the default split mode it runs in the privileged parent, and under `-p` in the single root process.
+  - `NOTIFYCMD "<message>"` runs for each notify event whose effective flags include `EXEC` and not `IGNORE`. It runs as `RUN_AS_USER` in split mode, or as root under `-p`.
+- **Semantics:** taken from NUT v2.8.1 `clients/upsmon.c` and `common/parseconf.c`:
+  - The parseconf state machine is modeled byte for byte: `#` comments, `\` literals and continuation, quoted words that span lines, a bare `=` word, discarded control and non-ASCII bytes, and the 512-byte word and 32-word line limits.
+  - A `#` inside quotes is a parse error. The rest of that line is then read as a new line, so a directive hidden behind it still applies.
+  - Directive names are exact-case, apart from `DEBUG_MIN`, and the last value wins.
+  - `NOTIFYFLAG` matches the event name case-insensitively and takes exact-case flags joined by `+`. Each line replaces the earlier flags. The default flags are `SYSLOG+WALL`.
+  - A `RUN_AS_USER` in the file overrides `-u`.
+  - getopt stops at the first operand.
+- **Fails closed:** each of these is a blocking gap:
+  - an unobserved config, argv or environment;
+  - NUL bytes, text that is not UTF-8, and over-limit input;
+  - an argv that makes upsmon exit instead of monitoring (`-c`, `-h`, `-V`, `-K`, `-i`, an unknown option or a missing argument);
+  - a captured config path different from the one upsmon reads.
+
+  Notify message templates are reported as a hash with flags for shell-active characters, a UPS-name substitution and possible truncation. A template whose `printf` conversions are not modeled leaves its event `unresolved`.
+- **Redaction:** `MONITOR` and `CERTIDENT` passwords, notify message text and the text of unknown or other directives are never copied into the result.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Startup-fatal `MONITOR` and `MINSUPPLIES` conditions are not modeled. The contract can over-report commands for a daemon that exits, but it does not under-report.
+  - Reload behavior is not modeled: split-mode parents ignore a changed `SHUTDOWNCMD`, and the account is not re-applied.
+  - Not yet done: account resolution, a differential against the real parser, agent collection, a catalog entry, package provenance, UI and AI classification.
