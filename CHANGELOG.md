@@ -1,3 +1,7 @@
+## 1.75.68 — 2026-11-20
+
+1. [PR #1189](https://github.com/StealthCat/MrPatchy/pull/1189): Restart the scan-coverage clock when a scheduled-scan server is disabled and re-enabled between alert ticks, and serialize marker reads/cleanup with disable writes so concurrent alert processing cannot discard the newer inactive marker. Compatibility: no schema or response-authorization change; only enabled scan policies receive the marker, and deletion behavior is unchanged. Limits: re-enrollment state changes still depend on a tick, and YARA scheduling remains separate.
+
 ## 1.75.67 — 2026-11-20
 
 1. [PR #1185](https://github.com/StealthCat/MrPatchy/pull/1185): Record redacted result-persistence duration and outcome while saving each newly validated release-configuration review into resumable plan progress, including failed saves. Preliminary checkpoints, reused reviews, refusals, waits and invalid responses remain excluded. Compatibility: additive timing event only; no schema or UI change. Limits: production throughput and cross-controller acceptance remain under the broader Roadmap A work.
