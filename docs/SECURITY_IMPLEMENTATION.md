@@ -12059,6 +12059,16 @@ Every CPython start without `-S` imports `site`, including root services. `site`
 - **Validation:** `tests/test_python_site_hooks.py` has 20 tests and cannot run on main, where the module does not exist. A parametrized test runs the real `site.addsitedir` from the local python3.11, 3.12 and 3.13 against one fixture tree. It compares the executed lines, their order and the added `sys.path` entries, including the 3.13-only form-feed split. Six mutations are each caught: case-insensitive names, universal newlines on 3.13, indented or space-less `import` treated as code, unsorted order, dropping `after_code`, and treating non-ASCII bytes as exact on 3.12. Treating a dot-named `.pth` as skipped on 3.11 or 3.12 is also caught.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against `dpkg` ownership of the shipped `.pth` files and `/etc/python3.X/sitecustomize.py`, RPM-family layouts, and UI.
 
+### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
+
+New disposable SQLite and MySQL benchmark reports require one successful
+result-persistence timing per completed investigation and one successful
+evidence-persistence timing per requested follow-up. A report is refused when
+either stage is missing, duplicated, malformed, unsuccessful or assigned to the
+wrong run, even when the fixture completed all investigations. Successful
+reports retain the existing format. This guards fixture evidence only.
+Production and live-provider performance comparisons remain open.
+
 ### Release configuration review persistence — Roadmap A checkpoint #1184
 
 A newly validated release configuration review records one retained
@@ -12189,3 +12199,10 @@ never reads a sourced file.
   - argument validation of non-mail directives (the contract over-reports, never under-reports);
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
+
+
+### D-Bus bus-activation contract — Roadmap F checkpoint #1211
+
+`app/dbus_activation.py` is a pure, versioned contract for captured, ordered D-Bus service-directory entries and `.service` text. It reports parsed files, bus-name precedence/winners and declared `Exec`, `User` and `SystemdService` values. When the caller supplies bus type and systemd-activation state, it also reports whether a name starts, is refused, remains unresolved or cannot yet be determined, including system-bus `User` checks and the launch helper's independent `<Name>.service` lookup. Parsing and start behavior were differentially observed against dbus-daemon 1.14.10 on session and system buses.
+
+The contract performs no file or bus I/O, starts no helper or command, does not assess origin and does not authorize a response. Unobserved inputs fail closed. User-database lookups and AppArmor/SELinux mediation are not modeled; the caller supplies directories in bus order. Collection, inventory, UI and AI wiring remain outside this checkpoint. The system-bus helper differential is opt-in and requires root because it uses the installed setuid helper and writes uniquely named fixtures under system service directories, then removes them.
