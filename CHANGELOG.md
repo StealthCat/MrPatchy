@@ -1,3 +1,7 @@
+## 1.75.75 — 2026-11-20
+
+1. [PR #1210](https://github.com/StealthCat/MrPatchy/pull/1210): Read legacy AI hourly allowance counts and reopening timestamps in one SQL statement. Preserve exact usage counts, the strict one-hour boundary and tie behavior, below-limit and nonpositive-limit states, while bounding the ordered lookup by the configured allowance. Compatibility: status API shape, roles, admission, budgets, provider access and authorization remain unchanged. Limits: validates statement count/query shape, not production latency; broader shared AI-control acceptance remains open.
+
 ## 1.75.74 — 2026-11-20
 
 1. [PR #1202](https://github.com/StealthCat/MrPatchy/pull/1202): Explain shared AI start-gate waits as provider Retry-After, local transient backoff, or a provider delay capped at 24 hours in the administrator-only Investigations and Workers views; retain the reason for the deadline that still governs when failures overlap. Compatibility: existing API shape, deadlines, eligibility, durable failure accounting, admission, pause, budget and response authorization remain unchanged; only allow-listed fixed application messages are returned, with a generic fallback for unknown stored values and no provider response text or identifiers. Limits: existing backoff rows keep their stored reason until the floor clears or a later failure supersedes it; per-worker eligibility and matched production-throughput measurements remain open.
