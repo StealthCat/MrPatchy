@@ -11912,3 +11912,13 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and nothing is labelled safe.
 - **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
 - **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
+
+### Endpoint-agent fleet view: out-of-range retained values — bug fix #1195 (roadmap H)
+
+- **Defect:** `app/agent_fleet_health.py` converted retained agent values to float before checking their range. An integer beyond float range (such as `10**400`, which `json.loads` accepts) in `resource_pressure.{cpu,memory}.some.avg60`, `telemetry.collected` or the receipt's `checked` raised `OverflowError`. One enrolled host's snapshot could therefore fail Activity → Workers → **Endpoint agents** and the unified **Deployment health** summary for every server.
+- **Fix:**
+  - Pressure bounds (`0..100`) are now compared before any float conversion, and finiteness is checked only on floats.
+  - An integer timestamp beyond float range is unknown, exactly like an infinite float. A large but representable integer is still a future time.
+  - `page()` classifies each host under a narrow guard (`ArithmeticError`, `TypeError`, `ValueError`). A host whose retained records cannot be interpreted is listed as **unknown** with a fixed reason, and every other host is unaffected.
+- **Unchanged:** no ingest, schema, route, UI, role or response-authorization change. The view still never inspects, repairs or authorizes anything, and resource metrics still never change the health state.
+- **Validation:** `tests/test_agent_fleet_health.py` adds regressions for `10**400`, `-10**400` and `2**1024` in `avg60`, `collected` and `checked`, the per-host guard, and an end-to-end store of the huge values through both admin APIs. Nine of the new tests fail on `d3f72fe4`.

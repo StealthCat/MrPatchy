@@ -215,3 +215,92 @@ def test_resources_never_change_health_and_reach_the_api(admin):
     text = json.dumps(data)
     for secret in ('statvfs', 'procfs', 'scope', 'secret-arg'):
         assert secret not in text, secret
+
+
+# Issue #1195: integers beyond float range must degrade one host to unknown, never fail the fleet view.
+HUGE = 10 ** 400
+
+
+@pytest.mark.parametrize('value', [HUGE, -HUGE, 2 ** 1024, 100.0000001, -0.0001], ids=['huge', 'neg-huge', '2^1024', 'over-100', 'negative'])
+def test_out_of_range_pressure_integers_are_unknown(value):
+    for key in ('cpu', 'memory'):
+        record = pressure()
+        record[key]['some']['avg60'] = value
+        assert fleet.resources({'resource_pressure': record}, 'fresh')[key + '_pressure_avg60'] is None
+
+
+@pytest.mark.parametrize('value,expected', [(100, 100.0), (0, 0.0), (37, 37.0), (12.345, 12.35)])
+def test_in_range_pressure_values_are_kept(value, expected):
+    record = pressure(cpu=value)
+    assert fleet.resources({'resource_pressure': record}, 'fresh')['cpu_pressure_avg60'] == expected
+
+
+@pytest.mark.parametrize('value', [HUGE, -HUGE, 2 ** 1024, float('inf'), float('nan'), 0, -5, True, 'x'],
+                         ids=['huge', 'neg-huge', '2^1024', 'inf', 'nan', 'zero', 'negative', 'bool', 'str'])
+def test_out_of_range_timestamps_are_unknown(value):
+    assert fleet._timestamp(value) is None
+
+
+def test_timestamps_accept_valid_integers_and_floats():
+    assert fleet._timestamp(1_800_000_000) == 1_800_000_000.0
+    assert fleet._timestamp(NOW) == NOW
+    # A large but representable integer is still a (future) time, exactly like the equivalent float.
+    assert fleet._timestamp(10 ** 20) == fleet._timestamp(1e20) == 1e20
+    assert fleet.classify(host(collected=10 ** 20), receipt(), NOW)['telemetry']['state'] == 'invalid'
+
+
+def test_out_of_range_values_degrade_only_the_affected_host():
+    pressure_record = pressure()
+    pressure_record['cpu']['some']['avg60'] = HUGE
+    bad_pressure = host(id='p', collected=NOW - 30)
+    bad_pressure.telemetry['resource_pressure'] = pressure_record
+    row = fleet.classify(bad_pressure, receipt(), NOW)
+    assert row['health'] == 'healthy' and row['resources']['cpu_pressure_avg60'] is None
+    assert row['resources']['memory_pressure_avg60'] == 0.0
+    bad_collected = fleet.classify(host(id='c', collected=HUGE), receipt(), NOW)
+    assert bad_collected['telemetry'] == {'state': 'missing', 'collected': None}
+    assert bad_collected['health'] == 'degraded'
+    bad_checked = fleet.classify(host(id='k'), receipt(checked=HUGE), NOW)
+    assert bad_checked['health'] == 'unknown' and bad_checked['verification']['checked'] is None
+    assert 'No valid agent verification' in bad_checked['reason']
+
+
+def test_uninterpretable_host_record_does_not_fail_the_fleet_page(admin, monkeypatch):
+    real = fleet.classify
+
+    def explode(host_row, status, now):
+        if host_row.id == 'boom':
+            raise OverflowError('int too large to convert to float')
+        return real(host_row, status, now)
+
+    monkeypatch.setattr(fleet, 'classify', explode)
+    now = time.time()
+    add('boom', receipt(checked=now - 10), collected=now)
+    add('fine', receipt(checked=now - 10), collected=now)
+    data = fleet.page(0, now)
+    rows = {row['host_id']: row for row in data['items']}
+    assert rows['fine']['health'] == 'healthy'
+    assert rows['boom']['health'] == 'unknown' and 'could not be interpreted' in rows['boom']['reason']
+    assert rows['boom']['verification']['state'] is None and rows['boom']['resources']['state'] == 'unavailable'
+    assert data['counts']['unknown'] >= 1 and data['counts']['healthy'] >= 1
+
+
+def test_huge_stored_values_keep_both_fleet_pages_available(admin):
+    now = time.time()
+    add('huge', {**receipt(), 'checked': HUGE}, collected=now)
+    add('ok', receipt(checked=now - 10), collected=now)
+    record = pressure()
+    record['cpu']['some']['avg60'] = HUGE
+    with Session() as s:
+        stored = s.get(Host, 'huge')
+        stored.telemetry = {**stored.telemetry, 'collected': HUGE, 'resource_pressure': record}
+        s.commit()
+    with Session() as s:
+        if s.get(Host, 'huge').telemetry.get('collected') != HUGE:
+            pytest.skip('this database cannot retain integers beyond float range')
+    response = admin.get('/api/operations/agents')
+    assert response.status_code == 200
+    rows = {row['host_id']: row for row in response.json()['items']}
+    assert rows['ok']['health'] == 'healthy'
+    assert rows['huge']['health'] == 'unknown' and rows['huge']['telemetry']['collected'] is None
+    assert admin.get('/api/operations/deployment-health').status_code == 200
