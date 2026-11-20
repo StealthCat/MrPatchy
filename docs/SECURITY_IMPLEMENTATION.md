@@ -12053,3 +12053,58 @@ never reads a sourced file.
 - **Remaining:** agent collection of the bash-completion package version and
   both directories, a catalog entry, package provenance, persistence, UI and AI
   classification.
+
+### ca-certificates hook contract — worker checkpoint #1203
+
+`app/ca_certificates_hooks.py` is a pure, versioned, I/O-free roadmap F
+contract. From entry metadata for `/etc/ca-certificates/update.d`, it reports:
+- which hook scripts Debian's `update-ca-certificates` runs as root;
+- in what order;
+- with which argument and standard input;
+- on which triggers.
+
+- **Why it matters:** the `ca-certificates` postinst runs
+  `update-ca-certificates` on configure and on its `update-ca-certificates` and
+  `update-ca-certificates-fresh` dpkg triggers. Any package that ships CA
+  certificates activates those triggers. A script in this directory therefore
+  runs as root during ordinary package installs and upgrades.
+- **Source of the semantics:** the shipped `/usr/sbin/update-ca-certificates`,
+  the postinst and the triggers file from Ubuntu 24.04 `ca-certificates`
+  20260816ubuntu0.24.04.2, plus debianutils `run-parts`.
+  - After a `[ -d HOOKSDIR ]` test, which follows symlinks, it runs
+    `eval run-parts --test -- HOOKSDIR | while read -r hook` and executes each
+    path as `"$hook" [--fresh]`.
+  - Standard input is the `+PATH` added lines, then the `-PATH` removed lines.
+  - Hooks run on every invocation, including when nothing changed.
+  - A failing hook does not stop later ones.
+  - Names must match `^[A-Za-z0-9_-]+$`. Order is bytewise. Symlinks are
+    followed. Directories, dangling links, non-executable files, noexec mounts
+    and special files are skipped, each with a stated reason.
+- **Fail closed:** blocking gaps cover:
+  - an unobserved or unsupported family;
+  - an unknown installation state;
+  - an unobserved, unreadable or truncated listing;
+  - malformed or duplicate entries;
+  - missing metadata;
+  - an unobserved symlink target;
+  - over-limit input.
+
+  Unobserved mount flags are a non-blocking gap. Unresolved entries are never
+  reported as running.
+- **Validation:** `tests/test_ca_certificates_hooks.py` has 33 tests.
+  - A differential runs the real `update-ca-certificates` against temporary
+    `--certsconf`, `--certsdir`, `--etccertsdir` and `--hooksdir` trees, with
+    and without `--fresh`. It compares the hooks that actually ran, their order,
+    their argv and their stdin with the contract. A failing hook, a symlinked
+    hook, a dangling link, a FIFO, a subdirectory, a non-executable file and
+    rejected names are all exercised.
+  - It also checks a no-change rerun, a non-directory hook path, and
+    `run-parts` byte ordering under C and UTF-8 locales.
+  - Five mutations are each caught: allowing dots in names, ignoring noexec,
+    locale-style ordering, running dangling links, and requiring the owner
+    execute bit.
+- **Unchanged:** no collection, schema, route, UI, AI, role or
+  response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the directory and the `ca-certificates`
+  installation state, a catalog entry, package provenance, persistence, UI and
+  AI classification. RPM `update-ca-trust` is not modeled.
