@@ -25,6 +25,7 @@ authorization are unchanged and plans remain manual-only.
 import time
 
 from sqlalchemy import literal, select
+from sqlalchemy.orm import aliased
 
 from . import ai_control_status, ai_policy, host_lifecycle, incidents
 from .db import Host, Job, Setting, config
@@ -65,8 +66,37 @@ def _awaiting(session, host_id):
     return len(rows), truncated, (float(rows[0]) if rows else None)
 
 
-def _job(row):
-    return None if row is None else {'state': row[0], 'created': float(row[1])}
+def _job(state, created):
+    return None if state is None else {'state': state, 'created': float(created)}
+
+
+def _plan_jobs(session, host_ids):
+    """Project at most one active job and one automatic attempt per listed host."""
+    if not host_ids:
+        return {}
+    active = aliased(Job)
+    latest = aliased(Job)
+    active_id = (
+        select(Job.id).where(Job.host_id == Host.id, Job.action.in_(PLAN_ACTIONS),
+                             Job.state.in_(('queued', 'running')))
+        .order_by(Job.created, Job.id).limit(1).correlate(Host).scalar_subquery()
+    )
+    latest_id = (
+        select(Job.id).where(Job.host_id == Host.id, Job.action == 'security-plan',
+                             Job.payload['automatic'].as_boolean() == True)  # noqa: E712
+        .order_by(Job.created.desc(), Job.id.desc()).limit(1).correlate(Host).scalar_subquery()
+    )
+    rows = session.execute(
+        select(Host.id, active.state, active.created, latest.state, latest.created)
+        .select_from(Host)
+        .outerjoin(active, active.id == active_id)
+        .outerjoin(latest, latest.id == latest_id)
+        .where(Host.id.in_(host_ids))
+    )
+    return {
+        host_id: (_job(active_state, active_created), _job(latest_state, latest_created))
+        for host_id, active_state, active_created, latest_state, latest_created in rows
+    }
 
 
 def _pacing(session, cfg, now):
@@ -79,24 +109,17 @@ def _pacing(session, cfg, now):
     return {'mode': cfg['ai_control_mode'], 'limit': None, 'used': None, 'remaining': None, 'next_at': None}
 
 
-def _host(session, host_id, policy, cfg):
+def _host(session, host_id, policy, cfg, jobs):
     awaiting, truncated, oldest = _awaiting(session, host_id)
-    active = session.execute(
-        select(Job.state, Job.created).where(Job.host_id == host_id, Job.action.in_(PLAN_ACTIONS),
-                                             Job.state.in_(('queued', 'running')))
-        .order_by(Job.created).limit(1)).first()
-    latest = session.execute(
-        select(Job.state, Job.created).where(Job.host_id == host_id, Job.action == 'security-plan',
-                                             Job.payload['automatic'].as_boolean() == True)  # noqa: E712
-        .order_by(Job.created.desc(), Job.id.desc()).limit(1)).first()
+    active, latest = jobs.get(host_id, (None, None))
     return {
         'enabled': bool(policy.get('auto_ai_plan')),
         'state': _state(session, host_id, policy, cfg),
         'awaiting': awaiting,
         'awaiting_truncated': truncated,
         'oldest_awaiting_since': oldest,
-        'active_plan': _job(active),
-        'latest_automatic': _job(latest),
+        'active_plan': active,
+        'latest_automatic': latest,
     }
 
 
@@ -106,7 +129,8 @@ def status(session, host_id, now=None):
     cfg = config(session)
     row = session.get(Setting, 'security-policy:' + host_id)
     policy = row.value if row and isinstance(row.value, dict) else {}
-    return {'generated_at': now, **_host(session, host_id, policy, cfg), 'pacing': _pacing(session, cfg, now)}
+    jobs = _plan_jobs(session, [host_id])
+    return {'generated_at': now, **_host(session, host_id, policy, cfg, jobs), 'pacing': _pacing(session, cfg, now)}
 
 
 def fleet(session, now=None):
@@ -125,8 +149,10 @@ def fleet(session, now=None):
         .order_by(Host.name, Host.id)).all()
     opted = [(host_id, name, value) for host_id, name, value in hosts
              if isinstance(value, dict) and value.get('auto_ai_plan')]
-    items = [{'host_id': host_id, 'host_name': name, **_host(session, host_id, value, cfg)}
-             for host_id, name, value in opted[:FLEET_LIMIT]]
+    listed = opted[:FLEET_LIMIT]
+    jobs = _plan_jobs(session, [host_id for host_id, _, _ in listed])
+    items = [{'host_id': host_id, 'host_name': name, **_host(session, host_id, value, cfg, jobs)}
+             for host_id, name, value in listed]
     return {
         'generated_at': now,
         'items': items,
