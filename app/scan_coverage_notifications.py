@@ -52,7 +52,7 @@ authorizes anything.
 import math
 from fractions import Fraction
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from . import host_lifecycle, notifications
 from .db import Job, Setting
@@ -221,7 +221,7 @@ def _resume_markers(session, policies, inactive, now):
     grace, or when the policy is disabled or removed or the server is deleted. A server never seen inactive has
     no marker, so upgrades and continuously active servers keep the existing schedule.
     """
-    existing = {row.key: row for row in session.scalars(select(Setting).where(Setting.key.like(RESUME_PREFIX + '%')))}
+    existing = _locked_markers(session, Setting.key.like(RESUME_PREFIX + '%'))
     effective = dict(policies)
     for key, row in existing.items():
         host_id = key[len(RESUME_PREFIX):]
@@ -252,6 +252,19 @@ def _resume_markers(session, policies, inactive, now):
     return effective
 
 
+def _locked_markers(session, condition):
+    """Read resume markers under their write lock, returning ``{key: row}`` (#1188).
+
+    The no-op UPDATE takes SQLite's write lock; the locking read takes the row and gap locks and reads the latest
+    commit on MySQL. A server disable that writes the inactive marker concurrently therefore waits for this
+    transaction, or this transaction sees its commit, so a cleanup or ``active_since`` rewrite decided on an older
+    value can never delete or overwrite a newer inactive marker.
+    """
+    session.execute(update(Setting).where(condition).values(key=Setting.key))
+    return {row.key: row for row in session.scalars(
+        select(Setting).where(condition).with_for_update().execution_options(populate_existing=True))}
+
+
 def mark_inactive(session, host_id):
     """Record that a server with an enabled scan policy left the active set (#1188).
 
@@ -261,7 +274,7 @@ def mark_inactive(session, host_id):
     policy = session.get(Setting, 'security-policy:' + host_id)
     if not (policy and isinstance(policy.value, dict) and policy.value.get('enabled') is True):
         return
-    row = session.get(Setting, RESUME_PREFIX + host_id)
+    row = _locked_markers(session, Setting.key == RESUME_PREFIX + host_id).get(RESUME_PREFIX + host_id)
     if not row:
         session.add(Setting(key=RESUME_PREFIX + host_id, value={'inactive': True}))
     elif row.value != {'inactive': True}:
