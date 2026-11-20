@@ -1,3 +1,7 @@
+## 1.76.1 — 2026-11-20
+
+1. [PR #1220](https://github.com/StealthCat/MrPatchy/pull/1220): Give the Settings **Test model** action cause-specific diagnostics when the model refuses the compatibility test or exhausts its response-token budget. The message says the request was sent and may be billed, a key change will not help, and what model change is appropriate; the same safe text is recorded in connection-test history. Compatibility: only the `detail` and run-history message for these two causes change; status, response shape, provider-text redaction, retry, rate limit, lock, saved settings, roles and response authorization remain unchanged. Other failures retain their existing text.
+
 ## 1.76.0 — 2026-11-20
 
 1. [PR #1212](https://github.com/StealthCat/MrPatchy/pull/1212): Add a standalone, versioned D-Bus activation contract that resolves captured service files, bus-name precedence and start paths, including system-bus `User` checks, launch-helper filename lookup and systemd handoff; parsing and start behavior were differentially checked against dbus-daemon 1.14.10. Compatibility: additive module, tests and documentation only; no collection, schema, route, UI, AI, scheduling or response-authorization change. Limits: the caller supplies captured directories; user-database resolution and AppArmor/SELinux mediation are not modeled, and collection, inventory/UI and AI wiring remain out of scope.
