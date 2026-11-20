@@ -6,7 +6,7 @@ from sqlalchemy import event, func, select
 from test_auto_plan_status import seed
 from test_operations import login_as
 
-from app import ai, ai_policy, auto_plan_status
+from app import ai, ai_policy, auto_plan_status, incidents
 from app.db import Host, Job, Session, Setting, engine
 
 URL = '/api/security/auto-plan-status'
@@ -59,7 +59,7 @@ def test_disabled_server_is_listed_as_inactive_and_active_plans_are_counted(admi
     assert result['totals']['ready'] == 1 and result['totals']['active_plans'] == 1
 
 
-def test_fleet_readiness_reads_are_bounded_by_page_not_server_count(admin, monkeypatch):
+def test_fleet_database_reads_are_bounded_by_page_not_server_count(admin, monkeypatch):
     now = seed()
     with Session() as s:
         for index in range(99):
@@ -75,19 +75,64 @@ def test_fleet_readiness_reads_are_bounded_by_page_not_server_count(admin, monke
 
     event.listen(engine, 'before_cursor_execute', capture)
     try:
-        overhead = {}
+        totals = {}
+        incident_reads = {}
         for count in (12, 100):
             monkeypatch.setattr(auto_plan_status, 'FLEET_LIMIT', count)
             reads.clear()
             result = fleet(now)
             assert result['totals']['ready'] == count
-            # Incident counts still use one bounded query per listed server.
-            overhead[count] = len(reads) - count
+            totals[count] = len(reads)
+            incident_reads[count] = sum('security_incidents' in sql.lower() for sql in reads)
     finally:
         event.remove(engine, 'before_cursor_execute', capture)
 
-    assert overhead[12] == overhead[100]
-    assert overhead[100] <= 11
+    assert incident_reads == {12: 1, 100: 1}, totals
+    assert totals[12] == totals[100] <= 12
+
+
+@pytest.mark.parametrize('legacy_mysql', [False, True], ids=['default', 'early-mysql-query'])
+def test_batched_awaiting_keeps_each_server_cap_oldest_and_exclusions(admin, monkeypatch, legacy_mysql):
+    if legacy_mysql:
+        if engine.dialect.name != 'mysql':
+            pytest.skip('Exercise the legacy query against MySQL')
+        monkeypatch.setattr(engine.dialect, 'server_version_info', (8, 0, 13))
+    now = seed()
+    monkeypatch.setattr(auto_plan_status, 'AWAITING_LIMIT', 2)
+    for host_id in ('beta', 'empty', 'gamma'):
+        add_host(host_id, host_id, {'auto_ai_plan': True})
+
+    with Session() as s:
+        for incident_id, host_id, age, evidence in (
+            ('beta-yara', 'beta', 999, {'scan_context': {'engine': 'YARA'}}),
+            ('beta-attempted', 'beta', 800, {}),
+            ('beta-released', 'beta', 700, {}),
+            ('beta-superseded', 'beta', 100, {}),
+            ('beta-ordinary', 'beta', 50, {}),
+            ('gamma-yara', 'gamma', 999, {'scan_context': {'engine': 'YARA'}}),
+        ):
+            s.add(incidents.Incident(id=incident_id, host_id=host_id, scan_id='scan',
+                                     updated=now - age, evidence=evidence))
+        for incident_id, released in (('beta-attempted', False), ('beta-released', True)):
+            s.add(Job(id=incident_id, host_id='beta', action='security-plan', state='failed',
+                      payload={'incident_id': incident_id, 'scan_id': 'scan', 'retry_released': released}))
+        s.add(incidents.Plan(id='superseded', incident_id='beta-superseded', state='superseded',
+                             content={}, evidence_digest='fixture'))
+        s.commit()
+
+    expected = {'beta': (2, True, now - 700), 'empty': (0, False, None),
+                'gamma': (0, False, None), 'web': (2, False, now - 900)}
+    result = fleet(now)
+    fields = ('awaiting', 'awaiting_truncated', 'oldest_awaiting_since')
+    assert result['totals']['awaiting'] == 4 and result['totals']['awaiting_truncated'] is True
+    with Session() as s:
+        for row in result['items']:
+            host_id = row['host_id']
+            single = auto_plan_status.status(s, host_id, now)
+            count, truncated, oldest = expected[host_id]
+            assert row['awaiting'] == count and row['awaiting_truncated'] is truncated
+            assert row['oldest_awaiting_since'] == (None if oldest is None else pytest.approx(oldest, rel=0, abs=1e-5))
+            assert {field: row[field] for field in fields} == {field: single[field] for field in fields}
 
 
 def test_fleet_readiness_precedence_matches_per_server_status(admin):

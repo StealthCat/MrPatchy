@@ -1,3 +1,7 @@
+## 1.79.3 — 2026-11-20
+
+1. [PR #1240](https://github.com/StealthCat/MrPatchy/pull/1240): Batch fleet automatic AI plan awaiting-incident counts and oldest timestamps into one database statement while preserving per-server caps, truncation, candidate exclusions and fleet totals. Compatibility: no schema, endpoint, permission, provider, scheduling or response-authorization change; per-server and fleet status remain consistent. Older MySQL releases before 8.0.14 use a single bounded UNION statement. Limits: SQLite's JSON aggregation may round the returned `oldest_awaiting_since` float by a few microseconds (the UI displays whole seconds); production response latency is unmeasured.
+
 ## 1.79.2 — 2026-11-20
 
 1. [PR #1242](https://github.com/StealthCat/MrPatchy/pull/1242): Rotate the bounded 50-subject exact known-good hit probe while daily-cap, rate-admission or provider-backoff gates are closed, so cached free hits behind older paid subjects are found without waiting for a gate reset. Compatibility: no schema, API, UI, role or response-authorization changes; paid subjects remain deferred without provider calls or reservations. Limits: the cursor is in-memory and per-process; a hit appearing before the cursor waits for wrap, and oversized evidence behavior is unchanged.
