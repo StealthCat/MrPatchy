@@ -1,3 +1,7 @@
+## 1.75.71 — 2026-11-20
+
+1. [PR #1198](https://github.com/StealthCat/MrPatchy/pull/1198): Add a pure bash-completion compat-directory contract for version-dependent `/etc/bash_completion.d` and `/usr/etc/bash_completion.d` startup files, including source order, readability, bounded evidence and fail-closed coverage gaps. Compatibility: additive module, tests and documentation only; no collection, schema, API, UI, AI, role, scheduling or response-authorization change. Limits: models upstream bash-completion 2.10–2.17, does not inspect sourced file contents or shell/runtime configuration, and is not a safety verdict.
+
 ## 1.75.70 — 2026-11-20
 
 1. [PR #1192](https://github.com/StealthCat/MrPatchy/pull/1192): Add endpoint-agent clock-discipline telemetry using read-only `adjtimex()` and show its synchronized state, maximum error and advisory unsynchronized flag. Compatibility: additive telemetry and resource fields; older agents show unknown until normally upgraded. No database schema or response-authorization change. Limits: reports only the kernel's view, does not identify the time source or compare with the controller, and unavailable or denied readings remain unknown; the broader clock-history, alert and preflight work remains open in #342.
