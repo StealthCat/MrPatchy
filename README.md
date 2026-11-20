@@ -1103,7 +1103,7 @@ and other roles are unchanged.
 
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
-provider. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
+provider. The fixture runner publishes a comparison report only when every completed run retains one successful result-persistence timing and each required follow-up retains its successful evidence-persistence timing; missing or invalid timing evidence is rejected. See [baseline results](docs/benchmarks/ai-transport-v1180.json) and the
 [implementation checkpoint](docs/SECURITY_IMPLEMENTATION.md). Fixture connection
 reuse is validated. Benchmark comparisons also verify that independently rounded
 run counts, elapsed time and throughput can describe the same execution before
