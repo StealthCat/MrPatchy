@@ -1,3 +1,7 @@
+## 1.75.73 — 2026-11-20
+
+1. [PR #1200](https://github.com/StealthCat/MrPatchy/pull/1200): Add a pure resolvconf hook contract reporting which `/etc/resolvconf/update.d` scripts run as root on DNS changes and which `/etc/resolvconf/update-libc.d` scripts run conditionally through the packaged `libc` hook, in byte order with reasons for skipped entries. Compatibility: module, tests and documentation only; no collection, schema, route, UI, AI, role, scheduling or response-authorization change. Limits: models Debian resolvconf 1.78ubuntu7 and debianutils run-parts only; openresolv and the systemd-resolved compatibility shim are not modeled, and agent collection, provenance, catalog, UI and AI classification remain out of scope.
+
 ## 1.75.72 — 2026-11-20
 
 1. [PR #1196](https://github.com/StealthCat/MrPatchy/pull/1196): Keep the Endpoint agents and Deployment health views available when one agent reports an out-of-range integer pressure value or timestamp; that server is shown as unknown with an explanation. Compatibility: no schema, route, response, UI, role, scheduling or response-authorization change; valid values retain their behavior. Limits: this is read-side resilience only and ingest remains unchanged; MySQL 8.4 may refuse oversized JSON numeric values before they reach retained telemetry, so the end-to-end storage test skips only for its expected 3140 range error.
