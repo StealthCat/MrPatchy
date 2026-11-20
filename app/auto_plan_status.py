@@ -79,7 +79,7 @@ def _plan_jobs(session, host_ids):
     active_id = (
         select(Job.id).where(Job.host_id == Host.id, Job.action.in_(PLAN_ACTIONS),
                              Job.state.in_(('queued', 'running')))
-        .order_by(Job.created, Job.id).limit(1).correlate(Host).scalar_subquery()
+        .order_by(Job.created, Job.id.desc()).limit(1).correlate(Host).scalar_subquery()
     )
     latest_id = (
         select(Job.id).where(Job.host_id == Host.id, Job.action == 'security-plan',

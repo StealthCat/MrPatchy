@@ -11794,9 +11794,8 @@ The automatic AI plan status reads the active plan and latest automatic attempt
 for all listed servers in one query. Two per-server selections run inside that
 query and return only state and creation time. Each selection uses the same
 host, action and state filters as the individual server view. For equal creation
-times the oldest active job sorts by ascending ID, and the latest automatic
-attempt sorts by descending ID. The fleet still lists at most 100 opted-in
-servers. A 12-server fixture reduced this part of its read from 24 statements
+times both selections sort by descending job ID. The fleet still lists at most
+100 opted-in servers. A 12-server fixture reduced this part of its read from 24 statements
 to one while preserving the result for each server. Incident counts and server
 readiness still make per-server reads. Production load time remains unmeasured.
 

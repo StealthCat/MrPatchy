@@ -70,9 +70,9 @@ def test_fleet_reads_both_job_summaries_in_one_query(admin, monkeypatch):
             s.add_all([
                 Job(id=f'{host_id}-newer-active', host_id=host_id,
                     action='security-plan', state='queued', created=now - 30),
-                Job(id=f'{host_id}-a-active', host_id=host_id,
-                    action='startup-plan', state='running', created=now - 40),
                 Job(id=f'{host_id}-b-active', host_id=host_id,
+                    action='startup-plan', state='running', created=now - 40),
+                Job(id=f'{host_id}-a-active', host_id=host_id,
                     action='security-plan', state='queued', created=now - 40),
                 Job(id=f'{host_id}-a-auto', host_id=host_id,
                     action='security-plan', payload={'automatic': True}, state='failed', created=now - 20),
