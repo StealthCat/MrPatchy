@@ -1,3 +1,7 @@
+## 1.76.2 — 2026-11-20
+
+1. [PR #1222](https://github.com/StealthCat/MrPatchy/pull/1222): Make the Settings unsaved-changes browser test deterministic by dropping guard-driven history moves during the Discard case and waiting for the guard's full retry budget instead of a fixed delay. Compatibility: test-only; no runtime, schema, API or response-authorization change. Limit: the natural timer race did not reproduce in the sandbox; validation used an injected stale retry. Reopen #1221 with the hosted job link if the browser assertion recurs.
+
 ## 1.76.1 — 2026-11-20
 
 1. [PR #1220](https://github.com/StealthCat/MrPatchy/pull/1220): Give the Settings **Test model** action cause-specific diagnostics when the model refuses the compatibility test or exhausts its response-token budget. The message says the request was sent and may be billed, a key change will not help, and what model change is appropriate; the same safe text is recorded in connection-test history. Compatibility: only the `detail` and run-history message for these two causes change; status, response shape, provider-text redaction, retry, rate limit, lock, saved settings, roles and response authorization remain unchanged. Other failures retain their existing text.
