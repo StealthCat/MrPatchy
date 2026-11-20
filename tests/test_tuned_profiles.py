@@ -129,6 +129,30 @@ def test_priority_orders_units_and_regexes_are_conditions():
     assert bad['invocations'] == []
 
 
+def test_apply_checks_follow_unit_manager_order_regex_then_uname_then_priority():
+    # units/manager.py create(): disabled units are skipped first, then cpuinfo_regex,
+    # then uname_regex, then int(priority); any raise aborts before a unit is created.
+    disabled = tp.evaluate(_capture({f'{ETC}/custom': '[a]\nenabled=false\npriority=x\n[script]\nscript=s\n'}))
+    assert disabled['status'] == 'resolved' and _runs(disabled) == [('script', '/etc/tuned/custom/s')]
+    conditional = tp.evaluate(_capture({
+        f'{ETC}/custom': '[a]\ntype=script\nscript=a.sh\ncpuinfo_regex=GenuineIntel\npriority=x\n[script]\nscript=s\n',
+    }))
+    assert conditional['status'] == 'incomplete' and conditional['complete'] is False
+    assert _gaps(conditional) == {'apply_refusal_conditional'} and conditional['invocations'] == []
+    bad_cpuinfo = tp.evaluate(_capture({f'{ETC}/custom': '[a]\ncpuinfo_regex=(\n[script]\nscript=s\n'}))
+    assert bad_cpuinfo['status'] == 'load_refused' and bad_cpuinfo['detail']['reason'] == 'regex_invalid'
+    bad_uname_after_cpuinfo = tp.evaluate(_capture({
+        f'{ETC}/custom': '[a]\ncpuinfo_regex=Intel\nuname_regex=[\n[script]\nscript=s\n'}))
+    assert _gaps(bad_uname_after_cpuinfo) == {'apply_refusal_conditional'}
+    # A definite refusal anywhere wins over a host-dependent one, whatever the order.
+    both = tp.evaluate(_capture({
+        f'{ETC}/custom': '[a]\nuname_regex=el9\npriority=x\n[b]\npriority=y\n[script]\nscript=s\n'}))
+    assert both['status'] == 'load_refused' and both['detail'] == {'reason': 'priority_invalid', 'subject': 'b'}
+    # TuneD expands variables in regexes before matching, so a $-value is never judged uncompilable.
+    expanded = tp.evaluate(_capture({f'{ETC}/custom': '[script]\nscript=s\nuname_regex=${x}(\n'}))
+    assert expanded['status'] == 'resolved' and _runs(expanded) == [('script', '/etc/tuned/custom/s')]
+
+
 def test_post_loaded_profile_is_appended_and_must_be_one_name():
     profiles = {f'{ETC}/custom': '[script]\nscript=a.sh\n', f'{ETC}/extra': '[x]\ntype=script\nscript=b.sh\n'}
     result = tp.evaluate(_capture(profiles, post='extra\n'))

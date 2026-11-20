@@ -48,7 +48,13 @@ Semantics come from the TuneD 2.21.0 source as packaged in Ubuntu 24.04
   ``cpuinfo_regex`` or ``uname_regex`` only run when the regex matches the
   host, which is reported as a condition. Units are ordered by ``int(priority)``
   (default ``default_instance_priority``, normally 0), stable on profile
-  order. A non-integer priority aborts the load.
+  order. ``units/manager.py`` checks each enabled unit in profile order:
+  ``cpuinfo_regex`` (``re.search``), then ``uname_regex``, then
+  ``int(priority)``. An uncompilable regex or a non-integer priority raises
+  before any unit is created, so nothing is applied. When the raising check
+  is only reached if an earlier regex of the same unit matches the host, the
+  outcome depends on the host and is a blocking gap; a regex containing
+  ``$`` is expanded by TuneD first and is never treated as uncompilable.
 * A ``type=script`` unit runs each listed path as root with ``start`` when the
   profile is applied, ``verify`` on ``tuned-adm verify`` and ``stop`` in
   reverse order on unload, with ``cwd`` set to the script's directory and the
@@ -104,7 +110,7 @@ BLOCKING = frozenset({
     'state_file_unobserved', 'state_file_unreadable', 'recommended_profile_not_modeled',
     'listing_unobserved', 'path_unobserved', 'file_unreadable', 'include_expansion_not_modeled',
     'function_exec', 'variables_file_not_modeled',
-    'include_depth_exceeded',
+    'include_depth_exceeded', 'apply_refusal_conditional',
 })
 
 _SAFE_NAME = re.compile(r'^[a-zA-Z0-9_.-]+$')
@@ -289,6 +295,17 @@ class _Resolver:
             profiles.append(profile)
 
 
+def _regex_compiles(pattern: Any) -> bool:
+    """Whether TuneD's ``re.search`` accepts ``pattern``; ``$`` values are expanded first, so assume yes."""
+    if not isinstance(pattern, str) or '$' in pattern:
+        return True
+    try:
+        re.compile(pattern, re.MULTILINE)
+    except (re.error, RecursionError, OverflowError):
+        return False
+    return True
+
+
 def _strings(value: Any) -> list[str]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, str)]
@@ -414,15 +431,39 @@ def _resolve(capture: dict, resolver: _Resolver, result: dict, default_priority:
     if result['function_exec']:
         raise _Incomplete(('function_exec', result['function_exec'][0]['unit']))
     ordered = []
+    definite_refusal: tuple[str, str] | None = None
+    conditional_refusal: str | None = None
     for unit in final.units.values():
         if not unit.enabled:
             continue
+        host_dependent = False
+        failure = None
+        for attr in ('cpuinfo_regex', 'uname_regex'):
+            pattern = getattr(unit, attr)
+            if pattern is None:
+                continue
+            if not _regex_compiles(pattern):
+                failure = 'regex_invalid'
+                break
+            host_dependent = True
         raw = unit.options.get('priority', default_priority)
-        try:
-            priority = int(raw)
-        except (TypeError, ValueError):
-            raise _Abort('priority_invalid', unit.name) from None
+        priority = 0
+        if failure is None:
+            try:
+                priority = int(raw)
+            except (TypeError, ValueError):
+                failure = 'priority_invalid'
+        if failure is not None:
+            if host_dependent:
+                conditional_refusal = conditional_refusal or unit.name
+            elif definite_refusal is None:
+                definite_refusal = (failure, unit.name)
+            continue
         ordered.append((priority, unit))
+    if definite_refusal is not None:
+        raise _Abort(*definite_refusal)
+    if conditional_refusal is not None:
+        raise _Incomplete(('apply_refusal_conditional', conditional_refusal))
     ordered.sort(key=lambda item: item[0])
     invocations = []
     for priority, unit in ordered:

@@ -12282,6 +12282,7 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
   - `${i:PROFILE_DIR}` expansion and `script=` normalization;
   - TuneD's merge rules: `replace`, `drop`, `enabled`, overwritten regexes and device scripts, and `script` concatenation, which repeats the earlier scripts when a later `[script]` unit sets none;
   - integer priority ordering;
+  - the `units/manager.py` check order for each enabled unit (`cpuinfo_regex`, then `uname_regex`, then `int(priority)`), where an uncompilable regex or a non-integer priority aborts the whole apply;
   - relative `script_pre`/`script_post` paths, which never run.
 - **Fail closed:** blocking gaps cover:
   - an unobserved family or installation state;
@@ -12290,10 +12291,11 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
   - auto mode, because the recommended profile is not modeled;
   - variables in `include=`;
   - a `[variables] include=` file;
-  - any `${f:exec:` call.
+  - any `${f:exec:` call;
+  - an invalid regex or priority that is only reached when an earlier regex of the same unit matches the host (`apply_refusal_conditional`).
 
-  A parse error, an unknown or missing profile, an invalid priority, an invalid mode or a multi-word post-loaded profile is reported as `load_refused` with no invocations, because the daemon then loads nothing. CPU/uname regexes and per-device scripts are reported as conditions, not as definite runs.
-- **Validation:** `tests/test_tuned_profiles.py` has 14 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in the worker session, so there is no live differential yet.
+  A parse error, an unknown or missing profile, an invalid priority or regex reached unconditionally, an invalid mode or a multi-word post-loaded profile is reported as `load_refused` with no invocations, because the daemon then loads nothing. CPU/uname regexes and per-device scripts are reported as conditions, not as definite runs.
+- **Validation:** `tests/test_tuned_profiles.py` has 15 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in two worker sessions, so there is no live differential yet. A second source review of `units/manager.py` found that the check order makes some invalid priorities host-dependent; that is now modeled.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change.
 - **Remaining:**
   - a differential against the real loader;
