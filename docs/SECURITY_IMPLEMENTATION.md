@@ -12053,3 +12053,14 @@ never reads a sourced file.
 - **Remaining:** agent collection of the bash-completion package version and
   both directories, a catalog entry, package provenance, persistence, UI and AI
   classification.
+
+
+### Endpoint-agent fleet view: out-of-range retained values — bug fix #1195 (roadmap H)
+
+- **Defect:** `app/agent_fleet_health.py` converted retained agent values to float before checking their range. An integer beyond float range (such as `10**400`, which `json.loads` accepts) in `resource_pressure.{cpu,memory}.some.avg60`, `telemetry.collected` or the receipt's `checked` raised `OverflowError`. One enrolled host's snapshot could therefore fail Activity → Workers → **Endpoint agents** and the unified **Deployment health** summary for every server.
+- **Fix:**
+  - Pressure bounds (`0..100`) are now compared before any float conversion, and finiteness is checked only on floats.
+  - An integer timestamp beyond float range is unknown, exactly like an infinite float. A large but representable integer is still a future time.
+  - `page()` classifies each host under a narrow guard (`ArithmeticError`, `TypeError`, `ValueError`). A host whose retained records cannot be interpreted is listed as **unknown** with a fixed reason, and every other host is unaffected.
+- **Unchanged:** no ingest, schema, route, UI, role or response-authorization change. The view still never inspects, repairs or authorizes anything, and resource metrics still never change the health state.
+- **Validation:** `tests/test_agent_fleet_health.py` adds regressions for `10**400`, `-10**400` and `2**1024` in `avg60`, `collected` and `checked`, the per-host guard, and an end-to-end store of the huge values through both admin APIs. Nine of the new tests fail on `d3f72fe4`.

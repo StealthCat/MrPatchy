@@ -1,3 +1,7 @@
+## 1.75.72 — 2026-11-20
+
+1. [PR #1196](https://github.com/StealthCat/MrPatchy/pull/1196): Keep the Endpoint agents and Deployment health views available when one agent reports an out-of-range integer pressure value or timestamp; that server is shown as unknown with an explanation. Compatibility: no schema, route, response, UI, role, scheduling or response-authorization change; valid values retain their behavior. Limits: this is read-side resilience only and ingest remains unchanged; MySQL 8.4 may refuse oversized JSON numeric values before they reach retained telemetry, so the end-to-end storage test skips only for its expected 3140 range error.
+
 ## 1.75.71 — 2026-11-20
 
 1. [PR #1198](https://github.com/StealthCat/MrPatchy/pull/1198): Add a pure bash-completion compat-directory contract for version-dependent `/etc/bash_completion.d` and `/usr/etc/bash_completion.d` startup files, including source order, readability, bounded evidence and fail-closed coverage gaps. Compatibility: additive module, tests and documentation only; no collection, schema, API, UI, AI, role, scheduling or response-authorization change. Limits: models upstream bash-completion 2.10–2.17, does not inspect sourced file contents or shell/runtime configuration, and is not a safety verdict.
