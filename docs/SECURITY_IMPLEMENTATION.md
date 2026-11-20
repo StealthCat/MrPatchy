@@ -11142,25 +11142,6 @@ This measures the loopback benchmark on a disposable database. A reported
 throughput figure is fixture-only. Representative live-provider and production
 failover measurements remain open.
 
-### Daily-cap triage benchmarks — Roadmap A checkpoint #1231
-
-Run the serial and parallel loopback fixtures with
-`--control-mode daily_cap` to include the real reservation, transmission and
-settlement operations. The tool applies a fixture-only price and a fixed USD 10
-daily cap in UTC inside the disposable process. The price and the reported
-settlements are synthetic. No charges are incurred.
-
-The benchmark requires one settled ledger row per call receipt, including
-follow-up calls. It checks the receipt, run, model, pricing version, estimated
-amount and reservation ceiling before reporting complete settlement. The
-comparator requires capped-mode settlement evidence and a matched workload.
-Existing legacy and unthrottled reports keep their format.
-
-SQLite and disposable MySQL tests exercise both cross-server and same-server
-workloads. This covers the ordinary capped path with available headroom. Tests
-for exhausted caps, deferral and restart remain separate. Production latency
-and benchmarking rate-paced modes remain open.
-
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
@@ -11201,6 +11182,26 @@ they measured, and the comparator could not detect a mixed pair.
   Production measurements remain open.
 - **Unchanged:** no runtime, admission, provider, schema or
   response-authorization behavior.
+
+
+### Daily-cap triage benchmarks — Roadmap A checkpoint #1231
+
+Run the serial and parallel loopback fixtures with
+`--control-mode daily_cap` to include the real reservation, transmission and
+settlement operations. The tool applies a fixture-only price and a fixed USD 10
+daily cap in UTC inside the disposable process. The price and the reported
+settlements are synthetic. No charges are incurred.
+
+The benchmark requires one settled ledger row per call receipt, including
+follow-up calls. It checks the receipt, run, model, pricing version, estimated
+amount and reservation ceiling before reporting complete settlement. The
+comparator requires capped-mode settlement evidence and a matched workload.
+Existing legacy and unthrottled reports keep their format.
+
+SQLite and disposable MySQL tests exercise both cross-server and same-server
+workloads. This covers the ordinary capped path with available headroom. Tests
+for exhausted caps, deferral and restart remain separate. Production latency
+and benchmarking rate-paced modes remain open.
 
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
