@@ -1,3 +1,7 @@
+## 1.75.76 — 2026-11-20
+
+1. [PR #1206](https://github.com/StealthCat/MrPatchy/pull/1206): Batch active-job and latest automatic-plan status reads into one query for listed fleet servers, retaining the existing filters, deterministic job-ID tie breaks and response shape. Compatibility: administrator access, incident totals, readiness, scheduling and response authorization are unchanged. Limit: a 12-server fixture measured 24 history reads reduced to one; production latency remains unmeasured.
+
 ## 1.75.75 — 2026-11-20
 
 1. [PR #1210](https://github.com/StealthCat/MrPatchy/pull/1210): Read legacy AI hourly allowance counts and reopening timestamps in one SQL statement. Preserve exact usage counts, the strict one-hour boundary and tie behavior, below-limit and nonpositive-limit states, while bounding the ordered lookup by the configured allowance. Compatibility: status API shape, roles, admission, budgets, provider access and authorization remain unchanged. Limits: validates statement count/query shape, not production latency; broader shared AI-control acceptance remains open.

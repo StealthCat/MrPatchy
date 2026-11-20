@@ -11814,6 +11814,18 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 - **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
 - **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
 - **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
+
+### Batch fleet automatic AI plan job status — Roadmap A checkpoint #1205
+
+The automatic AI plan status reads the active plan and latest automatic attempt
+for all listed servers in one query. Two per-server selections run inside that
+query and return only state and creation time. Each selection uses the same
+host, action and state filters as the individual server view. For equal creation
+times both selections sort by descending job ID. The fleet still lists at most
+100 opted-in servers. A 12-server fixture reduced this part of its read from 24 statements
+to one while preserving the result for each server. Incident counts and server
+readiness still make per-server reads. Production load time remains unmeasured.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
