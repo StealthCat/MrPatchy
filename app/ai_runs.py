@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, or_, case, literal
+from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, case, literal
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -101,15 +101,21 @@ TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_pe
 
 
 TIMING_SUMMARY_RUN_LIMIT = 100
+TIMING_SUMMARY_PURPOSES = ('triage', 'update_scoring')
 TIMING_SUMMARY_EVENT_LIMIT = 2048
 _TIMING_MESSAGE = re.compile(r'([a-z ]{1,32}): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
 
 
-def triage_timing_summary(s, limit):
-    """Summarize a bounded sample of retained process-triage timing events."""
+def triage_timing_summary(s, limit, purpose='triage'):
+    """Summarize a bounded sample of retained timing events for one AI activity.
+
+    Process triage is the default; update scoring records the same stage events.
+    """
+    if purpose not in TIMING_SUMMARY_PURPOSES:
+        raise ValueError('unsupported timing summary purpose')
     run_ids = list(s.scalars(
         select(AIRun.id)
-        .where(AIRun.purpose == 'triage', AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
+        .where(AIRun.purpose == purpose, AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
         .order_by(AIRun.started.desc(), AIRun.id)
         .limit(limit)
     ))
@@ -148,6 +154,7 @@ def triage_timing_summary(s, limit):
             'p95_ms': samples[(size * 95 + 99) // 100 - 1] if size else None,
         }
     return {
+        'purpose': purpose,
         'run_limit': limit, 'event_limit': TIMING_SUMMARY_EVENT_LIMIT,
         'sampled_runs': len(run_ids), 'runs_without_samples': len(run_ids) - len(covered_runs),
         'discarded_events': discarded, 'events_truncated': len(rows) > TIMING_SUMMARY_EVENT_LIMIT,
@@ -373,14 +380,13 @@ def status(s):
     ready_sql=ai_retry.eligible(signature,now)
     claim=ai_claims.Claim
     eligible_unclaimed=and_(unpaused,ready_sql,Behavior.host_id.in_(host_lifecycle.active_ids()),claim.subject.is_(None))
-    blocked_sql=and_(TR.subject.is_not(None),or_(TR.state=='blocked',and_(TR.state=='interrupted',TR.attempts>=ai_retry.MAX_ATTEMPTS)),~ready_sql)
-    wake=case((TR.subject.is_(None),Behavior.attempted+3600),(TR.next_at!=0,TR.next_at),else_=TR.provider_until)
+    blocked_sql,wake=ai_retry.queue_waits(signature)
     def counted(condition):return func.count(case((condition,1)))
     # One statement keeps the triage counts and minima on a single snapshot:
     # separate reads let a concurrent insert make `paused` negative.
     pending_count,oldest,unpaused_count,ready,blocked,retry,waiting,oldest_waiting=s.execute(select(
         func.count(),func.min(Behavior.first_seen),counted(unpaused),counted(and_(unpaused,ready_sql)),
-        counted(and_(unpaused,blocked_sql)),func.min(case((and_(unpaused,~blocked_sql,wake>now),wake))),
+        counted(and_(unpaused,blocked_sql)),func.min(case((and_(unpaused,wake>now),wake))),
         counted(eligible_unclaimed),func.min(case((eligible_unclaimed,Behavior.first_seen))),
     ).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id)
         .outerjoin(claim,and_(claim.subject==Behavior.id,claim.expires>now)).where(*pending_where)).one()

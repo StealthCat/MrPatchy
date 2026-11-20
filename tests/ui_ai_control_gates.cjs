@@ -6,7 +6,7 @@ module.exports=async(page,capture)=>{
  const snapshots={
   open:{generated_at:now,mode:'rate',can_start_now:true,next_start_at:null,blockers:[],limitations},
   finite:{generated_at:now,mode:'rate_and_daily',can_start_now:false,next_start_at:now+1800,blockers:[
-   {code:'provider_backoff',message:'Shared provider backoff is waiting after a transient failure.',next_at:now+600,recheck_at:null},
+   {code:'provider_backoff',message:'Provider Retry-After floor is active.',next_at:now+600,recheck_at:null},
    {code:'rate_throttle',message:'The shared smooth-rate throttle is waiting for its next start.',next_at:now+1800,recheck_at:null}],limitations},
   indefinite:{generated_at:now,mode:'daily_cap',can_start_now:false,next_start_at:null,blockers:[
    {code:'disabled',message:'Central AI provider calls are disabled by an administrator.',next_at:null,recheck_at:null},
@@ -35,6 +35,7 @@ module.exports=async(page,capture)=>{
   await card.getByText('held by 2 shared gates',{exact:false}).waitFor();
   const finite=await card.innerText();
   assert.match(finite,/Shared provider backoff/);assert.match(finite,/Smooth-rate throttle/);
+  assert.match(finite,/Provider Retry-After floor is active/);
   assert.match(finite,/Next eligible start:/);
   assert.equal((finite.match(/Next eligible /g)||[]).length,3);
   for(const width of [320,768,1440]){
