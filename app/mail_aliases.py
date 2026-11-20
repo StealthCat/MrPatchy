@@ -13,8 +13,10 @@ authorizes a response action.
 
 The rules follow the Postfix 3.8.6 sources: ``util/readlline.c``,
 ``postalias/postalias.c``, ``global/tok822_parse.c``, ``local/alias.c`` and
-``local/token.c``. The downloaded binaries could not be run in the authoring
-sandbox, so there is no live differential.
+``local/token.c``. ``tests/test_mail_aliases_postfix_differential.py`` checks
+them against the real Postfix 3.8.6: parsing against ``postalias -s`` dumps,
+and command/file classification and run-as users against ``local(8)``
+(``sendmail -bv`` reports and real deliveries).
 
 - Logical lines (``readllines``): physical lines end at ``\\n``. A line that
   is empty, all whitespace, or whose first non-whitespace character is ``#``
