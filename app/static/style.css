@@ -553,6 +553,8 @@ button.danger { border-color: var(--red); color: var(--red); }
 .known-good-candidates { margin-top:18px; }
 .known-good-candidate-controls { display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:10px; }
 .known-good-candidate-controls label { margin-bottom:0; }.known-good-candidate-controls select { width:auto; }
+.ai-timing-controls { display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:10px; }
+.ai-timing-controls label { margin-bottom:0; }.ai-timing-controls select { width:auto; }
 .known-good-candidates td small { display:block; }
 .known-good-candidates td { overflow-wrap:anywhere; }
 .upgrade-badge { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 12px; line-height: 18px; background: #274a40; color: #a8efd3; border: 1px solid #b5cdd91f; vertical-align: middle; }

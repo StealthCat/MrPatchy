@@ -91,6 +91,24 @@ def test_success_clears_shared_backoff_and_status(admin, monkeypatch):
         assert ai_provider_backoff.status(session)['blocked'] is False
 
 
+def test_overlapping_failures_preserve_the_reason_for_the_active_deadline(admin, monkeypatch):
+    monkeypatch.setattr(ai_provider_backoff.random, 'uniform', lambda low, high: 60)
+    ai_provider_backoff.failed(ai.AIError('provider wait', transient=True, retry_after=120), now=1000)
+    ai_provider_backoff.failed(ai.AIError('local wait', transient=True), now=1010)
+    with Session() as session:
+        current = ai_provider_backoff.status(session, now=1010)
+        assert current['next_at'] == 1120
+        assert current['reason'] == 'Provider Retry-After floor is active.'
+        assert current['failures'] == 2
+
+    ai_provider_backoff.failed(ai.AIError('longer local wait', transient=True), now=1100)
+    with Session() as session:
+        current = ai_provider_backoff.status(session, now=1100)
+        assert current['next_at'] == 1160
+        assert current['reason'] == 'Transient provider or transport failure; bounded exponential backoff is active.'
+        assert current['failures'] == 3
+
+
 def test_older_parallel_success_does_not_clear_a_newer_failure(admin):
     configure();error=ai.AIError('transient',transient=True,retry_after=120)
     ai_provider_backoff.failed(error,now=2000)
