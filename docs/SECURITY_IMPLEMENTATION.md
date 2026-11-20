@@ -11777,6 +11777,21 @@ Roadmap A requires worker health to show the blocked reason and next eligible st
 - **Validation:** the new `tests/ui_worker_ai_control_gates.cjs` times out on main `68887ce` (no card) and passes after the change. It covers the finite, open, malformed (injection) and error/retry states, placement, refresh, pagination, a slow snapshot with a discarded late response, the viewer case, and no horizontal scroll at 320, 768 and 1440 px. `ui_workers.cjs` and `ui_ai_control_gates.cjs` still pass.
 - **Remaining:** the card is display-only and promises no start. Per-worker gate state and full queue/spend dashboard acceptance remain open.
 
+### Explain shared provider waits — Roadmap A checkpoint #1201
+
+The shared AI start gates on Investigations and Activity → Workers explain
+whether the recorded deadline came from provider Retry-After, local transient
+backoff, or a provider delay capped at 24 hours. The administrator-only endpoint
+returns only known application messages, with a generic fallback for unknown
+stored text. It excludes provider response details and request identifiers.
+
+When failures overlap, the stored explanation follows the deadline that holds.
+A shorter failure keeps the earlier explanation, and a capped wait takes
+precedence at an equal deadline. Existing rows keep their recorded reason until
+the backoff clears or a later failure takes precedence. Eligibility, retry accounting,
+admission and response authorization follow the existing rules. Per-worker
+eligibility and matched production throughput measurements remain open.
+
 ### Fleet automatic AI plan status — worker checkpoint #936
 
 This closes the #922 limitation that automatic AI plan status was readable only one server at a time.

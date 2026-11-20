@@ -26,6 +26,12 @@ PRICING_MESSAGES = {
 
 CREDENTIAL_MESSAGE = ('The saved API key cannot be decrypted with this controller\'s encryption key. Restore the '
                       'matching encryption key or save the API key again before provider calls can start.')
+PROVIDER_WAIT_REASONS = (
+    ai_provider_backoff.RETRY_AFTER_REASON,
+    ai_provider_backoff.TRANSIENT_REASON,
+    ai_provider_backoff.CAPPED_REASON,
+)
+GENERIC_PROVIDER_WAIT = 'Shared provider backoff is waiting after a transient failure.'
 
 
 def _money_exhausted(value):
@@ -114,7 +120,9 @@ def snapshot(session, now=None):
         if not pricing['ok']:
             add('pricing', PRICING_MESSAGES[pricing['code']])
     if provider['blocked']:
-        add('provider_backoff', 'Shared provider backoff is waiting after a transient failure.', provider['next_at'])
+        reason = provider['reason']
+        message = reason if reason in PROVIDER_WAIT_REASONS else GENERIC_PROVIDER_WAIT
+        add('provider_backoff', message, provider['next_at'])
     if admission['mode'] in ('rate', 'rate_and_daily') and admission['next_at'] and admission['next_at'] > now:
         add('rate_throttle', 'The shared smooth-rate throttle is waiting for its next start.', admission['next_at'])
     if budget['enabled'] and _money_exhausted(budget['remaining_usd']):
