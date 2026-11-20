@@ -6226,6 +6226,61 @@ catalog `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
 response-authorization change.
 
+### crypttab keyscript contract — worker checkpoint #1225
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/crypttab_keyscripts.py` is a pure, versioned contract for the programs
+Debian and Ubuntu cryptsetup run as root while unlocking `/etc/crypttab`
+mappings at boot. A `keyscript=` program is `exec`'d with the third crypttab
+field as its argument and its output becomes the key; on the cryptdisks init
+path a `check=` program also runs on every unlocked device. It takes captured
+crypttab text, root's view of the paths the options name and
+`$CRYPTDISKS_CHECK`, and performs no I/O.
+
+- **Source.** `debian/functions`, `debian/cryptdisks-functions` and
+  `debian/initramfs/scripts/local-top/cryptroot` in Ubuntu `cryptsetup`
+  2.7.0-1ubuntu4 and 2.8.4-1ubuntu4. The only differences between them
+  (`tcrypt-system`, `x-initrd.attach`) cannot change a keyscript or check
+  outcome. An opt-in differential test sources the real `debian/functions`
+  under dash for 600 random crypttabs per version. It gave 0 mismatches for
+  both versions, and three deliberate model mutations each made it fail.
+- **Lines.** Fields are split as `IFS=" \t" read -r name source key options`:
+  the fourth field keeps inner spaces, so `luks, keyscript=x` has an ignored
+  unknown option ` keyscript` and runs no keyscript. A name starting with `#`
+  is a comment. An entry missing its source or key is skipped. A final line
+  without a newline is never processed.
+- **Options.** Comma-split words are validated as `crypttab_validate_option`
+  does, including aliases, required values, `grep -Ex` numeric checks and the
+  `[ -x ] && [ -f ]` test on `keyscript` (relative names resolve under
+  `/lib/cryptsetup/scripts`) and `check` (under `/lib/cryptsetup/checks`).
+  `header` must exist because both boot paths pass `--missing-path=fail`. A
+  bare `check` uses `$CRYPTDISKS_CHECK` and is dropped when that is empty.
+  Unknown options are ignored. A later option replaces an earlier one, and any
+  invalid value rejects the whole entry.
+- **Programs.** An accepted entry reports its unlock method: `keyscript`
+  (argv `[program, key field]`, with `CRYPTTAB_KEY` and the other `CRYPTTAB_*`
+  variables exported), `askpass` (key field `none`: `/lib/cryptsetup/askpass`
+  with a prompt), `keyfile` (nothing runs) or `exec_fails` (a keyscript of
+  `/lib/cryptsetup/askpass` with a real key reaches `exec ""`). On the
+  cryptdisks path it also reports the `check` argv and whether `noauto` or
+  `noearly` keep the entry out of automatic boot. The initramfs path never
+  runs `check`.
+- **Fail closed.** Unobserved crypttab text, path facts or
+  `$CRYPTDISKS_CHECK`, a relative `header`, a backslash (`printf '%b'`
+  decoding is not modelled), a glob character in the unquoted options
+  expansion, NUL bytes, invalid UTF-8 and over-limit input are blocking gaps
+  and leave entries `unresolved`. Every result names what it cannot observe:
+  which boot path handles each entry (the initramfs only unlocks entries its
+  hook copied, and systemd-cryptsetup-generator, which does not support
+  `keyscript=`, may handle the rest), whether the source device exists, the
+  programs' contents and the number of unlock attempts. `origin` is always
+  `not_assessed`, `authorizes_response` is False and no result is a safety
+  verdict.
+
+**Not covered:** agent collection of `/etc/crypttab` and path facts, catalog
+mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
+provenance and AI classification. No schema, API, auth or
+
 ### rsyslog program-action contract — worker checkpoint #1227
 
 Contract increment only; the startup-awareness requirement remains incomplete.
