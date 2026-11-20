@@ -12035,6 +12035,16 @@ Roadmap A: this follows up the #1158 "Remaining" line, which said update scoring
 - **Validation:** `tests/test_update_score_block_causes.py` drives the real `update_scores.run_one()` path with only the provider transport as a fixture. Restoring main's call site fails the two cause tests and leaves the six invariant guards passing: invalid output, other incomplete responses, rejected key, blocked count, model-change re-admission and key-change re-admission. 185 scoring/retry tests pass.
 - **Remaining:** advisory security plans keep their existing failure wording.
 
+### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
+
+New disposable SQLite and MySQL benchmark reports require one successful
+result-persistence timing per completed investigation and one successful
+evidence-persistence timing per requested follow-up. A report is refused when
+either stage is missing, duplicated, malformed, unsuccessful or assigned to the
+wrong run, even when the fixture completed all investigations. Successful
+reports retain the existing format. This guards fixture evidence only.
+Production and live-provider performance comparisons remain open.
+
 ### Release configuration review persistence — Roadmap A checkpoint #1184
 
 A newly validated release configuration review records one retained
@@ -12165,3 +12175,10 @@ never reads a sourced file.
   - argument validation of non-mail directives (the contract over-reports, never under-reports);
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
+
+
+### D-Bus bus-activation contract — Roadmap F checkpoint #1211
+
+`app/dbus_activation.py` is a pure, versioned contract for captured, ordered D-Bus service-directory entries and `.service` text. It reports parsed files, bus-name precedence/winners and declared `Exec`, `User` and `SystemdService` values. When the caller supplies bus type and systemd-activation state, it also reports whether a name starts, is refused, remains unresolved or cannot yet be determined, including system-bus `User` checks and the launch helper's independent `<Name>.service` lookup. Parsing and start behavior were differentially observed against dbus-daemon 1.14.10 on session and system buses.
+
+The contract performs no file or bus I/O, starts no helper or command, does not assess origin and does not authorize a response. Unobserved inputs fail closed. User-database lookups and AppArmor/SELinux mediation are not modeled; the caller supplies directories in bus order. Collection, inventory, UI and AI wiring remain outside this checkpoint. The system-bus helper differential is opt-in and requires root because it uses the installed setuid helper and writes uniquely named fixtures under system service directories, then removes them.
