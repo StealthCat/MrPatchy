@@ -12007,6 +12007,21 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
 - **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
 
+### Update-scoring stage timings in the fleet summary — Roadmap A checkpoint #1190
+
+`GET /api/ai/triage/timings` now accepts an optional `purpose` of `triage`
+(the default, with the previous sample) or `update_scoring`; other values return
+400. The response names the sampled `purpose`. Only completed or failed runs of
+that purpose are sampled, with the same 100-run and 2,048-event bounds, malformed
+event discard and no message, run ID or evidence exposure. The **AI stage timings**
+card on fleet AI logs adds an **Activity** selector (Process triage / Update
+importance); changing it clears the previous table and ignores late responses for
+the old selection. Scoring runs record provider admission, provider, receipt and
+usage persistence, result persistence and run timings; triage-only stages show no
+samples. Compatibility: admin-only as before, no schema, collection, admission,
+budget or response-authorization change. Matched serial/parallel production
+throughput remains open.
+
 ### Release configuration review persistence — Roadmap A checkpoint #1184
 
 A newly validated release configuration review records one retained
