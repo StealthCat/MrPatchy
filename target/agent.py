@@ -341,10 +341,69 @@ def resource_pressure(read=lambda path:Path(path).read_text(),collected=None):
     result['applicability']='supported' if all(x=='collected' for x in states) else 'unknown' if not any(x=='collected' for x in states) else 'partial'
     return result
 
-def telemetry_snapshot(hashed_at,hashes,metadata,processes,errors,clock=time.time,statvfs=os.statvfs,pressure=resource_pressure):
+STA_UNSYNC=0x0040
+STA_NANO=0x2000
+NTP_PHASE_LIMIT_US=16000000 # kernel: maxerror at/above this means the clock is no longer disciplined
+_TIME_STATES={0:'ok',1:'insert-leap',2:'delete-leap',3:'leap-in-progress',4:'leap-wait',5:'error'}
+_TIMEX_LIMIT=10**12
+
+def _read_adjtimex():
+    """Read the kernel clock discipline with adjtimex(modes=0). Read-only: no field is set, no privilege is needed."""
+    import ctypes
+    class Timeval(ctypes.Structure):
+        _fields_=[('tv_sec',ctypes.c_long),('tv_usec',ctypes.c_long)]
+    class Timex(ctypes.Structure):
+        _fields_=[('modes',ctypes.c_uint),('offset',ctypes.c_long),('freq',ctypes.c_long),('maxerror',ctypes.c_long),
+                  ('esterror',ctypes.c_long),('status',ctypes.c_int),('constant',ctypes.c_long),('precision',ctypes.c_long),
+                  ('tolerance',ctypes.c_long),('time',Timeval),('tick',ctypes.c_long),('ppsfreq',ctypes.c_long),
+                  ('jitter',ctypes.c_long),('shift',ctypes.c_int),('stabil',ctypes.c_long),('jitcnt',ctypes.c_long),
+                  ('calcnt',ctypes.c_long),('errcnt',ctypes.c_long),('stbcnt',ctypes.c_long),('tai',ctypes.c_int),
+                  ('reserved',ctypes.c_int*11)]
+    libc=ctypes.CDLL(None,use_errno=True)
+    call=libc.adjtimex;call.argtypes=[ctypes.POINTER(Timex)];call.restype=ctypes.c_int
+    value=Timex();value.modes=0
+    state=call(ctypes.byref(value))
+    if state<0:
+        code=ctypes.get_errno();raise OSError(code,os.strerror(code))
+    return {'state':state,'status':value.status,'maxerror':value.maxerror,'esterror':value.esterror,'offset':value.offset}
+
+def clock_sync(read=_read_adjtimex,collected=None):
+    """Report whether the kernel clock is NTP-disciplined. Never changes the clock.
+
+    Uses systemd timedated's ntp_synced() rule (NTPSynchronized): synchronized when maxerror is below the
+    16 s phase limit. STA_UNSYNC is reported but not used, because chrony/ntpd keep it set while disciplining
+    the clock when RTC sync is off (it stops the kernel's 11-minute RTC writes)."""
+    observed=time.time() if collected is None else collected
+    result={'version':1,'collected':observed,'source':'adjtimex','scope':{'kind':'host'},'gaps':[]}
+    try:
+        raw=read()
+        if not isinstance(raw,dict):raise ValueError('invalid adjtimex result')
+        fields={}
+        for key in ('state','status','maxerror','esterror','offset'):
+            value=raw.get(key)
+            if isinstance(value,bool) or not isinstance(value,int) or abs(value)>_TIMEX_LIMIT:raise ValueError('invalid adjtimex field')
+            fields[key]=value
+        if fields['state'] not in _TIME_STATES or fields['status']<0 or fields['maxerror']<0 or fields['esterror']<0:raise ValueError('invalid adjtimex field')
+        status=fields['status']
+        unsync=bool(status&STA_UNSYNC)
+        offset_us=fields['offset']/1000 if status&STA_NANO else float(fields['offset'])
+        result.update({'applicability':'supported','state':'unsynchronized' if fields['maxerror']>=NTP_PHASE_LIMIT_US else 'synchronized',
+                       'kernel_unsync':unsync,'time_state':_TIME_STATES[fields['state']],'unit':'microseconds',
+                       'max_error':fields['maxerror'],'estimated_error':fields['esterror'],'offset':offset_us})
+        return result
+    except PermissionError:
+        reason='permission-denied'
+    except (OSError,AttributeError,TypeError,ValueError,OverflowError):
+        reason='unavailable-or-malformed'
+    result.update({'applicability':'unknown','state':'unknown'})
+    result['gaps'].append({'signal':'clock-sync','reason':reason})
+    return result
+
+def telemetry_snapshot(hashed_at,hashes,metadata,processes,errors,clock=time.time,statvfs=os.statvfs,pressure=resource_pressure,sync=clock_sync):
     collected=clock()
     return {'collected':collected,'hashed_at':hashed_at,'managed':hashes,'managed_metadata':metadata,
-            'processes':processes,'errors':errors,'device_health':root_filesystem_health(statvfs,collected),'resource_pressure':pressure(collected=collected)}
+            'processes':processes,'errors':errors,'device_health':root_filesystem_health(statvfs,collected),'resource_pressure':pressure(collected=collected),
+            'clock_sync':sync(collected=collected)}
 
 def atomic(path, value):
     path=Path(path)

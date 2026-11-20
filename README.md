@@ -966,8 +966,17 @@ Controller web instances are listed separately. When `MRPATCHY_EXPECTED_CONTROLL
 is set, each listed controller that is missing, stale, stopped, has an invalid or
 unrecognized report, or runs a different version raises one administrator-only
 in-app notification, which resolves
-when it reports again. An invalid setting raises its own notification. These
-notifications grant no readiness, failover or response authority. Activity → Workers → Endpoint agents now shows root filesystem space and inodes, available memory, and CPU/memory pressure from retained telemetry. Missing or invalid values stay unknown; low-resource flags are advisory and do not change health, alerts, repairs or authorization. Endpoint-agent readiness, low-resource notifications, history/hysteresis, time sync, certificate expiry, GCP-node inventory and remote deployment acceptance remain planned. Rebuild the controller and keep worker versions matched.
+when it reports again. An invalid setting raises its own notification. These notifications grant no readiness, failover or response authority. Activity →
+Workers → Endpoint agents now shows root filesystem space and inodes, available
+memory, CPU/memory pressure, and the kernel's clock-discipline state and maximum
+error from retained telemetry. The clock indicator uses read-only adjtimex() data;
+it does not identify the time source or compare the server clock with the controller.
+Unavailable readings and telemetry from older agents show unknown. A not-synchronized
+result is advisory only and never changes health, alerts, repairs or authorization.
+Missing or invalid resource values likewise remain unknown. Endpoint-agent readiness,
+low-resource notifications, history/hysteresis, certificate expiry, GCP-node inventory
+and remote deployment acceptance remain planned. Target agents need the normal upgrade
+to report clock observations; rebuild the controller and keep worker versions matched.
 
 
 ### Worker controller/key startup gate (v0.13.0)

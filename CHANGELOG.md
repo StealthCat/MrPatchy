@@ -1,3 +1,7 @@
+## 1.75.70 — 2026-11-20
+
+1. [PR #1192](https://github.com/StealthCat/MrPatchy/pull/1192): Add endpoint-agent clock-discipline telemetry using read-only `adjtimex()` and show its synchronized state, maximum error and advisory unsynchronized flag. Compatibility: additive telemetry and resource fields; older agents show unknown until normally upgraded. No database schema or response-authorization change. Limits: reports only the kernel's view, does not identify the time source or compare with the controller, and unavailable or denied readings remain unknown; the broader clock-history, alert and preflight work remains open in #342.
+
 ## 1.75.69 — 2026-11-20
 
 1. [PR #1194](https://github.com/StealthCat/MrPatchy/pull/1194): Honor OpenAI's `retry-after-ms` alongside `Retry-After` for transient failures, using the longer valid delay. Malformed millisecond values fall back to the standard header; excessive values block automatic retry. Compatibility: additive redacted-header handling only; no schema, API, UI, authentication or response-authorization change. Limits: non-transient errors ignore both headers, the shared 24-hour cap and per-item jitter remain, and production throughput is unmeasured.
