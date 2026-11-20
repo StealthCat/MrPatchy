@@ -2716,6 +2716,13 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
 - **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
 
+#### Model refusal and token-budget wording in the Settings model test — worker checkpoint #1219
+
+- **Problem:** after #1158, process triage, advisory plans and release configuration reviews name a refusal and `max_output_tokens` exhaustion (update scoring follows in #1162). The Settings **Test model** action (`POST /api/settings/ai-test`) still returned and recorded the triage diagnostic, for example "Review this observation manually; no safety assessment was accepted". The test supplies no observation, and the text never said the request reached the provider and may be billed.
+- **Change:** `main._ai_test_investigate()` maps cause `model_refusal` and cause `token_budget` to test-specific text: the model declined (or exhausted its budget on) the compatibility test, the request was sent and may be billed, changing the API key does not help, and a different model (or one that completes within the task budget) should be selected. The rewritten `AIError` keeps the cause, so the `connection_test` run history stores the same text. Transient and policy-wait errors and every other cause are re-raised unchanged; provider refusal text is never returned or stored.
+- **Unchanged:** the 502 status, the `Test failed for model … Your saved model was not changed.` framing, the one-minute test interval, the connection-test lock, run tracking and cost receipts, admission, roles/CSRF, the saved model and response authorization.
+- **Validation:** `tests/test_ai_test_block_causes.py` drives the real route with only the provider transport as a fixture. Restoring main's call site fails both cause tests and leaves the four invariant guards passing: invalid output, other incomplete responses, rejected key, and rate limit/lock release after a refusal.
+
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
 Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
