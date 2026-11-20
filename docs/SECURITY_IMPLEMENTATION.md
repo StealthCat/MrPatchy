@@ -12022,6 +12022,16 @@ samples. Compatibility: admin-only as before, no schema, collection, admission,
 budget or response-authorization change. Matched serial/parallel production
 throughput remains open.
 
+### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
+
+New disposable SQLite and MySQL benchmark reports require one successful
+result-persistence timing per completed investigation and one successful
+evidence-persistence timing per requested follow-up. A report is refused when
+either stage is missing, duplicated, malformed, unsuccessful or assigned to the
+wrong run, even when the fixture completed all investigations. Successful
+reports retain the existing format. This guards fixture evidence only.
+Production and live-provider performance comparisons remain open.
+
 ### Release configuration review persistence — Roadmap A checkpoint #1184
 
 A newly validated release configuration review records one retained
