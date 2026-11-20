@@ -30,7 +30,7 @@ def connection_limit():
 
 
 def _safe_snapshot(response):
-    headers={name:response.headers[name] for name in ('retry-after','x-request-id') if name in response.headers}
+    headers={name:response.headers[name] for name in ('retry-after','retry-after-ms','x-request-id') if name in response.headers}
     return httpx.Response(response.status_code,headers=headers,content=b'',
         request=response.request,extensions=response.extensions)
 

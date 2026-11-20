@@ -1,3 +1,43 @@
+## 1.75.78 — 2026-11-20
+
+1. [PR #1191](https://github.com/StealthCat/MrPatchy/pull/1191): Add an activity selector to the administrator AI stage timing summary and allow the bounded timing API to sample retained `update_scoring` runs as well as process triage. Compatibility: requests without `purpose` retain the triage sample; the response adds the selected purpose, while roles, schema, AI state, admission, budgets and response authorization remain unchanged. Limits: summaries include only retained completed or failed runs; triage-only stages have no scoring samples, and matched production throughput remains unmeasured.
+
+## 1.75.77 — 2026-11-20
+
+1. [PR #1209](https://github.com/StealthCat/MrPatchy/pull/1209): Add a pure, fail-closed contract for which commands smartd runs on disk warnings, including the warning script, `smartd_warning.d` plugins, `-M exec` or `mail`, Debian's `smartd-runner` and the execution user, from `/etc/smartd.conf` and observed `-w`/`-u` options. Compatibility: no runtime, schema, route, UI, AI, role or response-authorization change. Limits: hook-directory listings and hook contents are not inspected; non-mail directive arguments are not validated, so the contract may over-report but not under-report; no real-binary differential is available; collection, catalog, provenance, UI and AI remain future work.
+
+## 1.75.76 — 2026-11-20
+
+1. [PR #1206](https://github.com/StealthCat/MrPatchy/pull/1206): Batch active-job and latest automatic-plan status reads into one query for listed fleet servers, retaining the existing filters, deterministic job-ID tie breaks and response shape. Compatibility: administrator access, incident totals, readiness, scheduling and response authorization are unchanged. Limit: a 12-server fixture measured 24 history reads reduced to one; production latency remains unmeasured.
+
+## 1.75.75 — 2026-11-20
+
+1. [PR #1210](https://github.com/StealthCat/MrPatchy/pull/1210): Read legacy AI hourly allowance counts and reopening timestamps in one SQL statement. Preserve exact usage counts, the strict one-hour boundary and tie behavior, below-limit and nonpositive-limit states, while bounding the ordered lookup by the configured allowance. Compatibility: status API shape, roles, admission, budgets, provider access and authorization remain unchanged. Limits: validates statement count/query shape, not production latency; broader shared AI-control acceptance remains open.
+
+## 1.75.74 — 2026-11-20
+
+1. [PR #1202](https://github.com/StealthCat/MrPatchy/pull/1202): Explain shared AI start-gate waits as provider Retry-After, local transient backoff, or a provider delay capped at 24 hours in the administrator-only Investigations and Workers views; retain the reason for the deadline that still governs when failures overlap. Compatibility: existing API shape, deadlines, eligibility, durable failure accounting, admission, pause, budget and response authorization remain unchanged; only allow-listed fixed application messages are returned, with a generic fallback for unknown stored values and no provider response text or identifiers. Limits: existing backoff rows keep their stored reason until the floor clears or a later failure supersedes it; per-worker eligibility and matched production-throughput measurements remain open.
+
+## 1.75.73 — 2026-11-20
+
+1. [PR #1200](https://github.com/StealthCat/MrPatchy/pull/1200): Add a pure resolvconf hook contract reporting which `/etc/resolvconf/update.d` scripts run as root on DNS changes and which `/etc/resolvconf/update-libc.d` scripts run conditionally through the packaged `libc` hook, in byte order with reasons for skipped entries. Compatibility: module, tests and documentation only; no collection, schema, route, UI, AI, role, scheduling or response-authorization change. Limits: models Debian resolvconf 1.78ubuntu7 and debianutils run-parts only; openresolv and the systemd-resolved compatibility shim are not modeled, and agent collection, provenance, catalog, UI and AI classification remain out of scope.
+
+## 1.75.72 — 2026-11-20
+
+1. [PR #1196](https://github.com/StealthCat/MrPatchy/pull/1196): Keep the Endpoint agents and Deployment health views available when one agent reports an out-of-range integer pressure value or timestamp; that server is shown as unknown with an explanation. Compatibility: no schema, route, response, UI, role, scheduling or response-authorization change; valid values retain their behavior. Limits: this is read-side resilience only and ingest remains unchanged; MySQL 8.4 may refuse oversized JSON numeric values before they reach retained telemetry, so the end-to-end storage test skips only for its expected 3140 range error.
+
+## 1.75.71 — 2026-11-20
+
+1. [PR #1198](https://github.com/StealthCat/MrPatchy/pull/1198): Add a pure bash-completion compat-directory contract for version-dependent `/etc/bash_completion.d` and `/usr/etc/bash_completion.d` startup files, including source order, readability, bounded evidence and fail-closed coverage gaps. Compatibility: additive module, tests and documentation only; no collection, schema, API, UI, AI, role, scheduling or response-authorization change. Limits: models upstream bash-completion 2.10–2.17, does not inspect sourced file contents or shell/runtime configuration, and is not a safety verdict.
+
+## 1.75.70 — 2026-11-20
+
+1. [PR #1192](https://github.com/StealthCat/MrPatchy/pull/1192): Add endpoint-agent clock-discipline telemetry using read-only `adjtimex()` and show its synchronized state, maximum error and advisory unsynchronized flag. Compatibility: additive telemetry and resource fields; older agents show unknown until normally upgraded. No database schema or response-authorization change. Limits: reports only the kernel's view, does not identify the time source or compare with the controller, and unavailable or denied readings remain unknown; the broader clock-history, alert and preflight work remains open in #342.
+
+## 1.75.69 — 2026-11-20
+
+1. [PR #1194](https://github.com/StealthCat/MrPatchy/pull/1194): Honor OpenAI's `retry-after-ms` alongside `Retry-After` for transient failures, using the longer valid delay. Malformed millisecond values fall back to the standard header; excessive values block automatic retry. Compatibility: additive redacted-header handling only; no schema, API, UI, authentication or response-authorization change. Limits: non-transient errors ignore both headers, the shared 24-hour cap and per-item jitter remain, and production throughput is unmeasured.
+
 ## 1.75.68 — 2026-11-20
 
 1. [PR #1189](https://github.com/StealthCat/MrPatchy/pull/1189): Restart the scan-coverage clock when a scheduled-scan server is disabled and re-enabled between alert ticks, and serialize marker reads/cleanup with disable writes so concurrent alert processing cannot discard the newer inactive marker. Compatibility: no schema or response-authorization change; only enabled scan policies receive the marker, and deletion behavior is unchanged. Limits: re-enrollment state changes still depend on a tick, and YARA scheduling remains separate.

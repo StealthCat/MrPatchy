@@ -332,30 +332,37 @@ function bindTriageTimingSummary(root,revision){
  const panel=document.createElement('section');
  panel.className='card';
  panel.setAttribute('aria-labelledby','ai-triage-timing-title');
- panel.innerHTML='<h2 id="ai-triage-timing-title">Process triage timings</h2><p class="help">Compare elapsed times across recent completed and failed investigations. Stages can overlap. Retained diagnostics may have gaps.</p><button type="button">Load timing summary</button><p class="help" role="status"></p><div class="table-wrap" tabindex="0" role="region" aria-label="Timing percentiles by stage" hidden></div>';
+ panel.innerHTML='<h2 id="ai-triage-timing-title">AI stage timings</h2><p class="help">Compare elapsed times across recent completed and failed runs of one AI activity. Stages can overlap. Retained diagnostics may have gaps.</p><div class="ai-timing-controls"><label>Activity<select id="ai-timing-purpose"><option value="triage">Process triage</option><option value="update_scoring">Update importance</option></select></label><button type="button">Load timing summary</button></div><p class="help" role="status"></p><div class="table-wrap" tabindex="0" role="region" aria-label="Timing percentiles by stage" hidden></div>';
  root.querySelector('.toolbar').before(panel);
- const button=panel.querySelector('button'),status=panel.querySelector('[role=status]'),table=panel.querySelector('.table-wrap');
+ const button=panel.querySelector('button'),select=panel.querySelector('select'),status=panel.querySelector('[role=status]'),table=panel.querySelector('.table-wrap');
  const active=()=>panel.isConnected&&currentView(revision,'ai-logs')&&isAdmin();
  const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unavailable';
  const duration=value=>Number.isFinite(value)&&value>=0?value.toLocaleString(undefined,{maximumFractionDigits:3}):'—';
+ const label=()=>select.selectedOptions[0]?.textContent||'AI';
+ let ticket=0;
+ const reset=()=>{table.hidden=true;table.innerHTML='';status.textContent='';button.textContent='Load timing summary';};
+ select.onchange=()=>{ticket++;reset();button.disabled=false;};
  button.onclick=async()=>{
   if(!active()||button.disabled)return;
-  button.disabled=true;status.textContent='Loading timing summary…';
+  const turn=++ticket,purpose=select.value,name=label();
+  button.disabled=true;status.textContent=`Loading ${name.toLowerCase()} timing summary…`;
+  const current=()=>active()&&turn===ticket;
   try{
-   const data=await api('/ai/triage/timings');
-   if(!active())return;
+   const data=await api('/ai/triage/timings?purpose='+encodeURIComponent(purpose));
+   if(!current())return;
+   if(data.purpose!==purpose)throw new Error('Unexpected timing summary activity');
    const rows=Object.entries(data.stages).map(([stage,row])=>`<tr><th scope="row">${esc(stage.replaceAll('_',' '))}</th><td>${count(row.samples)}</td><td>${count(row.errors)}</td><td>${duration(row.p50_ms)}</td><td>${duration(row.p95_ms)}</td></tr>`);
    const hasSamples=Object.values(data.stages).some(row=>row.samples>0);
-   table.innerHTML=hasSamples?`<table><thead><tr><th scope="col">Stage</th><th scope="col">Samples</th><th scope="col">Errors</th><th scope="col">p50 (ms)</th><th scope="col">p95 (ms)</th></tr></thead><tbody>${rows.join('')}</tbody></table>`:'';
+   table.innerHTML=hasSamples?`<table><caption>${esc(name)}</caption><thead><tr><th scope="col">Stage</th><th scope="col">Samples</th><th scope="col">Errors</th><th scope="col">p50 (ms)</th><th scope="col">p95 (ms)</th></tr></thead><tbody>${rows.join('')}</tbody></table>`:'';
    table.hidden=!hasSamples;
-   status.textContent=(hasSamples?'':'No retained timing samples. ')+`${count(data.sampled_runs)} runs sampled. ${count(data.runs_without_samples)} without valid samples. ${count(data.discarded_events)} malformed events discarded.`+(data.events_truncated?` Sample limited to the latest ${count(data.event_limit)} timing events.`:'');
+   status.textContent=`${name}: `+(hasSamples?'':'No retained timing samples. ')+`${count(data.sampled_runs)} runs sampled. ${count(data.runs_without_samples)} without valid samples. ${count(data.discarded_events)} malformed events discarded.`+(data.events_truncated?` Sample limited to the latest ${count(data.event_limit)} timing events.`:'');
    button.textContent='Refresh timing summary';
   }catch{
-   if(!active())return;
+   if(!current())return;
    table.hidden=true;table.innerHTML='';
-   status.textContent='Timing summary is unavailable. You can still inspect individual AI runs.';
+   status.textContent=`${name} timing summary is unavailable. You can still inspect individual AI runs.`;
    button.textContent='Retry timing summary';
-  }finally{if(active())button.disabled=false;}
+  }finally{if(current())button.disabled=false;}
  };
 }
 
