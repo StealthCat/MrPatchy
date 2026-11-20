@@ -2330,6 +2330,22 @@ the faster-AI milestone.
 - Deduplicate identical queued subjects and reuse valid immutable evidence with subject identity, evidence revision/hash, authorization scope, model/prompt/policy version and explicit freshness rules. For fleet-wide known-good assessment reuse, apply the exact-match contract below. Never apply an unmatched cross-host verdict, suppress a new incident or widen data sharing to improve cache hits. Keep stable instruction/schema prefixes and lossless input formatting where provider caching helps.
 - Replace blanket one-hour retry with classified handling: honor provider Retry-After and rate signals, use bounded exponential backoff with jitter for transient network/429/5xx failures, and surface authentication/billing/schema/configuration blockers until corrected. Preserve attempt/cost receipts and bounded retries; manual retry cannot bypass policy, reservations or shared admission.
 
+### Millisecond provider retry delay — Roadmap A checkpoint #1193
+
+Transient provider failures now honor OpenAI's `retry-after-ms` header as well as
+the standard `Retry-After` header. Only plain non-negative decimal milliseconds
+are accepted. If both headers are valid, the longer delay is used, so a retry is
+never earlier than either header asks. A malformed millisecond value is ignored
+and the standard header still applies. A value beyond the existing ten-year bound
+blocks automatic retry, as an excessive `Retry-After` already does. The redacted
+transport snapshot keeps this one extra header. Header text is never persisted or
+shown. Non-transient classifications still ignore both headers. The shared
+24-hour cap, per-item attempt jitter, notifications, pause, budget and response
+authorization are unchanged. Before this change, a response with only the
+millisecond header fell back to a random local delay of 30 seconds or more. That
+was slower than a short provider floor and could retry earlier than a long one.
+Production throughput remains unmeasured.
+
 ### Live process-triage lease telemetry
 
 The administrator investigation status API reports
@@ -3568,6 +3584,18 @@ to one purpose each and do not change the global `blockers`, `can_start_now` or
 counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
+
+### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
+
+The shared AI start gates and automatic AI plan status now fetch each legacy
+hourly allowance count and reopening time in one statement. When the window
+is exhausted, the lookup counts back from the newest matching entry using the
+configured allowance. This preserves exact counts and the strict one-hour
+boundary while bounding the ordered lookup. Admission and configuration
+retain their existing behavior. In an overfilled fixture with 259 scoring runs
+and an allowance of three, the status read went from two statements to one.
+The time remained correct when entries tied at the boundary. Production latency
+and the broader shared-controls acceptance remain open.
 
 ### Two-call follow-up reservations under a daily cap — worker checkpoint #988
 
@@ -6624,6 +6652,35 @@ Source, scope and process data stay out of the response. No schema or agent chan
 **Limits:** endpoint-agent readiness, alerts, history/hysteresis, time sync and
 certificate expiry, the GCP-node inventory and the unified dashboard acceptance
 remain open.
+
+### Endpoint-agent clock synchronization — worker checkpoint #342
+
+Each agent telemetry snapshot adds a version-1 `clock_sync` record. The agent
+reads the kernel clock discipline with one `adjtimex()` call with `modes=0`. This
+call is read-only: it sets no field, needs no privilege and runs no binary. The
+clock counts as `synchronized` under systemd-timedated's `ntp_synced()`
+(`NTPSynchronized`) rule: `maxerror` is below the 16-second phase limit.
+Otherwise it is `unsynchronized`. The kernel `STA_UNSYNC` flag is reported as
+`kernel_unsync` but does not decide the state, because chrony and ntpd keep it
+set while disciplining the clock when RTC synchronization is off. The record also carries the kernel time state,
+the maximum and estimated error, and the offset in microseconds (nanosecond
+offsets are converted when `STA_NANO` is set). A denied, missing or malformed
+call is `unknown`, with a typed `clock-sync` gap.
+
+The endpoint-agent **Resources** column shows the clock state and its maximum
+error, plus an advisory `clock-unsynchronized` flag. The controller accepts only
+consistent records. A state that contradicts its own maximum error is shown as
+unknown, as are negative, non-finite and out-of-range values. Bounds are checked
+before any float conversion, so an integer beyond float range is rejected instead
+of raising `OverflowError`. Like the other resource metrics, the flag never changes
+health, counts, alerts, repairs, preflight or authorization. Missing or
+future-dated telemetry shows nothing.
+
+**Limits:** this reads the kernel's own view only. It does not compare the server
+clock with the controller, identify the time source or daemon, or detect a clock
+that is disciplined to a wrong source. A service sandbox that blocks `adjtimex`
+with `EPERM` reports unknown. Certificate expiry, history and hysteresis, alert
+producers and patch/reboot preflight blockers remain open for #342.
 
 ### Expected-controller health notifications — worker checkpoint #761
 
@@ -11732,6 +11789,21 @@ Roadmap A requires worker health to show the blocked reason and next eligible st
 - **Validation:** the new `tests/ui_worker_ai_control_gates.cjs` times out on main `68887ce` (no card) and passes after the change. It covers the finite, open, malformed (injection) and error/retry states, placement, refresh, pagination, a slow snapshot with a discarded late response, the viewer case, and no horizontal scroll at 320, 768 and 1440 px. `ui_workers.cjs` and `ui_ai_control_gates.cjs` still pass.
 - **Remaining:** the card is display-only and promises no start. Per-worker gate state and full queue/spend dashboard acceptance remain open.
 
+### Explain shared provider waits — Roadmap A checkpoint #1201
+
+The shared AI start gates on Investigations and Activity → Workers explain
+whether the recorded deadline came from provider Retry-After, local transient
+backoff, or a provider delay capped at 24 hours. The administrator-only endpoint
+returns only known application messages, with a generic fallback for unknown
+stored text. It excludes provider response details and request identifiers.
+
+When failures overlap, the stored explanation follows the deadline that holds.
+A shorter failure keeps the earlier explanation, and a capped wait takes
+precedence at an equal deadline. Existing rows keep their recorded reason until
+the backoff clears or a later failure takes precedence. Eligibility, retry accounting,
+admission and response authorization follow the existing rules. Per-worker
+eligibility and matched production throughput measurements remain open.
+
 ### Fleet automatic AI plan status — worker checkpoint #936
 
 This closes the #922 limitation that automatic AI plan status was readable only one server at a time.
@@ -11742,6 +11814,18 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 - **UI:** the fleet Security page adds an administrator-only "Automatic AI plans across the fleet" card. It shows the totals, the pacing and one row per server with a link to that server's Security tab, and it has a refresh button. A failed or malformed load says the status is unavailable and never implies a plan will start. Viewers and operators get neither the card nor the request.
 - **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
 - **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
+
+### Batch fleet automatic AI plan job status — Roadmap A checkpoint #1205
+
+The automatic AI plan status reads the active plan and latest automatic attempt
+for all listed servers in one query. Two per-server selections run inside that
+query and return only state and creation time. Each selection uses the same
+host, action and state filters as the individual server view. For equal creation
+times both selections sort by descending job ID. The fleet still lists at most
+100 opted-in servers. A 12-server fixture reduced this part of its read from 24 statements
+to one while preserving the result for each server. Incident counts and server
+readiness still make per-server reads. Production load time remains unmeasured.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
@@ -11923,6 +12007,21 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_tmpfiles_exec.py` has 25 tests (five added after the 2026-11-19 review of invalid-field and NSS-dependent shadowing, unescape order, `e` conflicts and repeated modifiers; each fails on `165cf0c`), and the module does not exist on main. Six mutations are each caught: swapping the map order, dropping duplicate rules, ignoring `!`, dropping startup matching, matching hidden names in globs, and ignoring `/dev/null` masking.
 - **Remaining:** agent collection of `tmpfiles.d`, a shared kernel-hook view combined with #1089's `sysctl.d` result, a catalog entry, package provenance, and UI.
 
+### Update-scoring stage timings in the fleet summary — Roadmap A checkpoint #1190
+
+`GET /api/ai/triage/timings` now accepts an optional `purpose` of `triage`
+(the default, with the previous sample) or `update_scoring`; other values return
+400. The response names the sampled `purpose`. Only completed or failed runs of
+that purpose are sampled, with the same 100-run and 2,048-event bounds, malformed
+event discard and no message, run ID or evidence exposure. The **AI stage timings**
+card on fleet AI logs adds an **Activity** selector (Process triage / Update
+importance); changing it clears the previous table and ignores late responses for
+the old selection. Scoring runs record provider admission, provider, receipt and
+usage persistence, result persistence and run timings; triage-only stages show no
+samples. Compatibility: admin-only as before, no schema, collection, admission,
+budget or response-authorization change. Matched serial/parallel production
+throughput remains open.
+
 ### Interrupted package scoring in AI Activity — Roadmap A checkpoint #1115
 
 The scoring queue summary shows an exact current package attempt as waiting to
@@ -11947,3 +12046,121 @@ provider accounting and separate approval. Focused planner fixtures cover
 successful and failed saves, rejected results and resumption with matching or
 changed evidence. Production throughput and cross-controller acceptance
 continue under the wider Roadmap A milestones.
+
+### bash-completion compat-directory contract — worker checkpoint #1197
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/bash_completion_d.py` is a pure, versioned contract for a startup location
+no catalog mechanism listed yet. When bash-completion is installed, every
+interactive bash shell that loads `/usr/share/bash-completion/bash_completion`
+sources each eligible compat file as the account opening the shell, including
+root. A dropped file needs no execute bit. The contract takes the upstream
+version, the loader path and directory-entry metadata. It performs no I/O and
+never reads a sourced file.
+
+- **Source.** The rules were read from the upstream `bash_completion` script at
+  tags 2.10, 2.11, 2.12.0, 2.13.0, 2.14.0, 2.15.0, 2.16.0 and 2.17.0, not
+  recalled. They form four families:
+  - **2.10–2.11:** one directory, `/etc/bash_completion.d`. The backup glob uses
+    `dpkg*`, and `acroread.sh` is block-listed.
+  - **2.12–2.14:** `@(dpkg|ucf)-*` replaces `dpkg*`. A second directory is
+    derived from the loader path, which for the packaged loader is
+    `/usr/etc/bash_completion.d`.
+  - **2.15–2.16:** the glob is expanded with `LC_COLLATE=C`, `nullglob` and no
+    `dotglob`.
+  - **2.17:** adds the `.zs-old` suffix.
+
+  `upstream_version` strips dpkg/RPM epochs and revisions, for example
+  `1:2.11-8` gives `2.11`.
+- **Rules.** Names that are hidden, match the version's backup glob, start with
+  `Makefile` or are block-listed are skipped. Then `-f` follows symlinks and
+  accepts only a regular file, so directories, special files and dangling links
+  are skipped silently. `-r` lets root read any regular file. Other accounts use
+  one owner, group or other class, giving `sourced`, `skipped` (`not_readable`)
+  or `depends_on_account`. Every expansion is quoted, so names with spaces or
+  glob characters are sourced as themselves.
+- **Order.** All of `/etc/bash_completion.d` is sourced first, then the second
+  directory, in byte order. Before 2.15 the shell's locale collation can reorder
+  names, which adds a non-blocking `order_locale_dependent` gap. A hidden name
+  adds a non-blocking `hidden_name_dotglob` gap, because a shell with `dotglob`
+  set would also source it.
+- **Activation.** A missing loader is `inactive`. An unobserved or unsupported
+  version, or a loader path that is not absolute and normalized, is blocking.
+- **Fail closed.** These are blocking (`complete: false`), and outside a
+  `listed` directory nothing is reported as sourced:
+  - an unobserved, unreadable or truncated listing of any scanned directory;
+  - malformed or duplicate entries;
+  - missing mode, uid or gid;
+  - an unobserved symlink target;
+  - over-limit input.
+
+  A supplied directory that this version does not scan gets a non-blocking
+  `directory_not_scanned` gap.
+- **Validation.** `tests/test_bash_completion_d.py` has 72 tests.
+  - A cross-check runs real bash extglob matching on the verbatim upstream
+    patterns for each family, over 51 names, and requires exactly the names the
+    contract keeps.
+  - A live test runs each family's compat loop in real bash on real files: a
+    mode-0 file, a directory, a FIFO, and dangling and followed links. It
+    compares the sourced set, and the byte order from 2.15.
+  - The downloaded upstream scripts were read, not executed.
+  - The live test ran as root here. Its non-root branch, where the account owns
+    every file, runs only on unprivileged CI.
+- **Unobserved, stated in every result:**
+  - which shells load bash-completion (`/etc/profile.d/bash_completion.sh`,
+    `/etc/bash.bashrc`, per-user `~/.bashrc`);
+  - the `BASH_COMPLETION_COMPAT_DIR` and `BASH_COMPLETION_COMPAT_IGNORE`
+    environment overrides;
+  - per-user `~/.bash_completion` and the lazily loaded `completions/`
+    directories;
+  - ACLs and directory search permission for non-root accounts.
+- **Unchanged:** no collection, schema, route, UI, AI, role or
+  response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the bash-completion package version and
+  both directories, a catalog entry, package provenance, persistence, UI and AI
+  classification.
+
+
+### Endpoint-agent fleet view: out-of-range retained values — bug fix #1195 (roadmap H)
+
+- **Defect:** `app/agent_fleet_health.py` converted retained agent values to float before checking their range. An integer beyond float range (such as `10**400`, which `json.loads` accepts) in `resource_pressure.{cpu,memory}.some.avg60`, `telemetry.collected` or the receipt's `checked` raised `OverflowError`. One enrolled host's snapshot could therefore fail Activity → Workers → **Endpoint agents** and the unified **Deployment health** summary for every server.
+- **Fix:**
+  - Pressure bounds (`0..100`) are now compared before any float conversion, and finiteness is checked only on floats.
+  - An integer timestamp beyond float range is unknown, exactly like an infinite float. A large but representable integer is still a future time.
+  - `page()` classifies each host under a narrow guard (`ArithmeticError`, `TypeError`, `ValueError`). A host whose retained records cannot be interpreted is listed as **unknown** with a fixed reason, and every other host is unaffected.
+- **Unchanged:** no ingest, schema, route, UI, role or response-authorization change. The view still never inspects, repairs or authorizes anything, and resource metrics still never change the health state.
+- **Validation:** `tests/test_agent_fleet_health.py` adds regressions for `10**400`, `-10**400` and `2**1024` in `avg60`, `collected` and `checked`, the per-host guard, and an end-to-end store of the huge values through both admin APIs. Nine of the new tests fail on `d3f72fe4`.
+
+
+### resolvconf hook contract — worker checkpoint #1199
+
+`app/resolvconf_hooks.py` is a pure, versioned, I/O-free roadmap F contract. From entry metadata for `/etc/resolvconf/update.d` and `/etc/resolvconf/update-libc.d`, it reports which scripts the Debian `resolvconf` package runs as root, in what order and on which triggers.
+
+- **Source of the semantics:** resolvconf 1.78ubuntu7 `/sbin/resolvconf` and `/etc/resolvconf/update.d/libc`, downloaded from archive.ubuntu.com and read, plus debianutils `run-parts`.
+  - `resolvconf -a`, `-d` and `-u` run `run-parts [--arg=…] /etc/resolvconf/update.d` without `--exit-on-error` or `--lsbsysinit`. Interface hooks call them on every DNS change. A postponed update runs on `--enable-updates` at boot.
+  - The packaged `update.d/libc` runs `run-parts /etc/resolvconf/update-libc.d` only after the generated content changes and while `/etc/resolv.conf` is symlinked to the dynamic file. So `update-libc.d` scripts are `runs_if_libc` when `libc` runs, `not_invoked` when it does not, and `unresolved` when that cannot be decided.
+  - Names must match `^[A-Za-z0-9_-]+$`. Order is bytewise. Symlinks are followed. Directories, dangling links, non-executable files, noexec mounts and special files are skipped, each with a stated reason.
+- **Fail closed:** blocking gaps cover an unobserved or unsupported family, an unknown installation state, unobserved, unreadable or truncated listings, malformed or duplicate entries, missing metadata, an unobserved symlink target and over-limit input. Unobserved mount flags are a non-blocking gap.
+- **Validation:** `tests/test_resolvconf_hooks.py` has 31 tests, including a differential against the real debianutils `run-parts --test` on real files. Four mutations are each caught: allowing dots in names, ignoring noexec, invoking `update-libc.d` whenever `libc` is listed, and locale-style ordering.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of both directories and the resolvconf installation state, a catalog entry, package provenance, UI and AI classification.
+
+### smartd warning-command contract — worker checkpoint #1207 (roadmap F)
+
+- **Outcome:** `app/smartd_warnings.py` is a pure, I/O-free contract. From the text of `/etc/smartd.conf` and the observed smartd `-w/--warnexec` and `-u/--warn-as-user` options, it reports which commands smartd runs as root (or as the `-u` user) when it warns about a disk, and for which entries. Those commands are the warning script, the `smartd_warning.d` plugins, the `-M exec` program or `mail`, and Debian's `smartd-runner` → `run-parts --lsbsysinit /etc/smartmontools/run.d`.
+- **Semantics:** they come from smartmontools 7.4 `smartd.cpp` (`ParseConfigFile`, `ParseConfigLine`, `ParseToken`, `MailWarning`) and the Ubuntu 24.04 7.4-2build1 package scripts:
+  - a 256-byte line limit and a 1023-byte continued-line limit;
+  - `#` comments and backslash continuation;
+  - `DEFAULT` inheritance and reset;
+  - parsing stops at `DEVICESCAN`;
+  - whole-file rejection on syntax errors;
+  - `@plugin` handling, including skipping the mailer when only plugins are addressed;
+  - `<nomailer>` exec with no arguments.
+- **Fails closed:** unobserved or unreadable configs, unobserved daemon options, malformed input, rejected configs and over-limit input are blocking gaps. No entry is reported from a rejected file.
+- **Validation:** tests use vectors derived from the source. Running the downloaded smartd binary for a differential was not permitted in the worker environment, so a live differential is still to do.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - the `run.d` and `smartd_warning.d` listings;
+  - argument validation of non-mail directives (the contract over-reports, never under-reports);
+  - a real-binary differential;
+  - agent collection, a catalog entry, provenance, UI and AI classification.

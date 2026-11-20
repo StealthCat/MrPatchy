@@ -228,3 +228,55 @@ def test_manual_retry_roles_and_csrf(admin):
     with Session() as s:s.get(User,'admin').role='admin';s.commit()
     admin.headers.pop('X-CSRF-Token')
     assert admin.post('/api/investigations/subject/retry').status_code==403
+
+
+@pytest.mark.parametrize('headers,expected',[
+    ({'retry-after-ms':'1500'},1.5),
+    ({'retry-after-ms':'250.5'},0.2505),
+    ({'retry-after-ms':'0'},0),
+    ({'retry-after-ms':'45000','retry-after':'5'},45),  # never earlier than either header asks
+    ({'retry-after-ms':'2000','retry-after':'60'},60),
+    ({'retry-after-ms':'-5','retry-after':'7'},7),  # malformed ms is ignored, standard header applies
+    ({'retry-after-ms':'nan','retry-after':'7'},7),
+    ({'retry-after-ms':'1e3'},0),
+    ({'retry-after-ms':'private-key'},0),
+    ({'retry-after-ms':'9'*129},0),
+])
+def test_retry_after_ms_parsing(headers,expected):
+    assert ai.retry_after(response(headers=headers))==pytest.approx(expected)
+
+
+def test_excessive_retry_after_ms_blocks_automatic_retry():
+    assert ai.retry_after(response(headers={'retry-after-ms':str(315360001*1000)}))is None
+    error=ai.http_error(response(503,'server_error',{'retry-after-ms':str(315360001*1000),'retry-after':'5'}))
+    assert error.transient is False and error.retry_after==0
+
+
+@pytest.mark.parametrize('status,code,transient',[(429,'rate_limit_exceeded',True),(429,'insufficient_quota',False),(503,'server_error',True),(401,'invalid_api_key',False)])
+def test_retry_after_ms_only_applies_to_transient_errors(status,code,transient):
+    error=ai.http_error(response(status,code,{'retry-after-ms':'2500'}))
+    assert error.transient is transient
+    assert error.retry_after==(2.5 if transient else 0)
+
+
+def test_redacted_snapshot_keeps_retry_after_ms_only():
+    from app import ai_transport
+    raw=httpx.Response(503,headers={'retry-after-ms':'1200','retry-after':'2','x-request-id':'req_fixture','x-private':'raw-secret'},
+        content=b'private-key',request=httpx.Request('POST',ai.URL))
+    snapshot=ai_transport._safe_snapshot(raw)
+    assert dict(snapshot.headers)=={'retry-after-ms':'1200','retry-after':'2','x-request-id':'req_fixture'}
+    assert ai.retry_after(snapshot)==2
+
+
+def test_shared_backoff_uses_retry_after_ms_floor(admin,monkeypatch):
+    setup()
+    monkeypatch.setattr(ai.transport,'post',lambda *a,**k:response(429,'rate_limit_exceeded',{'retry-after-ms':'4500'}))
+    worker.investigate_one()
+    with Session() as s:
+        row=s.get(ai_provider_backoff.ProviderBackoff,'global')
+        assert row.reason=='Provider Retry-After floor is active.'
+        assert 0<row.blocked_until-time.time()<=4.5
+        retry=s.get(ai_retry.TriageRetry,'subject')
+        # The provider floor is exact; the failed item keeps its own attempt jitter on top.
+        assert retry.state=='deferred' and 0<retry.provider_until-time.time()<=4.5
+        assert retry.next_at>=retry.provider_until
