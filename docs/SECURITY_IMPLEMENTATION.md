@@ -11925,3 +11925,76 @@ provider accounting and separate approval. Focused planner fixtures cover
 successful and failed saves, rejected results and resumption with matching or
 changed evidence. Production throughput and cross-controller acceptance
 continue under the wider Roadmap A milestones.
+
+### bash-completion compat-directory contract — worker checkpoint #1197
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/bash_completion_d.py` is a pure, versioned contract for a startup location
+no catalog mechanism listed yet. When bash-completion is installed, every
+interactive bash shell that loads `/usr/share/bash-completion/bash_completion`
+sources each eligible compat file as the account opening the shell, including
+root. A dropped file needs no execute bit. The contract takes the upstream
+version, the loader path and directory-entry metadata. It performs no I/O and
+never reads a sourced file.
+
+- **Source.** The rules were read from the upstream `bash_completion` script at
+  tags 2.10, 2.11, 2.12.0, 2.13.0, 2.14.0, 2.15.0, 2.16.0 and 2.17.0, not
+  recalled. They form four families:
+  - **2.10–2.11:** one directory, `/etc/bash_completion.d`. The backup glob uses
+    `dpkg*`, and `acroread.sh` is block-listed.
+  - **2.12–2.14:** `@(dpkg|ucf)-*` replaces `dpkg*`. A second directory is
+    derived from the loader path, which for the packaged loader is
+    `/usr/etc/bash_completion.d`.
+  - **2.15–2.16:** the glob is expanded with `LC_COLLATE=C`, `nullglob` and no
+    `dotglob`.
+  - **2.17:** adds the `.zs-old` suffix.
+
+  `upstream_version` strips dpkg/RPM epochs and revisions, for example
+  `1:2.11-8` gives `2.11`.
+- **Rules.** Names that are hidden, match the version's backup glob, start with
+  `Makefile` or are block-listed are skipped. Then `-f` follows symlinks and
+  accepts only a regular file, so directories, special files and dangling links
+  are skipped silently. `-r` lets root read any regular file. Other accounts use
+  one owner, group or other class, giving `sourced`, `skipped` (`not_readable`)
+  or `depends_on_account`. Every expansion is quoted, so names with spaces or
+  glob characters are sourced as themselves.
+- **Order.** All of `/etc/bash_completion.d` is sourced first, then the second
+  directory, in byte order. Before 2.15 the shell's locale collation can reorder
+  names, which adds a non-blocking `order_locale_dependent` gap. A hidden name
+  adds a non-blocking `hidden_name_dotglob` gap, because a shell with `dotglob`
+  set would also source it.
+- **Activation.** A missing loader is `inactive`. An unobserved or unsupported
+  version, or a loader path that is not absolute and normalized, is blocking.
+- **Fail closed.** These are blocking (`complete: false`), and outside a
+  `listed` directory nothing is reported as sourced:
+  - an unobserved, unreadable or truncated listing of any scanned directory;
+  - malformed or duplicate entries;
+  - missing mode, uid or gid;
+  - an unobserved symlink target;
+  - over-limit input.
+
+  A supplied directory that this version does not scan gets a non-blocking
+  `directory_not_scanned` gap.
+- **Validation.** `tests/test_bash_completion_d.py` has 72 tests.
+  - A cross-check runs real bash extglob matching on the verbatim upstream
+    patterns for each family, over 51 names, and requires exactly the names the
+    contract keeps.
+  - A live test runs each family's compat loop in real bash on real files: a
+    mode-0 file, a directory, a FIFO, and dangling and followed links. It
+    compares the sourced set, and the byte order from 2.15.
+  - The downloaded upstream scripts were read, not executed.
+  - The live test ran as root here. Its non-root branch, where the account owns
+    every file, runs only on unprivileged CI.
+- **Unobserved, stated in every result:**
+  - which shells load bash-completion (`/etc/profile.d/bash_completion.sh`,
+    `/etc/bash.bashrc`, per-user `~/.bashrc`);
+  - the `BASH_COMPLETION_COMPAT_DIR` and `BASH_COMPLETION_COMPAT_IGNORE`
+    environment overrides;
+  - per-user `~/.bash_completion` and the lazily loaded `completions/`
+    directories;
+  - ACLs and directory search permission for non-root accounts.
+- **Unchanged:** no collection, schema, route, UI, AI, role or
+  response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the bash-completion package version and
+  both directories, a catalog entry, package provenance, persistence, UI and AI
+  classification.
