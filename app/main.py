@@ -1630,6 +1630,25 @@ def retry_blocked_update_scores(user=Depends(admin_user)):
         s.commit()
     return {'retried':retried,'detail':(str(retried)+' blocked update score'+('' if retried==1 else 's')+' queued for the next scoring pass. AI pause, shared rate and daily-cap admission still apply.') if retried else 'No update scores are blocked under the current AI configuration.'}
 
+# The model test supplies no server evidence, so the triage wording for a refusal or
+# token-budget exhaustion ("review this observation") does not fit (#1219). Both
+# reached the provider and may be billed; a key change does not help.
+AI_TEST_MODEL_REFUSAL=('The model declined the compatibility test, so it cannot be used for Mr Patchy\'s structured AI tasks. '
+    'The request was sent and may be billed. Changing the API key does not help; select a different model.')
+AI_TEST_TOKEN_BUDGET=('The model used its whole response token budget before finishing the compatibility test. '
+    'The request was sent and may be billed. Changing the API key does not help; select a model that completes '
+    'within Mr Patchy\'s task budget.')
+_AI_TEST_FAILURES={ai.MODEL_REFUSAL:AI_TEST_MODEL_REFUSAL,ai.TOKEN_BUDGET:AI_TEST_TOKEN_BUDGET}
+
+
+def _ai_test_investigate(evidence,model,key):
+    try:return ai.investigate(evidence,model,key)
+    except ai.AIError as error:
+        message=_AI_TEST_FAILURES.get(error.cause)
+        if message is None or error.transient or error.policy_wait:raise
+        raise ai.AIError(message,retry_after=error.retry_after,cause=error.cause) from None
+
+
 class AITestInput(BaseModel):
     model_config={'extra':'forbid'}
     expected_model:str|None=Field(default=None,max_length=100)
@@ -1652,7 +1671,7 @@ def ai_test(body:AITestInput|None=None,user=Depends(admin_user)):
         try:
             with ai_runs.track('connection_test',cfg['ai_model'],subject=user['username']) as run_id:
                 key=unseal(encrypted)
-                ai.investigate({'diagnostic':'Connection and JSON-schema compatibility test only. No process or server evidence was supplied. Return unknown risk and request no checks.'},cfg['ai_model'],key)
+                _ai_test_investigate({'diagnostic':'Connection and JSON-schema compatibility test only. No process or server evidence was supplied. Return unknown risk and request no checks.'},cfg['ai_model'],key)
         except Exception as error:
             return JSONResponse({'detail':'Test failed for model '+cfg['ai_model']+'. '+ai_runs.safe_error(error)+' Your saved model was not changed.', 'model':cfg['ai_model'],'run_id':run_id},status_code=502)
         return {'ok':True,'model':cfg['ai_model'],'run_id':run_id,'detail':'OpenAI connection and structured-output test passed for model '+cfg['ai_model']+'. No server evidence was sent.'}
