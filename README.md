@@ -966,8 +966,17 @@ Controller web instances are listed separately. When `MRPATCHY_EXPECTED_CONTROLL
 is set, each listed controller that is missing, stale, stopped, has an invalid or
 unrecognized report, or runs a different version raises one administrator-only
 in-app notification, which resolves
-when it reports again. An invalid setting raises its own notification. These
-notifications grant no readiness, failover or response authority. Activity → Workers → Endpoint agents now shows root filesystem space and inodes, available memory, and CPU/memory pressure from retained telemetry. Missing or invalid values stay unknown; low-resource flags are advisory and do not change health, alerts, repairs or authorization. Endpoint-agent readiness, low-resource notifications, history/hysteresis, time sync, certificate expiry, GCP-node inventory and remote deployment acceptance remain planned. Rebuild the controller and keep worker versions matched.
+when it reports again. An invalid setting raises its own notification. These notifications grant no readiness, failover or response authority. Activity →
+Workers → Endpoint agents now shows root filesystem space and inodes, available
+memory, CPU/memory pressure, and the kernel's clock-discipline state and maximum
+error from retained telemetry. The clock indicator uses read-only adjtimex() data;
+it does not identify the time source or compare the server clock with the controller.
+Unavailable readings and telemetry from older agents show unknown. A not-synchronized
+result is advisory only and never changes health, alerts, repairs or authorization.
+Missing or invalid resource values likewise remain unknown. Endpoint-agent readiness,
+low-resource notifications, history/hysteresis, certificate expiry, GCP-node inventory
+and remote deployment acceptance remain planned. Target agents need the normal upgrade
+to report clock observations; rebuild the controller and keep worker versions matched.
 
 
 ### Worker controller/key startup gate (v0.13.0)
@@ -1083,12 +1092,14 @@ run or host identities, credentials or evidence. Missing samples produce null
 percentiles, stages can overlap, and retained/pruned events are diagnostic history
 rather than matched production performance measurements.
 
-Administrators can load the same summary from Fleet AI logs in a dedicated Process
-triage timings panel. The panel distinguishes measured zero from missing percentiles,
-shows sample/error counts and coverage or truncation warnings, and can retry without
-interrupting the individual-run list. It discards stale responses after navigation
-and remains confined to the administrator fleet view; per-server logs and other
-roles are unchanged.
+Administrators can load the same summary from Fleet AI logs in a dedicated AI
+stage timings panel. Its Activity selector switches between Process triage and
+Update importance; the API also accepts `purpose=update_scoring` for scoring runs.
+The panel distinguishes measured zero from missing percentiles, shows sample/error
+counts and coverage or truncation warnings, and can retry without interrupting the
+individual-run list. Changing activity clears prior results, and late responses for
+the previous selection are ignored. It remains administrator-only; per-server logs
+and other roles are unchanged.
 
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
