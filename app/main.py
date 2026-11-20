@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = "1.75.69"
+APP_VERSION = '1.75.78'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -2511,11 +2511,14 @@ def delete_patch_schedule(schedule_id:str,body:ScheduleRevision,user=Depends(adm
     return {'ok':True}
 
 @app.get('/api/ai/triage/timings')
-def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, user=Depends(admin_user)):
+def ai_triage_timings(limit: int = ai_runs.TIMING_SUMMARY_RUN_LIMIT, purpose: str = 'triage',
+                      user=Depends(admin_user)):
     if not 1 <= limit <= ai_runs.TIMING_SUMMARY_RUN_LIMIT:
         raise HTTPException(400, 'Invalid timing sample limit')
+    if purpose not in ai_runs.TIMING_SUMMARY_PURPOSES:
+        raise HTTPException(400, 'Invalid timing summary activity')
     with Session() as s:
-        return ai_runs.triage_timing_summary(s, limit)
+        return ai_runs.triage_timing_summary(s, limit, purpose)
 
 
 @app.get('/api/ai/runs')

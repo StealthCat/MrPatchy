@@ -150,3 +150,57 @@ def test_triage_timing_summary_bounds_runs_and_events(admin, monkeypatch):
     }
     for limit in (0, 101):
         assert admin.get('/api/ai/triage/timings', params={'limit': limit}).status_code == 400
+
+
+def test_timing_summary_samples_only_the_selected_activity(admin):
+    with Session() as s:
+        for identifier, purpose, finished in (
+            ('triage-run', 'triage', 5),
+            ('scoring-run', 'update_scoring', 6),
+            ('scoring-failed', 'update_scoring', 7),
+            ('scoring-running', 'update_scoring', 0),
+        ):
+            s.add(ai_runs.AIRun(id=identifier, purpose=purpose,
+                                state='running' if not finished else ('error' if 'failed' in identifier else 'complete'),
+                                started=finished, finished=finished, subject='/private/evidence'))
+        for identifier, stage, message in (
+            ('triage-run', 'provider', 'provider: 900.000 ms; outcome=complete'),
+            ('triage-run', 'ssh_evidence', 'ssh evidence: 50.000 ms; outcome=complete'),
+            ('scoring-run', 'provider', 'provider: 10.000 ms; outcome=complete'),
+            ('scoring-run', 'result_persistence', 'result persistence: 2.000 ms; outcome=complete'),
+            ('scoring-failed', 'provider', 'provider: 30.000 ms; outcome=error'),
+            ('scoring-running', 'provider', 'provider: 999.000 ms; outcome=complete'),
+        ):
+            s.add(ai_runs.AIEvent(run_id=identifier, stage='timing_' + stage, message=message))
+        s.commit()
+
+    default = admin.get('/api/ai/triage/timings')
+    triage = admin.get('/api/ai/triage/timings', params={'purpose': 'triage'})
+    assert default.status_code == triage.status_code == 200
+    assert default.json() == triage.json()
+    assert triage.json()['purpose'] == 'triage' and triage.json()['sampled_runs'] == 1
+    assert triage.json()['stages']['provider'] == {
+        'samples': 1, 'errors': 0, 'p50_ms': 900.0, 'p95_ms': 900.0,
+    }
+
+    response = admin.get('/api/ai/triage/timings', params={'purpose': 'update_scoring'})
+    assert response.status_code == 200
+    data = response.json()
+    assert data['purpose'] == 'update_scoring'
+    assert data['sampled_runs'] == 2 and data['runs_without_samples'] == 0
+    assert data['stages']['provider'] == {
+        'samples': 2, 'errors': 1, 'p50_ms': 10.0, 'p95_ms': 30.0,
+    }
+    assert data['stages']['result_persistence']['samples'] == 1
+    assert data['stages']['ssh_evidence'] == {
+        'samples': 0, 'errors': 0, 'p50_ms': None, 'p95_ms': None,
+    }
+    assert '/private/evidence' not in response.text
+
+    for purpose in ('', 'connection_test', 'worker', 'TRIAGE', 'update_scoring '):
+        assert admin.get('/api/ai/triage/timings', params={'purpose': purpose}).status_code == 400
+
+
+def test_timing_summary_rejects_unknown_purpose():
+    with Session() as s, pytest.raises(ValueError):
+        ai_runs.triage_timing_summary(s, 1, 'security_plan')
