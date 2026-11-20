@@ -2,12 +2,12 @@
 import json
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from test_auto_plan_status import seed
 from test_operations import login_as
 
 from app import ai, auto_plan_status
-from app.db import Host, Job, Session, Setting
+from app.db import Host, Job, Session, Setting, engine
 
 URL = '/api/security/auto-plan-status'
 
@@ -57,6 +57,58 @@ def test_disabled_server_is_listed_as_inactive_and_active_plans_are_counted(admi
     states = {item['host_id']: item['state'] for item in result['items']}
     assert states == {'beta': 'inactive', 'web': 'ready'}
     assert result['totals']['ready'] == 1 and result['totals']['active_plans'] == 1
+
+
+def test_fleet_reads_both_job_summaries_in_one_query(admin, monkeypatch):
+    now = seed()
+    host_ids = [f'fleet-{index:02d}' for index in range(11)]
+    for host_id in host_ids + ['zz-over-limit']:
+        add_host(host_id, host_id, {'auto_ai_plan': True})
+    monkeypatch.setattr(auto_plan_status, 'FLEET_LIMIT', 12)
+    with Session() as s:
+        for host_id in host_ids:
+            s.add_all([
+                Job(id=f'{host_id}-newer-active', host_id=host_id,
+                    action='security-plan', state='queued', created=now - 30),
+                Job(id=f'{host_id}-b-active', host_id=host_id,
+                    action='startup-plan', state='running', created=now - 40),
+                Job(id=f'{host_id}-a-active', host_id=host_id,
+                    action='security-plan', state='queued', created=now - 40),
+                Job(id=f'{host_id}-a-auto', host_id=host_id,
+                    action='security-plan', payload={'automatic': True}, state='failed', created=now - 20),
+                Job(id=f'{host_id}-z-auto', host_id=host_id,
+                    action='security-plan', payload={'automatic': True}, state='complete', created=now - 20),
+                Job(id=f'{host_id}-manual', host_id=host_id,
+                    action='security-plan', state='complete', created=now - 10),
+                Job(id=f'{host_id}-startup', host_id=host_id,
+                    action='startup-plan', payload={'automatic': True}, state='failed', created=now - 5),
+            ])
+        s.commit()
+
+    job_reads = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if 'order by jobs.created' in ' '.join(statement.lower().split()):
+            job_reads.append(statement)
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        result = fleet(now)
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+
+    assert len(job_reads) == 1
+    assert result['truncated'] is True
+    assert [item['host_id'] for item in result['items']] == host_ids + ['web']
+    with Session() as s:
+        for item in result['items'][:-1]:
+            assert item['active_plan'] == {'state': 'running', 'created': pytest.approx(now - 40)}
+            assert item['latest_automatic'] == {'state': 'complete', 'created': pytest.approx(now - 20)}
+            single = auto_plan_status.status(s, item['host_id'], now)
+            assert item['active_plan'] == single['active_plan']
+            assert item['latest_automatic'] == single['latest_automatic']
+    assert result['items'][-1]['active_plan'] is None
+    assert result['items'][-1]['latest_automatic']['state'] == 'failed'
 
 
 def test_listing_is_bounded_and_reports_truncation(admin, monkeypatch):
