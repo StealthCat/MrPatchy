@@ -1092,12 +1092,14 @@ run or host identities, credentials or evidence. Missing samples produce null
 percentiles, stages can overlap, and retained/pruned events are diagnostic history
 rather than matched production performance measurements.
 
-Administrators can load the same summary from Fleet AI logs in a dedicated Process
-triage timings panel. The panel distinguishes measured zero from missing percentiles,
-shows sample/error counts and coverage or truncation warnings, and can retry without
-interrupting the individual-run list. It discards stale responses after navigation
-and remains confined to the administrator fleet view; per-server logs and other
-roles are unchanged.
+Administrators can load the same summary from Fleet AI logs in a dedicated AI
+stage timings panel. Its Activity selector switches between Process triage and
+Update importance; the API also accepts `purpose=update_scoring` for scoring runs.
+The panel distinguishes measured zero from missing percentiles, shows sample/error
+counts and coverage or truncation warnings, and can retry without interrupting the
+individual-run list. Changing activity clears prior results, and late responses for
+the previous selection are ignored. It remains administrator-only; per-server logs
+and other roles are unchanged.
 
 `python tools/benchmark_ai.py --runs 20` runs the serial pipeline against disposable
 loopback provider/SSH fixtures and SQLite; it never uses deployment state or a paid
