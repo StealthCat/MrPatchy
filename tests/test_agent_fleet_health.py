@@ -298,7 +298,11 @@ def test_huge_stored_values_keep_both_fleet_pages_available(admin):
                        telemetry={'collected': HUGE, 'resource_pressure': record}))
             s.add(Setting(key='agent-status:huge', value={**receipt(), 'checked': HUGE}))
             s.commit()
-    except DBAPIError:
+    except DBAPIError as exc:
+        # Only MySQL's JSON range rejection (ER_INVALID_JSON_TEXT, 3140) may skip; any other failure is real.
+        args = getattr(exc.orig, 'args', ())
+        if not (args and args[0] == 3140 and 'too big' in str(args[-1]).lower()):
+            raise
         pytest.skip('this database refuses integers beyond float range')
     with Session() as s:
         if s.get(Host, 'huge').telemetry.get('collected') != HUGE:
