@@ -30,12 +30,20 @@ GAPS = [
 ]
 LOW_AVAILABLE_PERCENT = 10
 _MAX_COUNT = 2 ** 63 - 1
+UNINTERPRETABLE = 'The retained agent records could not be interpreted, so this server\'s agent state is unknown.'
 
 
 def _timestamp(value):
+    """Return a positive finite epoch time, or None. Never raises for oversized integers (#1195)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    value = float(value)
+    if isinstance(value, int):
+        if value <= 0:
+            return None
+        try:
+            value = float(value)
+        except OverflowError:  # beyond float range: unknown, exactly like an infinite float
+            return None
     return value if math.isfinite(value) and value > 0 else None
 
 
@@ -66,7 +74,12 @@ def _pressure(entry):
         return None
     some = entry.get('some')
     value = some.get('avg60') if isinstance(some, dict) else None
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 100:
+    # Compare bounds before any float conversion: an integer beyond float range must be unknown, not raise (#1195).
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if not 0 <= value <= 100:
         return None
     return round(float(value), 2)
 
@@ -206,6 +219,21 @@ def classify(host, status, now):
     return result('healthy', 'The agent is verified current and telemetry is fresh.')
 
 
+def _unknown_row(host):
+    return {'host_id': host.id, 'name': host.name, 'deployment_type': None,
+            'verification': {'state': None, 'checked': None, 'age_seconds': None, 'issue_count': 0},
+            'telemetry': {'state': 'missing', 'collected': None},
+            'resources': resources(None, 'missing'), 'health': 'unknown', 'reason': UNINTERPRETABLE}
+
+
+def _classify_guarded(host, status, now):
+    """One host's malformed retained record must not hide agent health for the whole fleet (#1195)."""
+    try:
+        return classify(host, status, now)
+    except (ArithmeticError, TypeError, ValueError):
+        return _unknown_row(host)
+
+
 def page(offset=0, now=None):
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
         raise ValueError('Offset must be a non-negative integer')
@@ -219,7 +247,7 @@ def page(offset=0, now=None):
         for start in range(0, len(keys), 500):
             for row in s.scalars(select(Setting).where(Setting.key.in_(keys[start:start + 500]))):
                 statuses[row.key[len('agent-status:'):]] = row.value
-        rows = [classify(host, statuses.get(host.id), now) for host in hosts]
+        rows = [_classify_guarded(host, statuses.get(host.id), now) for host in hosts]
     rows.sort(key=lambda row: (_RANK[row['health']], (row['name'] or '').lower(), row['host_id']))
     counts = {name: 0 for name in HEALTH_ORDER}
     for row in rows:
