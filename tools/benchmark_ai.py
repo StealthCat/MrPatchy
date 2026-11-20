@@ -16,11 +16,16 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 MYSQL_URL_ENV = 'AI_BENCHMARK_MYSQL_URL'
+FIXTURE_MODEL = 'fixture-model'
+FIXTURE_PRICE_VERSION = 'synthetic-v1'
+FIXTURE_CAP_USD = 10
 PERSISTENCE_TIMING = re.compile(r'([a-z ]+): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
 
 
@@ -196,6 +201,30 @@ def collect_persisted_timings(events, expected_persistence):
     return samples
 
 
+def capped_fixture_summary(session, budget_entry, receipts, settings):
+    """Require one settled reservation for each priced receipt and no extra rows."""
+    expected = {receipt.id: receipt for group in receipts.values() for receipt in group}
+    entries = session.query(budget_entry).all()
+    if len(entries) != len(expected) or {entry.call_id for entry in entries} != expected.keys():
+        raise ValueError('Capped fixture did not retain one reservation per provider receipt.')
+    for entry in entries:
+        receipt = expected[entry.call_id]
+        if (entry.status != 'settled' or receipt.status != 'estimated'
+                or entry.run_id != receipt.run_id or entry.model != FIXTURE_MODEL
+                or entry.pricing_version != FIXTURE_PRICE_VERSION
+                or entry.timezone != settings['ai_budget_timezone']
+                or entry.actual_usd != Decimal(receipt.pricing['estimated_usd'])
+                or not 0 < entry.actual_usd <= entry.reservation_usd):
+            raise ValueError('Capped fixture could not verify a fully settled provider receipt.')
+    return {
+        'pricing_version': FIXTURE_PRICE_VERSION,
+        'cap_usd': settings['ai_daily_cap_usd'],
+        'timezone': settings['ai_budget_timezone'],
+        'settled_calls': len(entries),
+        'settled_microusd': int(sum(entry.actual_usd for entry in entries) * 1_000_000),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runs', type=int, default=8)
@@ -208,9 +237,9 @@ def main():
     parser.add_argument('--persistence-delay-ms', type=int, default=0)
     parser.add_argument('--ssh-delay-ms', type=int, default=10,
                         help='simulated latency of a follow-up SSH evidence request (default: 10)')
-    parser.add_argument('--control-mode', choices=('legacy', 'unthrottled'), default='legacy',
-                        help='AI control mode stored for the fixture: legacy (separate rolling-hour limits, '
-                             'the pre-flag behavior) or unthrottled (no Mr Patchy pacing or spend cap) (default: legacy)')
+    parser.add_argument('--control-mode', choices=('legacy', 'unthrottled', 'daily_cap'), default='legacy',
+                        help='AI control mode for the fixture (default: legacy). daily_cap uses the real '
+                             'spend ledger with fixture-only prices and a fixed cap.')
     parser.add_argument('--queue-age-seconds', type=int, default=2,
                         help='synthetic age of queued observations without a real wait (default: 2)')
     parser.add_argument('--retained-history-rows', type=int, default=0,
@@ -257,7 +286,7 @@ def main():
         for name in list(os.environ):
             if name.lower().endswith('_proxy'):os.environ.pop(name)
         from sqlalchemy import insert
-        from app import ai, ai_policy, worker, ai_runs
+        from app import ai, ai_budget, ai_policy, ai_pricing, worker, ai_runs
         from app.db import init, Session, Host, Setting, Behavior, engine, config
         from app.security import seal
         if args.database == 'mysql':
@@ -267,6 +296,15 @@ def main():
         if single_server_slots is not None and args.concurrency > single_server_slots:
             parser.error(f'--same-server requires --concurrency at most {single_server_slots}')
         init()
+        capped = args.control_mode == 'daily_cap'
+        if capped:
+            # The benchmark uses one loopback model and never depends on public catalog dates.
+            now = time.time()
+            cleanup.enter_context(patch.multiple(
+                ai_pricing, RATES={FIXTURE_MODEL: ('0.1', '0.01', '0.5', None)},
+                VERSION=FIXTURE_PRICE_VERSION, SOURCE='Disposable loopback benchmark',
+                VERIFIED_AT=now - 1, EXPIRES_AT=now + 86_400,
+            ))
         requests = []; ssh_requests = []; connections = set(); samples = {k: [] for k in ('run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission', 'queue_age', 'receipt_persistence', 'usage_persistence')}
         provider_lock = threading.Lock()
         active_provider_requests = peak_provider_requests = 0
@@ -288,8 +326,12 @@ def main():
                     evidence = json.loads(payload['input']); time.sleep(args.provider_delay_ms/1000)
                     result = {'risk':'low','explanation':'Synthetic complete assessment','recommended_checks':'None',
                               'requested_checks':['executable'] if evidence['two_stage'] and 'investigation' not in evidence else []}
-                    body = json.dumps({'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(result)}]}],
-                                       'usage':{'input_tokens':100,'output_tokens':20,'output_tokens_details':{'reasoning_tokens':5}}}).encode()
+                    response = {'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(result)}]}],
+                                'usage':{'input_tokens':100,'output_tokens':20,'output_tokens_details':{'reasoning_tokens':5}}}
+                    if capped:
+                        response.update(model=FIXTURE_MODEL, service_tier='default')
+                        response['usage']['input_tokens_details'] = {'cached_tokens': 0}
+                    body = json.dumps(response).encode()
                 finally:
                     with provider_lock:
                         active_provider_requests -= 1
@@ -335,8 +377,11 @@ def main():
             expected_hosts = {subject: f'fixture-host-{0 if args.same_server else index}'
                               for index, subject in enumerate(subjects)}
             with Session() as s:
-                s.add(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model','ai_hourly_limit':100,
-                                                  'ai_control_mode':args.control_mode}))
+                settings = {'ai_enabled': True, 'ai_model': FIXTURE_MODEL, 'ai_hourly_limit': 100,
+                            'ai_control_mode': args.control_mode}
+                if capped:
+                    settings.update(ai_daily_cap_usd=FIXTURE_CAP_USD, ai_budget_timezone='UTC')
+                s.add(Setting(key='config', value=settings))
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
                 for host_id in dict.fromkeys(expected_hosts.values()):
                     s.add(Host(id=host_id,name='Fixture only',address='192.0.2.1',fingerprint=''))
@@ -384,8 +429,10 @@ def main():
                 assert all(len(receipts[run.id]) == run.calls for run in runs)
                 costs = [ai_runs.cost_summary(run, receipts[run.id]) for run in runs]
                 # Report the mode the application actually applied, not only the flag.
-                control_mode = config(s)['ai_control_mode']
+                settings = config(s)
+                control_mode = settings['ai_control_mode']
                 assert control_mode == args.control_mode, control_mode
+                fixture_budget = capped_fixture_summary(s, ai_budget.BudgetEntry, receipts, settings) if capped else None
                 follow_up_subjects = {subjects[index] for index in follow_up_indices}
                 expected_persistence = {
                     'result_persistence': {run.id for run in runs},
@@ -395,7 +442,7 @@ def main():
                     s.query(ai_runs.AIEvent).filter(ai_runs.AIEvent.stage.like('timing_%')),
                     expected_persistence,
                 )
-            assert all(p['model']=='fixture-model' and p['max_output_tokens']==1600 and p['text']['format']['schema']==ai.SCHEMA for p in requests)
+            assert all(p['model']==FIXTURE_MODEL and p['max_output_tokens']==1600 and p['text']['format']['schema']==ai.SCHEMA for p in requests)
             def summary(values):
                 if not values:
                     return {'count': 0, 'p50_ms': None, 'p95_ms': None}
@@ -409,6 +456,7 @@ def main():
                 'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
                 'ai_control_mode':control_mode,
+                **({'fixture_budget': fixture_budget} if capped else {}),
                 'stages':{k:summary(v) for k,v in samples.items()},
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
                 'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'completed_subjects':completed_subjects,'approved_subjects':approved_subjects,

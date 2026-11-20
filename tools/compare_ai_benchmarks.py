@@ -24,9 +24,8 @@ STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
     'queue_age', 'receipt_persistence', 'usage_persistence',
 )
-# AI control modes the fixture can measure without pacing or pricing changing
-# the workload. Reports from before --control-mode ran in the implicit legacy mode.
-CONTROL_MODES = ('legacy', 'unthrottled')
+# Reports from before --control-mode ran in the implicit legacy mode.
+CONTROL_MODES = ('legacy', 'unthrottled', 'daily_cap')
 LEGACY_CONTROL_MODE = 'legacy'
 
 
@@ -222,6 +221,25 @@ def _validate(report, label):
     else:
         control_mode = LEGACY_CONTROL_MODE
         control_mode_source = 'legacy implicit default'
+    fixture_budget = report.get('fixture_budget')
+    if control_mode == 'daily_cap':
+        key = f'{label}.fixture_budget'
+        if not isinstance(fixture_budget, dict):
+            raise ComparisonError(f'{key} is required for daily_cap')
+        cap = _integer(fixture_budget.get('cap_usd'), f'{key}.cap_usd')
+        settled = _integer(fixture_budget.get('settled_calls'), f'{key}.settled_calls')
+        total = _integer(fixture_budget.get('settled_microusd'), f'{key}.settled_microusd')
+        # synthetic-v1 uses $0.10 input and $0.50 output per million tokens,
+        # with zero cached tokens. Compare the exact amount in millionths of a dollar.
+        if (fixture_budget.get('pricing_version') != 'synthetic-v1'
+                or fixture_budget.get('timezone') != 'UTC' or cap != 10
+                or settled != provider_calls or 10 * total != input_tokens + 5 * output_tokens
+                or total <= 0):
+            raise ComparisonError(f'{key} must record the fixed synthetic cap and complete settlement')
+        fixture_budget = {'pricing_version': 'synthetic-v1', 'timezone': 'UTC', 'cap_usd': cap,
+                          'settled_calls': settled, 'settled_microusd': total}
+    elif 'fixture_budget' in report:
+        raise ComparisonError(f'{label}.fixture_budget applies only to daily_cap')
     # Reports created before the optional synthetic receipt/usage persistence
     # delay carried no field and ran with no added delay. Treat only that
     # documented legacy contract as zero; bound any reported value.
@@ -262,6 +280,7 @@ def _validate(report, label):
         'cost_status': cost_status, 'workload_fingerprint': workload_fingerprint,
         'stages': stages,
         'ai_control_mode': control_mode, 'ai_control_mode_source': control_mode_source,
+        'fixture_budget': fixture_budget,
     }
 
 
@@ -343,6 +362,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'input_tokens': base['input_tokens'], 'output_tokens': base['output_tokens'],
             'workload_fingerprint': base['workload_fingerprint'],
             'stage_samples': {stage: base['stages'][stage]['count'] for stage in STAGES},
+            **({'fixture_budget': base['fixture_budget']} if base['fixture_budget'] is not None else {}),
         },
         'deltas': {
             'elapsed_seconds': _delta(base['elapsed_seconds'], current['elapsed_seconds']),

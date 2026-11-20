@@ -11233,11 +11233,31 @@ they measured, and the comparator could not detect a mixed pair.
   | legacy | 7.04/s | 11.02/s |
   | unthrottled | 7.21/s | 10.41/s |
 
-- **Still open:** `rate`, `daily_cap` and `rate_and_daily` benchmark modes. Rate
-  pacing deliberately spaces starts, and a capped mode needs a priced fixture
-  model. MySQL records (#976) and production measurements are also open.
+- **Follow-up:** #1231 covers the daily-cap fixture. The `rate` and
+  `rate_and_daily` modes still need fixtures that measure intentional pacing.
+  Production measurements remain open.
 - **Unchanged:** no runtime, admission, provider, schema or
   response-authorization behavior.
+
+
+### Daily-cap triage benchmarks — Roadmap A checkpoint #1231
+
+Run the serial and parallel loopback fixtures with
+`--control-mode daily_cap` to include the real reservation, transmission and
+settlement operations. The tool applies a fixture-only price and a fixed USD 10
+daily cap in UTC inside the disposable process. The price and the reported
+settlements are synthetic. No charges are incurred.
+
+The benchmark requires one settled ledger row per call receipt, including
+follow-up calls. It checks the receipt, run, model, pricing version, estimated
+amount and reservation ceiling before reporting complete settlement. The
+comparator requires capped-mode settlement evidence and a matched workload.
+Existing legacy and unthrottled reports keep their format.
+
+SQLite and disposable MySQL tests exercise both cross-server and same-server
+workloads. This covers the ordinary capped path with available headroom. Tests
+for exhausted caps, deferral and restart remain separate. Production latency
+and benchmarking rate-paced modes remain open.
 
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
