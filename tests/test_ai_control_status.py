@@ -1,7 +1,10 @@
 from decimal import Decimal
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
-from app import ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff
+import pytest
+
+from app import ai, ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff
 from app.db import Session, Setting
 from app.security import seal
 
@@ -55,6 +58,34 @@ def test_snapshot_uses_latest_simultaneous_gate_without_exposing_records(admin, 
     for private in ('private-call-id', 'private-run-id', 'private-receipt-id', 'private-model',
                     'private-version', 'private.example.test', 'private provider detail'):
         assert private not in rendered
+    assert result['blockers'][0]['message'] == 'Shared provider backoff is waiting after a transient failure.'
+
+
+@pytest.mark.parametrize('retry_after, delay, message', [
+    (0, 60, 'Transient provider or transport failure; bounded exponential backoff is active.'),
+    (120, 120, 'Provider Retry-After floor is active.'),
+    (86401, 86400, 'Provider Retry-After exceeds 24 hours and was capped; an administrator may clear it after review.'),
+])
+def test_gate_explains_active_provider_wait(admin, monkeypatch, retry_after, delay, message):
+    configure()
+    now = 2_000_000_000.0
+    monkeypatch.setattr(ai_control_status, 'time', SimpleNamespace(time=lambda: now))
+    monkeypatch.setattr(ai_provider_backoff.random, 'uniform', lambda low, high: high)
+    ai_provider_backoff.failed(ai.AIError('private provider response', transient=True, retry_after=retry_after), now=now)
+
+    response = admin.get('/api/settings/ai-control-status')
+    assert response.status_code == 200
+    result = response.json()
+    assert not result['can_start_now']
+    assert result['next_start_at'] == now + delay
+    assert result['blockers'] == [
+        {'code': 'provider_backoff', 'message': message, 'next_at': now + delay, 'recheck_at': None},
+    ]
+    assert 'private provider response' not in response.text
+
+    now += delay
+    expired = admin.get('/api/settings/ai-control-status').json()
+    assert expired['can_start_now'] and not expired['blockers']
 
 
 def test_indefinite_policy_or_configuration_blocker_refuses_a_claimed_time(admin):
@@ -227,6 +258,41 @@ def test_legacy_allowances_match_actual_admission_refusals(admin, monkeypatch):
     assert ai_claims.acquire() is None
     _, limits = limits_by_purpose(now)
     assert limits['triage']['state'] == 'exhausted' and limits['triage']['next_at'] == now - 30 + 3600
+
+
+def test_legacy_window_count_and_deadline_use_one_statement(admin):
+    from sqlalchemy import event
+
+    from app.ai_runs import AIRun
+    from app.db import engine
+
+    now = 2_000_000_000.0
+    older = tuple(now - 3500 + index for index in range(256))
+    add_history(scoring=(*older, now - 10, now - 10, now - 3, now - 3600),
+                triage=(now - 1,))
+    scenarios = (
+        (now, 3, (259, True, now + 3590)),
+        (now + 3590, 3, (1, False, None)),
+        (now + 3600, 3, (0, False, None)),
+        (now, 0, (259, True, None)),
+    )
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        with Session() as session:
+            for clock, limit, expected in scenarios:
+                statements.clear()
+                result = ai_control_status._window(
+                    session, AIRun.started, (AIRun.purpose == 'update_scoring',), limit, clock)
+                assert result == expected
+                assert len(statements) == 1
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+
 
 
 def test_control_snapshot_requires_admin(client):

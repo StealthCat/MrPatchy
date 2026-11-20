@@ -1,3 +1,19 @@
+## 1.75.77 — 2026-11-20
+
+1. [PR #1209](https://github.com/StealthCat/MrPatchy/pull/1209): Add a pure, fail-closed contract for which commands smartd runs on disk warnings, including the warning script, `smartd_warning.d` plugins, `-M exec` or `mail`, Debian's `smartd-runner` and the execution user, from `/etc/smartd.conf` and observed `-w`/`-u` options. Compatibility: no runtime, schema, route, UI, AI, role or response-authorization change. Limits: hook-directory listings and hook contents are not inspected; non-mail directive arguments are not validated, so the contract may over-report but not under-report; no real-binary differential is available; collection, catalog, provenance, UI and AI remain future work.
+
+## 1.75.76 — 2026-11-20
+
+1. [PR #1206](https://github.com/StealthCat/MrPatchy/pull/1206): Batch active-job and latest automatic-plan status reads into one query for listed fleet servers, retaining the existing filters, deterministic job-ID tie breaks and response shape. Compatibility: administrator access, incident totals, readiness, scheduling and response authorization are unchanged. Limit: a 12-server fixture measured 24 history reads reduced to one; production latency remains unmeasured.
+
+## 1.75.75 — 2026-11-20
+
+1. [PR #1210](https://github.com/StealthCat/MrPatchy/pull/1210): Read legacy AI hourly allowance counts and reopening timestamps in one SQL statement. Preserve exact usage counts, the strict one-hour boundary and tie behavior, below-limit and nonpositive-limit states, while bounding the ordered lookup by the configured allowance. Compatibility: status API shape, roles, admission, budgets, provider access and authorization remain unchanged. Limits: validates statement count/query shape, not production latency; broader shared AI-control acceptance remains open.
+
+## 1.75.74 — 2026-11-20
+
+1. [PR #1202](https://github.com/StealthCat/MrPatchy/pull/1202): Explain shared AI start-gate waits as provider Retry-After, local transient backoff, or a provider delay capped at 24 hours in the administrator-only Investigations and Workers views; retain the reason for the deadline that still governs when failures overlap. Compatibility: existing API shape, deadlines, eligibility, durable failure accounting, admission, pause, budget and response authorization remain unchanged; only allow-listed fixed application messages are returned, with a generic fallback for unknown stored values and no provider response text or identifiers. Limits: existing backoff rows keep their stored reason until the floor clears or a later failure supersedes it; per-worker eligibility and matched production-throughput measurements remain open.
+
 ## 1.75.73 — 2026-11-20
 
 1. [PR #1200](https://github.com/StealthCat/MrPatchy/pull/1200): Add a pure resolvconf hook contract reporting which `/etc/resolvconf/update.d` scripts run as root on DNS changes and which `/etc/resolvconf/update-libc.d` scripts run conditionally through the packaged `libc` hook, in byte order with reasons for skipped entries. Compatibility: module, tests and documentation only; no collection, schema, route, UI, AI, role, scheduling or response-authorization change. Limits: models Debian resolvconf 1.78ubuntu7 and debianutils run-parts only; openresolv and the systemd-resolved compatibility shim are not modeled, and agent collection, provenance, catalog, UI and AI classification remain out of scope.
