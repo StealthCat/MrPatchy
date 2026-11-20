@@ -1,7 +1,10 @@
 from decimal import Decimal
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
-from app import ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff
+import pytest
+
+from app import ai, ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff
 from app.db import Session, Setting
 from app.security import seal
 
@@ -55,6 +58,34 @@ def test_snapshot_uses_latest_simultaneous_gate_without_exposing_records(admin, 
     for private in ('private-call-id', 'private-run-id', 'private-receipt-id', 'private-model',
                     'private-version', 'private.example.test', 'private provider detail'):
         assert private not in rendered
+    assert result['blockers'][0]['message'] == 'Shared provider backoff is waiting after a transient failure.'
+
+
+@pytest.mark.parametrize('retry_after, delay, message', [
+    (0, 60, 'Transient provider or transport failure; bounded exponential backoff is active.'),
+    (120, 120, 'Provider Retry-After floor is active.'),
+    (86401, 86400, 'Provider Retry-After exceeds 24 hours and was capped; an administrator may clear it after review.'),
+])
+def test_gate_explains_active_provider_wait(admin, monkeypatch, retry_after, delay, message):
+    configure()
+    now = 2_000_000_000.0
+    monkeypatch.setattr(ai_control_status, 'time', SimpleNamespace(time=lambda: now))
+    monkeypatch.setattr(ai_provider_backoff.random, 'uniform', lambda low, high: high)
+    ai_provider_backoff.failed(ai.AIError('private provider response', transient=True, retry_after=retry_after), now=now)
+
+    response = admin.get('/api/settings/ai-control-status')
+    assert response.status_code == 200
+    result = response.json()
+    assert not result['can_start_now']
+    assert result['next_start_at'] == now + delay
+    assert result['blockers'] == [
+        {'code': 'provider_backoff', 'message': message, 'next_at': now + delay, 'recheck_at': None},
+    ]
+    assert 'private provider response' not in response.text
+
+    now += delay
+    expired = admin.get('/api/settings/ai-control-status').json()
+    assert expired['can_start_now'] and not expired['blockers']
 
 
 def test_indefinite_policy_or_configuration_blocker_refuses_a_claimed_time(admin):

@@ -11777,6 +11777,21 @@ Roadmap A requires worker health to show the blocked reason and next eligible st
 - **Validation:** the new `tests/ui_worker_ai_control_gates.cjs` times out on main `68887ce` (no card) and passes after the change. It covers the finite, open, malformed (injection) and error/retry states, placement, refresh, pagination, a slow snapshot with a discarded late response, the viewer case, and no horizontal scroll at 320, 768 and 1440 px. `ui_workers.cjs` and `ui_ai_control_gates.cjs` still pass.
 - **Remaining:** the card is display-only and promises no start. Per-worker gate state and full queue/spend dashboard acceptance remain open.
 
+### Explain shared provider waits — Roadmap A checkpoint #1201
+
+The shared AI start gates on Investigations and Activity → Workers explain
+whether the recorded deadline came from provider Retry-After, local transient
+backoff, or a provider delay capped at 24 hours. The administrator-only endpoint
+returns only known application messages, with a generic fallback for unknown
+stored text. It excludes provider response details and request identifiers.
+
+When failures overlap, the stored explanation follows the deadline that holds.
+A shorter failure keeps the earlier explanation, and a capped wait takes
+precedence at an equal deadline. Existing rows keep their recorded reason until
+the backoff clears or a later failure takes precedence. Eligibility, retry accounting,
+admission and response authorization follow the existing rules. Per-worker
+eligibility and matched production throughput measurements remain open.
+
 ### Fleet automatic AI plan status — worker checkpoint #936
 
 This closes the #922 limitation that automatic AI plan status was readable only one server at a time.
@@ -12065,6 +12080,19 @@ never reads a sourced file.
 - **Unchanged:** no ingest, schema, route, UI, role or response-authorization change. The view still never inspects, repairs or authorizes anything, and resource metrics still never change the health state.
 - **Validation:** `tests/test_agent_fleet_health.py` adds regressions for `10**400`, `-10**400` and `2**1024` in `avg60`, `collected` and `checked`, the per-host guard, and an end-to-end store of the huge values through both admin APIs. Nine of the new tests fail on `d3f72fe4`.
 
+
+### resolvconf hook contract — worker checkpoint #1199
+
+`app/resolvconf_hooks.py` is a pure, versioned, I/O-free roadmap F contract. From entry metadata for `/etc/resolvconf/update.d` and `/etc/resolvconf/update-libc.d`, it reports which scripts the Debian `resolvconf` package runs as root, in what order and on which triggers.
+
+- **Source of the semantics:** resolvconf 1.78ubuntu7 `/sbin/resolvconf` and `/etc/resolvconf/update.d/libc`, downloaded from archive.ubuntu.com and read, plus debianutils `run-parts`.
+  - `resolvconf -a`, `-d` and `-u` run `run-parts [--arg=…] /etc/resolvconf/update.d` without `--exit-on-error` or `--lsbsysinit`. Interface hooks call them on every DNS change. A postponed update runs on `--enable-updates` at boot.
+  - The packaged `update.d/libc` runs `run-parts /etc/resolvconf/update-libc.d` only after the generated content changes and while `/etc/resolv.conf` is symlinked to the dynamic file. So `update-libc.d` scripts are `runs_if_libc` when `libc` runs, `not_invoked` when it does not, and `unresolved` when that cannot be decided.
+  - Names must match `^[A-Za-z0-9_-]+$`. Order is bytewise. Symlinks are followed. Directories, dangling links, non-executable files, noexec mounts and special files are skipped, each with a stated reason.
+- **Fail closed:** blocking gaps cover an unobserved or unsupported family, an unknown installation state, unobserved, unreadable or truncated listings, malformed or duplicate entries, missing metadata, an unobserved symlink target and over-limit input. Unobserved mount flags are a non-blocking gap.
+- **Validation:** `tests/test_resolvconf_hooks.py` has 31 tests, including a differential against the real debianutils `run-parts --test` on real files. Four mutations are each caught: allowing dots in names, ignoring noexec, invoking `update-libc.d` whenever `libc` is listed, and locale-style ordering.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of both directories and the resolvconf installation state, a catalog entry, package provenance, UI and AI classification.
 
 ### smartd warning-command contract — worker checkpoint #1207 (roadmap F)
 
