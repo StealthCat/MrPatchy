@@ -37,21 +37,32 @@ PLAN_ACTIONS = ('security-plan', 'startup-plan')
 STATES = ('off', 'ai_disabled', 'not_configured', 'paused', 'held', 'inactive', 'ready')
 
 
-def _state(session, host_id, policy, cfg):
-    if not policy.get('auto_ai_plan'):
-        return 'off'
+def _readiness(session, host_ids, cfg):
+    """Classify the listed, opted-in servers without per-server database reads."""
+    if not host_ids:
+        return {}
     if not cfg['ai_enabled']:
-        return 'ai_disabled'
-    if not cfg['ai_model'] or session.get(Setting, 'openai_key') is None:
-        return 'not_configured'
-    if ai_policy.status(session, host_id)['paused']:
-        return 'paused'
-    from .operations import host_quarantined
-    if host_quarantined(session, host_id):
-        return 'held'
-    if session.scalar(host_lifecycle.active_ids().where(Host.id == host_id)) is None:
-        return 'inactive'
-    return 'ready'
+        return dict.fromkeys(host_ids, 'ai_disabled')
+    if not cfg['ai_model'] or session.scalar(select(Setting.key).where(Setting.key == 'openai_key')) is None:
+        return dict.fromkeys(host_ids, 'not_configured')
+
+    keys = {host_id: ai_policy.PREFIX + host_id for host_id in host_ids}
+    policies = dict(session.execute(
+        select(Setting.key, Setting.value).where(Setting.key.in_(keys.values()))
+    ).all())
+    paused = {
+        host_id for host_id, key in keys.items()
+        if ai_policy.stored_paused(policies.get(key), present=key in policies)
+    }
+    from .operations import quarantined_hosts
+    held = quarantined_hosts(session, [host_id for host_id in host_ids if host_id not in paused])
+    unchecked = [host_id for host_id in host_ids if host_id not in paused and host_id not in held]
+    active = set(session.scalars(host_lifecycle.active_ids().where(Host.id.in_(unchecked)))) if unchecked else set()
+    states = dict.fromkeys(host_ids, 'inactive')
+    states.update(dict.fromkeys(active, 'ready'))
+    states.update(dict.fromkeys(held, 'held'))
+    states.update(dict.fromkeys(paused, 'paused'))
+    return states
 
 
 def _awaiting(session, host_id):
@@ -109,12 +120,12 @@ def _pacing(session, cfg, now):
     return {'mode': cfg['ai_control_mode'], 'limit': None, 'used': None, 'remaining': None, 'next_at': None}
 
 
-def _host(session, host_id, policy, cfg, jobs):
+def _host(session, host_id, state, jobs):
     awaiting, truncated, oldest = _awaiting(session, host_id)
     active, latest = jobs.get(host_id, (None, None))
     return {
-        'enabled': bool(policy.get('auto_ai_plan')),
-        'state': _state(session, host_id, policy, cfg),
+        'enabled': state != 'off',
+        'state': state,
         'awaiting': awaiting,
         'awaiting_truncated': truncated,
         'oldest_awaiting_since': oldest,
@@ -127,10 +138,11 @@ def status(session, host_id, now=None):
     """Return this server's automatic AI plan status in the caller's session. Read-only."""
     now = time.time() if now is None else now
     cfg = config(session)
-    row = session.get(Setting, 'security-policy:' + host_id)
+    row = session.get(Setting, POLICY_PREFIX + host_id)
     policy = row.value if row and isinstance(row.value, dict) else {}
     jobs = _plan_jobs(session, [host_id])
-    return {'generated_at': now, **_host(session, host_id, policy, cfg, jobs), 'pacing': _pacing(session, cfg, now)}
+    state = _readiness(session, [host_id], cfg)[host_id] if policy.get('auto_ai_plan') else 'off'
+    return {'generated_at': now, **_host(session, host_id, state, jobs), 'pacing': _pacing(session, cfg, now)}
 
 
 def fleet(session, now=None):
@@ -147,12 +159,14 @@ def fleet(session, now=None):
         .join(Setting, Setting.key == literal(POLICY_PREFIX) + Host.id)
         .where(Host.deleted_at == 0)
         .order_by(Host.name, Host.id)).all()
-    opted = [(host_id, name, value) for host_id, name, value in hosts
+    opted = [(host_id, name) for host_id, name, value in hosts
              if isinstance(value, dict) and value.get('auto_ai_plan')]
     listed = opted[:FLEET_LIMIT]
-    jobs = _plan_jobs(session, [host_id for host_id, _, _ in listed])
-    items = [{'host_id': host_id, 'host_name': name, **_host(session, host_id, value, cfg, jobs)}
-             for host_id, name, value in listed]
+    host_ids = [host_id for host_id, _ in listed]
+    jobs = _plan_jobs(session, host_ids)
+    states = _readiness(session, host_ids, cfg)
+    items = [{'host_id': host_id, 'host_name': name, **_host(session, host_id, states[host_id], jobs)}
+             for host_id, name in listed]
     return {
         'generated_at': now,
         'items': items,

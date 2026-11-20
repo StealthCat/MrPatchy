@@ -6,7 +6,7 @@ from sqlalchemy import event, func, select
 from test_auto_plan_status import seed
 from test_operations import login_as
 
-from app import ai, auto_plan_status
+from app import ai, ai_policy, auto_plan_status
 from app.db import Host, Job, Session, Setting, engine
 
 URL = '/api/security/auto-plan-status'
@@ -57,6 +57,59 @@ def test_disabled_server_is_listed_as_inactive_and_active_plans_are_counted(admi
     states = {item['host_id']: item['state'] for item in result['items']}
     assert states == {'beta': 'inactive', 'web': 'ready'}
     assert result['totals']['ready'] == 1 and result['totals']['active_plans'] == 1
+
+
+def test_fleet_readiness_reads_are_bounded_by_page_not_server_count(admin, monkeypatch):
+    now = seed()
+    with Session() as s:
+        for index in range(99):
+            host_id = f'fixture-{index:03d}'
+            s.add(Host(id=host_id, name=host_id, address='192.0.2.9', fingerprint=''))
+            s.add(Setting(key='security-policy:' + host_id, value={'auto_ai_plan': True}))
+        s.commit()
+
+    reads = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        reads.append(statement)
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        overhead = {}
+        for count in (12, 100):
+            monkeypatch.setattr(auto_plan_status, 'FLEET_LIMIT', count)
+            reads.clear()
+            result = fleet(now)
+            assert result['totals']['ready'] == count
+            # Incident counts still use one bounded query per listed server.
+            overhead[count] = len(reads) - count
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+
+    assert overhead[12] == overhead[100]
+    assert overhead[100] <= 11
+
+
+def test_fleet_readiness_precedence_matches_per_server_status(admin):
+    now = seed()
+    expected = {'paused': 'paused', 'malformed': 'paused', 'held': 'held',
+                'inactive': 'inactive', 'web': 'ready'}
+    for host_id in expected:
+        if host_id != 'web':
+            add_host(host_id, host_id, {'auto_ai_plan': True})
+    with Session() as s:
+        for host_id in ('paused', 'held', 'inactive'):
+            s.get(Host, host_id).enabled = False
+        for host_id in ('paused', 'held'):
+            s.add(Job(id=f'hold-{host_id}', host_id=host_id, action='upgrade', state='recovery_required'))
+        s.add(Setting(key=ai_policy.PREFIX + 'paused', value={'paused': True}))
+        s.add(Setting(key=ai_policy.PREFIX + 'malformed', value=['unknown policy']))
+        s.commit()
+
+    assert {item['host_id']: item['state'] for item in fleet(now)['items']} == expected
+    with Session() as s:
+        for host_id, state in expected.items():
+            assert auto_plan_status.status(s, host_id, now)['state'] == state
 
 
 def test_fleet_reads_both_job_summaries_in_one_query(admin, monkeypatch):
