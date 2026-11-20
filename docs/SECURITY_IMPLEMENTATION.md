@@ -11198,6 +11198,21 @@ This measures the loopback benchmark on a disposable database. A reported
 throughput figure is fixture-only. Representative live-provider and production
 failover measurements remain open.
 
+### Transport latency in triage fixture comparisons — Roadmap A checkpoint #1120
+
+Run `python tools/compare_ai_benchmarks.py serial.json parallel.json --provider-transport`
+to add a separate p50/p95 comparison for the persisted provider transport
+timing. The usual workload equivalence checks still run first. Both reports
+must contain one valid timing sample per provider call. This transport
+measurement excludes receipt and usage persistence, which contribute to the
+existing, wider provider-call measurement.
+
+The retained SQLite loopback records have 30 transport samples per report.
+Cross-server p95 was 26.738 ms serial and 58.657 ms parallel. Same-server p95
+was 27.447 ms serial and 59.814 ms parallel. These figures describe the
+retained fixture runs. Matched live-provider timings and production throughput
+remain open. The original comparison reports still reproduce without the flag.
+
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
