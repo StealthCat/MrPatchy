@@ -76,7 +76,10 @@ _CLOCK_LIMIT = 10 ** 12
 
 
 def _microseconds(value, signed=False):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    # Only floats can be non-finite; math.isfinite() on an int beyond float range raises OverflowError.
+    if isinstance(value, float) and not math.isfinite(value):
         return None
     if abs(value) > _CLOCK_LIMIT or (value < 0 and not signed):
         return None

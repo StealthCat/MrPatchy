@@ -6563,7 +6563,9 @@ call is `unknown`, with a typed `clock-sync` gap.
 The endpoint-agent **Resources** column shows the clock state and its maximum
 error, plus an advisory `clock-unsynchronized` flag. The controller accepts only
 consistent records. A state that contradicts its own maximum error is shown as
-unknown. Like the other resource metrics, the flag never changes
+unknown, as are negative, non-finite and out-of-range values. Bounds are checked
+before any float conversion, so an integer beyond float range is rejected instead
+of raising `OverflowError`. Like the other resource metrics, the flag never changes
 health, counts, alerts, repairs, preflight or authorization. Missing or
 future-dated telemetry shows nothing.
 

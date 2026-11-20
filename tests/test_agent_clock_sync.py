@@ -111,6 +111,13 @@ def test_fleet_summary_reports_clock_and_advisory_attention():
     lambda r: r.update(max_error=-1),
     lambda r: r.update(offset=float('nan')),
     lambda r: r.update(estimated_error=True),
+    lambda r: r.update(max_error=float('inf')),
+    lambda r: r.update(offset=float('-inf')),
+    lambda r: r.update(offset=10 ** 13),
+    # Integers beyond float range must be rejected, not raise OverflowError.
+    lambda r: r.update(max_error=10 ** 400),
+    lambda r: r.update(estimated_error=10 ** 400),
+    lambda r: r.update(offset=-(10 ** 400)),
 ])
 def test_malformed_or_contradictory_clock_records_are_unknown(mutate):
     entry = record()
