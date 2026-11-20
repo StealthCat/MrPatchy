@@ -1,3 +1,7 @@
+## 1.79.2 — 2026-11-20
+
+1. [PR #1242](https://github.com/StealthCat/MrPatchy/pull/1242): Rotate the bounded 50-subject exact known-good hit probe while daily-cap, rate-admission or provider-backoff gates are closed, so cached free hits behind older paid subjects are found without waiting for a gate reset. Compatibility: no schema, API, UI, role or response-authorization changes; paid subjects remain deferred without provider calls or reservations. Limits: the cursor is in-memory and per-process; a hit appearing before the cursor waits for wrap, and oversized evidence behavior is unchanged.
+
 ## 1.79.1 — 2026-11-20
 
 1. [PR #1234](https://github.com/StealthCat/MrPatchy/pull/1234): Treat a non-object stored per-server AI policy as paused at minimum capacity, so malformed values no longer crash automatic fleet planning, policy reads or the repair endpoint. Compatibility: valid policy objects behave as before; no schema, API-shape, auth or response-authorization change. Limits: the SQL `paused_ids()` summary still does not classify non-objects as paused (the provider gate remains fail-closed), and malformed `security-policy:<host>` values are separate work.
