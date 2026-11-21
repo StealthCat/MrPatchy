@@ -874,7 +874,12 @@ def _assess_active_behavior(s,row,cfg,secret):
             if follow_up and error.cause==ai.EVIDENCE_SIZE:error.cause=ai.FOLLOW_UP_EVIDENCE_SIZE
             raise
         inputs.append({'evidence':prepared,'policy':policy})
-        return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
+        try:return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
+        except ai.AIError as error:
+            # Only the follow-up was withheld by the cap; the first-stage call was sent (#1286).
+            if follow_up and error.policy_wait and getattr(error,'budget_wait_until',None) is not None:
+                error.cause=ai.FOLLOW_UP_BUDGET;error.diagnostic=ai.FOLLOW_UP_BUDGET_DIAGNOSTIC
+            raise
     result=assess(row.evidence)
     checks=result.get('requested_checks',[])
     if checks:

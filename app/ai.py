@@ -29,6 +29,11 @@ FOLLOW_UP_EVIDENCE_SIZE='follow_up_evidence_size'
 # max_output_tokens budget before completing the JSON. Neither is a key or quota problem.
 MODEL_REFUSAL='model_refusal'
 TOKEN_BUDGET='token_budget'
+# The daily cap withheld the required follow-up after the first-stage call was
+# already sent (#1286). Only the follow-up is unsent; the earlier call can still count.
+FOLLOW_UP_BUDGET='follow_up_budget'
+FOLLOW_UP_BUDGET_DIAGNOSTIC=('The configured daily AI spend cap has no remaining safe reservation for the required follow-up, '
+    'so the follow-up request was not sent. The earlier first-stage provider call was sent, and its charge can still count toward the cap.')
 
 
 class AIError(RuntimeError):
