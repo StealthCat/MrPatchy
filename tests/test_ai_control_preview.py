@@ -241,3 +241,81 @@ def test_enabling_ai_requires_confirmation_on_both_save_paths(admin):
     assert admin.put('/api/settings', json=full).status_code == 409
     assert confirmed_put(admin, '/api/settings', full).status_code == 200
     assert admin.get('/api/settings').json()['ai_enabled'] is True
+
+
+# Concrete budget-window disclosure before and after a capped change (#1267).
+from datetime import datetime, timezone as _tz  # noqa: E402
+
+CAPPED = BASE | {'ai_control_mode': 'daily_cap'}
+
+
+def _ts(*args):
+    return datetime(*args, tzinfo=_tz.utc).timestamp()
+
+
+def test_budget_reset_is_absent_without_a_capped_window_change():
+    now = _ts(2026, 11, 21, 7, 0)
+    assert preview.budget_reset(BASE, {'ai_rate_per_hour': 5}, now) is None
+    assert preview.budget_reset(BASE, {'ai_budget_timezone': 'Asia/Tokyo'}, now) is None  # rate mode: no window
+    assert preview.budget_reset(CAPPED, {'ai_daily_cap_usd': 20}, now) is None
+    assert preview.budget_reset(CAPPED, {'ai_control_mode': 'rate_and_daily'}, now) is None
+    assert preview.budget_reset(CAPPED, {'ai_control_mode': 'unthrottled', 'ai_budget_timezone': 'Asia/Tokyo'}, now) is None
+
+
+def test_budget_reset_names_both_windows_when_the_timezone_changes():
+    now = _ts(2026, 11, 21, 7, 0)
+    result = preview.budget_reset(CAPPED, {'ai_budget_timezone': 'Pacific/Kiritimati'}, now)
+    assert result['current'] == {'timezone': 'UTC', 'window_start': _ts(2026, 11, 21), 'next_reset': _ts(2026, 11, 22)}
+    # UTC+14: local 2026-11-21 21:00, so the window started 2026-11-20 10:00 UTC and resets 10:00 UTC.
+    assert result['proposed'] == {'timezone': 'Pacific/Kiritimati', 'window_start': _ts(2026, 11, 20, 10),
+                                  'next_reset': _ts(2026, 11, 21, 10)}
+    assert result['resets_sooner'] is True and result['seconds_until_proposed_reset'] == 3 * 3600
+    assert 'keeps counting until the reset of the budget window it was admitted under' in result['carryover']
+    # An earlier proposed boundary is not a refill: retained spend can still count after it (#1269 review).
+    assert 'fresh daily cap' not in result['carryover']
+    assert 'can still count after that boundary' in result['carryover']
+    later = preview.budget_reset(CAPPED, {'ai_budget_timezone': 'America/Los_Angeles'}, now)
+    # PST (UTC-8): local 2026-11-20 23:00, resets at 08:00 UTC, still sooner than UTC midnight.
+    assert later['proposed']['next_reset'] == _ts(2026, 11, 21, 8) and later['resets_sooner']
+    evening = preview.budget_reset(CAPPED, {'ai_budget_timezone': 'America/Los_Angeles'}, _ts(2026, 11, 21, 9))
+    assert evening['proposed']['next_reset'] == _ts(2026, 11, 22, 8) and not evening['resets_sooner']
+
+
+def test_budget_reset_follows_daylight_saving_days():
+    # 2026-11-01 is the US fall-back day: a 25-hour budget day in America/New_York.
+    now = _ts(2026, 11, 1, 12)
+    window = preview.budget_reset(CAPPED, {'ai_budget_timezone': 'America/New_York'}, now)['proposed']
+    assert window['window_start'] == _ts(2026, 11, 1, 4) and window['next_reset'] == _ts(2026, 11, 2, 5)
+
+
+def test_budget_reset_on_entering_a_capped_mode_has_no_current_window():
+    now = _ts(2026, 11, 21, 7, 30)
+    result = preview.budget_reset(BASE, {'ai_control_mode': 'rate_and_daily'}, now)
+    assert result['current'] is None and result['resets_sooner'] is False
+    assert result['proposed']['timezone'] == 'UTC' and result['proposed']['next_reset'] == _ts(2026, 11, 22)
+    assert result['seconds_until_proposed_reset'] == 16 * 3600 + 30 * 60
+    assert 'not recorded against a daily cap' in result['carryover']
+
+
+def test_budget_reset_keeps_the_expansion_confirmation_clock_independent():
+    proposed = {'ai_budget_timezone': 'Asia/Tokyo'}
+    first = preview.compare(CAPPED, proposed)
+    assert preview.budget_reset(CAPPED, proposed, _ts(2026, 11, 21, 1)) != \
+        preview.budget_reset(CAPPED, proposed, _ts(2026, 11, 21, 23))
+    assert '2026' not in ' '.join(first['expansions'])
+    assert preview.compare(CAPPED, proposed)['expansions'] == first['expansions']
+
+
+def test_preview_route_returns_the_budget_reset_read_only(admin):
+    put = confirmed_put(admin, '/api/settings/ai', {'ai_control_mode': 'daily_cap', 'ai_budget_timezone': 'UTC'})
+    assert put.status_code == 200, put.text
+    with Session() as s:
+        before, audits = config(s), _audit_count(s)
+    body = admin.post('/api/settings/ai/preview', json={'ai_budget_timezone': 'Asia/Tokyo'}).json()
+    reset = body['budget_reset']
+    assert reset['current']['timezone'] == 'UTC' and reset['proposed']['timezone'] == 'Asia/Tokyo'
+    assert reset['current']['next_reset'] > reset['generated_at'] and reset['proposed']['next_reset'] > reset['generated_at']
+    assert body['expands'] and body['expansion_confirmation']
+    assert admin.post('/api/settings/ai/preview', json={'ai_daily_cap_usd': 5}).json()['budget_reset'] is None
+    with Session() as s:
+        assert config(s) == before and _audit_count(s) == audits

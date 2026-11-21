@@ -1567,7 +1567,9 @@ def ai_settings_preview(body:AISettingsInput,user=Depends(admin_user)):
     with Session() as s:
         previous=config(s)
         result=ai_control_preview.compare(previous,proposed);revision=ai_controls_revision(previous)
-        return result|{'ai_controls_revision':revision,'expansion_confirmation':ai_control_preview.expansion_confirmation(revision,result['expansions'])}
+        # Concrete window boundaries (#1267) stay outside the expansion texts, so the confirmation never depends on the clock.
+        return result|{'ai_controls_revision':revision,'expansion_confirmation':ai_control_preview.expansion_confirmation(revision,result['expansions']),
+            'budget_reset':ai_control_preview.budget_reset(previous,proposed,time.time())}
 
 @app.put('/api/settings/patching')
 def patch_settings_save(body:PatchSettingsInput,user=Depends(admin_user)):

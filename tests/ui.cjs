@@ -219,6 +219,7 @@ const assert=require('assert/strict');
     await require('./ui_ai_budget_status.cjs')(page,capture);
     await require('./ui_ai_control_gates.cjs')(page,capture);
     await require('./ui_ai_control_preview.cjs')(page,capture);
+    await require('./ui_ai_budget_reset_preview.cjs')(page,capture);
     await require('./ui_ai_control_migration.cjs')(page,capture);
     await require('./ui_scoring_queue.cjs')(page,capture);
     await require('./ui_ai_activity_scoring_queue.cjs')(page,capture);
