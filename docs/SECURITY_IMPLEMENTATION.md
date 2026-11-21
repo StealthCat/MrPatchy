@@ -12064,6 +12064,21 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
 
+### Disclose a capped triage reset as a recheck — Roadmap A checkpoint #1268
+
+At an exhausted daily cap, the admin Investigations worker status reports a
+timed retry only if the shared budget snapshot confirms the configured reset
+is authoritative. If reservations from an earlier budget window overlap the
+reset, the status explains that those reservations can still count and the cap
+card shows the configured reset as a recheck. The ledger, role checks, reservations
+and queue admission retain their existing behavior.
+
+The SQLite and MySQL acceptance uses persisted entries in a current or
+overlapping window and compares both admin status routes. At the configured
+reset the overlapping reservation remains counted until its original window
+closes. This checkpoint covers the current queue status. The proposed Settings
+change preview is tracked separately in #1267.
+
 ### Free exact known-good hits under an exhausted daily cap — worker checkpoint #1030
 
 Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit spends nothing. Before this checkpoint `ai_claims.acquire()` refused every claim once the cap had no headroom, or once the elected subject's own quote exceeded it. A free cached verdict on another server therefore stayed `pending` until the next reset.
