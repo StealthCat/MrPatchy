@@ -271,6 +271,9 @@ def test_budget_reset_names_both_windows_when_the_timezone_changes():
                                   'next_reset': _ts(2026, 11, 21, 10)}
     assert result['resets_sooner'] is True and result['seconds_until_proposed_reset'] == 3 * 3600
     assert 'keeps counting until the reset of the budget window it was admitted under' in result['carryover']
+    # An earlier proposed boundary is not a refill: retained spend can still count after it (#1269 review).
+    assert 'fresh daily cap' not in result['carryover']
+    assert 'can still count after that boundary' in result['carryover']
     later = preview.budget_reset(CAPPED, {'ai_budget_timezone': 'America/Los_Angeles'}, now)
     # PST (UTC-8): local 2026-11-20 23:00, resets at 08:00 UTC, still sooner than UTC midnight.
     assert later['proposed']['next_reset'] == _ts(2026, 11, 21, 8) and later['resets_sooner']

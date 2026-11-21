@@ -36,6 +36,9 @@ module.exports=async(page,capture)=>{
   const server=await page.evaluate(async()=>(await api('/settings/ai/preview','POST',{ai_control_mode:'daily_cap',ai_budget_timezone:'Pacific/Kiritimati'})).budget_reset);
   assert.equal(await moving.getAttribute('data-resets-sooner'),String(server.resets_sooner));
   assert.equal(/resets before the current one/.test(movingText),server.resets_sooner);
+  // An earlier proposed boundary is a recheck: retained spend may still count, so no refill is promised (#1269 review).
+  assert.doesNotMatch(movingText,/fresh daily cap becomes available sooner/);
+  if(server.resets_sooner)assert.match(movingText,/can still count after the proposed reset/);
   await capture('settings-ai-budget-reset');
   // The expansion dialog repeats the disclosure; cancelling saves nothing.
   await form.getByRole('button',{name:'Save AI settings'}).click();

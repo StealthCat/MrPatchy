@@ -184,7 +184,8 @@ def legacy_migration(values):
 
 RESET_CARRYOVER = ('Spend admitted before the change keeps counting until the reset of the budget window '
                    'it was admitted under, so changing the reset timezone does not hand back spend already '
-                   'counted. A proposed window that resets sooner makes a fresh daily cap available sooner.')
+                   'counted. A proposed window with an earlier boundary does not by itself add headroom: '
+                   'spend retained from the current window can still count after that boundary.')
 
 
 CAP_START = ('Calls made while uncapped are not recorded against a daily cap. The full cap, less any capped '
