@@ -251,7 +251,7 @@ def dispatch_paced(pool, run_one, runs, session_factory, admission_model):
                     raise BenchmarkTimingError('Paced fixture did not observe the previous durable start.')
                 time.sleep(0.02)
             wait_seconds += time.perf_counter() - started
-        futures.append(pool.submit(run_one, index))
+        futures.append(pool.submit(run_one, time.perf_counter()))
     for future in futures:
         future.result()
     return wait_seconds
@@ -349,7 +349,13 @@ def main():
                 VERSION=FIXTURE_PRICE_VERSION, SOURCE='Disposable loopback benchmark',
                 VERIFIED_AT=now - 1, EXPIRES_AT=now + 86_400,
             ))
-        requests = []; ssh_requests = []; connections = set(); samples = {k: [] for k in ('run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission', 'queue_age', 'receipt_persistence', 'usage_persistence')}
+        requests = []
+        ssh_requests = []
+        connections = set()
+        samples = {k: [] for k in (
+            'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
+            'queue_age', 'executor_wait', 'receipt_persistence', 'usage_persistence',
+        )}
         provider_lock = threading.Lock()
         active_provider_requests = peak_provider_requests = 0
 
@@ -450,8 +456,10 @@ def main():
                                    evidence=evidence))
                 s.commit()
             started=time.perf_counter()
-            def run_one(index):
-                token=begin.set(time.perf_counter())
+            def run_one(submitted_at):
+                started_at = time.perf_counter()
+                samples['executor_wait'].append((started_at - submitted_at) * 1000)
+                token = begin.set(started_at)
                 try:
                     worker.investigate_one();duration=(time.perf_counter()-begin.get())*1000
                     samples['run'].append(duration);samples['two_stage' if two_stage.get() else 'one_stage'].append(duration)
@@ -460,7 +468,9 @@ def main():
                 if paced:
                     wait_seconds = dispatch_paced(pool, run_one, args.runs, Session, ai_admission.Admission)
                 else:
-                    list(pool.map(run_one, range(args.runs)))
+                    futures = [pool.submit(run_one, time.perf_counter()) for _ in range(args.runs)]
+                    for future in futures:
+                        future.result()
             elapsed=time.perf_counter()-started
             with Session() as s:
                 rows=s.query(Behavior).filter(Behavior.id.in_(subjects)).all()

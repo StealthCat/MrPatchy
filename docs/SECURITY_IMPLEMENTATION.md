@@ -3969,6 +3969,21 @@ two-stage workload before comparing their stage percentiles and throughput.
 These are loopback and stubbed SSH measurements. Production comparison remains
 open.
 
+### Measure executor queue wait in triage fixtures — Roadmap A checkpoint #1315
+
+The benchmark's `stages.executor_wait` records a count and p50/p95 in
+milliseconds from submitting each investigation to the point its executor
+thread starts work. It is a measured fixture wait distinct from seeded
+observation age and the worker's admission time. In paced fixtures, the
+dispatcher waits for the durable rate slot before submission. Read that
+time separately in `fixture_rate.dispatch_wait_seconds`.
+
+Compare the raw stage in matched serial and parallel reports. Use the
+existing comparator to check capability equivalence. Acceptance covers a
+busy serial executor, sample counts, and paced SQLite and MySQL workloads.
+Historical reports omit this measurement. It does not establish production
+queue latency or throughput.
+
 ### Retained behavior history in the triage benchmark — worker checkpoint #641
 
 Use `--retained-history-rows` to seed 0–50,000 older completed observations in

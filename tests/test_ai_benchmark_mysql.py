@@ -296,6 +296,8 @@ def test_mysql_paced_serial_and_parallel_keep_followups_and_leave_no_tables(empt
         assert sample['fixture_rate']['admitted_starts'] == 2
         assert sample['fixture_rate']['starts_per_hour'] == custom_rate
         assert sample['elapsed_seconds'] >= round(3600 / custom_rate, 3)
+        assert sample['stages']['executor_wait']['count'] == 2
+        assert 0 <= sample['stages']['executor_wait']['p95_ms'] < 3600 * 1000 / custom_rate
         assert sample['provider_calls'] == 3 and sample['stages']['ssh_evidence']['count'] == 1
         reports.append(sample)
     assert compare(*reports)['capability_equivalent'] is True

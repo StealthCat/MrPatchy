@@ -230,6 +230,9 @@ def test_serial_and_parallel_fixtures_wait_for_real_paced_starts(mode, custom_ra
         pacing = sample['fixture_rate']
         assert pacing['starts_per_hour'] == effective_rate and pacing['admitted_starts'] == 4
         assert 0 < pacing['dispatch_wait_seconds'] <= sample['elapsed_seconds']
+        executor_wait = sample['stages']['executor_wait']
+        assert executor_wait['count'] == 4
+        assert 0 <= executor_wait['p50_ms'] <= executor_wait['p95_ms'] < 3600 * 1000 / effective_rate
         assert sample['elapsed_seconds'] >= round(3 * 3600 / effective_rate, 3)
         assert sample['completed_subjects'] == 4 and sample['errors'] == 0
         assert sample['provider_calls'] == 6 and sample['stages']['ssh_evidence']['count'] == 2
