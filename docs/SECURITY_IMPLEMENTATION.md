@@ -3952,6 +3952,19 @@ Previously it always advertised the legacy investigation limit, which only
 applies in legacy mode. This is display-only: admission, spend, pause, lifecycle
 and authorization behavior are unchanged. A browser regression covers every mode.
 
+### Compare daily ledger timings — Roadmap A checkpoint #1305
+
+`tools/compare_ai_benchmarks.py` adds a `budget_timings` section when either
+capped fixture report includes ledger timings. It verifies both reservation
+and reconciliation timings on each measured side, including one sample per
+settled provider call and finite ordered durations within the run elapsed
+time. A complete pair includes p50/p95 deltas. For a mixed pair the historical
+side and the deltas are null. A pair of older reports keeps its existing
+comparison shape. Uncapped reports cannot supply capped ledger timings.
+
+Workload equivalence checks still apply before comparisons. These measurements
+cover the disposable fixture ledger and leave production throughput open.
+
 ### SSH evidence delay in the triage benchmark — worker checkpoint #524
 
 `tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
