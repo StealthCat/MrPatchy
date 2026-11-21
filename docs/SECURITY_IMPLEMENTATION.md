@@ -2240,6 +2240,14 @@ score keys and provider payloads are preserved. The worker still reads stored
 inventory, fingerprints the RPM list and walks eligible candidates. Production
 throughput and the broader parallel-scoring milestone remain open.
 
+When a scoring reply is persisted, the worker builds one fresh RPM version
+index per affected server for the batch's package names and architectures
+(#1329). It retains the exact identity, version fallback and stale-result
+checks. A five-package fixture reduced post-reply inventory scans from five
+to one. It retained the exact outbound evidence and superseded only the
+score whose installed RPM evidence changed. Production throughput remains
+unmeasured.
+
 At the 256-server memo bound, overflow servers use a pass-local memo and
 retained servers stay warm across scoring passes. An exhausted pass releases
 entries for absent eligible servers. A pass that stops after selecting a

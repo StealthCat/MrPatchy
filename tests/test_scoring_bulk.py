@@ -400,6 +400,77 @@ def test_equal_age_candidates_keep_id_tiebreak_order_across_chunks(admin,monkeyp
     assert [row['id'] for row in sent]==expected
 
 
+def test_reply_revalidation_scans_rpm_inventory_once_for_five_packages(admin, monkeypatch):
+    package_ids = seed(5, completed=0, host_count=1)
+    expected = []
+    with Session() as session:
+        host = session.get(Host, 'bulk-0')
+        host.inventory = {
+            'package_manager': 'rpm',
+            'os': 'ID=almalinux\nVERSION_ID=9',
+            'rpm_packages': [
+                {'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1.2-1'},
+                {'name': 'pkg0000', 'arch': 'aarch64', 'evr': '0:9-1'},
+                {'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1.1-1'},
+                {'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1.1-1'},
+                {'name': 'pkg0001', 'arch': 'x86_64', 'evr': '0:1-1'},
+                *[{'name': f'other{index}', 'arch': 'x86_64', 'evr': '0:1-1'}
+                  for index in range(100)],
+            ],
+        }
+        for identifier in package_ids:
+            package = session.get(Package, identifier)
+            package.name += ':x86_64'
+            package.id = host.id + ':' + package.name
+            expected.append({'id': update_scores.identity(host, package),
+                             **update_scores.evidence(host, package)})
+        session.commit()
+
+    sent = capture_assessments(monkeypatch)
+    assess = ai.request
+    versions = update_scores.versions
+    version_index = update_scores.version_index
+    reply_started = False
+    scans = []
+
+    def change_inventory(*args, **kwargs):
+        nonlocal reply_started
+        result = assess(*args, **kwargs)
+        with Session() as session:
+            host = session.get(Host, 'bulk-0')
+            first, *remaining = host.inventory['rpm_packages']
+            host.inventory = {**host.inventory, 'rpm_packages': [{**first, 'evr': '0:1.3-1'}, *remaining]}
+            session.commit()
+        reply_started = True
+        return result
+
+    def observe_versions(inventory, name, fallback, index=None):
+        if reply_started and index is None and inventory.get('package_manager') == 'rpm':
+            scans.append('unindexed')
+        return versions(inventory, name, fallback, index)
+
+    def observe_index(inventory, *args, **kwargs):
+        index = version_index(inventory, *args, **kwargs)
+        if reply_started and inventory.get('package_manager') == 'rpm':
+            scans.append(('indexed', set(index)))
+        return index
+
+    monkeypatch.setattr(ai, 'request', change_inventory)
+    monkeypatch.setattr(update_scores, 'versions', observe_versions)
+    monkeypatch.setattr(update_scores, 'version_index', observe_index)
+    update_scores.run_one()
+
+    assert sent == expected
+    assert sent[0]['installed'] == ['0:1.1-1', '0:1.2-1']
+    assert sent[-1]['installed'] == ['1']
+    with Session() as session:
+        rows = {row.id: (row.state, row.score)
+                for row in session.scalars(select(update_scores.UpdateScore))}
+    assert rows == {expected[0]['id']: ('superseded', None),
+                    **{item['id']: ('complete', 50) for item in expected[1:]}}
+    assert scans == [('indexed', {'pkg0000:x86_64', 'pkg0001:x86_64'})]
+
+
 def test_paused_and_inactive_hosts_stay_out_of_scoring_and_stale_supersession(admin,monkeypatch):
     seed(450,'deferred')
     with Session() as s:
