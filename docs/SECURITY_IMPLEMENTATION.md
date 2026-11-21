@@ -11648,8 +11648,25 @@ because it carries endpoint text.
 - **Unchanged:** a rejected payload never blocks alert collection. The raw
   `integrity` alert, `host.integrity` and patching gates are unchanged. Nothing
   is acknowledged, remediated or authorized, and there is no schema change.
-- **Remaining:** a configurable threshold, and a native agent sweep-stall
-  acceptance test.
+- **Remaining:** ~~a configurable threshold~~ (addressed by the #1265 worker
+  checkpoint below), and a native agent sweep-stall acceptance test.
+
+### Configurable hash-sweep stall threshold — worker checkpoint #1265
+
+Closes the "configurable threshold" item from checkpoint #794: the admin-only `integrity-sweep`/`hash-sweep-stalled` notice no longer waits a fixed 30 minutes.
+
+- **Setting:** Settings → Patch policy adds **Hash-sweep stall notice after · minutes**, whole minutes from 10 to 1440, default 30. The minimum stays well above the 360-second ingest check so a slow sweep does not flap. The settings finder matches "hash sweep" and "integrity".
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `integrity_sweep_stalled_minutes`. Out-of-range or non-integer values return 422, and clients that omit the field keep the stored value.
+  - A change appends `hash-sweep stall notification threshold changed from A to B minutes` to the existing admin-only settings audit row. Saving the same value adds nothing.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 30 (`integrity_sweep_notifications.stalled_minutes`), so a bad value never silences the notice.
+  - The value lives in the existing `config` setting, so there is no schema change.
+- **Producer:** `operations.collect_alerts` passes its configuration to `integrity_sweep_notifications.publish`, and `classify` uses the configured threshold for `overdue`.
+  - The fixed reason text names the configured minutes. At 30 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of a still-qualifying active event once.
+  - Raising the threshold above a server's current stall resolves its event, and the same event reopens if the stall later passes the new threshold.
+- **Unchanged:** the `future` category, the 360-second `host.integrity` ingest check and the patching hold it causes, the raw `integrity` SMTP/webhook alert, roles, CSRF, the admin-only audience and response authorization. The notice stays advisory.
+- **Validation:** `tests/test_integrity_sweep_threshold.py` has 8 tests, all failing on main `7a165a60` and passing after (the `future` test is a behavioral control that fails on main only because the setting does not exist). `tests/ui_settings_hash_sweep.cjs` fails on main and passes after; it covers the finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px. The existing sweep, telemetry-loss, operational-notification, route-role and settings tests pass.
+- **Remaining:** a native agent sweep-stall acceptance test.
 
 
 ### External alert-delivery failure notifications — worker checkpoint #792
