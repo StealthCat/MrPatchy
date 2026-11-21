@@ -21,6 +21,7 @@ from tests.test_ai_daily_cap_billable_paths import (
     configure,
     ledger_rows,
     respond,
+    scoring_quote,
     scores,
     seed_scoring,
 )
@@ -80,8 +81,10 @@ class InlinePool:
 
 @pytest.mark.parametrize('has_headroom', [True, False], ids=['score-fits', 'score-deferred'])
 def test_replacement_coordinator_keeps_shared_budget(admin, monkeypatch, clock, tmp_path, has_headroom):
-    quote = ai_pricing.reservation(ai.investigation_payload(EVIDENCE, MODEL))['amount_usd']
-    configure(Decimal('10') if has_headroom else quote * Decimal('1.5'))
+    triage_quote = ai_pricing.reservation(ai.investigation_payload(EVIDENCE, MODEL))['amount_usd']
+    score_floor = scoring_quote()
+    cap = Decimal('10') if has_headroom else max(triage_quote, score_floor) + min(triage_quote, score_floor) / 2
+    configure(cap)
     seed_scoring()
     with Session() as session:
         session.add(Host(id='triage-host', name='Triage fixture', address='192.0.2.1', fingerprint=''))
@@ -89,6 +92,7 @@ def test_replacement_coordinator_keeps_shared_budget(admin, monkeypatch, clock, 
         session.commit()
 
     sent = []
+    quotes = []
     leadership_ticks = []
 
     def post(*args, **kwargs):
@@ -103,7 +107,14 @@ def test_replacement_coordinator_keeps_shared_budget(admin, monkeypatch, clock, 
         del body['usage']
         return httpx.Response(200, json=body, request=result.request)
 
+    reserve = ai_budget.reserve
+
+    def record_quote(payload):
+        quotes.append(ai_pricing.reservation(payload)['amount_usd'])
+        return reserve(payload)
+
     monkeypatch.setattr(ai.transport, 'post', post)
+    monkeypatch.setattr(ai_budget, 'reserve', record_quote)
     monkeypatch.setattr(update_scores, '_MEMO', {})
     monkeypatch.setattr(worker.concurrent.futures, 'ThreadPoolExecutor', InlinePool)
     monkeypatch.setattr(worker, 'periodic_ticks', lambda now, _: leadership_ticks.append(now))
@@ -132,6 +143,7 @@ def test_replacement_coordinator_keeps_shared_budget(admin, monkeypatch, clock, 
         worker._loop(node)
 
     assert leadership_ticks == [NOW + 12]
+    admitted_quote, successor_quote = quotes
     rows = ledger_rows()
     with Session() as session:
         assert session.get(Behavior, 'triage-subject').verdict == 'low'
@@ -142,7 +154,7 @@ def test_replacement_coordinator_keeps_shared_budget(admin, monkeypatch, clock, 
         [triage] = triage_entries
         assert triage.status == 'uncertain' and triage.reset_at == RESET and triage.call_id
         assert triage.id == earlier_charge.id and triage.call_id == earlier_charge.call_id
-        assert triage.reservation_usd == earlier_charge.reservation_usd
+        assert triage.reservation_usd == earlier_charge.reservation_usd == admitted_quote
         counted = Decimal(ai_budget.status(session)['counted_usd'])
 
         if has_headroom:
@@ -152,6 +164,8 @@ def test_replacement_coordinator_keeps_shared_budget(admin, monkeypatch, clock, 
             assert scoring.status == 'settled' and scoring.reset_at == RESET and scoring.call_id
             assert counted == triage.reservation_usd + scoring.actual_usd
         else:
+            # The score fits on its own. Only the retained charge makes it wait.
+            assert successor_quote <= cap < admitted_quote + successor_quote
             assert sent == ['triage'] and len(rows) == 1
             assert score.state == run.state == 'deferred' and score.score is None and run.calls == 0
             assert score.next_at == pytest.approx(RESET, abs=1)

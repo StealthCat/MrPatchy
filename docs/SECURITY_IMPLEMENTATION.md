@@ -3440,8 +3440,8 @@ coordinator. After the lock owner dies, the same follower becomes coordinator
 and dispatches the queued score against the same ledger window.
 
 With headroom, the score gets its own settled receipt alongside the first
-unreconciled reservation. When the earlier reservation leaves too little
-headroom, the score is deferred to the configured reset and the ledger still
+unreconciled reservation. A tighter fixture cap fits either request on its own.
+The earlier reservation then defers the score to the reset and the ledger still
 contains only the triage charge. Dispatch is deterministic within the test and
 provider replies are fixtures. SQLite and MySQL check the same lock-owner loss
 contract. Database writer failover and multi-host deployment acceptance remain
