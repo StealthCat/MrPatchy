@@ -452,7 +452,12 @@ def status(s):
     elif legacy_blocked:
         reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=legacy_next
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
-    elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
+    elif budget['enabled'] and float(budget['remaining_usd'])<=0:
+        reason='spend_limited'
+        message='The daily AI spend cap has no remaining headroom.'
+        retry=budget['next_reset'] if budget['next_reset_authoritative'] else None
+        if retry is None:
+            message+=' Spend from earlier budget windows can still count after the configured reset.'
     elif not pending_count and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
     elif not pending_count and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
     elif not pending_count and plan_deferred:reason='blocked';message='Advisory AI planning remains queued until its server AI integration is resumed.'
