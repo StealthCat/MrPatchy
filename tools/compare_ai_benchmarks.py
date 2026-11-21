@@ -58,19 +58,16 @@ def _bounded(value, field, minimum, maximum):
     return value
 
 
-def _summary(report, stage, queue_age):
-    value = report['stages'].get(stage)
+def _summary(value, field, max_ms):
     if not isinstance(value, dict):
-        raise ComparisonError(f'stages.{stage} must be an object')
-    count = _integer(value.get('count'), f'stages.{stage}.count')
+        raise ComparisonError(f'{field} must be an object')
+    count = _integer(value.get('count'), f'{field}.count')
     if count == 0 and all(key in value and value[key] is None for key in ('p50_ms', 'p95_ms')):
         return {'count': 0, 'p50_ms': None, 'p95_ms': None}
-    # Observed queue age includes the seed and time spent in the fixture.
-    max_ms = MAX_STAGE_MS + queue_age * 1000 if stage == 'queue_age' else MAX_STAGE_MS
-    p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, max_ms)
-    p95 = _bounded(value.get('p95_ms'), f'stages.{stage}.p95_ms', 0, max_ms)
+    p50 = _bounded(value.get('p50_ms'), f'{field}.p50_ms', 0, max_ms)
+    p95 = _bounded(value.get('p95_ms'), f'{field}.p95_ms', 0, max_ms)
     if p95 < p50:
-        raise ComparisonError(f'stages.{stage}.p95_ms must not be less than p50_ms')
+        raise ComparisonError(f'{field}.p95_ms must not be less than p50_ms')
     return {'count': count, 'p50_ms': p50, 'p95_ms': p95}
 
 
@@ -184,7 +181,12 @@ def _validate(report, label):
     if not isinstance(report.get('stages'), dict):
         raise ComparisonError(f'{label}.stages must be an object')
     queue_age, queue_age_source = _queue_age(report, label)
-    stages = {stage: _summary(report, stage, queue_age) for stage in STAGES}
+    # Observed queue age includes the seed and time spent in the fixture.
+    stages = {
+        stage: _summary(report['stages'].get(stage), f'stages.{stage}',
+                        MAX_STAGE_MS + queue_age * 1000 if stage == 'queue_age' else MAX_STAGE_MS)
+        for stage in STAGES
+    }
     if stages['run']['count'] != runs:
         raise ComparisonError(f'{label} run sample count does not match runs')
     if stages['one_stage']['count'] + stages['two_stage']['count'] != runs:
@@ -342,9 +344,11 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     for stage in STAGES:
         if base['stages'][stage]['count'] != current['stages'][stage]['count']:
             raise ComparisonError(f'capability mismatch: stages.{stage}.count differs')
+    queue_timing = _compare_queue_timings(baseline, candidate, base, current)
     return {
         'schema_version': SCHEMA_VERSION,
         'fixture_only': True,
+        **({'queue_timing': queue_timing} if queue_timing else {}),
         'capability_equivalent': True,
         'baseline': {
             'name': baseline_name, 'execution': base['execution'],
@@ -409,6 +413,56 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
     }
+
+
+QUEUE_TIMING_GROUPS = {
+    'executor_wait': 'stages',
+    'claim_lock': 'persisted_stages',
+    'claim_lock_hold': 'persisted_stages',
+}
+
+
+def _has_new_queue_timing(report):
+    persisted = report.get('persisted_stages')
+    return ('executor_wait' in report['stages'] or
+            isinstance(persisted, dict) and 'claim_lock_hold' in persisted)
+
+
+def _queue_timings(report, normalized, label):
+    # Elapsed seconds and stage milliseconds are each rounded to three decimals.
+    max_ms = round(normalized['elapsed_seconds'] * 1000, 3) + 0.501
+    timings = {}
+    for stage, group in QUEUE_TIMING_GROUPS.items():
+        values = report.get(group, {})
+        if not isinstance(values, dict):
+            raise ComparisonError(f'{label}.{group} must be an object')
+        if stage not in values:
+            continue
+        field = f'{label}.{group}.{stage}'
+        summary = _summary(values[stage], field, max_ms)
+        if summary['count'] != normalized['runs']:
+            raise ComparisonError(f'{field}.count must match runs')
+        timings[stage] = summary
+    return timings
+
+
+def _compare_queue_timings(baseline, candidate, base, current):
+    if not (_has_new_queue_timing(baseline) or _has_new_queue_timing(candidate)):
+        return {}
+    before = _queue_timings(baseline, base, 'baseline')
+    after = _queue_timings(candidate, current, 'candidate')
+    comparison = {}
+    for stage in QUEUE_TIMING_GROUPS:
+        left, right = before.get(stage), after.get(stage)
+        if left is None and right is None:
+            continue
+        comparison[stage] = {
+            'baseline': left,
+            'candidate': right,
+            'p50_ms': _delta(left['p50_ms'], right['p50_ms']) if left and right else None,
+            'p95_ms': _delta(left['p95_ms'], right['p95_ms']) if left and right else None,
+        }
+    return comparison
 
 
 def _load(path):
