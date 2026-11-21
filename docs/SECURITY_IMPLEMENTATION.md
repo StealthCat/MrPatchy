@@ -12544,3 +12544,27 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### net-snmp snmpd program contract — worker checkpoint #1327 (roadmap F, increment 1)
+
+snmpd runs configured programs whenever an SNMP manager reads, or for writable entries sets, the object identifiers they serve. On Debian and Ubuntu it runs them as `Debian-snmp`. The `extend`, `exec`, `sh`, `pass` and `pass_persist` directives are a known persistence and remote-execution surface, and the startup inventory did not model them.
+
+- **Change:** the pure `app/snmpd_programs.py` takes captured configuration text in snmpd's read order, the effective snmpd argv (default: the packaged `snmpd.service` command) and captured `/etc/passwd` and `/etc/group`. For each program snmpd would run, it returns the module and directive, the source file and line, the name or OID, the argv, `/bin/sh -c` command or pass argv prefix, whether the entry is writable or truncated, and the run user and group. It performs no I/O and never runs snmpd or a program.
+- **Fidelity:** traced from net-snmp 5.9.4 in Ubuntu 24.04 `net-snmp_5.9.4+dfsg-1.1ubuntu3.3`:
+  - That build does not include `ucd-snmp/extensible`, so the extend module also handles `exec`, `sh` and `execFix`.
+  - Handlers are looked up case-insensitively, but the shell and writable flags are chosen with a case-sensitive comparison. `EXTEND-SH` therefore runs through `execv`.
+  - A word that starts with `#` ends the line. `copy_nword` handles quoting and backslashes, and a word is truncated to its buffer.
+  - The extend command and its arguments are joined into a 511-byte buffer. Exec entries split that buffer again with `tokenize_exec_command`, so a quoted program path that contains a space splits at exec time.
+  - `pass` takes `strtol` priorities and stops its command at the first `#` or `;`. `pass_persist` is started through `parse_cmd`, which splits only at spaces.
+  - Among extend entries under the same root OID, the first one with a given name wins. `-I` lists select or exclude modules.
+  - Later `agentuser`/`agentgroup` lines replace `-u`/`-g`. An unknown name in the configuration keeps the earlier value, and an unknown `-u` name makes snmpd exit.
+- **Fail closed:** increment 1 does not derive snmpd's configuration search path or persistent-directory files, so every result carries the blocking `read_order_not_derived` gap and is never `complete`. The following are blocking gaps too:
+  - include directives and command-line configuration (`-c`, `-C`, `-Y`, `--token=value`);
+  - a permanent switch to an unknown `[type]`;
+  - `dlmod`, `perl` and `procfix`;
+  - symbolic OIDs, over-long names, and a `pass -p` without a value (snmpd dereferences NULL);
+  - unobserved files or account databases, invalid UTF-8, NUL bytes and over-limit input.
+  `origin` stays `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_snmpd_programs.py` (18 tests), with expected values traced from `read_config.c`, `extend.c`, `pass.c`, `pass_persist.c`, `execute.c`, `util_funcs.c` and `snmpd.c`. No differential run against a live snmpd was done in this increment.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining (#1327):** derive the read order (`SNMPCONFPATH`, `persistentDir`, numbered persistent backups, `-c`/`-C`, `$HOME/.snmp`) and the include directives; differential validation against the packaged snmpd; agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
