@@ -112,10 +112,14 @@ FREE_HIT_SCAN=50
 # Per process; admission runs under the distributed ``ai-triage`` lock, so
 # passes in one process never overlap. ``None`` starts from the oldest subject.
 _free_hit_cursor=None
-# Fleet candidate rows that existed when the cursor was recorded. Candidates are
-# never deleted or reactivated, so a larger count means a newly published one.
-# Revocation removes hits and never needs a restart.
+# Fleet candidate rows that existed when the state below was recorded. Candidates
+# are never deleted or reactivated, so a larger count means a newly published
+# one. Revocation removes hits and never needs a restart.
 _free_hit_candidates=None
+# After a publication, ``(last swept, stop)``: subjects from the oldest up to the
+# rotation cursor ``stop`` are re-probed oldest-first, ``FREE_HIT_SCAN`` per pass,
+# before the rotation resumes after the cursor. ``None`` when no sweep is due.
+_free_hit_sweep=None
 
 
 def _elect_host(s,election_filters,live_counts,signature,now):
@@ -160,14 +164,25 @@ def _free_hit(s,model,election_filters):
     at most ``FREE_HIT_SCAN`` subjects. A pass without a hit records where it
     stopped, and the next pass resumes after that subject and wraps to the oldest,
     so a hit behind any number of older paid subjects is reached in a bounded
-    number of passes (#1241). A hit restarts the next pass from the oldest. A
-    candidate published since the cursor was recorded makes the next pass probe
-    from the oldest too, without moving the cursor back, because it can turn
-    subjects behind the cursor into exact hits ahead of newer ones (#1291).
+    number of passes (#1241). A hit restarts the next pass from the oldest.
+
+    A candidate published since the cursor was recorded can turn subjects behind
+    the cursor into exact hits ahead of newer ones. The following passes then
+    sweep from the oldest subject up to the cursor, still ``FREE_HIT_SCAN`` probes
+    per pass, before the rotation resumes after the cursor, so a newly reusable
+    older subject is always claimed first (#1291). The cursor is never moved back,
+    and another publication during the sweep restarts it from the oldest.
     """
-    global _free_hit_cursor,_free_hit_candidates
+    global _free_hit_cursor,_free_hit_candidates,_free_hit_sweep
     from . import known_good
     key=lambda row:(row.first_seen,row.id)
+
+    def after(position):
+        seen,subject=position
+        if seen is None:
+            return or_(Behavior.first_seen.is_not(None),
+                and_(Behavior.first_seen.is_(None),Behavior.id>subject))
+        return or_(Behavior.first_seen>seen,and_(Behavior.first_seen==seen,Behavior.id>subject))
 
     def window(*bounds,limit):
         rows=[]
@@ -181,29 +196,47 @@ def _free_hit(s,model,election_filters):
     candidates=s.scalar(select(func.count()).select_from(known_good.Entry))
     cursor=_free_hit_cursor
     if cursor is not None and cursor[0] is None:cursor=None
-    # A candidate published since the cursor was recorded can turn subjects
-    # behind it into exact hits; probe from the oldest so they win (#1291).
-    restart=(cursor is not None and _free_hit_candidates is not None
-        and candidates>_free_hit_candidates)
-    if cursor is None or restart:
+    sweep=_free_hit_sweep if cursor is not None else None
+    if (cursor is not None and _free_hit_candidates is not None
+            and candidates>_free_hit_candidates):
+        # Everything up to the cursor was probed against fewer candidates.
+        sweep=(None,cursor)
+    probe=[]
+    swept_pass=sweep is not None
+    if sweep is not None:
+        swept,stop=sweep
+        bounds=[or_(Behavior.first_seen.is_(None),~after(stop))]
+        if swept is not None:bounds.append(after(swept))
+        probe=window(*bounds,limit=FREE_HIT_SCAN)
+        if len(probe)==FREE_HIT_SCAN and key(probe[-1])!=stop:
+            sweep=(key(probe[-1]),stop)
+        elif len(probe)==FREE_HIT_SCAN:
+            sweep=None  # the full window ended exactly at the cursor
+        else:
+            # The sweep reached the cursor: the rotation resumes after it in the
+            # same pass, without wrapping into the subjects just swept.
+            sweep=None
+            probe+=window(after(cursor),limit=FREE_HIT_SCAN-len(probe))
+    elif cursor is None:
         probe=window(limit=FREE_HIT_SCAN)
     else:
-        seen,subject=cursor
-        after=or_(Behavior.first_seen>seen,and_(Behavior.first_seen==seen,Behavior.id>subject))
-        probe=window(after,limit=FREE_HIT_SCAN)
+        probe=window(after(cursor),limit=FREE_HIT_SCAN)
         if len(probe)<FREE_HIT_SCAN:
             # The queue end was reached: wrap to the oldest subjects not probed yet.
-            probe+=window(or_(Behavior.first_seen.is_(None),~after),limit=FREE_HIT_SCAN-len(probe))
+            probe+=window(or_(Behavior.first_seen.is_(None),~after(cursor)),limit=FREE_HIT_SCAN-len(probe))
     for row in probe:
         if known_good.exact_hit_available(s,row,model):
-            _free_hit_cursor=_free_hit_candidates=None
+            _free_hit_cursor=_free_hit_candidates=_free_hit_sweep=None
             return row
-    last=key(probe[-1]) if probe else None
-    if restart and probe and (last[0] is None or last<cursor):
-        # A restart never rewinds the rotation, so the #1241 bound still holds
-        # apart from one extra pass per publication.
-        last=cursor
+    if swept_pass:
+        # A sweep never rewinds the rotation cursor; once it reaches the cursor,
+        # the rotation probes that followed in this pass advance it.
+        rotated=[row for row in probe if row.first_seen is not None and key(row)>cursor]
+        last=key(rotated[-1]) if rotated else cursor
+    else:
+        last=key(probe[-1]) if probe else None
     _free_hit_cursor=last
+    _free_hit_sweep=sweep if last is not None else None
     _free_hit_candidates=candidates if last is not None else None
     return None
 
