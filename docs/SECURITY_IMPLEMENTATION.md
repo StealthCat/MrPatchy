@@ -12184,6 +12184,18 @@ samples. Compatibility: admin-only as before, no schema, collection, admission,
 budget or response-authorization change. Matched serial/parallel production
 throughput remains open.
 
+### Interrupted package scoring in AI Activity — Roadmap A checkpoint #1115
+
+The scoring queue summary shows an exact current package attempt as waiting to
+retry when worker recovery has recorded its linked scoring run as interrupted.
+It reports the existing one-hour eligibility boundary. A live, missing or older
+run link cannot supply evidence of interruption for the current attempt.
+
+The regression compares counts before and after the retry boundary and verifies
+that reading the summary leaves the score intact. If the worker stops before
+linking its run, the summary has no run state for that attempt. Independent
+scoring admission and native fleet throughput acceptance remain open.
+
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
 New disposable SQLite and MySQL benchmark reports require one successful
