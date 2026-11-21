@@ -4008,6 +4008,20 @@ Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
 At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
 one. Matched production measurements remain open.
 
+### Daily ledger timings in capped triage fixtures — Roadmap A checkpoint #1302
+
+Capped fixture reports include `stages.budget_reservation` and
+`stages.budget_reconciliation` with sample counts and p50/p95 durations.
+They measure the real daily ledger calls, including database lock wait. The
+receipt/usage delay option only simulates diagnostic persistence latency.
+The benchmark checks that each budget stage has one sample per settled
+provider call, including follow-ups. Uncapped reports omit these stages.
+
+SQLite and MySQL acceptance cover daily cap and combined rate-and-cap modes
+with both serial and parallel configurations. The stages are additive report
+fields. Existing comparator semantics and production measurement milestones
+are unchanged.
+
 ### Native MySQL mode for the triage benchmark — worker checkpoint #976
 
 `tools/benchmark_ai.py --database mysql` runs the same disposable fixture on a
