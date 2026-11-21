@@ -12358,14 +12358,15 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
 - a non-default, relative or path-truncated `SCRIPTDIR`;
 - an `apccontrol` not authenticated as the unchanged packaged file;
 - a sourced `/etc/apcupsd/config`;
-- unobserved, unreadable or truncated listings, malformed entries, missing metadata or unobserved symlink targets.
+- unobserved, unreadable or truncated listings, malformed entries, missing metadata or unobserved symlink targets;
+- unobserved mount flags on an executable event script, which leave that event `unresolved` because `[ -x ]` fails on a noexec mount.
 
-Unobserved mount flags are non-blocking. Unresolved entries are never reported as running. Scripts are reported as they would run if apcupsd starts; the contract does not check whether an unknown keyword or bad value aborts startup, which over-reports rather than under-reports.
+Unresolved entries are never reported as running. Scripts are reported as they would run if apcupsd starts; the contract does not check whether an unknown keyword or bad value aborts startup, which over-reports rather than under-reports.
 
-**Validation.** `tests/test_apcupsd_events.py` has 21 tests, covering:
+**Validation.** `tests/test_apcupsd_events.py` has 22 tests, covering:
 
 - `fgets` chunk splitting, `#` truncation, case folding, last-wins, empty and relative values, and the 245/255-byte path boundary;
-- the sourced config file, symlinks, noexec mounts, directories and special files;
+- the sourced config file, symlinks, noexec mounts, unobserved mount flags as the only gap, directories and special files;
 - truncated listings, malformed input and the gap bound.
 
 A root-only differential runs the packaged `[ -f p -a -x p ]` test through `/bin/sh` on temporary files and compares it with the contract. Six mutations are each caught.

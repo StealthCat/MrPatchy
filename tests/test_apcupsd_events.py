@@ -171,10 +171,25 @@ def test_symlinks_noexec_and_special_files():
     assert outcomes['commfailure'] == 'noexec_mount'
     assert outcomes['mainsback'] == 'runs'  # Any execute bit passes for root.
     assert outcomes['emergency'] == 'not_plain_file'
-    assert outcomes['annoyme'] == 'runs'
+    assert outcomes['annoyme'] == 'unresolved'
     codes = _codes(result)
     assert {'symlink_target_unobserved', 'mount_flags_unobserved'} <= codes
     assert result['complete'] is False
+
+
+def test_unobserved_noexec_flag_alone_keeps_the_result_incomplete():
+    # Regression: an executable script with unobserved mount flags was reported as running with complete True.
+    result = _run(directory=_listing(dict(SCRIPT, name='onbattery', noexec=None)))
+    assert _outcomes(result)['onbattery'] == 'unresolved'
+    assert [gap['code'] for gap in result['gaps']] == ['mount_flags_unobserved']
+    assert 'mount_flags_unobserved' in ae.BLOCKING
+    assert result['complete'] is False
+    observed = _run(directory=_listing(dict(SCRIPT, name='onbattery')))
+    assert _outcomes(observed)['onbattery'] == 'runs' and observed['complete'] is True
+    # Non-executable files and directories do not depend on the mount flag.
+    other = _run(directory=_listing(dict(SCRIPT, name='onbattery', mode=0o644, noexec=None),
+                                    dict(SCRIPT, name='offbattery', type='directory', noexec=None)))
+    assert other['complete'] is True and not other['gaps']
 
 
 def test_truncated_listing_leaves_absent_events_unresolved():

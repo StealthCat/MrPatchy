@@ -37,8 +37,9 @@ Semantics come from apcupsd 3.14.14 source and the Ubuntu 24.04 package
 
 It performs no I/O and never authorizes a response action. Unobserved family,
 installation state, config, service command or metadata, malformed or
-over-limit input, a non-default ``SCRIPTDIR``, an unverified ``apccontrol`` and
-a sourced ``/etc/apcupsd/config`` are blocking gaps.
+over-limit input, unobserved mount flags of an executable event script, a
+non-default ``SCRIPTDIR``, an unverified ``apccontrol`` and a sourced
+``/etc/apcupsd/config`` are blocking gaps.
 """
 from __future__ import annotations
 
@@ -81,7 +82,7 @@ BLOCKING = frozenset({
     'nondefault_exec_start', 'nondefault_scriptdir', 'relative_scriptdir', 'apccontrol_path_truncated',
     'apccontrol_unverified', 'apccontrol_config_sourced', 'config_file_not_observed',
     'directory_not_observed', 'directory_unreadable', 'listing_incomplete', 'too_many_entries',
-    'metadata_missing', 'symlink_target_unobserved', 'gaps_truncated',
+    'metadata_missing', 'symlink_target_unobserved', 'mount_flags_unobserved', 'gaps_truncated',
 })
 UNOBSERVED = (
     'Script contents are not read, so what an event script does is not assessed.',
@@ -100,7 +101,8 @@ REASONS = {
     'noexec_mount': 'The file is on a noexec mount, so the kernel refuses to execute it.',
     'stat_failed': 'The entry cannot be followed (for example a dangling symlink), so [ -f ] fails.',
     'not_plain_file': 'Not a regular file, so [ -f ] fails and it does not run.',
-    'unresolved': 'Required metadata was not supplied, so the outcome is not determined.',
+    'unresolved': 'Required metadata, such as a symlink target or the noexec mount flag, was not supplied, so '
+                  'the outcome is not determined.',
 }
 
 
@@ -171,7 +173,10 @@ def _event_outcome(entry: Any, path: str, gaps: list[dict[str, Any]]) -> str:
     if stat.get('noexec'):
         return 'noexec_mount'
     if stat.get('noexec') is None:
-        _gap(gaps, 'mount_flags_unobserved', path, 'Reported as running; the noexec flag was not observed.')
+        # access(X_OK) behind [ -x ] fails on a noexec mount, so without the flag the outcome is unknown.
+        _gap(gaps, 'mount_flags_unobserved', path, 'The noexec flag was not observed, so whether it runs is '
+             'not determined.')
+        return 'unresolved'
     return 'runs'
 
 
