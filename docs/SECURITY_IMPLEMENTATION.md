@@ -4158,6 +4158,19 @@ aging, provider-specific quotas, native complete-context collection, full suppor
 multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
 browser, full-suite and coordinator integration checks remain required.
 
+### Explicit server AI policy repair — Roadmap C/J checkpoint #1313
+
+The administrator's server AI panel distinguishes a malformed policy from an
+intentional pause. The repair action opens the existing audited save flow and
+writes a valid paused policy. Resuming remains a separate action after repair.
+The panel does not render the malformed value. A malformed revision that
+cannot be submitted to the existing API is represented by an opaque value
+derived from the stored policy, so a later change still rejects a stale save.
+
+The same role, CSRF and server lifecycle checks apply. This is a repair
+workflow for the saved pause policy. It sends no provider request and does not
+change global AI settings or historical results.
+
 ### Reviewed shared provider-backoff reset — worker checkpoint #552
 
 AI Settings exposes an active shared provider Retry-After/transient-failure floor with
