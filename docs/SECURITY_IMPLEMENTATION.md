@@ -2868,6 +2868,16 @@ matching `secret.key`), `operations.collect_alerts()` publishes one admin-only
   again changes the retry signature, which makes them eligible again. Blocked
   update-scoring and advisory-plan work remains uncovered.
 
+Worker checkpoint #1311 adds an administrator-only repair notice for malformed
+per-server AI policies. Operational alert collection checks active servers while
+central AI is enabled. A malformed policy that holds the server's AI work causes
+one in-app event linked to that server's Security tab. An intentional pause uses
+its existing coverage notification. Healthy, missing and intentionally paused
+policies do not trigger a repair notice. Repeated observations stay on one
+revision. Repair, disabling AI or leaving active management resolves it, and a
+recurrence appears unread. The event carries fixed text and the server identity.
+It does not send a provider request or change SMTP, webhook or response state.
+
 Worker checkpoint #739 adds an advance warning to the daily-cap producer. While
 counted spend in an enabled cap mode is at least a fixed 80% of the cap but
 below it, one admin-only `ai-budget`/`daily-cap-warning` notification (severity
