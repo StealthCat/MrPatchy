@@ -3605,6 +3605,21 @@ counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
 
+### Use the real legacy triage reopening time — Roadmap A checkpoint #1255
+
+Investigations and the shared AI controls report the same legacy reopening time.
+Each overfull one-hour window clears when the entry ranked at its allowance
+leaves the window. If both recent behavior attempts and triage runs hold
+admission closed, the later opening applies. A window with no scheduled
+opening reports no time. The query retains the existing historical count and
+uses the indexed attempt and run timestamps without adding query round trips.
+
+The SQLite and MySQL acceptance fixtures exercise each counter independently
+and both together, compare the admin endpoints and verify actual claim
+eligibility immediately before and at the reported boundary. Explicit AI
+control modes retain their own gate timing. This checkpoint changes queue
+visibility. Admission, reservations and provider calls follow the existing path.
+
 ### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
 
 The shared AI start gates and automatic AI plan status now fetch each legacy
@@ -11318,6 +11333,22 @@ follow-up calls. These are loopback measurements with deliberate pacing
 and cap headroom. Production speeds and exhausted-cap throughput are outside
 this checkpoint.
 
+
+### Choose the rate for paced triage benchmarks — Roadmap A checkpoint #1253
+
+In `rate` and `rate_and_daily` fixture modes, pass the same `--rate-per-hour` to
+each serial and parallel run to compare a specific shared throttle. The default
+remains 1,000 starts/hour. The benchmark validates the rate against the
+application's 1–1,000 range and rejects combinations requiring more than five
+minutes of minimum spacing between starts before opening the disposable
+database. For example, a two-investigation sample at 20 starts/hour includes
+one three-minute interval.
+
+The comparison requires both reports to record the same rate and one durable
+start per investigation. Existing reports retain their format. SQLite and
+disposable MySQL fixtures check actual pacing with follow-up evidence. These
+runs use local fixtures and do not measure production throughput or an
+exhausted spend cap.
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
 

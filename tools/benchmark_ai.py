@@ -26,7 +26,8 @@ MYSQL_URL_ENV = 'AI_BENCHMARK_MYSQL_URL'
 FIXTURE_MODEL = 'fixture-model'
 FIXTURE_PRICE_VERSION = 'synthetic-v1'
 FIXTURE_CAP_USD = 10
-FIXTURE_RATE_PER_HOUR = 1000
+DEFAULT_FIXTURE_RATE_PER_HOUR = 1000
+MAX_FIXTURE_PACING_SECONDS = 300
 PACED_MODES = ('rate', 'rate_and_daily')
 PERSISTENCE_TIMING = re.compile(r'([a-z ]+): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
 
@@ -271,7 +272,9 @@ def main():
     parser.add_argument('--control-mode', choices=('legacy', 'unthrottled', 'daily_cap', *PACED_MODES),
                         default='legacy', help='AI control mode for the fixture (default: legacy). '
                         'Capped modes use the real spend ledger with synthetic prices. '
-                        'Paced modes wait for the real gate at 1,000 starts/hour.')
+                        'Paced modes wait for the real gate.')
+    parser.add_argument('--rate-per-hour', type=int,
+                        help='shared starts per hour in paced modes (1–1000, default: 1000)')
     parser.add_argument('--queue-age-seconds', type=int, default=2,
                         help='synthetic age of queued observations without a real wait (default: 2)')
     parser.add_argument('--retained-history-rows', type=int, default=0,
@@ -281,6 +284,15 @@ def main():
                              f'the {MYSQL_URL_ENV} environment variable; its tables are removed afterwards')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
+    paced = args.control_mode in PACED_MODES
+    rate = DEFAULT_FIXTURE_RATE_PER_HOUR if args.rate_per_hour is None else args.rate_per_hour
+    if args.rate_per_hour is not None and not paced:
+        parser.error('--rate-per-hour requires --control-mode rate or rate_and_daily')
+    if not 1 <= rate <= 1000:
+        parser.error('--rate-per-hour must be between 1 and 1000')
+    if paced and (args.runs - 1) * 3600 > MAX_FIXTURE_PACING_SECONDS * rate:
+        parser.error(f'The workload requires more than {MAX_FIXTURE_PACING_SECONDS} seconds of scheduled pacing. '
+                     'Reduce --runs or raise --rate-per-hour.')
     if args.follow_up_runs is not None and not 0 <= args.follow_up_runs <= args.runs:
         parser.error('--follow-up-runs must be between 0 and --runs')
     if args.follow_up_runs is None:
@@ -329,7 +341,6 @@ def main():
             parser.error(f'--same-server requires --concurrency at most {single_server_slots}')
         init()
         capped = args.control_mode in ai_pricing.CAP_MODES
-        paced = args.control_mode in PACED_MODES
         if capped:
             # The benchmark uses one loopback model and never depends on public catalog dates.
             now = time.time()
@@ -415,7 +426,7 @@ def main():
                 if capped:
                     settings.update(ai_daily_cap_usd=FIXTURE_CAP_USD, ai_budget_timezone='UTC')
                 if paced:
-                    settings['ai_rate_per_hour'] = FIXTURE_RATE_PER_HOUR
+                    settings['ai_rate_per_hour'] = rate
                 s.add(Setting(key='config', value=settings))
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
                 for host_id in dict.fromkeys(expected_hosts.values()):
@@ -474,6 +485,8 @@ def main():
                 fixture_budget = capped_fixture_summary(s, ai_budget.BudgetEntry, receipts, settings) if capped else None
                 fixture_rate = None
                 if paced:
+                    if settings['ai_rate_per_hour'] != rate:
+                        raise BenchmarkTimingError('The effective paced fixture rate differs from the requested rate.')
                     slot = s.get(ai_admission.Admission, 'global')
                     if slot is None or slot.admitted != len(runs):
                         raise BenchmarkTimingError('Paced fixture requires one durable start per investigation.')

@@ -1,3 +1,11 @@
+## 1.83.2 — 2026-11-21
+
+1. [PR #1254](https://github.com/StealthCat/MrPatchy/pull/1254): Allow paced AI benchmark comparisons to use a selected shared rate (1–1,000 starts/hour), and reject mismatched rates or workloads requiring more than five minutes of scheduled pacing before database setup. Compatibility: existing invocations keep the 1,000/hour default and report format; production runtime, settings, schema, provider and authorization behavior are unchanged. Limit: loopback fixture measurements do not establish production throughput, failover or exhausted-cap performance.
+
+## 1.83.1 — 2026-11-21
+
+1. [PR #1256](https://github.com/StealthCat/MrPatchy/pull/1256): Correct the displayed legacy triage reopening time by applying the hourly allowance to both recent attempts and triage runs and showing the later active opening across Investigations and shared AI controls. Compatibility: status visibility only; admission, claims, spend accounting and provider calls are unchanged, with no schema migration. Limit: the reopening time is a snapshot; workers and other gates can still delay a claim.
+
 ## 1.83.0 — 2026-11-21
 
 1. [PR #1258](https://github.com/StealthCat/MrPatchy/pull/1258): Add fixed-text, admin-only operational notifications for fresh agent reports of low free disk, inodes, memory or an unsynchronized kernel clock; preserve active notifications through unknown or stale telemetry and apply 15% capacity-clear hysteresis. Compatibility: notification-only, with no schema, route, UI, auth, scheduling or agent-health classification change; no SMTP/webhook alert and no AI call. Limits: thresholds remain fixed at 10% alert and 15% clear; other #342 resource signals, including certificate expiry, history, configurable thresholds, preflight blockers and SMART/NVMe or kernel-error signals, remain out of scope. No remediation or response authorization.

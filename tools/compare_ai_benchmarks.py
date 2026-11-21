@@ -249,8 +249,10 @@ def _validate(report, label):
         rate = _integer(fixture_rate.get('starts_per_hour'), f'{key}.starts_per_hour')
         admitted = _integer(fixture_rate.get('admitted_starts'), f'{key}.admitted_starts')
         wait = _bounded(fixture_rate.get('dispatch_wait_seconds'), f'{key}.dispatch_wait_seconds', 0, elapsed)
-        if rate != 1000 or admitted != runs:
-            raise ComparisonError(f'{key} must record 1,000 starts/hour and one durable start per investigation')
+        if not 1 <= rate <= 1000:
+            raise ComparisonError(f'{key}.starts_per_hour must be between 1 and 1000')
+        if admitted != runs:
+            raise ComparisonError(f'{key} must record one durable start per investigation')
         # Use the elapsed floor rather than a waiting floor. A slow admission
         # query could use up part of its next slot before we observe it.
         if elapsed + float(REPORT_ROUNDING_RADIUS) < (runs - 1) * 3600 / rate:
@@ -323,6 +325,9 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         raise ComparisonError('candidate must use a distinct execution configuration')
     if base['ai_control_mode'] != current['ai_control_mode']:
         raise ComparisonError('capability mismatch: ai_control_mode differs')
+    if base['fixture_rate'] is not None:
+        if base['fixture_rate']['starts_per_hour'] != current['fixture_rate']['starts_per_hour']:
+            raise ComparisonError('capability mismatch: fixture_rate.starts_per_hour differs')
     controls = (
         'database', 'runs', 'fixture_hosts', 'single_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',

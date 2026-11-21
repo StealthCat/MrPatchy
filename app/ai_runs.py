@@ -370,7 +370,8 @@ def viewer_status(s):
 
 
 def status(s):
-    from . import ai_retry,ai_policy,host_lifecycle,ai_claims,ai_admission,ai_budget,ai_provider_backoff,worker_registry
+    from . import (ai_retry, ai_policy, host_lifecycle, ai_claims, ai_admission, ai_budget,
+                   ai_control_status, ai_provider_backoff, worker_registry)
     from .update_scores import UpdateScore
     now=time.time(); cfg=config(s)
     signature=ai_retry.configuration(s)
@@ -391,7 +392,6 @@ def status(s):
     ).select_from(Behavior).outerjoin(TR,TR.subject==Behavior.id)
         .outerjoin(claim,and_(claim.subject==Behavior.id,claim.expires>now)).where(*pending_where)).one()
     paused=pending_count-unpaused_count
-    recent_count,recent_min=s.execute(select(func.count(),func.min(Behavior.attempted)).where(Behavior.attempted>now-3600)).one()
     heartbeat_row=s.get(Setting,'worker:heartbeat'); seen=heartbeat_row.value.get('seen',0) if heartbeat_row else 0
     running_stage,last_run,last_error=_status_run_details(s)
     active_count,active_lease_expires=s.execute(select(
@@ -399,10 +399,15 @@ def status(s):
     ).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now)).one()
     reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
-    run_count,oldest_run=s.execute(select(func.count(),func.min(AIRun.started)).where(
-        AIRun.purpose=='triage',AIRun.started>now-3600)).one()
-    used=max(recent_count,run_count)
     admission=ai_admission.status(s)
+    legacy_blocked,legacy_next=False,None
+    if admission['mode']=='legacy':
+        used,legacy_blocked,legacy_next=ai_control_status.legacy_triage_allowance(s,cfg['ai_hourly_limit'],now)
+    else:
+        attempts=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
+        runs=s.scalar(select(func.count()).select_from(AIRun).where(
+            AIRun.purpose=='triage',AIRun.started>now-3600))
+        used=max(attempts,runs)
     budget=ai_budget.status(s,now)
     provider_backoff=ai_provider_backoff.status(s,now)
     scoring_scope=and_(UpdateScore.host_id==Package.host_id,UpdateScore.name==Package.name,
@@ -444,7 +449,8 @@ def status(s):
     elif not seen or now-seen>90: reason='worker_unavailable'; message='No recent scheduler heartbeat. Check app/worker container logs and DISABLE_SCHEDULER.'
     elif running_stage is not None: reason='running'; message=str(active_count)+' process investigation(s) hold current leases. Latest stage: '+running_stage
     elif provider_backoff['blocked']:reason='backoff';message='Shared provider backoff is waiting for retry eligibility after a transient failure.'
-    elif admission['mode']=='legacy' and used>=cfg['ai_hourly_limit']: reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=min([v for v in (recent_min,oldest_run) if v is not None])+3600
+    elif legacy_blocked:
+        reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=legacy_next
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
     elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
     elif not pending_count and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
