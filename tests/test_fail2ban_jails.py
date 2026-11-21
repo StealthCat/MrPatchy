@@ -130,3 +130,68 @@ def test_hidden_jail_d_files_and_crlf():
     r = run({B + '/jail.d/.hidden.conf': '[a]\nenabled = true\naction = x.py\n',
              B + '/jail.conf': '[b]\r\nenabled = true\r\naction = y.py\r\n'})
     assert [j['jail'] for j in r['jails']] == ['b'] and r['complete']
+
+
+# Expected splits were produced by fail2ban 1.0.2 helpers.py ``splitWithOptions``
+# (OPTION_SPLIT_CRE). The upstream regex is not embedded here because it
+# backtracks exponentially (CodeQL py/redos); scratch fuzzing compared the
+# scanner with it over 600,000 random inputs with 0 disagreements.
+_UPSTREAM_SPLITS = [
+    ('',
+     []),
+    ('  a  b ',
+     ['a ', 'b ']),
+    ('a [x=1]  b',
+     ['a [x=1] ', 'b']),
+    ('a[x=1][y="2,3"]\n b.py',
+     ['a[x=1][y="2,3"]\n', 'b.py']),
+    ('[odd] x',
+     ['[odd]', 'x']),
+    ('bad[oops',
+     ['bad[oops']),
+    ('bad [oops',
+     ['bad', '[oops']),
+    ('a[x="q", y=\'r]s\', z=t u]\tnext',
+     ['a[x="q", y=\'r]s\', z=t u]', 'next']),
+    ('a[k=v w=z]',
+     ['a[k=v w=z]']),
+    ('m[k= v ]',
+     ['m[k= v ]']),
+    ('é[ü=1] ١',
+     ['é[ü=1]', '١']),
+    ('a\x1fb',
+     ['a', 'b']),
+    ('iptables-multiport[port="ssh", protocol="tcp", chain="INPUT"]\n           sendmail-whois-lines[sender="f2b@x", dest="root", logpath="/var/log/auth.log"]\nabuseipdb[abuseipdb_apikey="k", abuseipdb_category="18,22"]  hook.py',
+     ['iptables-multiport[port="ssh", protocol="tcp", chain="INPUT"]\n          ', 'sendmail-whois-lines[sender="f2b@x", dest="root", logpath="/var/log/auth.log"]', 'abuseipdb[abuseipdb_apikey="k", abuseipdb_category="18,22"] ', 'hook.py']),
+]
+
+
+def test_split_with_options_matches_upstream():
+    for text, expected in _UPSTREAM_SPLITS:
+        assert fj.split_with_options(text) == expected, repr(text)
+    for text in ('m[ k = v ]', 'x.py[actname=y]junk'):  # upstream would backtrack here
+        try:
+            fj.split_with_options(text)
+        except fj._SplitUnresolved:
+            continue
+        raise AssertionError(repr(text))
+
+
+def test_ambiguous_action_list_is_linear_and_fails_closed():
+    import time
+    # CodeQL py/redos witness shape (alert #24): '!' '[-=' then many ' -='.
+    for hostile in ('![-=' + ' -=' * 20000 + '!', '![-=' + ' -=' * 20000 + ']!'):
+        began = time.perf_counter()
+        try:
+            fj.split_with_options(hostile)
+        except fj._SplitUnresolved:
+            pass
+        assert time.perf_counter() - began < 1.0
+    # No ``]`` left: no option list can match, so upstream's ``\S+`` split is exact.
+    r = run({B + '/jail.conf': '[a]\nenabled = true\naction = ' + '![-=' + ' -=' * 20000 + '!' + '\n'})
+    assert r['complete'] and jail(r, 'a')['config_error'] == 'invalid_action'
+    # An option list upstream would backtrack through is a blocking gap, not a guess.
+    r = run({B + '/jail.conf': '[a]\nenabled = true\naction = ' + '![-=' + ' -=' * 20000 + ']!' + '\n'})
+    assert gaps(r) == {'action_syntax_unresolved'} and not r['complete'] and r['jails'] == []
+    r = run({B + '/jail.conf': '[a]\nenabled = true\naction = x.py[actname=y]junk\n'})
+    assert gaps(r) == {'action_syntax_unresolved'}

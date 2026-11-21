@@ -40,8 +40,11 @@ library ``configparser``, with the same parser options upstream uses
 
 Fail-closed rules (``complete: False``): an unobserved file or directory, a
 path with ``..``, NUL bytes, text that is not UTF-8, over-limit input, a parse
-or interpolation error that makes upstream raise, and any interpolation in an
-enabled jail that reads ``known/`` values a filter would supply. Filter and
+or interpolation error that makes upstream raise, any interpolation in an
+enabled jail that reads ``known/`` values a filter would supply, and an
+enabled jail's ``action`` option list that upstream's backtracking
+``splitWithOptions`` regex could split more than one way
+(``action_syntax_unresolved``; the scanner here is linear). Filter and
 action file contents are not evaluated in this slice, so any enabled jail that
 reads one carries the blocking ``definitions_not_evaluated`` gap. The
 ``logpath`` glob check in ``convert()`` (which can stop the whole start) is not
@@ -70,20 +73,19 @@ MAX_INCLUDE_DEPTH = 32
 BLOCKING = frozenset({
     'file_not_observed', 'path_traversal', 'file_nul', 'file_invalid_utf8',
     'too_large', 'parse_error', 'interpolation_error', 'include_limit',
-    'known_values_not_evaluated', 'definitions_not_evaluated',
+    'known_values_not_evaluated', 'definitions_not_evaluated', 'action_syntax_unresolved',
 })
 
 _SECTION_OPTNAME_CRE = re.compile(r'^([\w\-]+)/([^\s>]+)$')
 _SECTION_OPTSUBST_CRE = re.compile(r'%\(([\w\-]+/([^\)]+))\)s')
 _CONDITIONAL_RE = re.compile(r'^(\w+)(\?.+)$')
-# helpers.py OPTION_CRE / OPTION_EXTRACT_CRE / OPTION_SPLIT_CRE (1.0.2).
+# helpers.py OPTION_CRE / OPTION_EXTRACT_CRE (1.0.2). OPTION_SPLIT_CRE is
+# replaced by the linear ``split_with_options`` scanner below.
 _OPTION_CRE = re.compile(r'^([^\[]+)(?:\[(.*)\])?\s*$', re.DOTALL)
 _OPTION_EXTRACT_CRE = re.compile(
     r'\s*([\w\-_\.]+)=(?:"([^"]*)"|\'([^\']*)\'|([^,\]]*))(?:,|\]\s*\[|$|(?P<wrngA>.+))|,?\s*$|(?P<wrngB>.+)',
     re.DOTALL)
-_OPTION_SPLIT_CRE = re.compile(
-    r'(?:[^\[\s]+(?:\s*\[\s*(?:[\w\-_\.]+=(?:"[^"]*"|\'[^\']*\'|[^,\]]*)\s*(?:,|\]\s*\[)?\s*)*\])?\s*|\S+)(?=\n\s*|\s+|$)',
-    re.DOTALL)
+_KEY_CHARS = frozenset('abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.')
 
 # jailreader.py _configOpts1st and _configOpts (with FilterReader._configOpts).
 _OPTS_FIRST = (('enabled', 'bool', False), ('backend', 'string', 'auto'), ('filter', 'string', ''))
@@ -391,8 +393,117 @@ def extract_options(option: str) -> tuple[str, dict[str, str]]:
     return name, opts
 
 
+class _SplitUnresolved(ValueError):
+    pass
+
+
+def _is_key_char(ch: str) -> bool:
+    # ``[\w\-_\.]`` in upstream's pattern; ``\w`` is Unicode-aware (``isalnum``).
+    return ch in _KEY_CHARS or ch.isalnum()
+
+
+def _split_bracket(text: str, pos: int) -> int:
+    """Return the index just past the closing ``]`` of the first-choice parse.
+
+    ``pos`` is the index of the opening ``[``. Each step takes the alternative
+    upstream's backtracking regex tries first; any point where that first
+    choice fails (where the regex would start backtracking) raises
+    ``_SplitUnresolved`` instead of exploring alternatives.
+    """
+    n = len(text)
+    i = pos + 1
+    while i < n and text[i].isspace():
+        i += 1
+    while True:
+        if i >= n:
+            raise _SplitUnresolved('unterminated option list')
+        if not _is_key_char(text[i]):
+            if text[i] == ']':
+                return i + 1
+            raise _SplitUnresolved('unexpected option character')
+        while i < n and _is_key_char(text[i]):
+            i += 1
+        if i >= n or text[i] != '=':
+            raise _SplitUnresolved('option without =')
+        i += 1
+        quoted = False
+        if i < n and text[i] in '"\'':
+            close = text.find(text[i], i + 1)
+            if close >= 0:
+                i = close + 1
+                quoted = True
+        if not quoted:
+            while i < n and text[i] not in ',]':
+                i += 1
+        while i < n and text[i].isspace():
+            i += 1
+        if i < n and text[i] == ',':
+            i += 1
+        elif i < n and text[i] == ']':
+            j = i + 1
+            while j < n and text[j].isspace():
+                j += 1
+            if j < n and text[j] == '[':
+                i = j + 1
+        while i < n and text[i].isspace():
+            i += 1
+
+
 def split_with_options(option: str) -> list[str]:
-    return _OPTION_SPLIT_CRE.findall(option)
+    """Split an ``action`` value like upstream ``splitWithOptions`` (1.0.2).
+
+    Upstream uses ``re.findall`` with a pattern whose ambiguous option list
+    backtracks exponentially (CodeQL ``py/redos``). This linear scanner follows
+    the regex's first-choice path for every token, which is exactly what the
+    regex returns whenever that path succeeds. When it would fail and the regex
+    would backtrack into alternative splits, ``_SplitUnresolved`` is raised and
+    the caller reports a blocking gap instead of guessing.
+    """
+    text = option
+    n = len(text)
+    out: list[str] = []
+    i = 0
+    while i < n:
+        if text[i].isspace():
+            i += 1
+            continue
+        start = i
+        if text[i] == '[':
+            while i < n and not text[i].isspace():
+                i += 1
+            out.append(text[start:i])
+            continue
+        while i < n and text[i] != '[' and not text[i].isspace():
+            i += 1
+        j = i
+        while j < n and text[j].isspace():
+            j += 1
+        if j < n and text[j] == '[' and ']' in text[j:]:
+            i = _split_bracket(text, j)
+        elif j < n and text[j] == '[' and j == i:
+            # No ``]`` remains, so no option list can match: the regex falls
+            # back to ``\S+``.
+            while i < n and not text[i].isspace():
+                i += 1
+            out.append(text[start:i])
+            continue
+        elif j == i:
+            out.append(text[start:i])
+            continue
+        # Trailing ``\s*`` then the ``(?=\s|$)`` lookahead: keep the whitespace
+        # run except its last character, or all of it at the end of the text.
+        j = i
+        while j < n and text[j].isspace():
+            j += 1
+        if j == n:
+            end = n
+        elif j > i:
+            end = j - 1
+        else:
+            raise _SplitUnresolved('option list not followed by whitespace')
+        out.append(text[start:end])
+        i = end
+    return out
 
 
 def _definition_files(fs: _FS, kind: str, name: str) -> list[str]:
@@ -431,7 +542,11 @@ def _jail(cfg: _Parser, fs: _FS, name: str, any_filter: list[bool]) -> dict[str,
             cfg.track_known = False
         if cfg.known_refs:
             raise _Unresolved('known_values_not_evaluated', f'[{name}] ' + ', '.join(sorted(set(cfg.known_refs))))
-        for act in split_with_options(second.get('action', '')):
+        try:
+            action_specs = split_with_options(second.get('action', ''))
+        except _SplitUnresolved as exc:
+            raise _Unresolved('action_syntax_unresolved', f'[{name}] {exc}') from exc
+        for act in action_specs:
             act = act.strip()
             if not act:
                 continue
