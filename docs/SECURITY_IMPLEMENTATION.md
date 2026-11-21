@@ -12466,3 +12466,14 @@ There is no live differential against a built apcupsd: this session's classifier
   - agent collection of the TuneD files and installation state;
   - a catalog entry, provenance, persistence, UI and AI classification;
   - recommended-profile (`recommend.d`) resolution, variable expansion and `tuned-main.conf` `default_instance_priority` collection.
+
+### supervisord program contract — worker checkpoint #1259 (roadmap F)
+
+supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x]` it loads from its main file and its `[include] files =` globs, at supervisord start when `autostart` is true (the default), as the section's `user` or as supervisord's own user, normally root. The startup inventory did not model `conf.d/*.conf` as a persistence location.
+
+- **Change:** the pure `app/supervisor_programs.py` takes captured file text and captured include-glob matches and returns each process supervisord would start: section, kind, program and group name, process name and number, the expanded command and its SHA-256, the configured user, and whether it starts at supervisord start or only on demand. It performs no I/O and never runs a command.
+- **Fidelity:** it parses with the same standard-library `RawConfigParser` settings supervisor 4.2.5 uses, reads includes in its order with per-file `%(here)s` replacement, honours `[DEFAULT]`, `[group:x]` membership and supervisord's per-process expansion and option converters, and reports `config_error`, with no processes, only for the refusals it models exactly.
+- **Fail closed:** an unobserved file or glob result, an include pattern that needs the unobserved host name or process environment, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. A command that needs an unobserved `%(ENV_*)s` or `%(host_node_name)s` is reported as starting with an unresolved command. Validations it does not model (users, log directories, `[supervisord]` server options, rpcinterface plugins, fcgi sockets) can only stop supervisord, so the result over-reports and says so. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
