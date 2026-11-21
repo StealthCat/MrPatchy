@@ -73,8 +73,11 @@ Semantics come from the TuneD 2.21.0 source as packaged in Ubuntu 24.04
   variables textually, leaving every function call in place, and then reads
   each ``{f:`` name: ``exec`` is a blocking ``function_exec`` gap, and a name
   that is not a literal word is a blocking ``function_expansion_not_modeled``
-  gap. The daemon keeps one variable store for its lifetime, so a reference to
-  a name the profile does not define may resolve to a value left by an earlier
+  gap. So is any ``${`` that is neither a plain ``${NAME}`` reference nor a
+  literal ``${f:<name>`` call, because TuneD re-splits that outer call after a
+  nested result is spliced in (``${${f:strip:f\\:exec\\:cmd}}`` runs ``cmd``).
+  The daemon keeps one variable store for its lifetime, so a reference to a
+  name the profile does not define may resolve to a value left by an earlier
   profile; that is a blocking ``variable_undefined`` gap. A variable or
   function in an include and a ``[variables] include=`` file are blocking gaps.
   ``${i:PROFILE_DIR}`` is substituted with ``re.sub``, which treats a backslash
@@ -132,6 +135,8 @@ _VAR_REF = re.compile(r'(?<!\\)\$\{(\w+)\}')
 _VAR_UNESCAPE = re.compile(r'\\(\$\{\w+\})')
 _FUNC_OPEN = re.compile(r'\{f:')
 _FUNC_NAME = re.compile(r'\w+(?=[:}])')
+_CALL_OPEN = re.compile(r'\$\{')
+_READABLE_OPEN = re.compile(r'\w+\}|f:\w+[:}]')
 _VAR_NAME = re.compile(r'\w+$')
 _TRUE = ('True', 'true', '1')
 
@@ -346,6 +351,12 @@ def _function_calls(text: str) -> tuple[bool, bool]:
             opaque = True
         elif name.group(0) == 'exec':
             calls_exec = True
+    # TuneD pushes a frame at every "${" and re-splits it after inner results are
+    # spliced in, so an opening that is neither a plain variable reference nor a
+    # literal "f:<name>" call can be completed into any call, exec included.
+    for match in _CALL_OPEN.finditer(text):
+        if _READABLE_OPEN.match(text, match.end()) is None:
+            opaque = True
     return calls_exec, opaque
 
 

@@ -260,6 +260,23 @@ def test_exec_assembled_by_variables_or_nested_functions_is_never_missed():
         assert result['invocations'] == [], label
 
 
+def test_outer_call_completed_by_a_nested_function_result_is_never_missed():
+    # TuneD pushes a frame at every "${" and re-splits the outer call after the inner
+    # result is spliced in, so "${${f:strip:f\:exec\:...}}" becomes an exec call even
+    # though no literal "{f:exec" appears. Both load-time placements must fail closed.
+    cases = {
+        'devices': '[sysctl]\ndevices=${${f:strip:f\\:exec\\:/tmp/evil}}\n[script]\nscript=s.sh\n',
+        'variables': '[variables]\nx=${${f:strip:f\\:exec\\:/tmp/evil}}\n[script]\nscript=s.sh\n',
+        'name_prefix': '[sysctl]\nk=${f${f:strip:\\:exec}:/tmp/evil}\n[script]\nscript=s.sh\n',
+    }
+    for label, text in cases.items():
+        result = tp.evaluate(_capture({f'{ETC}/custom': text}))
+        assert result['complete'] is False, label
+        assert result['status'] != 'resolved', label
+        assert 'function_expansion_not_modeled' in _gaps(result), label
+        assert result['invocations'] == [], label
+
+
 def test_static_variables_and_ordinary_functions_stay_complete():
     result = tp.evaluate(_capture({
         f'{ETC}/custom': '[variables]\ncores=1-3\nmask=${f:cpulist2hex:${cores}}\n'

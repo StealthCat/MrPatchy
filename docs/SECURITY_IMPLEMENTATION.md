@@ -12312,7 +12312,7 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
   - variables in `include=`;
   - a `[variables] include=` file;
   - any `exec` function call, including one whose name is assembled from a variable or a nested function result, which is found by substituting `[variables]` values textually before reading each `{f:` name;
-  - a function name that is not a literal word after that substitution (`function_expansion_not_modeled`);
+  - a function name that is not a literal word after that substitution, or a `${` that is neither a plain `${NAME}` reference nor a literal `${f:<name>` call, since TuneD re-splits that outer call after a nested function result is spliced in (`${${f:strip:f\:exec\:cmd}}` runs `cmd`) (`function_expansion_not_modeled`);
   - a reference to a variable the loaded profile does not define, because the daemon's variable store outlives a single load (`variable_undefined`);
   - `${i:PROFILE_DIR}` in a profile whose directory name contains a backslash, which `re.sub` treats as a template escape (`profile_dir_escape_not_modeled`);
   - an invalid regex or priority that is only reached when an earlier regex of the same unit matches the host (`apply_refusal_conditional`).
