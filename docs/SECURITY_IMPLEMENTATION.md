@@ -12544,3 +12544,15 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### keepalived script contract — worker checkpoint #1307 (roadmap F, in progress)
+
+keepalived runs administrator-configured programs on VRRP state changes, health checks, LVS events and at startup and shutdown. They run as root, or as `script_user` / `keepalived_script`.
+
+- **Increment 1 (draft):** the pure `app/keepalived_scripts.py` ports these keepalived 2.2.8 functions:
+  - `lib/parser.c`: `read_line` preprocessing, `decomment`, the brace split, and `alloc_strvec_r`
+  - `lib/notify.c`: `alloc_strvec_quoted_escaped` and `notify_script_init`
+- **What it yields:** the argv and configured user/group of a single script keyword line.
+- **Fails closed:** `include`, definitions, standard `$_*` parameters, `~SEQ`/`~LST`, `@` conditionals without an observed `config_id`, continuations, over-buffer lines, NUL bytes, invalid UTF-8 and over-limit input all make the result incomplete.
+- **Remaining:** the keyword-tree block walk. In 2.2.8 an unknown keyword's `{` is ignored, and its contents are parsed at the enclosing level, so any unknown keyword in a script-bearing block must be a blocking gap. Also remaining: default-user resolution, the per-program inventory and a differential check against the real binary.
+- **Acceptance:** stays incomplete until those are delivered.
