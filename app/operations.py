@@ -307,7 +307,7 @@ def collect_alerts(now=None,observing_since=None):
         from . import agent_integrity_notifications
         agent_integrity_notifications.publish(hosts,now,lambda *args:_operational_notification(s,*args),published)
         from . import resource_attention_notifications
-        resource_attention_notifications.publish(s,hosts,now,lambda *args:_operational_notification(s,*args),published)
+        resource_attention_notifications.publish(s,hosts,now,lambda *args:_operational_notification(s,*args),published,cfg)
         lost_minutes=telemetry_lost_minutes(cfg);lost_seconds=lost_minutes*60;lost_message=telemetry_lost_message(lost_minutes)
         for host in hosts:
             if not host_lifecycle.active(host):
