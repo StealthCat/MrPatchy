@@ -211,3 +211,161 @@ def test_non_ascii_digits_are_not_c_digits():
     result = run('pass .1.3.\u00b2 /bin/p\npass \u00b2 /bin/q\n')
     assert [row['oid'] for row in result['programs']] == ['.1.3.']
     assert result['lines'][-1]['reason'] == 'oid_not_numeric'
+
+
+# --- Increment 2: read order derived from a filesystem snapshot (read_config.c) ---
+
+PACKAGED_DIRS = {
+    '/etc/snmp': [],
+    '/usr/share/snmp': ['mibs'],
+    '/usr/lib/x86_64-linux-gnu/snmp': [],
+    '/var/lib/snmp': [],
+}
+
+
+def snap(files, directories=None, absent=()):
+    dirs = dict(PACKAGED_DIRS)
+    dirs.update(directories or {})
+    for path in files:
+        parent, _, name = path.rpartition('/')
+        if parent in dirs and dirs[parent] is not None and name not in dirs[parent]:
+            dirs[parent] = [*dirs[parent], name]
+    return {'files': files, 'directories': dirs, 'absent': list(absent)}
+
+
+def run_snapshot(files, directories=None, absent=(), **kwargs):
+    kwargs.setdefault('passwd_text', PASSWD)
+    kwargs.setdefault('group_text', GROUP)
+    kwargs.setdefault('environ', {})
+    return sp.evaluate_snapshot(snap(files, directories, absent), **kwargs)
+
+
+def order(result):
+    return [entry['path'] for entry in result['read_order']]
+
+
+def test_packaged_search_path_without_home_reads_etc_then_persistent_and_completes():
+    result = run_snapshot({
+        '/etc/snmp/snmpd.conf': 'extend test1 /bin/echo hi\n',
+        '/var/lib/snmp/snmpd.conf': 'setserialno 1\n',
+    })
+    assert order(result) == ['/etc/snmp/snmpd.conf', '/var/lib/snmp/snmpd.conf']
+    assert result['search_path'] == '/etc/snmp:/usr/share/snmp:/usr/lib/x86_64-linux-gnu/snmp'
+    assert result['complete'] is True and result['gaps'] == []
+    assert programs(result, name='test1')[0]['run_user'] == 'Debian-snmp'
+    assert result['authorizes_response'] is False and result['origin'] == 'not_assessed'
+
+
+def test_local_conf_home_and_persistent_backups_follow_read_config_files_in_path():
+    files = {
+        '/etc/snmp/snmpd.conf': 'extend dup /bin/first\n',
+        '/etc/snmp/snmpd.local.conf': 'extend dup /bin/second\nextend local /bin/local\n',
+        '/root/.snmp/snmpd.conf': 'extend home /bin/home\n',
+        '/var/lib/snmp/snmpd.0.conf': 'extend backup0 /bin/b0\n',
+        '/var/lib/snmp/snmpd.1.conf': 'extend backup1 /bin/b1\n',
+        # snmpd.2.conf is missing, so snmpd.3.conf is never read.
+        '/var/lib/snmp/snmpd.3.conf': 'extend backup3 /bin/b3\n',
+        '/var/lib/snmp/snmpd.conf': '',
+    }
+    result = run_snapshot(files, {'/root/.snmp': []}, environ={'HOME': '/root'})
+    assert order(result) == [
+        '/etc/snmp/snmpd.conf', '/etc/snmp/snmpd.local.conf', '/root/.snmp/snmpd.conf',
+        '/var/lib/snmp/snmpd.0.conf', '/var/lib/snmp/snmpd.1.conf', '/var/lib/snmp/snmpd.conf',
+    ]
+    assert programs(result, name='dup')[0]['argv'] == ['/bin/first']
+    assert {row['name'] for row in result['programs']} == {'dup', 'local', 'home', 'backup0', 'backup1'}
+    assert result['complete'] is True
+
+
+def test_snmpconfpath_replaces_the_search_and_stops_at_an_empty_element():
+    files = {
+        '/opt/a/snmpd.conf': 'extend a /bin/a\n',
+        '/etc/snmp/snmpd.conf': 'extend etc /bin/etc\n',
+        '/opt/b/snmpd.conf': 'extend b /bin/b\n',
+    }
+    result = run_snapshot(files, {'/opt/a': None, '/opt/b': None}, environ={'SNMPCONFPATH': '/opt/a::/opt/b'})
+    assert order(result) == ['/opt/a/snmpd.conf']
+    assert [row['name'] for row in result['programs']] == ['a']
+    # The persistent directory is read only when it is in SNMPCONFPATH; prefix match gets backups.
+    result = run_snapshot({'/var/lib/snmp/snmpd.0.conf': 'extend p0 /bin/p0\n', '/var/lib/snmp/snmpd.conf': ''},
+                          environ={'SNMPCONFPATH': '/var/lib/snmp'})
+    assert order(result) == ['/var/lib/snmp/snmpd.0.conf', '/var/lib/snmp/snmpd.conf']
+
+
+def test_include_file_dir_and_search_resolve_with_the_includers_context():
+    files = {
+        '/etc/snmp/snmpd.conf': (
+            'includeFile extra.conf\n'
+            'includeDir /etc/snmp/snmpd.conf.d\n'
+            'includeSearch site.conf\n'
+            'includeFile /etc/snmp/missing.conf\n'
+            'extend after /bin/after\n'
+        ),
+        # The context switch inside the included file does not leak back.
+        '/etc/snmp/extra.conf': 'extend extra /bin/extra\n[snmp]\nextend ignored /bin/no\n',
+        '/etc/snmp/snmpd.conf.d/one.conf': 'extend one /bin/one\n',
+        '/etc/snmp/site.conf': 'extend site /bin/site\n',
+    }
+    dirs = {'/etc/snmp/snmpd.conf.d': ['.hidden.conf', 'notes.txt', 'one.conf', '.conf']}
+    result = run_snapshot(files, dirs)
+    assert order(result)[:4] == [
+        '/etc/snmp/snmpd.conf', '/etc/snmp/extra.conf', '/etc/snmp/snmpd.conf.d/one.conf', '/etc/snmp/site.conf',
+    ]
+    assert [row['name'] for row in result['programs']] == ['extra', 'one', 'site', 'after']
+    assert any(note['reason'] == 'not_found' for note in result['lines'])
+    assert result['complete'] is True, result['gaps']
+
+
+def test_include_target_keeps_trailing_blanks_and_relative_include_dir_blocks():
+    result = run_snapshot({'/etc/snmp/snmpd.conf': 'includeFile /etc/snmp/x.conf  \nincludeDir conf.d\n',
+                           '/etc/snmp/x.conf': 'extend x /bin/x\n'})
+    # "/etc/snmp/x.conf  " does not exist, so x.conf is not read.
+    assert programs(result, name='x') == []
+    assert 'include_dir_relative' in codes(result) and result['complete'] is False
+
+
+def test_include_dir_with_several_entries_blocks_on_readdir_order():
+    files = {
+        '/etc/snmp/snmpd.conf': 'includeDir /etc/snmp/d\n',
+        '/etc/snmp/d/a.conf': 'extend same /bin/a\n',
+        '/etc/snmp/d/b.conf': 'extend same /bin/b\n',
+    }
+    result = run_snapshot(files, {'/etc/snmp/d': ['b.conf', 'a.conf']})
+    assert 'include_dir_order_unknown' in codes(result) and result['complete'] is False
+    # Rows still follow the captured listing order.
+    assert programs(result, name='same')[0]['argv'] == ['/bin/b']
+
+
+def test_include_nesting_deeper_than_sixteen_is_refused():
+    result = run_snapshot({'/etc/snmp/snmpd.conf': 'includeFile snmpd.conf\nextend loop /bin/loop\n'})
+    depths = [entry['depth'] for entry in result['read_order'] if entry['path'] == '/etc/snmp/snmpd.conf']
+    assert max(depths) == sp.MAX_INCLUDE_DEPTH and len(depths) == sp.MAX_INCLUDE_DEPTH + 1
+    assert any(note['reason'] == 'include_depth_exceeded' for note in result['lines'])
+    assert len(programs(result, name='loop')) == 1
+
+
+def test_snmp_type_files_persistent_dir_and_cross_type_handlers_block():
+    result = run_snapshot({'/etc/snmp/snmpd.conf': '', '/etc/snmp/snmp.conf': 'mibs +ALL\n'})
+    assert order(result) == ['/etc/snmp/snmpd.conf', '/etc/snmp/snmp.conf'] and result['complete'] is True
+    result = run_snapshot({'/etc/snmp/snmpd.conf': '', '/etc/snmp/snmp.conf': 'persistentDir /tmp/p\n'})
+    assert 'persistent_dir_directive' in codes(result)
+    result = run_snapshot({'/etc/snmp/snmpd.conf': '[snmp] persistentDir /tmp/p\n'})
+    assert 'persistent_dir_directive' in codes(result)
+    result = run_snapshot({'/etc/snmp/snmpd.conf': '', '/etc/snmp/snmp.conf': '[snmpd] extend s /bin/s\n'})
+    assert programs(result, name='s') and 'type_order_not_derived' in codes(result)
+    assert result['complete'] is False
+
+
+def test_undescribed_paths_environment_and_argv_configuration_block():
+    snapshot = {'files': {'/etc/snmp/snmpd.conf': ''}, 'directories': {'/etc/snmp': ['snmpd.conf']}}
+    result = sp.evaluate_snapshot(snapshot, passwd_text=PASSWD, group_text=GROUP)
+    assert 'environment_not_observed' in codes(result)
+    assert {'/usr/share/snmp', '/var/lib/snmp'} <= {gap.get('path') for gap in result['gaps']}
+    assert result['complete'] is False
+    result = run_snapshot({'/etc/snmp/snmpd.conf': ''}, argv=[*sp.DEFAULT_ARGV, '-c', '/tmp/x.conf'])
+    assert 'argv_config_not_modelled' in codes(result)
+    result = run_snapshot({'/etc/snmp/snmpd.conf': None})
+    assert 'file_not_observed' in codes(result)
+    long_dir = '/' + 'd' * 290
+    result = run_snapshot({}, {long_dir: []}, environ={'SNMPCONFPATH': long_dir})
+    assert 'path_truncated' in codes(result)

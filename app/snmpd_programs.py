@@ -52,10 +52,37 @@ extend module:
   ``pass_persist``). The packaged unit passes
   ``-I -smux,mteTrigger,mteTriggerConf``.
 
-Fail-closed rules: increment 1 does not derive snmpd's configuration search
-path, so every result carries the blocking ``read_order_not_derived`` gap and
-is never ``complete``. Include directives, command-line configuration
+Read order (``evaluate_snapshot``) follows ``read_config_files_of_type`` and
+``read_config`` over a captured filesystem snapshot:
+
+- Without ``SNMPCONFPATH`` snmpd searches ``/etc/snmp``, ``/usr/share/snmp``,
+  ``/usr/lib/<multiarch>/snmp`` and, only when ``HOME`` is set,
+  ``$HOME/.snmp``, then the persistent directory (``SNMP_PERSISTENT_DIR`` or
+  ``/var/lib/snmp``). With ``SNMPCONFPATH`` it searches only that list. The
+  list stops at its first empty element, and missing or non-directory entries
+  are skipped.
+- In each directory it reads ``<type>.conf`` then ``<type>.local.conf``. A
+  directory whose name starts with the persistent directory (or
+  ``SNMP_PERSISTENT_FILE``) first gets ``<type>.0.conf`` to ``<type>.10.conf``,
+  stopping at the first missing one.
+- The ``snmpd`` type is read, then the ``snmp`` type. snmpd handlers reached
+  from an ``snmp`` file depend on the type registration order, which is not
+  derived, so they are a blocking gap. So is ``persistentDir``, a premib token
+  that moves the persistent directory.
+- ``includeFile`` resolves a relative name against the including file's
+  directory. ``includeDir`` reads its ``*.conf`` entries (not dot files) in
+  readdir order, so more than one entry, or a relative directory (resolved
+  against snmpd's working directory), is a blocking gap. ``includeSearch``
+  searches the path for ``<name>`` with one ``.conf`` suffix removed. The
+  target is the raw rest of the line, trailing blanks included. Included files
+  start in the includer's permanent context and do not change it, and nesting
+  deeper than 16 is refused.
+
+Fail-closed rules: ``evaluate`` takes the order on trust, so it always carries
+the blocking ``read_order_not_derived`` gap and treats includes as
+``include_not_modelled``. In both modes, command-line configuration
 (``-c``, ``-C``, ``-Y`` and ``--token=value``), unknown bracketed types,
+paths the snapshot does not describe, an unobserved environment,
 directives that load code (``dlmod``, ``perl``, ``procfix``), symbolic OIDs,
 unobserved files and account databases, NUL bytes, invalid UTF-8 and
 over-limit input are blocking gaps. ``origin`` is always ``not_assessed`` and
@@ -92,11 +119,23 @@ SHELL_TOKENS = frozenset({'sh', 'extend-sh', 'sh2'})
 FIX_TOKENS = frozenset({'execFix', 'extendfix', 'execFix2'})
 CODE_LOADING_TOKENS = ('dlmod', 'perl', 'perlinitfile', 'procfix')
 NS_EXTEND_OID = '.1.3.6.1.4.1.8072.1.3.2'
+# Debian/Ubuntu configure paths (SNMPCONFPATH, SNMPSHAREPATH, SNMPLIBPATH for amd64,
+# NETSNMP_PERSISTENT_DIRECTORY).
+CONF_PATH = '/etc/snmp'
+SHARE_PATH = '/usr/share/snmp'
+LIB_PATH = '/usr/lib/x86_64-linux-gnu/snmp'
+PERSISTENT_DIR = '/var/lib/snmp'
+NETSNMP_MAX_PERSISTENT_BACKUPS = 10
+MAX_PERSISTENT_BACKUPS = NETSNMP_MAX_PERSISTENT_BACKUPS
+CONFIG_FILE_BUFFER = 300
+MAX_INCLUDE_DEPTH = 16
 SNMPD_OPTIONS = 'aAc:CdD::fhHI:l:L:m:M:n:p:P:qrsS:UvV-:Y:g:u:x:X'
 BLOCKING = frozenset({
     'read_order_not_derived', 'file_not_observed', 'file_invalid', 'too_many_files', 'argv_invalid',
     'argv_config_not_modelled', 'include_not_modelled', 'context_unresolved', 'code_loading_directive',
     'oid_unresolved', 'account_unresolved', 'accounts_not_observed', 'name_unresolved', 'snmpd_crash',
+    'path_not_observed', 'path_truncated', 'directory_not_listed', 'include_dir_relative', 'include_dir_order_unknown',
+    'persistent_dir_directive', 'type_order_not_derived', 'environment_not_observed',
 })
 
 _C_SPACE = ' \t\n\v\f\r'
@@ -524,11 +563,7 @@ def _resolve_identity(state: _State, passwd: Mapping[str, tuple[int, int | None]
     }
 
 
-def evaluate(config_files: Sequence[Mapping[str, Any]], *, argv: Sequence[str] | None = DEFAULT_ARGV,
-             passwd_text: str | None = None, group_text: str | None = None) -> dict[str, Any]:
-    """Return the programs snmpd runs for captured files read in ``config_files`` order."""
-    state = _State()
-    state.gap('read_order_not_derived')
+def _prepare(argv: Sequence[str] | None, state: _State) -> dict[str, bool]:
     if argv is None:
         state.gap('argv_invalid', reason='not_observed')
         argv = DEFAULT_ARGV
@@ -536,28 +571,27 @@ def evaluate(config_files: Sequence[Mapping[str, Any]], *, argv: Sequence[str] |
         state.gap('argv_invalid', reason='too_long')
         argv = list(argv[:MAX_ARGV])
     lists = _parse_argv(list(argv), state)
-    modules = {name: _module_enabled(name, lists) for name in ('extend', 'pass', 'pass_persist')}
-    digest = hashlib.sha256()
-    if len(config_files) > MAX_FILES:
-        state.gap('too_many_files', count=len(config_files))
-    for entry in list(config_files)[:MAX_FILES]:
-        path = str(entry.get('path') or '')
-        text = entry.get('text')
-        digest.update(path.encode('utf-8', 'replace') + b'\0')
-        if text is None:
-            state.gap('file_not_observed', path=path)
-            continue
-        if isinstance(text, bytes):
-            try:
-                text = text.decode('utf-8')
-            except UnicodeDecodeError:
-                state.gap('file_invalid', path=path, reason='invalid_utf8')
-                continue
-        if not isinstance(text, str) or len(text) > MAX_TEXT or '\0' in text:
-            state.gap('file_invalid', path=path, reason='nul_or_oversized')
-            continue
-        digest.update(text.encode('utf-8') + b'\0')
-        _read_file(path, text, modules, state)
+    return {name: _module_enabled(name, lists) for name in ('extend', 'pass', 'pass_persist')}
+
+
+def _checked_text(path: str, text: Any, state: _State) -> str | None:
+    if text is None:
+        state.gap('file_not_observed', path=path)
+        return None
+    if isinstance(text, bytes):
+        try:
+            text = text.decode('utf-8')
+        except UnicodeDecodeError:
+            state.gap('file_invalid', path=path, reason='invalid_utf8')
+            return None
+    if not isinstance(text, str) or len(text) > MAX_TEXT or '\0' in text:
+        state.gap('file_invalid', path=path, reason='nul_or_oversized')
+        return None
+    return text
+
+
+def _finish(state: _State, modules: Mapping[str, bool], digest: Any, passwd_text: str | None,
+            group_text: str | None, extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
     _decode_rows(state)
     passwd = _parse_accounts(passwd_text, 'passwd')
     groups = _parse_accounts(group_text, 'group')
@@ -568,7 +602,7 @@ def evaluate(config_files: Sequence[Mapping[str, Any]], *, argv: Sequence[str] |
         row['run_group'] = identity['group']
         row['run_gid'] = identity['gid']
     blocking = [gap for gap in state.gaps if gap['blocking']]
-    return {
+    result = {
         'contract': 'snmpd_programs',
         'contract_version': CONTRACT_VERSION,
         'source_version': SOURCE_VERSION,
@@ -582,10 +616,223 @@ def evaluate(config_files: Sequence[Mapping[str, Any]], *, argv: Sequence[str] |
         'origin': 'not_assessed',
         'authorizes_response': False,
     }
+    if extra:
+        result.update(extra)
+    return result
 
 
-def _read_file(path: str, text: str, modules: Mapping[str, bool], state: _State) -> None:
-    context = 'snmpd'
+def evaluate(config_files: Sequence[Mapping[str, Any]], *, argv: Sequence[str] | None = DEFAULT_ARGV,
+             passwd_text: str | None = None, group_text: str | None = None) -> dict[str, Any]:
+    """Return the programs snmpd runs for captured files read in ``config_files`` order.
+
+    The caller asserts the order, so the result always carries the blocking
+    ``read_order_not_derived`` gap. Use :func:`evaluate_snapshot` to derive it.
+    """
+    state = _State()
+    state.gap('read_order_not_derived')
+    modules = _prepare(argv, state)
+    digest = hashlib.sha256()
+    if len(config_files) > MAX_FILES:
+        state.gap('too_many_files', count=len(config_files))
+    for entry in list(config_files)[:MAX_FILES]:
+        path = str(entry.get('path') or '')
+        digest.update(path.encode('utf-8', 'replace') + b'\0')
+        text = _checked_text(path, entry.get('text'), state)
+        if text is None:
+            continue
+        digest.update(text.encode('utf-8') + b'\0')
+        _read_file(path, text, modules, state)
+    return _finish(state, modules, digest, passwd_text, group_text)
+
+
+def _normal_path(path: str) -> str:
+    """Collapse repeated and trailing slashes; ``.``/``..`` and symlinks are not resolved."""
+    while '//' in path:
+        path = path.replace('//', '/')
+    if len(path) > 1 and path.endswith('/'):
+        path = path.rstrip('/') or '/'
+    return path
+
+
+class _Reader:
+    """``read_config_files_of_type`` and ``read_config`` over a captured filesystem snapshot."""
+
+    def __init__(self, snapshot: Mapping[str, Any], modules: Mapping[str, bool], state: _State,
+                 environ: Mapping[str, str], lib_path: str) -> None:
+        self.files = {_normal_path(str(k)): v for k, v in dict(snapshot.get('files') or {}).items()}
+        self.dirs = {_normal_path(str(k)): v for k, v in dict(snapshot.get('directories') or {}).items()}
+        self.absent = {_normal_path(str(k)) for k in snapshot.get('absent') or ()}
+        self.modules = modules
+        self.state = state
+        self.digest = hashlib.sha256()
+        self.read_count = 0
+        self.order: list[dict[str, Any]] = []
+        self.type_header = 'snmpd'
+        home = environ.get('HOME')
+        self.confpath = f'{CONF_PATH}:{SHARE_PATH}:{lib_path}' + ('' if home is None else f':{home}/.snmp')
+        self.envconfpath = environ.get('SNMPCONFPATH')
+        # getenv() returns an empty value as-is, so only an unset variable selects the default.
+        persdir = environ.get('SNMP_PERSISTENT_DIR')
+        self.perspath = PERSISTENT_DIR if persdir is None else persdir
+        self.persfile = environ.get('SNMP_PERSISTENT_FILE')
+
+    def kind(self, path: str) -> str | None:
+        key = _normal_path(path)
+        if key in self.files:
+            return 'file'
+        if key in self.dirs:
+            return 'dir'
+        if key in self.absent:
+            return 'absent'
+        # A path under a listed directory that the listing omits does not exist.
+        parent, _, name = key.rpartition('/')
+        listing = self.dirs.get(parent or '/')
+        if listing is not None and name not in listing:
+            return 'absent'
+        return None
+
+    def exists(self, path: str) -> bool | None:
+        kind = self.kind(path)
+        if kind is None:
+            self.state.gap('path_not_observed', path=path)
+            return None
+        return kind != 'absent'
+
+    def read_type(self, header: str, context: str, level: int = 0) -> None:
+        """``read_config_files_of_type``: the configuration path, then the persistent directory."""
+        perspath = self.perspath
+        if self.envconfpath is None:
+            self.read_in_path(self.confpath, header, context, perspath, level)
+            self.read_in_path(self.perspath, header, context, perspath, level)
+        else:
+            self.read_in_path(self.envconfpath, header, context, perspath, level)
+
+    def read_in_path(self, path: str, header: str, context: str, perspath: str, level: int) -> None:
+        for directory in path.split(':'):
+            if directory == '':
+                # The C loop stops at the first empty element.
+                break
+            kind = self.kind(directory)
+            if kind is None:
+                self.state.gap('path_not_observed', path=directory)
+                continue
+            if kind != 'dir':
+                continue
+            if directory.startswith(perspath) or (self.persfile is not None and directory.startswith(self.persfile)):
+                for number in range(MAX_PERSISTENT_BACKUPS + 1):
+                    backup = f'{directory}/{header}.{number}.conf'
+                    if self._truncated(backup):
+                        break
+                    if not self.exists(backup):
+                        break
+                    self.read(backup, context, level, 'persistent_backup')
+            for suffix in ('.conf', '.local.conf'):
+                candidate = f'{directory}/{header}{suffix}'
+                if not self._truncated(candidate):
+                    self.read(candidate, context, level, 'search_path')
+
+    def _truncated(self, path: str) -> bool:
+        if len(path.encode('utf-8', 'replace')) >= CONFIG_FILE_BUFFER:
+            self.state.gap('path_truncated', path=path)
+            return True
+        return False
+
+    def read(self, path: str, context: str, level: int, via: str) -> bool:
+        """``read_config``; returns whether snmpd would open the file."""
+        kind = self.kind(path)
+        if kind is None:
+            self.state.gap('file_not_observed', path=path)
+            return False
+        if kind == 'absent':
+            return False
+        if level > MAX_INCLUDE_DEPTH:
+            self.state.note(path, 0, 'read_config', 'rejected', 'include_depth_exceeded')
+            return False
+        if self.read_count >= MAX_FILES:
+            self.state.gap('too_many_files', path=path)
+            return False
+        self.read_count += 1
+        self.order.append({'path': path, 'type': self.type_header, 'context': context, 'via': via, 'depth': level})
+        self.digest.update(path.encode('utf-8', 'replace') + b'\0')
+        if kind == 'dir':
+            # fopen succeeds on a directory and fgets reads nothing.
+            return True
+        text = _checked_text(path, self.files.get(_normal_path(path)), self.state)
+        if text is None:
+            return True
+        self.digest.update(text.encode('utf-8') + b'\0')
+        _read_file(path, text, self.modules, self.state, context=context, reader=self, level=level + 1)
+        return True
+
+    def include(self, token: str, target: str, path: str, line: int, context: str, level: int) -> None:
+        lowered = token.lower()
+        if lowered == 'includefile':
+            if target.startswith('/'):
+                name = target
+            else:
+                cut = path.rfind('/')
+                name = (path[:cut + 1] if cut >= 0 else '') + target
+            opened = self.read(name, context, level, 'includeFile')
+            self.state.note(path, line, token, 'included' if opened else 'rejected', None if opened else 'not_found')
+        elif lowered == 'includedir':
+            if not target.startswith('/'):
+                # opendir() resolves a relative name against snmpd's working directory.
+                self.state.note(path, line, token, 'unresolved', 'relative_include_dir')
+                self.state.gap('include_dir_relative', path=path, line=line, target=target)
+                return
+            kind = self.kind(target)
+            if kind is None:
+                self.state.gap('path_not_observed', path=target)
+                return
+            if kind != 'dir':
+                self.state.note(path, line, token, 'rejected', 'not_a_directory')
+                return
+            listing = self.dirs.get(_normal_path(target))
+            if listing is None:
+                self.state.gap('directory_not_listed', path=target)
+                return
+            names = [name for name in listing if not name.startswith('.') and len(name.encode('utf-8', 'replace')) > 5
+                     and name.endswith('.conf')]
+            if len(names) > 1:
+                # readdir() order is filesystem-specific, and the first extend name wins.
+                self.state.gap('include_dir_order_unknown', path=target, count=len(names))
+            self.state.note(path, line, token, 'included')
+            for name in names:
+                self.read(f'{target}/{name}', context, level, 'includeDir')
+        else:
+            header = target[:-5] if len(target.encode('utf-8', 'replace')) > 5 and target.endswith('.conf') else target
+            self.state.note(path, line, token, 'included')
+            self.read_type(header, context, level)
+
+
+def evaluate_snapshot(snapshot: Mapping[str, Any], *, argv: Sequence[str] | None = DEFAULT_ARGV,
+                      environ: Mapping[str, str] | None = None, passwd_text: str | None = None,
+                      group_text: str | None = None, lib_path: str = LIB_PATH) -> dict[str, Any]:
+    """Derive snmpd's read order from a captured filesystem snapshot and return its programs.
+
+    ``snapshot`` holds ``files`` (path to text, or None when the file exists
+    but was not captured), ``directories`` (path to entry names in readdir
+    order, or None when unlisted) and ``absent`` paths. A path the snapshot
+    does not describe is a blocking gap. ``environ`` is snmpd's environment;
+    when it is not observed the result is blocking and an empty environment
+    is assumed.
+    """
+    state = _State()
+    modules = _prepare(argv, state)
+    if environ is None:
+        state.gap('environment_not_observed')
+        environ = {}
+    reader = _Reader(snapshot, modules, state, environ, lib_path)
+    reader.read_type('snmpd', 'snmpd')
+    reader.type_header = 'snmp'
+    reader.read_type('snmp', 'snmp')
+    extra = {'read_order': reader.order, 'search_path': reader.envconfpath if reader.envconfpath is not None
+             else reader.confpath, 'persistent_dir': reader.perspath}
+    return _finish(state, modules, reader.digest, passwd_text, group_text, extra)
+
+
+def _read_file(path: str, text: str, modules: Mapping[str, bool], state: _State, *, context: str = 'snmpd',
+               reader: _Reader | None = None, level: int = 1) -> None:
     raw_lines = text.split('\n')
     for number, raw in enumerate(raw_lines, start=1):
         latin = raw.encode('utf-8').decode('latin-1')
@@ -615,16 +862,32 @@ def _read_file(path: str, text: str, modules: Mapping[str, bool], state: _State)
                 state.note(path, number, token, 'ignored', 'ambiguous_include')
                 continue
             if token.lower() in ('includedir', 'includefile', 'includesearch'):
-                state.note(path, number, token, 'unresolved', 'include_not_modelled')
-                if cptr is not None:
+                if cptr is None:
+                    state.note(path, number, token, 'rejected', 'no_value')
+                elif context == '?':
+                    state.note(path, number, token, 'unresolved', 'context_unresolved')
+                elif reader is None:
+                    state.note(path, number, token, 'unresolved', 'include_not_modelled')
                     state.gap('include_not_modelled', path=path, line=number, directive=token)
+                else:
+                    # The include target is the raw rest of the line, trailing blanks included.
+                    target = cptr.encode('latin-1').decode('utf-8', 'replace')
+                    reader.include(token, target, path, number, context, level)
                 continue
         if line_context == '?':
             state.note(path, number, token, 'unresolved', 'context_unresolved')
             continue
+        if line_context == 'snmp' and token.lower() == 'persistentdir':
+            # A premib token: it moves the persistent directory before this pass reads it.
+            state.note(path, number, token, 'unresolved', 'persistent_dir_directive')
+            state.gap('persistent_dir_directive', path=path, line=number)
+            continue
         if line_context != 'snmpd':
             state.note(path, number, token, 'ignored', 'other_context')
             continue
+        if reader is not None and reader.type_header != 'snmpd' and _handler_for(token, modules) is not None:
+            # Lines for snmpd handlers in another file type depend on the registration order of types.
+            state.gap('type_order_not_derived', path=path, line=number)
         handler = _handler_for(token, modules)
         if handler is None:
             continue
