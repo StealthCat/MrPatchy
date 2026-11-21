@@ -279,7 +279,7 @@ function renderAISettings(data,revision,container){
    const caveats=notes?`<ul class="help">${notes}</ul>`:'';
    if(!result.enabled){purposeResults.innerHTML='<p class="help" role="status">No daily spend cap applies in the current control mode, so no spend is being counted against a cap.</p>';return;}
    const recheck=result.next_reset_authoritative===false;
-   const windowText=`${recheck?'Budget recheck at':'Budget window resets'} ${esc(date(result.next_reset))} · ${esc(result.timezone)}.`+
+   const windowText=`${recheck?'Budget recheck at':'Budget window resets'} ${esc(date(result.next_reset))} (local time) · Budget timezone ${esc(result.timezone)}.`+
     (recheck?' Spend from an earlier budget window may still count after this time.':'');
    if(!result.groups.length){purposeResults.innerHTML=`<p class="help" role="status">No billable AI calls are counted in the current budget window. ${windowText}</p>`+caveats;return;}
    const rows=result.groups.map(row=>`<tr><th scope="row">${esc(SPEND_PURPOSE_LABELS[row.purpose]||'Other recorded activity')}</th><td>${esc(row.call_count)}</td><td>$${esc(row.settled_usd)}</td><td>$${esc(row.reserved_usd)}</td><td>$${esc(row.uncertain_usd)}</td><td><strong>$${esc(row.counted_usd)}</strong></td></tr>`).join('');

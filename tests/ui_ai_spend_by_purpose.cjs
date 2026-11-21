@@ -33,7 +33,7 @@ module.exports=async(page,capture)=>{
    ['Not attributed (run history pruned or no run)','1','$0.05','$0.03','$0','$0.111'],
   ]);
   assert.deepEqual(await card.locator('tfoot tr').evaluate(row=>[...row.cells].map(cell=>cell.textContent)),['All activity','6','','$1.636']);
-  assert.match(await card.textContent(),/Budget window resets .* · UTC<img/s);
+  assert.match(await card.textContent(),/Budget window resets .* \(local time\) · Budget timezone UTC<img/s);
   assert.match(await card.textContent(),/not provider invoices/);
   assert.match(await card.textContent(),/read-only: it does not change admission, reservations or the cap/);
   assert.equal(await card.locator('img[src=x]').count(),0);
@@ -51,7 +51,7 @@ module.exports=async(page,capture)=>{
   assert.match(await card.textContent(),/not provider invoices/);
   await refresh.click();
   await card.locator('table').waitFor();
-  assert.match(await card.textContent(),/Budget recheck at .* · UTC<img/s);
+  assert.match(await card.textContent(),/Budget recheck at .* \(local time\) · Budget timezone UTC<img/s);
   assert.match(await card.textContent(),/Spend from an earlier budget window may still count after this time\./);
   assert.doesNotMatch(await card.textContent(),/Budget window resets/);
   assert.equal(await card.locator('img[src=x]').count(),0);

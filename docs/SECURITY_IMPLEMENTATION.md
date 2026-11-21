@@ -3533,6 +3533,7 @@ The grouped query checks whether any positive, observed spend will still count
 after the configured boundary. It uses the same predicate as the saved-budget
 snapshot and reads the ledger once. The activity card shows a recheck and
 explains carryover when the flag is false. Each Refresh uses its own snapshot.
+The date uses browser-local time and labels the budget timezone separately.
 The API regressions cover a real retained earlier window, released and zero-cost
 rows, unobserved spend, and authoritative, empty and uncapped windows. The
 browser regression refreshes from a reset to a recheck and verifies the same
