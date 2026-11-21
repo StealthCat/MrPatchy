@@ -3924,10 +3924,8 @@ so an investigation on its last attempt is `active` here while the fleet
   claims, pause, budget, schema, roles and response authorization are unchanged.
 - **Limitations:** this is a point-in-time read, and "eligible" is not a promise
   to start: shared start gates, worker capacity, the per-server limit and pause
-  still apply. Pause is read as the fleet status reads it, so a manually
-  corrupted per-server AI policy is not shown as paused although provider calls
-  for that server are refused. Servers beyond the first 50 and matched
-  production acceptance remain open.
+  still apply. Servers beyond the first 50 and matched production acceptance
+  remain open.
 - **UI panel (worker follow-up):** the fleet AI activity page (`#ai-logs`) now
   has an administrator-only, on-demand **Servers holding the triage backlog**
   panel. It reads this endpoint and shows each server's pending, active,
@@ -3951,6 +3949,16 @@ unthrottled by Mr Patchy, or legacy attempts against the legacy hourly limit.
 Previously it always advertised the legacy investigation limit, which only
 applies in legacy mode. This is display-only: admission, spend, pause, lifecycle
 and authorization behavior are unchanged. A browser regression covers every mode.
+
+### Fail-closed pause in shared AI queues — Roadmap A/C checkpoint #1309
+
+The shared SQLite/MySQL filter now agrees with the per-server status and the
+outbound provider check. A missing policy or a policy object with no
+`paused` field is resumed by default. An explicit JSON false resumes it.
+Other stored field types and non-object policies are paused. Fleet counts,
+server backlog status and work selection use the same filter. A malformed
+server's work stays queued while other eligible servers can claim work.
+Administrators can still repair the saved policy through the audited control.
 
 ### SSH evidence delay in the triage benchmark — worker checkpoint #524
 
