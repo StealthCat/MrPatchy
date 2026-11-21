@@ -2230,6 +2230,13 @@ server records. Existing pause and lifecycle filters still govern eligibility.
 This reduces data fetched per scoring pass. Candidate hashing and measured
 production throughput remain open.
 
+The scheduler and read-only scoring queue also share a package-page projection
+(#1331). It selects fields used for exact scoring evidence and ordering. It
+excludes repository-origin text and the separate repository-priority field.
+A 450-candidate fixture retained all ordered exact identities across both
+paths while reducing each page from twelve selected fields to ten with no
+lazy package reads. Production throughput remains open.
+
 The update-scoring memo uses the distribution and package-manager fields
 shared with the scoring payload, plus installed RPM inventory when applicable.
 Repository file text, raw APT status and unrelated OS fields no longer evict

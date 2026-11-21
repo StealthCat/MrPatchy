@@ -148,6 +148,19 @@ def _scoring_package_filters():
             Package.host_id.in_(host_lifecycle.active_ids()))
 
 
+def scoring_package_page(session, cursor, limit):
+    """Read the ordered scoring inputs shared by scheduling and queue status."""
+    query = select(Package).options(load_only(
+        Package.id, Package.host_id, Package.name, Package.installed, Package.candidate,
+        Package.priority, Package.priority_manual, Package.available_since, Package.held,
+        Package.dpkg_state, raiseload=True,
+    )).where(*_scoring_package_filters())
+    if cursor is not None:
+        query = query.where(or_(Package.available_since > cursor[0],
+                               and_(Package.available_since == cursor[0], Package.id > cursor[1])))
+    return list(session.scalars(query.order_by(Package.available_since, Package.id).limit(limit)))
+
+
 def scoring_candidates(s):
     """Read ordered candidates and exact/deferred score state in bounded chunks.
 
@@ -158,11 +171,7 @@ def scoring_candidates(s):
     cursor = None
     hosts = {}
     while True:
-        query=select(Package).where(*_scoring_package_filters())
-        if cursor is not None:
-            query=query.where(or_(Package.available_since>cursor[0],
-                and_(Package.available_since==cursor[0],Package.id>cursor[1])))
-        packages=list(s.scalars(query.order_by(Package.available_since,Package.id).limit(200)))
+        packages = scoring_package_page(s, cursor, 200)
         if not packages:
             # Only an exhausted pass knows which servers were absent.
             for host_id in _MEMO.keys() - hosts.keys():

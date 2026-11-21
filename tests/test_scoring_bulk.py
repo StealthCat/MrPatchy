@@ -3,7 +3,7 @@ import hashlib
 import time
 import pytest
 from sqlalchemy import event,select
-from app import ai,ai_policy,ai_runs,update_scores
+from app import ai,ai_policy,ai_runs,scoring_queue_status,update_scores
 from app.db import Session,Host,Package,Setting,engine
 from app.security import seal
 
@@ -260,6 +260,36 @@ def test_scoring_candidate_queries_only_load_scheduling_fields(admin):
         projection='SELECT '+', '.join('update_scores.'+field for field in fields)
         assert all(statement==projection for statement in score_reads),score_reads[0]
         assert len(candidates)==450 and all(row.state=='complete' for _,_,_,row,_ in candidates)
+
+
+def test_scoring_and_queue_status_omit_unused_package_columns_across_pages(admin):
+    expected_order = seed(450)
+    with Session() as session:
+        full_hosts = {host.id: host for host in session.scalars(select(Host))}
+        keys = {package.id: update_scores.identity(full_hosts[package.host_id], package)
+                for package in session.scalars(select(Package))}
+
+    package_reads = []
+
+    def observe(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().lower().startswith('select packages.'):
+            package_reads.append(statement.partition('\n')[0].strip().lower())
+
+    event.listen(engine, 'before_cursor_execute', observe)
+    try:
+        with Session() as session:
+            candidate_order = [(package.id, key)
+                               for package, _, key, _, _ in update_scores.scoring_candidates(session)]
+        with Session() as session:
+            status_order = [(package.id, key)
+                            for package, key in scoring_queue_status._current_candidates(session)]
+    finally:
+        event.remove(engine, 'before_cursor_execute', observe)
+
+    assert candidate_order == status_order == [(identifier, keys[identifier]) for identifier in expected_order]
+    columns = ('id', 'host_id', 'name', 'installed', 'candidate', 'priority',
+               'priority_manual', 'available_since', 'held', 'dpkg_state')
+    assert package_reads == ['select ' + ', '.join('packages.' + field for field in columns)] * 8
 
 
 @pytest.mark.parametrize('count,completed',[(513,505),(1000,0)])

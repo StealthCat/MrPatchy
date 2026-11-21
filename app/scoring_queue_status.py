@@ -23,7 +23,7 @@ request and changes no schema, admission, reservation, retry or authorization.
 """
 import time
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import load_only
 
 from . import ai_policy, ai_retry, host_lifecycle, update_scores
@@ -82,12 +82,7 @@ def _current_candidates(session):
     hosts = {}
     cursor = None
     while True:
-        query = select(Package).where(Package.candidate != '', Package.host_id.not_in(ai_policy.paused_ids()),
-                                      Package.host_id.in_(host_lifecycle.active_ids()))
-        if cursor is not None:
-            query = query.where(or_(Package.available_since > cursor[0],
-                                    and_(Package.available_since == cursor[0], Package.id > cursor[1])))
-        packages = list(session.scalars(query.order_by(Package.available_since, Package.id).limit(CHUNK)))
+        packages = update_scores.scoring_package_page(session, cursor, CHUNK)
         if not packages:
             return
         cursor = (packages[-1].available_since, packages[-1].id)
