@@ -280,3 +280,20 @@ def test_a_second_run_is_refused_while_the_first_holds_the_database(empty_mysql)
         first.release()
     # The lock is free again once the first run has finished.
     benchmark_ai.claim_empty_mysql(benchmark_ai.mysql_target({ENV: MYSQL_URL})).release()
+
+
+@needs_mysql
+@pytest.mark.parametrize('mode', ['rate', 'rate_and_daily'])
+def test_mysql_paced_serial_and_parallel_keep_followups_and_leave_no_tables(empty_mysql, mode):
+    reports = []
+    for concurrency in (1, 4):
+        result = run('--database', 'mysql', '--runs', '2', '--control-mode', mode,
+                     '--concurrency', str(concurrency), url=MYSQL_URL)
+        assert result.returncode == 0, result.stderr
+        assert _tables(empty_mysql) == []
+        empty_mysql.dispose()
+        sample = json.loads(result.stdout)
+        assert sample['fixture_rate']['admitted_starts'] == 2
+        assert sample['provider_calls'] == 3 and sample['stages']['ssh_evidence']['count'] == 1
+        reports.append(sample)
+    assert compare(*reports)['capability_equivalent'] is True
