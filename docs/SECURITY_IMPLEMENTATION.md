@@ -2737,6 +2737,19 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
 
+#### Fleet-wide release of failed automatic plans — worker checkpoint #1251
+
+- **Problem:** after fixing a fleet-wide cause (a rejected key, unsupported model or exhausted quota), an administrator had to open each opted-in server's Security tab to release its failed automatic attempts (#1036).
+- **Change:** `auto_plan_retry` applies the #1036 predicate to every **active** (enabled, not deleted) server. Disabled and deleted servers are neither counted nor released, so the count matches what a release can act on.
+  - Admin-only `GET /api/security/auto-plan-failed` returns `{failed}`.
+  - Admin-only, CSRF-protected `POST /api/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and releases up to 200 incidents across active servers, oldest first, with the same `retry_released` marking (who and when). It returns `{released, remaining}` and writes one audit row naming the fleet scope, the incident count and the server count when anything was released.
+  - A failed job is marked only when it was filed under the incident's own server.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The ordinary `auto_plan_tick` still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. Exclusions match the per-server action: planned, resolved, YARA, older-scan, stale-evidence, manual and still-attempted incidents are never counted.
+- **UI:** Security coverage → **Automatic AI plans across the fleet** shows **Retry failed automatic plans** to administrators only when the fleet count is above 0, with the same fix-the-cause-first and no-request-now wording. It says disabled servers are not included, reports partial batches, and refreshes the count and the automatic plan status afterwards. Failed, zero or malformed counts hide the action; operators and viewers never request it.
+- **Unchanged:** the per-server routes and their counts (a disabled server's own count still reports its failures), schema, admission, reservations, plan approval, notifications and response authorization.
+- **Validation:** `tests/test_auto_plan_retry_fleet.py` (8 tests) fails on main `1ae31e1b` and passes after, with the existing #1036 tests unchanged. `tests/ui_fleet_auto_plan_retry.cjs` fails on main and covers the action, partial and empty batches, the refresh of both reads, zero/malformed/failed counts, escaping, the operator role, no per-server route use and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
@@ -7332,6 +7345,29 @@ the same transaction that records the job state.
 - Notifications never retry, reconcile, acknowledge or authorize anything.
 
 Milestones 2–4 remain open.
+
+Worker checkpoint (issue #1257, #342 alert-producer slice): the advisory resource
+attention codes in the endpoint-agent view now reach the notification center. Each
+30-second `collect_alerts()` tick publishes one admin-only `operations`/`resource-attention`
+event (medium, linking to `#servers/<id>/agent`) per enabled, enrolled server whose
+**fresh** telemetry reports `disk-space-low`, `disk-inodes-low` or `memory-low`
+(10% or less available) or `clock-unsynchronized`.
+
+- The reason text is fixed and names only the affected categories. Changing
+  percentages add no revision; a changed category set adds one.
+- Hysteresis: a capacity category already in the active event stays until it is
+  above 15% available, so values hovering around 10% do not flap.
+- Unknown is not recovery. Stale, missing, future-dated or malformed telemetry, or a
+  metric that is now unknown, leaves the active event unchanged. Telemetry loss is
+  reported by its own producer.
+- Disabled and deleted servers resolve through the shared operational path.
+  Enrolling servers publish nothing.
+- Notification-only: no SMTP/webhook outbox alert. It never changes agent health
+  classification, makes an AI call, frees space, adjusts clocks or authorizes any
+  response. No schema, route or UI change.
+
+Remaining in #342: certificate expiry, metric history, configurable thresholds,
+preflight blockers and SMART/NVMe or kernel-error signals.
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -11978,6 +12014,21 @@ reads. The measured improvement is in database round trips. Production load
 time remains unmeasured. Scheduling, provider admission and response
 authorization remain outside this status change.
 
+### Shared holds on automatic plan status — Roadmap A checkpoint #1249
+
+Security Coverage and Server → Security show the recorded shared AI start gates alongside
+automatic plan status in explicit control modes. Both surfaces read the existing admin-only
+control snapshot once per load, independently of the plan-status response. They distinguish
+the latest shared eligibility time, a reset recheck, and holds without a scheduled release.
+Worker slots, server readiness and call-specific checks can still defer a request after the
+shared gates open. If the snapshot fails or its mode differs from the plan status, the plan
+counts, job history and readiness remain visible with an unavailable timing state.
+
+Acceptance covers timed and indefinite holds, open and unavailable snapshots, legacy pacing,
+escaped text and fleet and server layouts at 320, 768 and 1440 pixels. Queue admission, provider
+accounting and response authorization retain their existing behavior. Deferred work and
+per-call admission across all AI purposes remain tracked under the wider Roadmap A milestones.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
@@ -12346,6 +12397,55 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
 - **Validation:** `tests/test_certbot_hooks.py` has 58 tests. Four differential tests load certbot's real `hooks.py` and `compat` modules (only logging/display and unused helpers are stubbed) and execute real hooks through `/bin/sh` from temporary directories. They compare what ran, its order, deduplication, environment, the `renew`/other-verb split, dry-run and `--no-directory-hooks` behavior, a name with a space, and a non-directory hook path with the contract. They run when `MRPATCHY_CERTBOT_SOURCE` points at an unpacked certbot wheel or certbot is installed, and are skipped otherwise. Seven mutations are each caught.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** agent collection of the directories and the certbot installation state, a catalog entry, provenance, persistence, UI and AI classification. Hook commands in `/etc/letsencrypt/renewal/*.conf` and `cli.ini`, and `--config-dir` overrides, are not modeled.
+
+### apcupsd event-script contract — worker checkpoint #1243 (roadmap F)
+
+`app/apcupsd_events.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are `/etc/apcupsd/apcupsd.conf` text, the effective `apcupsd.service` `ExecStart` and entry metadata for `/etc/apcupsd`. From these it reports which programs apcupsd runs as root on UPS power events:
+
+- the `apccontrol` program the daemon execs from the effective `SCRIPTDIR`;
+- the `/etc/apcupsd/config` file the packaged `apccontrol` sources as shell;
+- which `/etc/apcupsd/<event>` scripts run, for each of the 19 daemon events and for `killpower` at final shutdown.
+
+**Why it matters.** Every executable named after a UPS event in `/etc/apcupsd` runs as root whenever that event fires. A `SCRIPTDIR` line makes the daemon run a different `apccontrol` entirely. Both are event-triggered root execution paths that no existing contract reported.
+
+**Source of the semantics.** apcupsd 3.14.14 (`src/lib/apcconfig.c`, `src/lib/apcexec.c`, `src/action.c`, `src/apcupsd.c`) and the Ubuntu 24.04 package `3.14.14-3.1build2` (`apccontrol`, `apcupsd.service`, `apcupsd_shutdown`):
+
+- **Config parsing.** The config is read with `fgets` into 256 bytes, so the tail of an overlong line, including the tail of a comment, is parsed as its own line. Keywords are upper-cased up to the first whitespace. The value is cut at the first `#` anywhere, trailing whitespace is removed, and the last `SCRIPTDIR` wins.
+- **Program path.** `SCRIPTDIR` + `/apccontrol` is formatted into a 256-byte buffer and exec'd with `EVENT UPSNAME CONNECTED POWERED` after `chdir("/")`. An empty or relative `SCRIPTDIR` therefore resolves from `/`.
+- **Packaged `apccontrol`.** It hardcodes `SCRIPTDIR=/etc/apcupsd` and sources `/etc/apcupsd/config` when `[ -f ]` holds. It runs `/etc/apcupsd/EVENT` when `[ -f p -a -x p ]` holds: symlinks are followed and, for root, any execute bit passes. Exit status 99 skips the built-in action (`/sbin/shutdown` for `doshutdown`/`doreboot`).
+- **Shutdown hook.** `/lib/systemd/system-shutdown/apcupsd_shutdown` runs `apccontrol killpower` when the powerfail flag exists.
+- **Missing config.** apcupsd aborts at startup without its config file, so the daemon runs no events.
+
+**Fail closed.** Each of the following is a blocking gap:
+
+- an unobserved or non-Debian family, or unknown installation state;
+- an unobserved or non-default `ExecStart`;
+- an unobserved, unreadable or over-limit config;
+- a non-default, relative or path-truncated `SCRIPTDIR`;
+- an `apccontrol` not authenticated as the unchanged packaged file;
+- a sourced `/etc/apcupsd/config`;
+- unobserved, unreadable or truncated listings, malformed entries, missing metadata or unobserved symlink targets;
+- unobserved mount flags on an executable event script, which leave that event `unresolved` because `[ -x ]` fails on a noexec mount.
+
+Unresolved entries are never reported as running. Scripts are reported as they would run if apcupsd starts; the contract does not check whether an unknown keyword or bad value aborts startup, which over-reports rather than under-reports.
+
+**Validation.** `tests/test_apcupsd_events.py` has 22 tests, covering:
+
+- `fgets` chunk splitting, `#` truncation, case folding, last-wins, empty and relative values, and the 245/255-byte path boundary;
+- the sourced config file, symlinks, noexec mounts, unobserved mount flags as the only gap, directories and special files;
+- truncated listings, malformed input and the gap bound.
+
+A root-only differential runs the packaged `[ -f p -a -x p ]` test through `/bin/sh` on temporary files and compares it with the contract. Six mutations are each caught.
+
+There is no live differential against a built apcupsd: this session's classifier refused building the downloaded source. The config-parsing rules come from reading the source.
+
+**Unchanged.** There is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+
+**Remaining:**
+
+- agent collection of the config, `ExecStart`, directory metadata and package authentication of `apccontrol`;
+- a catalog entry, provenance, persistence, UI and AI classification;
+- RPM/EPEL layouts, `multimon.conf`/CGI and the contents of the sourced `config` are not modeled.
 
 ### NUT upsmon command contract — Roadmap F checkpoint #1247
 

@@ -1,3 +1,23 @@
+## 1.83.1 — 2026-11-21
+
+1. [PR #1256](https://github.com/StealthCat/MrPatchy/pull/1256): Correct the displayed legacy triage reopening time by applying the hourly allowance to both recent attempts and triage runs and showing the later active opening across Investigations and shared AI controls. Compatibility: status visibility only; admission, claims, spend accounting and provider calls are unchanged, with no schema migration. Limit: the reopening time is a snapshot; workers and other gates can still delay a claim.
+
+## 1.83.0 — 2026-11-21
+
+1. [PR #1258](https://github.com/StealthCat/MrPatchy/pull/1258): Add fixed-text, admin-only operational notifications for fresh agent reports of low free disk, inodes, memory or an unsynchronized kernel clock; preserve active notifications through unknown or stale telemetry and apply 15% capacity-clear hysteresis. Compatibility: notification-only, with no schema, route, UI, auth, scheduling or agent-health classification change; no SMTP/webhook alert and no AI call. Limits: thresholds remain fixed at 10% alert and 15% clear; other #342 resource signals, including certificate expiry, history, configurable thresholds, preflight blockers and SMART/NVMe or kernel-error signals, remain out of scope. No remediation or response authorization.
+
+## 1.82.0 — 2026-11-21
+
+1. [PR #1252](https://github.com/StealthCat/MrPatchy/pull/1252): Add an administrator-only fleet view and bounded release for failed automatic AI plan attempts across enabled servers; use the existing eligibility predicate, audit marking and worker gates. Compatibility: new endpoints and display/action only; no schema, admission, reservation, approval, notification or response-authorization change, and per-server counts remain unchanged. Limits: release sends no provider request and enqueues no work; startup-change plans are not automatic and are not covered.
+
+## 1.81.2 — 2026-11-21
+
+1. [PR #1244](https://github.com/StealthCat/MrPatchy/pull/1244): Add a pure apcupsd event-script contract for root-run `apccontrol` and UPS event scripts, following the effective `SCRIPTDIR`, daemon event list, shutdown hook and file execution checks. Compatibility: additive module, tests and documentation only; no runtime, schema, collection, API, UI, role, scheduling or response-authorization change. Limits: no live differential against a built apcupsd; startup validity is not modeled, so the contract may over-report; collection, catalog, provenance, persistence, UI and AI wiring remain out of scope.
+
+## 1.81.1 — 2026-11-21
+
+1. [PR #1250](https://github.com/StealthCat/MrPatchy/pull/1250): Show recorded shared AI holds, eligibility times, reset rechecks and indefinite holds on automatic-plan status in fleet and server Security views; label the verified-pricing blocker consistently. Compatibility: display-only; no API, schema, admission, provider-call, scheduling or response-authorization change. Limits: timing is a page-load/refresh snapshot, not a promised start; worker capacity, server readiness and call-specific budget checks still apply.
+
 ## 1.81.0 — 2026-11-21
 
 1. [PR #1239](https://github.com/StealthCat/MrPatchy/pull/1239): Add a pure TuneD profile contract for root-run `[script]`, `script_pre` and `script_post` executables, including profile shadowing, include/merge behavior, ordering and host conditions. Compatibility: additive module, tests and documentation only; no runtime, schema, API, collection, UI, role, scheduling or response-authorization change. Limits: no live TuneD differential; `recommend.d`/auto mode, function results, default-priority configuration and several unsupported inputs remain fail-closed or unmodeled; collection, catalog, provenance, persistence, UI and AI wiring are out of scope.
