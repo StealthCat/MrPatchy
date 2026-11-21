@@ -615,28 +615,6 @@ async function fleetAutoPlans(revision,root){
  };
  await load();
 }
-// Fleet-wide release of failed automatic AI plan attempts (#1251). Admin-only; counts active servers only.
-// Releasing sends no provider request: the automatic schedule retries each incident through the same gates.
-async function fleetAutoPlanRetry(revision,root){
- const box=root.querySelector('.fleet-auto-plan-retry');if(!box||!isAdmin())return;let ticket=0;
- const load=async()=>{
-  const turn=++ticket,current=()=>turn===ticket&&box.isConnected&&currentView(revision,'security')&&isAdmin();
-  let data;try{data=await api('/security/auto-plan-failed');}catch{data=null;}
-  if(!current())return;
-  const failed=data&&Number.isSafeInteger(data.failed)&&data.failed>0?data.failed:0;
-  if(!failed){box.hidden=true;box.innerHTML='';return;}
-  box.innerHTML=`<p><strong>${esc(failed.toLocaleString())} open incident${failed===1?'':'s'}</strong> across enabled servers ${failed===1?'had its':'had their'} automatic AI plan attempt fail and will not be tried again automatically.</p><p class="help">Fix the cause first, such as the saved key, model or provider quota; the failed operations in Activity show the error. Retrying sends no provider request now: it lets the automatic schedule try each incident once more, one plan per server at a time, and AI pause, response holds and the shared AI start gates still apply. Disabled servers are not included.</p><div class="actions"><button type="button" class="fleet-auto-plan-retry-run">Retry failed automatic plans</button></div>`;
-  box.hidden=false;
-  box.querySelector('.fleet-auto-plan-retry-run').onclick=async e=>{const b=e.currentTarget;b.disabled=true;
-   try{const r=await api('/security/auto-plan-failed/retry','POST');if(!current())return;
-    const released=Number.isSafeInteger(r?.released)?r.released:0,left=Number.isSafeInteger(r?.remaining)?r.remaining:0;
-    toast(released?`Released ${released.toLocaleString()} failed automatic plan attempt${released===1?'':'s'} for retry${left?`; ${left.toLocaleString()} still waiting, run it again`:''}`:'Nothing was released; the attempts may have changed');
-    box.closest('#fleet-auto-plans')?.querySelector('.fleet-auto-plans-refresh')?.click();
-    load();}
-   catch(error){if(current())toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};
- };
- await load();
-}
 const FLEET_AUTO_PLAN_STATES={off:['Off','disabled'],ai_disabled:['AI disabled','disabled'],not_configured:['Needs model and key','medium'],paused:['AI paused','medium'],held:['Response hold','medium'],inactive:['Server disabled','disabled'],ready:['Ready','low']};
 function fleetAutoPlansContent(data){
  const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString():'Unknown';
@@ -662,6 +640,29 @@ function fleetAutoPlansContent(data){
   return '<li><div>'+host+' <span class="badge '+state[1]+'">'+esc(state[0])+'</span></div><div class="help">'+facts.join(' · ')+'</div></li>';
  }).join('');
  return summary+truncated+'<ul class="fleet-auto-plans-list">'+rows+'</ul>'+limits+refresh;
+}
+
+// Fleet-wide release of failed automatic AI plan attempts (#1251). Admin-only; counts active servers only.
+// Releasing sends no provider request: the automatic schedule retries each incident through the same gates.
+async function fleetAutoPlanRetry(revision,root){
+ const box=root.querySelector('.fleet-auto-plan-retry');if(!box||!isAdmin())return;let ticket=0;
+ const load=async()=>{
+  const turn=++ticket,current=()=>turn===ticket&&box.isConnected&&currentView(revision,'security')&&isAdmin();
+  let data;try{data=await api('/security/auto-plan-failed');}catch{data=null;}
+  if(!current())return;
+  const failed=data&&Number.isSafeInteger(data.failed)&&data.failed>0?data.failed:0;
+  if(!failed){box.hidden=true;box.innerHTML='';return;}
+  box.innerHTML=`<p><strong>${esc(failed.toLocaleString())} open incident${failed===1?'':'s'}</strong> across enabled servers ${failed===1?'had its':'had their'} automatic AI plan attempt fail and will not be tried again automatically.</p><p class="help">Fix the cause first, such as the saved key, model or provider quota; the failed operations in Activity show the error. Retrying sends no provider request now: it lets the automatic schedule try each incident once more, one plan per server at a time, and AI pause, response holds and the shared AI start gates still apply. Disabled servers are not included.</p><div class="actions"><button type="button" class="fleet-auto-plan-retry-run">Retry failed automatic plans</button></div>`;
+  box.hidden=false;
+  box.querySelector('.fleet-auto-plan-retry-run').onclick=async e=>{const b=e.currentTarget;b.disabled=true;
+   try{const r=await api('/security/auto-plan-failed/retry','POST');if(!current())return;
+    const released=Number.isSafeInteger(r?.released)?r.released:0,left=Number.isSafeInteger(r?.remaining)?r.remaining:0;
+    toast(released?`Released ${released.toLocaleString()} failed automatic plan attempt${released===1?'':'s'} for retry${left?`; ${left.toLocaleString()} still waiting, run it again`:''}`:'Nothing was released; the attempts may have changed');
+    box.closest('#fleet-auto-plans')?.querySelector('.fleet-auto-plans-refresh')?.click();
+    load();}
+   catch(error){if(current())toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};
+ };
+ await load();
 }
 
 async function aiRunPage(revision,context,base,parts){
