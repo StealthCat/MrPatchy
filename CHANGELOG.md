@@ -1,3 +1,7 @@
+## 1.82.0 — 2026-11-21
+
+1. [PR #1252](https://github.com/StealthCat/MrPatchy/pull/1252): Add an administrator-only fleet view and bounded release for failed automatic AI plan attempts across enabled servers; use the existing eligibility predicate, audit marking and worker gates. Compatibility: new endpoints and display/action only; no schema, admission, reservation, approval, notification or response-authorization change, and per-server counts remain unchanged. Limits: release sends no provider request and enqueues no work; startup-change plans are not automatic and are not covered.
+
 ## 1.81.2 — 2026-11-21
 
 1. [PR #1244](https://github.com/StealthCat/MrPatchy/pull/1244): Add a pure apcupsd event-script contract for root-run `apccontrol` and UPS event scripts, following the effective `SCRIPTDIR`, daemon event list, shutdown hook and file execution checks. Compatibility: additive module, tests and documentation only; no runtime, schema, collection, API, UI, role, scheduling or response-authorization change. Limits: no live differential against a built apcupsd; startup validity is not modeled, so the contract may over-report; collection, catalog, provenance, persistence, UI and AI wiring remain out of scope.

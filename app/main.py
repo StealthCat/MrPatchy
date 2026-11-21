@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = '1.81.2'
+APP_VERSION = '1.82.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -3478,6 +3478,23 @@ def security_auto_plan_failed_retry(host_id:str,user=Depends(admin_user)):
         with Session() as s:
             host_or_404(s,host_id)
             result=auto_plan_retry.release(s,host_id,user['username'])
+            s.commit()
+            return result
+
+@app.get('/api/security/auto-plan-failed')
+def fleet_security_auto_plan_failed(user=Depends(admin_user)):
+    """Count failed automatic AI plan attempts across active servers (#1251). Read-only."""
+    from . import auto_plan_retry
+    with Session() as s:
+        return {'failed':auto_plan_retry.fleet_failed_count(s)}
+
+@app.post('/api/security/auto-plan-failed/retry')
+def fleet_security_auto_plan_failed_retry(user=Depends(admin_user)):
+    """Release failed automatic plan attempts across active servers (#1251). Sends nothing now."""
+    from . import auto_plan_retry
+    with worker.Lock('security-plan-queue'):
+        with Session() as s:
+            result=auto_plan_retry.release_fleet(s,user['username'])
             s.commit()
             return result
 
