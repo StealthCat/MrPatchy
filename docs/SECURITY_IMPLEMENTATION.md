@@ -2737,6 +2737,19 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
 
+#### Fleet-wide release of failed automatic plans — worker checkpoint #1251
+
+- **Problem:** after fixing a fleet-wide cause (a rejected key, unsupported model or exhausted quota), an administrator had to open each opted-in server's Security tab to release its failed automatic attempts (#1036).
+- **Change:** `auto_plan_retry` applies the #1036 predicate to every **active** (enabled, not deleted) server. Disabled and deleted servers are neither counted nor released, so the count matches what a release can act on.
+  - Admin-only `GET /api/security/auto-plan-failed` returns `{failed}`.
+  - Admin-only, CSRF-protected `POST /api/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and releases up to 200 incidents across active servers, oldest first, with the same `retry_released` marking (who and when). It returns `{released, remaining}` and writes one audit row naming the fleet scope, the incident count and the server count when anything was released.
+  - A failed job is marked only when it was filed under the incident's own server.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The ordinary `auto_plan_tick` still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. Exclusions match the per-server action: planned, resolved, YARA, older-scan, stale-evidence, manual and still-attempted incidents are never counted.
+- **UI:** Security coverage → **Automatic AI plans across the fleet** shows **Retry failed automatic plans** to administrators only when the fleet count is above 0, with the same fix-the-cause-first and no-request-now wording. It says disabled servers are not included, reports partial batches, and refreshes the count and the automatic plan status afterwards. Failed, zero or malformed counts hide the action; operators and viewers never request it.
+- **Unchanged:** the per-server routes and their counts (a disabled server's own count still reports its failures), schema, admission, reservations, plan approval, notifications and response authorization.
+- **Validation:** `tests/test_auto_plan_retry_fleet.py` (8 tests) fails on main `1ae31e1b` and passes after, with the existing #1036 tests unchanged. `tests/ui_fleet_auto_plan_retry.cjs` fails on main and covers the action, partial and empty batches, the refresh of both reads, zero/malformed/failed counts, escaping, the operator role, no per-server route use and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered.
+
 ### Throttling, daily cap and unthrottled operation
 
 The shared Responses API request path validates strict UTF-8 JSON against a
