@@ -28,6 +28,7 @@ STAGES = (
 PACED_MODES = ('rate', 'rate_and_daily')
 CONTROL_MODES = ('legacy', 'unthrottled', 'daily_cap', *PACED_MODES)
 LEGACY_CONTROL_MODE = 'legacy'
+BUDGET_TIMING_STAGES = ('budget_reservation', 'budget_reconciliation')
 
 
 class ComparisonError(ValueError):
@@ -318,6 +319,30 @@ def _delta(baseline, candidate):
     }
 
 
+def _budget_timings(report, validated, label):
+    """Validate the optional timing evidence emitted by the capped fixture."""
+    stages = report['stages']
+    if not any(stage in stages for stage in BUDGET_TIMING_STAGES):
+        return None
+    if validated['fixture_budget'] is None:
+        raise ComparisonError(f'{label} budget timings apply only to capped modes')
+    maximum = validated['elapsed_seconds'] * 1000 + 1  # allow report rounding
+    expected_count = validated['fixture_budget']['settled_calls']
+    timings = {}
+    for stage in BUDGET_TIMING_STAGES:
+        field = f'{label}.stages.{stage}'
+        value = stages.get(stage)
+        if not isinstance(value, dict):
+            raise ComparisonError(f'{field} must be an object when budget timings are present')
+        count = _integer(value.get('count'), f'{field}.count')
+        if count != expected_count:
+            raise ComparisonError(f'{field}.count must equal settled provider calls')
+        p50 = _bounded(value.get('p50_ms'), f'{field}.p50_ms', 0, maximum)
+        p95 = _bounded(value.get('p95_ms'), f'{field}.p95_ms', p50, maximum)
+        timings[stage] = {'count': count, 'p50_ms': p50, 'p95_ms': p95}
+    return timings
+
+
 def compare(baseline, candidate, baseline_name='baseline', candidate_name='candidate'):
     base = _validate(baseline, 'baseline')
     current = _validate(candidate, 'candidate')
@@ -342,8 +367,21 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     for stage in STAGES:
         if base['stages'][stage]['count'] != current['stages'][stage]['count']:
             raise ComparisonError(f'capability mismatch: stages.{stage}.count differs')
+    baseline_budget = _budget_timings(baseline, base, 'baseline')
+    candidate_budget = _budget_timings(candidate, current, 'candidate')
+    budget_deltas = None
+    if baseline_budget is not None and candidate_budget is not None:
+        budget_deltas = {
+            stage: {percentile: _delta(baseline_budget[stage][percentile], candidate_budget[stage][percentile])
+                    for percentile in ('p50_ms', 'p95_ms')}
+            for stage in BUDGET_TIMING_STAGES
+        }
     return {
         'schema_version': SCHEMA_VERSION,
+        **({'budget_timings': {
+            'baseline': baseline_budget, 'candidate': candidate_budget, 'deltas': budget_deltas,
+        }}
+           if baseline_budget is not None or candidate_budget is not None else {}),
         'fixture_only': True,
         'capability_equivalent': True,
         'baseline': {
