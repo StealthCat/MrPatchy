@@ -287,7 +287,7 @@ def acquire(owner=None):
                         quote=ai_pricing.reservation(payload)
                         cap=Decimal(str(cfg['ai_daily_cap_usd']))
                         over=quote['ok'] and quote['amount_usd']>cap
-                        if ((over or ai_budget.waiting(s,now,payload)) and
+                        if ((over or ai_budget.waiting(s,now,quote=quote)) and
                             not known_good.exact_hit_available(s,row,cfg['ai_model'])):
                             if over:ai_retry.over_cap(s,row,signature,quote['amount_usd'],cap);s.commit()
                             return None

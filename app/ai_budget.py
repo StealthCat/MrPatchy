@@ -101,15 +101,19 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation)
 
 
-def waiting(session,now,payload=None,*,settings=None):
-    """Read-only preflight; final atomic reserve still owns spending authority."""
+def waiting(session,now,payload=None,*,settings=None,quote=None):
+    """Read current headroom, optionally using the caller's preflight quote.
+
+    Only the final atomic reserve prices and authorizes an outbound request.
+    """
     if settings is None:settings=config(session)
     enabled,_name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,settings,now)
     if not enabled:return 0
     if counted>=cap:return reset
-    if payload is not None:
+    if quote is None and payload is not None:
         quote=ai_pricing.reservation(payload)
-        if not quote['ok'] or counted+quote['amount_usd']>cap:return reset
+    if quote is not None and (not quote['ok'] or counted+quote['amount_usd']>cap):
+        return reset
     return 0
 
 
