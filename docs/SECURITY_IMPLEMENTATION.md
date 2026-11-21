@@ -3528,6 +3528,16 @@ connection tests. The groups sum to the counted total in the budget status.
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
 
+Worker checkpoint #1283 adds `next_reset_authoritative` to the activity snapshot.
+The grouped query checks whether any positive, observed spend will still count
+after the configured boundary. It uses the same predicate as the saved-budget
+snapshot and reads the ledger once. The activity card shows a recheck and
+explains carryover when the flag is false. Each Refresh uses its own snapshot.
+The API regressions cover a real retained earlier window, released and zero-cost
+rows, unobserved spend, and authoritative, empty and uncapped windows. The
+browser regression refreshes from a reset to a recheck and verifies the same
+activity totals and escaped text.
+
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
 The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
