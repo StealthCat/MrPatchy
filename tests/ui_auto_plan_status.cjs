@@ -6,21 +6,36 @@ module.exports=async(page,capture)=>{
  const base={generated_at:now,enabled:true,state:'ready',awaiting:3,awaiting_truncated:false,oldest_awaiting_since:now-900,
   active_plan:{state:'queued',created:now-60},latest_automatic:{state:'failed',created:now-3600},
   pacing:{mode:'rate',limit:null,used:null,remaining:null,next_at:null}};
+ let gates={mode:'rate',can_start_now:false,next_start_at:now+300,blockers:[
+  {code:'rate_throttle',message:'The current rate slot is full.',next_at:now+180},
+  {code:'provider_backoff',message:'Provider retry window is active.',next_at:now+300},
+ ]};
+ let gateReads=0;
+ const gatesRoute=route=>{
+  assert.equal(route.request().method(),'GET');
+  gateReads++;
+  return gates==='error'?route.fulfill({status:500,json:{detail:'<b>internal</b>'}}):route.fulfill({json:gates});
+ };
  const statusRoute=route=>status==='error'?route.fulfill({status:500,json:{detail:'boom'}}):route.fulfill({json:status});
  const policyRoute=route=>route.request().method()==='GET'?route.fulfill({json:{enabled:true,auto_ai_plan:true,interval_hours:24,paths:['/tmp']}}):route.fallback();
  await page.route('**/api/hosts/*/security/auto-plan-status',statusRoute);
  await page.route('**/api/hosts/*/security/policy',policyRoute);
+ await page.route('**/api/settings/ai-control-status',gatesRoute);
  try{
   status=base;
   await page.goto(new URL('/#servers/'+host.id+'/security',page.url()).href);
   const notice=page.locator('#auto-plan-status');
-  await notice.getByText('awaiting an automatic attempt',{exact:false}).waitFor();
+  await notice.getByText('Next shared eligibility',{exact:false}).waitFor();
   let text=await notice.innerText();
   assert.match(text,/Automatic plans can be requested for new detections on this server\./);
   assert.match(text,/3 open incidents awaiting an automatic attempt \(oldest updated .+\)/);
   assert.match(text,/A plan has been queued for this server since .+; the next one waits for it/);
   assert.match(text,/Latest automatic attempt: failed at /);
   assert.match(text,/No plan-specific hourly limit; the shared AI start gates/);
+  assert.match(text,/Smooth-rate throttle · The current rate slot is full/);
+  assert.match(text,/Shared provider backoff · Provider retry window is active/);
+  assert.match(text,/Worker capacity, server readiness and plan-specific checks still apply/);
+  assert.match(text,/Next shared eligibility .+\./);
   assert.doesNotMatch(text,/ten per hour|Legacy fleet allowance/);
   // The help text no longer claims a fleet hourly cap in every mode.
   const help=await page.locator('#security-policy-form [name=auto_ai_plan]').evaluate(input=>input.closest('label').nextElementSibling.textContent);
@@ -41,9 +56,21 @@ module.exports=async(page,capture)=>{
   assert.match(text,/500 or more open incidents awaiting/);
   assert.match(text,/Legacy fleet allowance: 10 of 10 plan requests used this hour · next free /);
   assert.doesNotMatch(text,/Latest automatic attempt|A plan has been/);
+  assert.equal(await notice.locator('[data-auto-plan-gates]').count(),0);
+  assert.equal(gateReads,1,'legacy status does not fetch shared timing');
 
   status={...base,state:'ready',awaiting:0,oldest_awaiting_since:null,active_plan:null,latest_automatic:null};
-  await page.reload();await notice.getByText('No open incidents await',{exact:false}).waitFor();
+  gates={mode:'rate',can_start_now:true,next_start_at:null,blockers:[]};
+  await page.reload();await notice.getByText('The recorded shared AI start gates are open.',{exact:false}).waitFor();
+  assert.match(await notice.innerText(),/No open incidents await/);
+
+  for(const snapshot of ['error',null,{...gates,mode:'legacy'}]){
+   gates=snapshot;
+   await page.reload();
+   await notice.getByText('Shared AI start gates are unavailable right now.',{exact:false}).waitFor();
+   assert.match(await notice.innerText(),/No open incidents await/);
+   assert.doesNotMatch(await notice.innerText(),/internal/);
+  }
 
   // Untrusted values are escaped, never rendered as markup.
   status={...base,awaiting:'<img src=x onerror=window.__planInjected=true>',latest_automatic:{state:'<b>x</b>',created:now}};
@@ -60,5 +87,6 @@ module.exports=async(page,capture)=>{
  }finally{
   await page.unroute('**/api/hosts/*/security/auto-plan-status',statusRoute);
   await page.unroute('**/api/hosts/*/security/policy',policyRoute);
+  await page.unroute('**/api/settings/ai-control-status',gatesRoute);
  }
 };
