@@ -44,11 +44,9 @@ class AIError(RuntimeError):
         self.retry_after=retry_after
         self.provider_retry_after=retry_after  # provider-sent delay only; retry_after may later include local backoff
         self.policy_wait=policy_wait
-        # Why a non-transient failure happened, for retry wording only (#1007).
-        # 'evidence_size' is a local refusal before any provider request;
-        # 'follow_up_evidence_size' is that refusal on the follow-up request, after
-        # the first-stage call was sent. 'model_refusal' and 'token_budget' were sent
-        # and may be billed (#1158). Anything else keeps the provider/configuration meaning. Never changes eligibility.
+        # The cause selects retry wording and distinguishes local database waits
+        # from shared provider and rate waits. policy_wait and transient control
+        # whether the error can be deferred.
         self.cause=cause
 
 
