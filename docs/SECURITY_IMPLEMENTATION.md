@@ -12064,6 +12064,17 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
 
+### AI Settings current budget boundary — worker checkpoint #1278 (roadmap A)
+
+The current window card in Settings → AI uses the saved budget snapshot's
+`next_reset_authoritative` flag. When earlier-window spend can carry across
+the configured boundary, the card shows a recheck time and explains that the
+spend may still count. Authoritative reset dates retain their original label.
+
+The browser regression covers both labels and the existing spend amounts,
+with narrow, tablet and desktop layout checks. Admission and accounting
+continue to use the existing budget policy.
+
 ### Free exact known-good hits under an exhausted daily cap — worker checkpoint #1030
 
 Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit spends nothing. Before this checkpoint `ai_claims.acquire()` refused every claim once the cap had no headroom, or once the elected subject's own quote exceeded it. A free cached verdict on another server therefore stayed `pending` until the next reset.
