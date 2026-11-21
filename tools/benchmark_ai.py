@@ -26,6 +26,8 @@ MYSQL_URL_ENV = 'AI_BENCHMARK_MYSQL_URL'
 FIXTURE_MODEL = 'fixture-model'
 FIXTURE_PRICE_VERSION = 'synthetic-v1'
 FIXTURE_CAP_USD = 10
+FIXTURE_RATE_PER_HOUR = 1000
+PACED_MODES = ('rate', 'rate_and_daily')
 PERSISTENCE_TIMING = re.compile(r'([a-z ]+): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
 
 
@@ -225,6 +227,35 @@ def capped_fixture_summary(session, budget_entry, receipts, settings):
     }
 
 
+def dispatch_paced(pool, run_one, runs, session_factory, admission_model):
+    """Wait for each durable start slot while earlier investigations can finish."""
+    futures = []
+    wait_seconds = 0.0
+    for index in range(runs):
+        if futures:
+            started = time.perf_counter()
+            deadline = started + 45
+            previous = futures[-1]
+            while True:
+                finished = previous.done()
+                with session_factory() as session:
+                    slot = session.get(admission_model, 'global')
+                    next_at = slot.next_at if slot is not None and slot.admitted == index else None
+                if next_at is not None:
+                    time.sleep(max(0, next_at - time.time()))
+                    break
+                if finished or time.perf_counter() >= deadline:
+                    if finished:
+                        previous.result()
+                    raise BenchmarkTimingError('Paced fixture did not observe the previous durable start.')
+                time.sleep(0.02)
+            wait_seconds += time.perf_counter() - started
+        futures.append(pool.submit(run_one, index))
+    for future in futures:
+        future.result()
+    return wait_seconds
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runs', type=int, default=8)
@@ -237,9 +268,10 @@ def main():
     parser.add_argument('--persistence-delay-ms', type=int, default=0)
     parser.add_argument('--ssh-delay-ms', type=int, default=10,
                         help='simulated latency of a follow-up SSH evidence request (default: 10)')
-    parser.add_argument('--control-mode', choices=('legacy', 'unthrottled', 'daily_cap'), default='legacy',
-                        help='AI control mode for the fixture (default: legacy). daily_cap uses the real '
-                             'spend ledger with fixture-only prices and a fixed cap.')
+    parser.add_argument('--control-mode', choices=('legacy', 'unthrottled', 'daily_cap', *PACED_MODES),
+                        default='legacy', help='AI control mode for the fixture (default: legacy). '
+                        'Capped modes use the real spend ledger with synthetic prices. '
+                        'Paced modes wait for the real gate at 1,000 starts/hour.')
     parser.add_argument('--queue-age-seconds', type=int, default=2,
                         help='synthetic age of queued observations without a real wait (default: 2)')
     parser.add_argument('--retained-history-rows', type=int, default=0,
@@ -286,7 +318,7 @@ def main():
         for name in list(os.environ):
             if name.lower().endswith('_proxy'):os.environ.pop(name)
         from sqlalchemy import insert
-        from app import ai, ai_budget, ai_policy, ai_pricing, worker, ai_runs
+        from app import ai, ai_admission, ai_budget, ai_policy, ai_pricing, worker, ai_runs
         from app.db import init, Session, Host, Setting, Behavior, engine, config
         from app.security import seal
         if args.database == 'mysql':
@@ -296,7 +328,8 @@ def main():
         if single_server_slots is not None and args.concurrency > single_server_slots:
             parser.error(f'--same-server requires --concurrency at most {single_server_slots}')
         init()
-        capped = args.control_mode == 'daily_cap'
+        capped = args.control_mode in ai_pricing.CAP_MODES
+        paced = args.control_mode in PACED_MODES
         if capped:
             # The benchmark uses one loopback model and never depends on public catalog dates.
             now = time.time()
@@ -381,6 +414,8 @@ def main():
                             'ai_control_mode': args.control_mode}
                 if capped:
                     settings.update(ai_daily_cap_usd=FIXTURE_CAP_USD, ai_budget_timezone='UTC')
+                if paced:
+                    settings['ai_rate_per_hour'] = FIXTURE_RATE_PER_HOUR
                 s.add(Setting(key='config', value=settings))
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
                 for host_id in dict.fromkeys(expected_hosts.values()):
@@ -410,7 +445,11 @@ def main():
                     worker.investigate_one();duration=(time.perf_counter()-begin.get())*1000
                     samples['run'].append(duration);samples['two_stage' if two_stage.get() else 'one_stage'].append(duration)
                 finally:begin.reset(token)
-            with ThreadPoolExecutor(max_workers=args.concurrency) as pool:list(pool.map(run_one,range(args.runs)))
+            with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+                if paced:
+                    wait_seconds = dispatch_paced(pool, run_one, args.runs, Session, ai_admission.Admission)
+                else:
+                    list(pool.map(run_one, range(args.runs)))
             elapsed=time.perf_counter()-started
             with Session() as s:
                 rows=s.query(Behavior).filter(Behavior.id.in_(subjects)).all()
@@ -433,6 +472,16 @@ def main():
                 control_mode = settings['ai_control_mode']
                 assert control_mode == args.control_mode, control_mode
                 fixture_budget = capped_fixture_summary(s, ai_budget.BudgetEntry, receipts, settings) if capped else None
+                fixture_rate = None
+                if paced:
+                    slot = s.get(ai_admission.Admission, 'global')
+                    if slot is None or slot.admitted != len(runs):
+                        raise BenchmarkTimingError('Paced fixture requires one durable start per investigation.')
+                    fixture_rate = {
+                        'starts_per_hour': settings['ai_rate_per_hour'],
+                        'admitted_starts': slot.admitted,
+                        'dispatch_wait_seconds': round(wait_seconds, 3),
+                    }
                 follow_up_subjects = {subjects[index] for index in follow_up_indices}
                 expected_persistence = {
                     'result_persistence': {run.id for run in runs},
@@ -457,6 +506,7 @@ def main():
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
                 'ai_control_mode':control_mode,
                 **({'fixture_budget': fixture_budget} if capped else {}),
+                **({'fixture_rate': fixture_rate} if paced else {}),
                 'stages':{k:summary(v) for k,v in samples.items()},
                 'persisted_stages':{k:summary(v) for k,v in persisted_timings.items()},'input_tokens':sum(c['tokens']['input_tokens'] for c in costs),
                 'output_tokens':sum(c['tokens']['output_tokens'] for c in costs),'completed_subjects':completed_subjects,'approved_subjects':approved_subjects,

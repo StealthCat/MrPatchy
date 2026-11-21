@@ -25,7 +25,8 @@ STAGES = (
     'queue_age', 'receipt_persistence', 'usage_persistence',
 )
 # Reports from before --control-mode ran in the implicit legacy mode.
-CONTROL_MODES = ('legacy', 'unthrottled', 'daily_cap')
+PACED_MODES = ('rate', 'rate_and_daily')
+CONTROL_MODES = ('legacy', 'unthrottled', 'daily_cap', *PACED_MODES)
 LEGACY_CONTROL_MODE = 'legacy'
 
 
@@ -222,10 +223,10 @@ def _validate(report, label):
         control_mode = LEGACY_CONTROL_MODE
         control_mode_source = 'legacy implicit default'
     fixture_budget = report.get('fixture_budget')
-    if control_mode == 'daily_cap':
+    if control_mode in ('daily_cap', 'rate_and_daily'):
         key = f'{label}.fixture_budget'
         if not isinstance(fixture_budget, dict):
-            raise ComparisonError(f'{key} is required for daily_cap')
+            raise ComparisonError(f'{key} is required for capped modes')
         cap = _integer(fixture_budget.get('cap_usd'), f'{key}.cap_usd')
         settled = _integer(fixture_budget.get('settled_calls'), f'{key}.settled_calls')
         total = _integer(fixture_budget.get('settled_microusd'), f'{key}.settled_microusd')
@@ -239,7 +240,24 @@ def _validate(report, label):
         fixture_budget = {'pricing_version': 'synthetic-v1', 'timezone': 'UTC', 'cap_usd': cap,
                           'settled_calls': settled, 'settled_microusd': total}
     elif 'fixture_budget' in report:
-        raise ComparisonError(f'{label}.fixture_budget applies only to daily_cap')
+        raise ComparisonError(f'{label}.fixture_budget applies only to capped modes')
+    fixture_rate = report.get('fixture_rate')
+    if control_mode in PACED_MODES:
+        key = f'{label}.fixture_rate'
+        if not isinstance(fixture_rate, dict):
+            raise ComparisonError(f'{key} is required for paced modes')
+        rate = _integer(fixture_rate.get('starts_per_hour'), f'{key}.starts_per_hour')
+        admitted = _integer(fixture_rate.get('admitted_starts'), f'{key}.admitted_starts')
+        wait = _bounded(fixture_rate.get('dispatch_wait_seconds'), f'{key}.dispatch_wait_seconds', 0, elapsed)
+        if rate != 1000 or admitted != runs:
+            raise ComparisonError(f'{key} must record 1,000 starts/hour and one durable start per investigation')
+        # Use the elapsed floor rather than a waiting floor. A slow admission
+        # query could use up part of its next slot before we observe it.
+        if elapsed + float(REPORT_ROUNDING_RADIUS) < (runs - 1) * 3600 / rate:
+            raise ComparisonError(f'{key} elapsed time cannot contain the recorded pacing')
+        fixture_rate = {'starts_per_hour': rate, 'admitted_starts': admitted, 'dispatch_wait_seconds': wait}
+    elif 'fixture_rate' in report:
+        raise ComparisonError(f'{label}.fixture_rate applies only to paced modes')
     # Reports created before the optional synthetic receipt/usage persistence
     # delay carried no field and ran with no added delay. Treat only that
     # documented legacy contract as zero; bound any reported value.
@@ -280,7 +298,7 @@ def _validate(report, label):
         'cost_status': cost_status, 'workload_fingerprint': workload_fingerprint,
         'stages': stages,
         'ai_control_mode': control_mode, 'ai_control_mode_source': control_mode_source,
-        'fixture_budget': fixture_budget,
+        'fixture_budget': fixture_budget, 'fixture_rate': fixture_rate,
     }
 
 
@@ -339,6 +357,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'cost_status': base['cost_status'],
             'ai_control_mode': base['ai_control_mode'],
             'ai_control_mode_source': base['ai_control_mode_source'],
+            **({'fixture_rate': base['fixture_rate']} if base['fixture_rate'] is not None else {}),
         },
         'candidate': {
             'name': candidate_name, 'execution': current['execution'],
@@ -356,6 +375,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'cost_status': current['cost_status'],
             'ai_control_mode': current['ai_control_mode'],
             'ai_control_mode_source': current['ai_control_mode_source'],
+            **({'fixture_rate': current['fixture_rate']} if current['fixture_rate'] is not None else {}),
         },
         'capability': {
             'runs': base['runs'], 'provider_calls': base['provider_calls'],

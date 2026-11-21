@@ -11233,9 +11233,9 @@ they measured, and the comparator could not detect a mixed pair.
   | legacy | 7.04/s | 11.02/s |
   | unthrottled | 7.21/s | 10.41/s |
 
-- **Follow-up:** #1231 covers the daily-cap fixture. The `rate` and
-  `rate_and_daily` modes still need fixtures that measure intentional pacing.
-  Production measurements remain open.
+- **Follow-up:** #1231 covers the daily-cap fixture. #1245 covers the
+  shared-rate fixture, alone and with the daily cap. Production measurements
+  remain open.
 - **Unchanged:** no runtime, admission, provider, schema or
   response-authorization behavior.
 
@@ -11257,7 +11257,30 @@ Existing legacy and unthrottled reports keep their format.
 SQLite and disposable MySQL tests exercise both cross-server and same-server
 workloads. This covers the ordinary capped path with available headroom. Tests
 for exhausted caps, deferral and restart remain separate. Production latency
-and benchmarking rate-paced modes remain open.
+remains unmeasured. #1245 extends the same fixture to rate-paced modes.
+
+
+### Rate-paced triage benchmarks — Roadmap A checkpoint #1245
+
+Use `--control-mode rate` or `--control-mode rate_and_daily` with the disposable
+loopback benchmark. Both fixtures use the recorded shared gate at 1,000
+starts/hour. Each investigation consumes one start and its follow-up can
+continue under that start. The dispatcher observes the persisted next start
+time and waits while earlier work can finish. It refuses to emit a complete
+report if the ledger lacks a start for any investigation.
+
+Reports include the fixture rate, durable starts and dispatch waiting time.
+The waiting interval can overlap earlier investigations, so it is already
+included in total elapsed time. The comparator requires consistent evidence
+and refuses an elapsed time too short for the claimed starts. The combined
+mode checks the synthetic spend ledger as well. Legacy and unthrottled
+reports and retained comparisons are still accepted with their existing
+format.
+
+SQLite and disposable MySQL exercise serial and parallel workloads with
+follow-up calls. These are loopback measurements with deliberate pacing
+and cap headroom. Production speeds and exhausted-cap throughput are outside
+this checkpoint.
 
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
@@ -12323,3 +12346,74 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
 - **Validation:** `tests/test_certbot_hooks.py` has 58 tests. Four differential tests load certbot's real `hooks.py` and `compat` modules (only logging/display and unused helpers are stubbed) and execute real hooks through `/bin/sh` from temporary directories. They compare what ran, its order, deduplication, environment, the `renew`/other-verb split, dry-run and `--no-directory-hooks` behavior, a name with a space, and a non-directory hook path with the contract. They run when `MRPATCHY_CERTBOT_SOURCE` points at an unpacked certbot wheel or certbot is installed, and are skipped otherwise. Seven mutations are each caught.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** agent collection of the directories and the certbot installation state, a catalog entry, provenance, persistence, UI and AI classification. Hook commands in `/etc/letsencrypt/renewal/*.conf` and `cli.ini`, and `--config-dir` overrides, are not modeled.
+
+### NUT upsmon command contract — Roadmap F checkpoint #1247
+
+- **Outcome:** `app/nut_upsmon.py` is a pure contract with no I/O. It takes the text of `upsmon.conf`, the observed `upsmon` argv and the daemon's `NUT_CONFPATH`, and reports which commands Network UPS Tools' `upsmon` runs through `/bin/sh`, as which user and on which events:
+  - `SHUTDOWNCMD` runs as root. In the default split mode it runs in the privileged parent, and under `-p` in the single root process.
+  - `NOTIFYCMD "<message>"` runs for each notify event whose effective flags include `EXEC` and not `IGNORE`. It runs as `RUN_AS_USER` in split mode, or as root under `-p`.
+- **Semantics:** taken from NUT v2.8.1 `clients/upsmon.c` and `common/parseconf.c`:
+  - The parseconf state machine is modeled byte for byte: `#` comments, `\` literals and continuation, quoted words that span lines, a bare `=` word, discarded control and non-ASCII bytes, and the 512-byte word and 32-word line limits.
+  - A `#` inside quotes is a parse error. The rest of that line is then read as a new line, so a directive hidden behind it still applies.
+  - Directive names are exact-case, apart from `DEBUG_MIN`, and the last value wins.
+  - `NOTIFYFLAG` matches the event name case-insensitively and takes exact-case flags joined by `+`. Each line replaces the earlier flags. The default flags are `SYSLOG+WALL`.
+  - A `RUN_AS_USER` in the file overrides `-u`.
+  - getopt stops at the first operand.
+- **Fails closed:** each of these is a blocking gap:
+  - an unobserved config, argv or environment;
+  - NUL bytes, text that is not UTF-8, and over-limit input;
+  - an argv that makes upsmon exit instead of monitoring (`-c`, `-h`, `-V`, `-K`, `-i`, an unknown option or a missing argument);
+  - a captured config path different from the one upsmon reads.
+
+  Notify message templates are reported as a hash with flags for shell-active characters, a UPS-name substitution and possible truncation. A template whose `printf` conversions are not modeled leaves its event `unresolved`.
+- **Redaction:** `MONITOR` and `CERTIDENT` passwords, notify message text and the text of unknown or other directives are never copied into the result.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Startup-fatal `MONITOR` and `MINSUPPLIES` conditions are not modeled. The contract can over-report commands for a daemon that exits, but it does not under-report.
+  - Reload behavior is not modeled: split-mode parents ignore a changed `SHUTDOWNCMD`, and the account is not re-applied.
+  - Not yet done: account resolution, agent collection, a catalog entry, package provenance, UI and AI classification.
+- **Differential:** the tokenizer and directive handling were compared with the real NUT v2.8.1 `parseconf.c` and the `upsmon.c` `parse_conf_arg`, `set_notifyflag` and `set_notifymsg` handlers, compiled into a harness. There were 0 mismatches in 13,000 random configs; the 60 configs that hit the fatal 5-word `MONITOR` exit were excluded, as documented. `parse_argv` matched glibc `getopt` with the upsmon optstring on 3,000 random argv lists.
+
+### TuneD profile script contract — worker checkpoint #1237 (roadmap F)
+
+`app/tuned_profiles.py` is a pure, versioned, I/O-free roadmap F contract. Its input is captured TuneD state: `active_profile`, `profile_mode`, `post_loaded_profile`, the `/usr/lib/tuned` and `/etc/tuned` listings, and the candidate `tuned.conf` texts. From that it reports which executables the TuneD daemon starts as root for the active profile, with which arguments, in which order and under which conditions.
+
+- **Why it matters:** TuneD is installed and enabled by default on RHEL-family servers. On every boot and profile switch it runs:
+  - each `[script]` unit's `script=` executable with `start`, and with `stop` on unload;
+  - any unit's `script_pre`/`script_post` once per device;
+  - `${f:exec:...}` calls.
+
+  A custom `/etc/tuned/<name>/tuned.conf` shadows the stock profile of the same name. A custom profile can also add scripts through `include=`. No existing contract reported any of this.
+- **Source of the semantics:** TuneD 2.21.0 as packaged in Ubuntu 24.04. The files read were `profiles/{locator,loader,merger,profile,unit,variables}.py`, `plugins/{base,plugin_script}.py`, `units/manager.py`, `daemon/daemon.py` and `utils/commands.py`. The contract models:
+  - the profile-mode rules: an empty mode means manual when an active profile is set, auto mode is a blocking gap, and an invalid mode refuses the load;
+  - the single post-loaded profile;
+  - the known-name check before `safe_name` filtering;
+  - `/etc/tuned` taking precedence over `/usr/lib/tuned`, with processed files skipped and the search falling through to the next directory;
+  - optional `-name` includes and depth-first `include=` loading;
+  - parsing with the same `configparser` settings TuneD uses;
+  - `${i:PROFILE_DIR}` expansion and `script=` normalization;
+  - TuneD's merge rules: `replace`, `drop`, `enabled`, overwritten regexes and device scripts, and `script` concatenation, which repeats the earlier scripts when a later `[script]` unit sets none;
+  - integer priority ordering;
+  - the `units/manager.py` check order for each enabled unit (`cpuinfo_regex`, then `uname_regex`, then `int(priority)`), where an uncompilable regex or a non-integer priority aborts the whole apply;
+  - relative `script_pre`/`script_post` paths, which never run.
+- **Fail closed:** blocking gaps cover:
+  - an unobserved family or installation state;
+  - an unobserved or unreadable state file, listing or path;
+  - malformed or over-limit input;
+  - auto mode, because the recommended profile is not modeled;
+  - variables in `include=`;
+  - a `[variables] include=` file;
+  - any `exec` function call, including one whose name is assembled from a variable or a nested function result, which is found by substituting `[variables]` values textually before reading each `{f:` name;
+  - a function name that is not a literal word after that substitution, or a `${` that is neither a plain `${NAME}` reference nor a literal `${f:<name>` call, since TuneD re-splits that outer call after a nested function result is spliced in (`${${f:strip:f\:exec\:cmd}}` runs `cmd`) (`function_expansion_not_modeled`);
+  - a reference to a variable the loaded profile does not define, because the daemon's variable store outlives a single load (`variable_undefined`);
+  - `${i:PROFILE_DIR}` in a profile whose directory name contains a backslash, which `re.sub` treats as a template escape (`profile_dir_escape_not_modeled`);
+  - an invalid regex or priority that is only reached when an earlier regex of the same unit matches the host (`apply_refusal_conditional`).
+
+  A parse error, an unknown or missing profile, an invalid priority or regex reached unconditionally, an invalid mode or a multi-word post-loaded profile is reported as `load_refused` with no invocations, because the daemon then loads nothing. CPU/uname regexes and per-device scripts are reported as conditions, not as definite runs.
+- **Validation:** `tests/test_tuned_profiles.py` has 19 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in two worker sessions, so there is no live differential. A second source review of `units/manager.py` found that the check order makes some invalid priorities host-dependent; that is now modeled. A third review of `profiles/variables.py` and `profiles/functions/functions.py` found that `exec` could be assembled from a variable or a nested function result and that `${i:PROFILE_DIR}` is a `re.sub` template; both now fail closed. Run as text over all 38 stock profiles in the 2.21.0 package, the contract resolves 30 completely. The other 8 are blocked by their `[variables] include=` file or a function in `include=`, as before.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change.
+- **Remaining:**
+  - a differential against the real loader;
+  - agent collection of the TuneD files and installation state;
+  - a catalog entry, provenance, persistence, UI and AI classification;
+  - recommended-profile (`recommend.d`) resolution, variable expansion and `tuned-main.conf` `default_instance_priority` collection.
