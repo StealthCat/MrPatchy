@@ -2214,6 +2214,15 @@ adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence a
 response-authorization behavior are unchanged. Production contention baselines
 and the broader faster-AI acceptance remain open.
 
+The `claim_lock_hold` sample (#1317) measures from acquisition of the
+fleet claim lock to the start of its release for a successful process-triage
+claim. It includes election, claim persistence and the database session's
+exit. Read it alongside the separate lock wait and aggregate admission
+times in AI stage timings or the fixture benchmark's `persisted_stages`.
+Samples use the monotonic clock and existing diagnostic retention. Older
+runs may have no sample, and refused or empty polls contribute none.
+Production contention and throughput remain to be measured.
+
 The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
 summary from #523. It reports per-stage sample counts, errors and p50/p95 with
 coverage and truncation, and keeps individual run logs available when the summary

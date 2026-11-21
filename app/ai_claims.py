@@ -208,7 +208,9 @@ def acquire(owner=None):
     lock=Lock('ai-triage')
     lock_started=perf_counter()
     if not lock.acquire():return None
-    claim_lock_wait=perf_counter()-lock_started
+    lock_acquired = perf_counter()
+    claim_lock_wait = lock_acquired - lock_started
+    lease = None
     try:
         with Session() as s:
             now=time.time();reconcile(s,now);s.commit()
@@ -299,9 +301,13 @@ def acquire(owner=None):
                         configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
                     s.add(claim);record_turn(s,host_id);s.commit()
                     work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
-                    return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner,claim_lock_wait)
+                    lease = Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner,claim_lock_wait)
+                    return lease
             except host_lifecycle.Inactive:return None
-    finally:lock.release()
+    finally:
+        if lease is not None:
+            lease.claim_lock_hold = perf_counter() - lock_acquired
+        lock.release()
 
 
 class Lease:
