@@ -3254,6 +3254,17 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Shared rate-slot contention between triage and scoring (#1105, roadmap A)
+
+The rate acceptance suite brings real process triage and package scoring to the
+same authoritative admission gate, letting each path arrive first in turn.
+Both Rate throttle and Rate with daily cap grant one provider start. The
+deferred path retains its evidence and next eligibility, and a capped attempt
+that lost the rate slot releases the unused reservation. At refill the waiting
+path completes under its own admission. SQLite and MySQL use the same scenarios.
+The fixture controls arrival order and provider responses, so sustained
+cross-purpose fairness and production throughput remain separate acceptance.
+
 ### Daily-cap deferral reason — bug fix checkpoint #1015 (P3)
 
 A triage subject refused by the authoritative `ai_budget.reserve()` because the
