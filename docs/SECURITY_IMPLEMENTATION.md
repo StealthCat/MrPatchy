@@ -3632,6 +3632,26 @@ and an allowance of three, the status read went from two statements to one.
 The time remained correct when entries tied at the boundary. Production latency
 and the broader shared-controls acceptance remain open.
 
+### Database connection loss during a capped reservation — milestone 4 acceptance #1293
+
+`tests/test_ai_budget_connection_loss.py` interrupts the native connection
+around the reservation commit with an earlier uncertain charge already counted.
+It checks both outcomes through the normal provider request path. A transaction
+that rolls back leaves headroom for one retry. A durable commit whose outcome
+the caller could not confirm leaves the reservation counted and defers a retry
+to the saved reset. The interrupted call sends no provider request in either case.
+
+When the driver reports a lost connection during budget admission, the worker
+keeps the investigation queued for a local recheck after 30 seconds. The
+deferral preserves its retry allowance and does not set a provider backoff.
+The next admission reads the retained ledger again. Other database errors and
+failures after provider transmission retain their existing classification.
+
+SQLite closes the connection and MySQL terminates the test's own database
+session. The test simulates a lost acknowledgement by committing before
+disconnecting. It uses fixture provider replies and leaves database writer
+promotion and multi-host recovery open.
+
 ### Two-call follow-up reservations under a daily cap — worker checkpoint #988
 
 `tests/test_ai_budget_followup_acceptance.py` covers the milestone 4 item
