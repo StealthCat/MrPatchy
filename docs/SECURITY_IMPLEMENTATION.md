@@ -3886,6 +3886,16 @@ unavailable and never implies a plan will start.
 - **Limitations:** this is a point-in-time read for one server. A fleet-wide
   plan queue view and startup-change plans (never automatic) are not covered.
 
+### Fail-closed pause in shared AI queues — Roadmap A/C checkpoint #1309
+
+The shared SQLite/MySQL filter now agrees with the per-server status and the
+outbound provider check. A missing policy or a policy object with no
+`paused` field is resumed by default. An explicit JSON false resumes it.
+Other stored field types and non-object policies are paused. Fleet counts,
+server backlog status and work selection use the same filter. A malformed
+server's work stays queued while other eligible servers can claim work.
+Administrators can still repair the saved policy through the audited control.
+
 ### Per-server process-triage queue breakdown — worker checkpoint #975
 
 `GET /api/investigation-status` reports fleet-wide totals only. When the queue
@@ -3924,10 +3934,8 @@ so an investigation on its last attempt is `active` here while the fleet
   claims, pause, budget, schema, roles and response authorization are unchanged.
 - **Limitations:** this is a point-in-time read, and "eligible" is not a promise
   to start: shared start gates, worker capacity, the per-server limit and pause
-  still apply. Pause is read as the fleet status reads it, so a manually
-  corrupted per-server AI policy is not shown as paused although provider calls
-  for that server are refused. Servers beyond the first 50 and matched
-  production acceptance remain open.
+  still apply. Servers beyond the first 50 and matched production acceptance
+  remain open.
 - **UI panel (worker follow-up):** the fleet AI activity page (`#ai-logs`) now
   has an administrator-only, on-demand **Servers holding the triage backlog**
   panel. It reads this endpoint and shows each server's pending, active,
