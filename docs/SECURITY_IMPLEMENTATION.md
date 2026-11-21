@@ -12544,3 +12544,15 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### cloud-init script-directory contract — worker checkpoint #1271 (roadmap F)
+
+cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` final-stage modules run every executable entry of `/var/lib/cloud/scripts/per-boot`, `per-instance` and `per-once` as root: at every boot, once per instance ID (again after it changes, for example on a cloned image), and once. The startup inventory and catalog did not model these directories.
+
+- **Change:** the pure `app/cloud_init_scripts.py` takes captured directory listings and followed-stat metadata, and returns each script cloud-init would run, in order, with its frequency, `argv` and user, plus a reason for every skipped entry. It performs no I/O and never runs a command.
+- **Fidelity:** it follows cloud-init 24.4 `subp.runparts`/`is_exe` and `cc_scripts_per_*`, read from the upstream source. Entries run in `sorted(os.listdir())` code-point order, with no name filter. Unlike `run-parts`, that includes dotfiles, `x~` and `*.dpkg-old` backups. An entry runs when it is a regular file after following symlinks, has any execute bit and is not on a `noexec` mount, which is root's `X_OK`. A missing or non-directory root runs nothing.
+- **Fail closed:** unobserved, unreadable or truncated listings, malformed or missing metadata, unobserved symlink targets, duplicate names and over-limit input are blocking gaps. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_cloud_init_scripts.py` has 9 tests. One of them, run as root, compares the contract with a line-for-line port of upstream `runparts` selection on a real directory tree. A scratch differential over 500 random trees, with random modes, names, directories, FIFOs and live or dangling symlinks, had 0 disagreements.
+- **Not modeled:** whether cloud-init is installed or enabled, `cloud_final_modules` membership, a non-default `cloud_dir`, semaphore state, user-data `scripts_user` and `scripts_vendor`, and script contents.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.
