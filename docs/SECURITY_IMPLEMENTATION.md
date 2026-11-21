@@ -12358,3 +12358,47 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
   - Reload behavior is not modeled: split-mode parents ignore a changed `SHUTDOWNCMD`, and the account is not re-applied.
   - Not yet done: account resolution, agent collection, a catalog entry, package provenance, UI and AI classification.
 - **Differential:** the tokenizer and directive handling were compared with the real NUT v2.8.1 `parseconf.c` and the `upsmon.c` `parse_conf_arg`, `set_notifyflag` and `set_notifymsg` handlers, compiled into a harness. There were 0 mismatches in 13,000 random configs; the 60 configs that hit the fatal 5-word `MONITOR` exit were excluded, as documented. `parse_argv` matched glibc `getopt` with the upsmon optstring on 3,000 random argv lists.
+
+### TuneD profile script contract — worker checkpoint #1237 (roadmap F)
+
+`app/tuned_profiles.py` is a pure, versioned, I/O-free roadmap F contract. Its input is captured TuneD state: `active_profile`, `profile_mode`, `post_loaded_profile`, the `/usr/lib/tuned` and `/etc/tuned` listings, and the candidate `tuned.conf` texts. From that it reports which executables the TuneD daemon starts as root for the active profile, with which arguments, in which order and under which conditions.
+
+- **Why it matters:** TuneD is installed and enabled by default on RHEL-family servers. On every boot and profile switch it runs:
+  - each `[script]` unit's `script=` executable with `start`, and with `stop` on unload;
+  - any unit's `script_pre`/`script_post` once per device;
+  - `${f:exec:...}` calls.
+
+  A custom `/etc/tuned/<name>/tuned.conf` shadows the stock profile of the same name. A custom profile can also add scripts through `include=`. No existing contract reported any of this.
+- **Source of the semantics:** TuneD 2.21.0 as packaged in Ubuntu 24.04. The files read were `profiles/{locator,loader,merger,profile,unit,variables}.py`, `plugins/{base,plugin_script}.py`, `units/manager.py`, `daemon/daemon.py` and `utils/commands.py`. The contract models:
+  - the profile-mode rules: an empty mode means manual when an active profile is set, auto mode is a blocking gap, and an invalid mode refuses the load;
+  - the single post-loaded profile;
+  - the known-name check before `safe_name` filtering;
+  - `/etc/tuned` taking precedence over `/usr/lib/tuned`, with processed files skipped and the search falling through to the next directory;
+  - optional `-name` includes and depth-first `include=` loading;
+  - parsing with the same `configparser` settings TuneD uses;
+  - `${i:PROFILE_DIR}` expansion and `script=` normalization;
+  - TuneD's merge rules: `replace`, `drop`, `enabled`, overwritten regexes and device scripts, and `script` concatenation, which repeats the earlier scripts when a later `[script]` unit sets none;
+  - integer priority ordering;
+  - the `units/manager.py` check order for each enabled unit (`cpuinfo_regex`, then `uname_regex`, then `int(priority)`), where an uncompilable regex or a non-integer priority aborts the whole apply;
+  - relative `script_pre`/`script_post` paths, which never run.
+- **Fail closed:** blocking gaps cover:
+  - an unobserved family or installation state;
+  - an unobserved or unreadable state file, listing or path;
+  - malformed or over-limit input;
+  - auto mode, because the recommended profile is not modeled;
+  - variables in `include=`;
+  - a `[variables] include=` file;
+  - any `exec` function call, including one whose name is assembled from a variable or a nested function result, which is found by substituting `[variables]` values textually before reading each `{f:` name;
+  - a function name that is not a literal word after that substitution, or a `${` that is neither a plain `${NAME}` reference nor a literal `${f:<name>` call, since TuneD re-splits that outer call after a nested function result is spliced in (`${${f:strip:f\:exec\:cmd}}` runs `cmd`) (`function_expansion_not_modeled`);
+  - a reference to a variable the loaded profile does not define, because the daemon's variable store outlives a single load (`variable_undefined`);
+  - `${i:PROFILE_DIR}` in a profile whose directory name contains a backslash, which `re.sub` treats as a template escape (`profile_dir_escape_not_modeled`);
+  - an invalid regex or priority that is only reached when an earlier regex of the same unit matches the host (`apply_refusal_conditional`).
+
+  A parse error, an unknown or missing profile, an invalid priority or regex reached unconditionally, an invalid mode or a multi-word post-loaded profile is reported as `load_refused` with no invocations, because the daemon then loads nothing. CPU/uname regexes and per-device scripts are reported as conditions, not as definite runs.
+- **Validation:** `tests/test_tuned_profiles.py` has 19 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in two worker sessions, so there is no live differential. A second source review of `units/manager.py` found that the check order makes some invalid priorities host-dependent; that is now modeled. A third review of `profiles/variables.py` and `profiles/functions/functions.py` found that `exec` could be assembled from a variable or a nested function result and that `${i:PROFILE_DIR}` is a `re.sub` template; both now fail closed. Run as text over all 38 stock profiles in the 2.21.0 package, the contract resolves 30 completely. The other 8 are blocked by their `[variables] include=` file or a function in `include=`, as before.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change.
+- **Remaining:**
+  - a differential against the real loader;
+  - agent collection of the TuneD files and installation state;
+  - a catalog entry, provenance, persistence, UI and AI classification;
+  - recommended-profile (`recommend.d`) resolution, variable expansion and `tuned-main.conf` `default_instance_priority` collection.
