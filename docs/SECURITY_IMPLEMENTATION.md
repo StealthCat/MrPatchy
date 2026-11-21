@@ -3193,9 +3193,12 @@ Worker checkpoint #1154 keeps the triage contention fixtures within one configur
   - Every other subject was refused before a run started, or is deferred to the
     window reset with no retry attempt used. None is blocked.
   - A second round in the same window sends nothing more.
-- **Preflight bypassed:** the same holds when the claim-time budget preflight
-  admits everything. All ten workers claim work, and the authoritative
-  reservation alone holds the cap.
+- **Preflights bypassed (#1295):** all ten contenders reach authoritative
+  reservation when the advisory claim-time budget and rate checks are
+  bypassed. Runtime reservation and rate admission still run. In
+  `rate_and_daily`, one worker starts after the first provider call has used
+  the rate slot, so coverage of the contended reservation does not depend on
+  which worker runs first.
 - **`rate_and_daily`:** checked with room for one call, because the rate gate
   also spaces admissions.
 - **Processes:** four fresh OS processes with two threads each share one cap.
