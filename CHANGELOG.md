@@ -1,3 +1,7 @@
+## 1.81.2 — 2026-11-21
+
+1. [PR #1244](https://github.com/StealthCat/MrPatchy/pull/1244): Add a pure apcupsd event-script contract for root-run `apccontrol` and UPS event scripts, following the effective `SCRIPTDIR`, daemon event list, shutdown hook and file execution checks. Compatibility: additive module, tests and documentation only; no runtime, schema, collection, API, UI, role, scheduling or response-authorization change. Limits: no live differential against a built apcupsd; startup validity is not modeled, so the contract may over-report; collection, catalog, provenance, persistence, UI and AI wiring remain out of scope.
+
 ## 1.81.1 — 2026-11-21
 
 1. [PR #1250](https://github.com/StealthCat/MrPatchy/pull/1250): Show recorded shared AI holds, eligibility times, reset rechecks and indefinite holds on automatic-plan status in fleet and server Security views; label the verified-pricing blocker consistently. Compatibility: display-only; no API, schema, admission, provider-call, scheduling or response-authorization change. Limits: timing is a page-load/refresh snapshot, not a promised start; worker capacity, server readiness and call-specific budget checks still apply.
