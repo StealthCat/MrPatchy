@@ -52,6 +52,17 @@ module.exports=async(page,capture)=>{
    assert.equal(await page.locator('#modal-body .preflight-summary').getAttribute('data-preflight-state'),'unavailable');
    assert.equal(await page.locator('#confirm-patch').isEnabled(),true);await page.keyboard.press('Escape');
   }finally{await page.unroute('**/api/hosts/*/patch-preflight',failed);}
+  // A preflight response that never settles must not hold the review open (#1262 review): it falls back to unavailable after the bounded wait.
+  let releaseHeld;const heldGate=new Promise(resolve=>{releaseHeld=resolve;});
+  const held=async route=>{await heldGate;await route.fulfill({json:{state:'clear',threshold_percent:10,collected:now,warnings:[],gaps:[]}}).catch(()=>{});};
+  await page.route('**/api/hosts/*/patch-preflight',held);
+  try{
+   const started=Date.now();await page.locator('#patch-selected').click();await page.locator('#confirm-patch').waitFor({timeout:8000});
+   assert.ok(Date.now()-started<8000);
+   assert.equal(await page.locator('#modal-body .preflight-summary').getAttribute('data-preflight-state'),'unavailable');
+   assert.equal(await page.locator('#confirm-patch').isEnabled(),true);
+   assert.match(await page.locator('#modal-body').innerText(),/Approved recovery policy/);await page.keyboard.press('Escape');
+  }finally{releaseHeld();await page.unroute('**/api/hosts/*/patch-preflight',held);}
  }finally{await page.unroute('**/api/hosts/*/packages?*',packages);}
 	 const status=route=>route.fulfill({json:{pending:4,ready:0,hourly_limit:20,recent_attempts:2,worker_seen:now,reason:'backoff',message:'Failed investigations are waiting for the retry interval.',retry_at:now+1200,scoring_deferred:2,scoring_ready:1,scoring_next_at:now+1200,plan_deferred:2,plan_next_at:now+900,plan_deferred_by_action:{'release-plan':{deferred:0,ready:0,next_at:null},'security-plan':{deferred:1,ready:1,next_at:null},'startup-plan':{deferred:1,ready:0,next_at:now+900}},per_server_limit:2,per_server_limit_min:1,per_server_limit_max:4,last_error:'OpenAI API HTTP 429 (insufficient_quota)'}});
  const runs=route=>route.fulfill({json:{items:[{id:'fixture-run',purpose:'triage',state:'error',stage:'failed',started:now,model:'fixture-model',calls:1,message:'OpenAI API HTTP 429 (insufficient_quota); request ID req_fixture'}],more:false}});
