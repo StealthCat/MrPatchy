@@ -6,6 +6,7 @@ import math
 import re
 import time
 import httpx
+from sqlalchemy.exc import DBAPIError
 from . import ai_runs, ai_transport as transport
 
 URL='https://api.openai.com/v1/responses'
@@ -29,6 +30,8 @@ FOLLOW_UP_EVIDENCE_SIZE='follow_up_evidence_size'
 # max_output_tokens budget before completing the JSON. Neither is a key or quota problem.
 MODEL_REFUSAL='model_refusal'
 TOKEN_BUDGET='token_budget'
+BUDGET_CONNECTION_LOST='budget_connection_lost'
+BUDGET_CONNECTION_RETRY_SECONDS=30
 
 
 class AIError(RuntimeError):
@@ -228,7 +231,16 @@ def request(payload,key,timeout=60):
             with ai_runs.measure('provider_admission'):
                 stack.enter_context(ai_policy.provider())
                 ai_provider_backoff.admit()
-                reservation=ai_budget.reserve(payload)
+                try:
+                    reservation=ai_budget.reserve(payload)
+                except DBAPIError as error:
+                    if not error.connection_invalidated:raise
+                    # This call has not reached transport. An uncertain commit
+                    # may still have left a reservation for the next admission.
+                    wait=AIError('Waiting to recheck the AI budget after the database connection was lost. '
+                        'This provider call was held before transmission.', policy_wait=True,cause=BUDGET_CONNECTION_LOST)
+                    wait.retry_after=BUDGET_CONNECTION_RETRY_SECONDS
+                    raise wait from None
                 ai_admission.admit(payload.get('model',''))
             return _request(provider_payload,key,timeout,reservation,encoded_body)
         except Exception:

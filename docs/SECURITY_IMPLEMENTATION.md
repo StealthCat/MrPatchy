@@ -3641,6 +3641,12 @@ that rolls back leaves headroom for one retry. A durable commit whose outcome
 the caller could not confirm leaves the reservation counted and defers a retry
 to the saved reset. The interrupted call sends no provider request in either case.
 
+When the driver reports a lost connection during budget admission, the worker
+keeps the investigation queued for a local recheck after 30 seconds. The
+deferral preserves its retry allowance and does not set a provider backoff.
+The next admission reads the retained ledger again. Other database errors and
+failures after provider transmission retain their existing classification.
+
 SQLite closes the connection and MySQL terminates the test's own database
 session. The test simulates a lost acknowledgement by committing before
 disconnecting. It uses fixture provider replies and leaves database writer
