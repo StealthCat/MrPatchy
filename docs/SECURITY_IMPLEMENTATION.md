@@ -11233,9 +11233,9 @@ they measured, and the comparator could not detect a mixed pair.
   | legacy | 7.04/s | 11.02/s |
   | unthrottled | 7.21/s | 10.41/s |
 
-- **Follow-up:** #1231 covers the daily-cap fixture. The `rate` and
-  `rate_and_daily` modes still need fixtures that measure intentional pacing.
-  Production measurements remain open.
+- **Follow-up:** #1231 covers the daily-cap fixture. #1245 covers the
+  shared-rate fixture, alone and with the daily cap. Production measurements
+  remain open.
 - **Unchanged:** no runtime, admission, provider, schema or
   response-authorization behavior.
 
@@ -11257,7 +11257,30 @@ Existing legacy and unthrottled reports keep their format.
 SQLite and disposable MySQL tests exercise both cross-server and same-server
 workloads. This covers the ordinary capped path with available headroom. Tests
 for exhausted caps, deferral and restart remain separate. Production latency
-and benchmarking rate-paced modes remain open.
+remains unmeasured. #1245 extends the same fixture to rate-paced modes.
+
+
+### Rate-paced triage benchmarks — Roadmap A checkpoint #1245
+
+Use `--control-mode rate` or `--control-mode rate_and_daily` with the disposable
+loopback benchmark. Both fixtures use the recorded shared gate at 1,000
+starts/hour. Each investigation consumes one start and its follow-up can
+continue under that start. The dispatcher observes the persisted next start
+time and waits while earlier work can finish. It refuses to emit a complete
+report if the ledger lacks a start for any investigation.
+
+Reports include the fixture rate, durable starts and dispatch waiting time.
+The waiting interval can overlap earlier investigations, so it is already
+included in total elapsed time. The comparator requires consistent evidence
+and refuses an elapsed time too short for the claimed starts. The combined
+mode checks the synthetic spend ledger as well. Legacy and unthrottled
+reports and retained comparisons are still accepted with their existing
+format.
+
+SQLite and disposable MySQL exercise serial and parallel workloads with
+follow-up calls. These are loopback measurements with deliberate pacing
+and cap headroom. Production speeds and exhausted-cap throughput are outside
+this checkpoint.
 
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
@@ -12309,7 +12332,7 @@ The contract performs no file or bus I/O, starts no helper or command, does not 
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** agent collection of the directories and the certbot installation state, a catalog entry, provenance, persistence, UI and AI classification. Hook commands in `/etc/letsencrypt/renewal/*.conf` and `cli.ini`, and `--config-dir` overrides, are not modeled.
 
-### NUT upsmon command contract — worker checkpoint #1247 (roadmap F)
+### NUT upsmon command contract — Roadmap F checkpoint #1247
 
 - **Outcome:** `app/nut_upsmon.py` is a pure contract with no I/O. It takes the text of `upsmon.conf`, the observed `upsmon` argv and the daemon's `NUT_CONFPATH`, and reports which commands Network UPS Tools' `upsmon` runs through `/bin/sh`, as which user and on which events:
   - `SHUTDOWNCMD` runs as root. In the default split mode it runs in the privileged parent, and under `-p` in the single root process.

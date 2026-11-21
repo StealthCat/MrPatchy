@@ -1,3 +1,11 @@
+## 1.80.0 — 2026-11-21
+
+1. [PR #1248](https://github.com/StealthCat/MrPatchy/pull/1248): Add a pure NUT `upsmon` contract for configured `SHUTDOWNCMD` and `NOTIFYCMD` commands, execution account/process mode, and notify-event flags, with source-derived parsing, secret redaction and fail-closed handling of missing inputs. Compatibility: additive module, tests and documentation only; no runtime, schema, collection, API, UI, role, scheduling or response-authorization change. Limits: startup-fatal `MONITOR`/`MINSUPPLIES`, empty `RUN_AS_USER`, `-P` outcomes and reload behavior can still over-report; account resolution, package provenance, collection, catalog, UI and AI wiring remain out of scope; this is not a safety verdict.
+
+## 1.79.4 — 2026-11-20
+
+1. [PR #1246](https://github.com/StealthCat/MrPatchy/pull/1246): Extend disposable AI triage benchmarks to measure shared-rate pacing alone and with the synthetic daily cap, validating durable starts, dispatcher wait time and elapsed feasibility. Compatibility: benchmark tools and tests only; no application runtime, schema, API, provider, authorization or scheduling change; earlier report formats remain accepted. Limits: loopback fixtures only; production throughput, exhausted-cap behavior and distributed worker timing remain unmeasured.
+
 ## 1.79.3 — 2026-11-20
 
 1. [PR #1240](https://github.com/StealthCat/MrPatchy/pull/1240): Batch fleet automatic AI plan awaiting-incident counts and oldest timestamps into one database statement while preserving per-server caps, truncation, candidate exclusions and fleet totals. Compatibility: no schema, endpoint, permission, provider, scheduling or response-authorization change; per-server and fleet status remain consistent. Older MySQL releases before 8.0.14 use a single bounded UNION statement. Limits: SQLite's JSON aggregation may round the returned `oldest_awaiting_since` float by a few microseconds (the UI displays whole seconds); production response latency is unmeasured.
