@@ -1,3 +1,11 @@
+## 1.81.0 — 2026-11-21
+
+1. [PR #1239](https://github.com/StealthCat/MrPatchy/pull/1239): Add a pure TuneD profile contract for root-run `[script]`, `script_pre` and `script_post` executables, including profile shadowing, include/merge behavior, ordering and host conditions. Compatibility: additive module, tests and documentation only; no runtime, schema, API, collection, UI, role, scheduling or response-authorization change. Limits: no live TuneD differential; `recommend.d`/auto mode, function results, default-priority configuration and several unsupported inputs remain fail-closed or unmodeled; collection, catalog, provenance, persistence, UI and AI wiring are out of scope.
+
+## 1.80.0 — 2026-11-21
+
+1. [PR #1248](https://github.com/StealthCat/MrPatchy/pull/1248): Add a pure NUT `upsmon` contract for configured `SHUTDOWNCMD` and `NOTIFYCMD` commands, execution account/process mode, and notify-event flags, with source-derived parsing, secret redaction and fail-closed handling of missing inputs. Compatibility: additive module, tests and documentation only; no runtime, schema, collection, API, UI, role, scheduling or response-authorization change. Limits: startup-fatal `MONITOR`/`MINSUPPLIES`, empty `RUN_AS_USER`, `-P` outcomes and reload behavior can still over-report; account resolution, package provenance, collection, catalog, UI and AI wiring remain out of scope; this is not a safety verdict.
+
 ## 1.79.4 — 2026-11-20
 
 1. [PR #1246](https://github.com/StealthCat/MrPatchy/pull/1246): Extend disposable AI triage benchmarks to measure shared-rate pacing alone and with the synthetic daily cap, validating durable starts, dispatcher wait time and elapsed feasibility. Compatibility: benchmark tools and tests only; no application runtime, schema, API, provider, authorization or scheduling change; earlier report formats remain accepted. Limits: loopback fixtures only; production throughput, exhausted-cap behavior and distributed worker timing remain unmeasured.
