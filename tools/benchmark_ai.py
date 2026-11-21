@@ -14,8 +14,10 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
+from copy import deepcopy
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
@@ -30,10 +32,22 @@ DEFAULT_FIXTURE_RATE_PER_HOUR = 1000
 MAX_FIXTURE_PACING_SECONDS = 300
 PACED_MODES = ('rate', 'rate_and_daily')
 PERSISTENCE_TIMING = re.compile(r'([a-z ]+): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
+FIXTURE_RESULT = {
+    'risk': 'low', 'explanation': 'Synthetic complete assessment',
+    'recommended_checks': 'None', 'requested_checks': [],
+}
+FIXTURE_FOLLOW_UP = {
+    'identity_verified': True, 'sha256': 'a' * 64,
+    'executable': {'path': '/fixture/artifact', 'verified': True},
+}
 
 
 class BenchmarkTimingError(ValueError):
     """The disposable workload did not retain complete timing evidence."""
+
+class BenchmarkAssessmentError(ValueError):
+    """The disposable workload did not retain its expected assessments."""
+
 
 
 class DatabaseRefused(Exception):
@@ -159,11 +173,12 @@ def claim_empty_mysql(url):
             'another benchmark run holds the benchmark MySQL database; wait for it to finish (nothing was changed)')
     return MySQLClaim(engine, connection, lock_name, version)
 
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+
 def workload_fingerprint(provider_requests, ssh_requests):
     """Hash the observed synthetic requests independently of dispatch order."""
-    def canonical(value):
-        return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
-
     provider = []
     for request in provider_requests:
         evidence = json.loads(request['input'])
@@ -202,6 +217,52 @@ def collect_persisted_timings(events, expected_persistence):
         if missing:
             raise BenchmarkTimingError(f'{stage}: missing {len(missing)} timing sample(s)')
     return samples
+
+
+def assessment_coverage(assessments, observations, runs, follow_up_subjects, ai, provider_requests):
+    """Verify the retained result and input trail after the timed workload."""
+    observations_by_subject = {row.id: row for row in observations}
+    runs_by_subject = {run.subject: run for run in runs}
+    seen = set()
+    saved_evidence = Counter()
+    policy = ai.investigation_policy()
+    for assessment in assessments:
+        subject = assessment.subject
+        observation = observations_by_subject.get(subject)
+        run = runs_by_subject.get(subject)
+        if observation is None or run is None:
+            raise BenchmarkAssessmentError('Assessment persistence: unexpected subject.')
+        if subject in seen:
+            raise BenchmarkAssessmentError('Assessment persistence: duplicate subject.')
+        seen.add(subject)
+        if (assessment.run_id, assessment.host_id, assessment.source, assessment.model) != (
+                run.id, observation.host_id, 'ai', FIXTURE_MODEL):
+            raise BenchmarkAssessmentError('Assessment persistence: run, host, source or model differs.')
+        evidence = observation.evidence
+        if (not isinstance(evidence, dict) or assessment.result != FIXTURE_RESULT
+                or assessment.snapshot != evidence):
+            raise BenchmarkAssessmentError('Assessment persistence: final result or evidence snapshot differs.')
+
+        initial = {key: value for key, value in evidence.items() if key != 'investigation'}
+        expected_inputs = [{'evidence': ai.investigation_input(initial), 'policy': policy}]
+        if subject in follow_up_subjects:
+            follow_up = evidence.get('investigation')
+            if not isinstance(follow_up, dict) or follow_up.get('details') != FIXTURE_FOLLOW_UP:
+                raise BenchmarkAssessmentError('Assessment persistence: expected follow-up evidence is missing or changed.')
+            expected_inputs.append({'evidence': ai.investigation_input(evidence), 'policy': policy})
+        elif 'investigation' in evidence:
+            raise BenchmarkAssessmentError('Assessment persistence: unexpected follow-up evidence.')
+        if assessment.inputs != expected_inputs:
+            raise BenchmarkAssessmentError('Assessment persistence: retained AI input stages differ.')
+        saved_evidence.update(canonical(stage['evidence']) for stage in assessment.inputs)
+
+    if missing := observations_by_subject.keys() - seen:
+        raise BenchmarkAssessmentError(f'Assessment persistence: missing {len(missing)} assessment(s).')
+    sent_evidence = Counter(canonical(json.loads(request['input'])) for request in provider_requests)
+    if saved_evidence != sent_evidence:
+        raise BenchmarkAssessmentError('Assessment persistence: retained evidence differs from provider requests.')
+    return {'subjects': len(seen), 'input_stages': sum(saved_evidence.values()),
+            'follow_up_subjects': len(follow_up_subjects)}
 
 
 def capped_fixture_summary(session, budget_entry, receipts, settings):
@@ -330,7 +391,7 @@ def main():
         for name in list(os.environ):
             if name.lower().endswith('_proxy'):os.environ.pop(name)
         from sqlalchemy import insert
-        from app import ai, ai_admission, ai_budget, ai_policy, ai_pricing, worker, ai_runs
+        from app import ai, ai_admission, ai_assessments, ai_budget, ai_policy, ai_pricing, worker, ai_runs
         from app.db import init, Session, Host, Setting, Behavior, engine, config
         from app.security import seal
         if args.database == 'mysql':
@@ -368,7 +429,7 @@ def main():
                     peak_provider_requests = max(peak_provider_requests, active_provider_requests)
                 try:
                     evidence = json.loads(payload['input']); time.sleep(args.provider_delay_ms/1000)
-                    result = {'risk':'low','explanation':'Synthetic complete assessment','recommended_checks':'None',
+                    result = {**FIXTURE_RESULT,
                               'requested_checks':['executable'] if evidence['two_stage'] and 'investigation' not in evidence else []}
                     response = {'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(result)}]}],
                                 'usage':{'input_tokens':100,'output_tokens':20,'output_tokens_details':{'reasoning_tokens':5}}}
@@ -407,7 +468,7 @@ def main():
             samples['ssh_evidence'].append((time.perf_counter()-started)*1000)
             _, request = a
             ssh_requests.append(request)
-            return {'identity_verified':True,'sha256':'a'*64,'executable':{'path':'/fixture/artifact','verified':True}}
+            return deepcopy(FIXTURE_FOLLOW_UP)
         worker.ssh.call = ssh_fixture
         original_assess = worker._assess_behavior
         def admission(s,row,*a):
@@ -496,6 +557,9 @@ def main():
                         'dispatch_wait_seconds': round(wait_seconds, 3),
                     }
                 follow_up_subjects = {subjects[index] for index in follow_up_indices}
+                retained_assessments = assessment_coverage(
+                    s.query(ai_assessments.Assessment).all(), rows, runs, follow_up_subjects, ai, requests,
+                )
                 expected_persistence = {
                     'result_persistence': {run.id for run in runs},
                     'evidence_persistence': {run.id for run in runs if run.subject in follow_up_subjects},
@@ -517,6 +581,7 @@ def main():
                 'retained_history_rows':retained_history_rows,'connections':len(connections),
                 'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
+                'persisted_assessments':retained_assessments,
                 'ai_control_mode':control_mode,
                 **({'fixture_budget': fixture_budget} if capped else {}),
                 **({'fixture_rate': fixture_rate} if paced else {}),
@@ -536,5 +601,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (DatabaseRefused, BenchmarkTimingError) as refusal:
+    except (DatabaseRefused, BenchmarkTimingError, BenchmarkAssessmentError) as refusal:
         sys.exit(str(refusal))
