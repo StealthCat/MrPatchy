@@ -7318,6 +7318,29 @@ the same transaction that records the job state.
 
 Milestones 2–4 remain open.
 
+Worker checkpoint (issue #1257, #342 alert-producer slice): the advisory resource
+attention codes in the endpoint-agent view now reach the notification center. Each
+30-second `collect_alerts()` tick publishes one admin-only `operations`/`resource-attention`
+event (medium, linking to `#servers/<id>/agent`) per enabled, enrolled server whose
+**fresh** telemetry reports `disk-space-low`, `disk-inodes-low` or `memory-low`
+(10% or less available) or `clock-unsynchronized`.
+
+- The reason text is fixed and names only the affected categories. Changing
+  percentages add no revision; a changed category set adds one.
+- Hysteresis: a capacity category already in the active event stays until it is
+  above 15% available, so values hovering around 10% do not flap.
+- Unknown is not recovery. Stale, missing, future-dated or malformed telemetry, or a
+  metric that is now unknown, leaves the active event unchanged. Telemetry loss is
+  reported by its own producer.
+- Disabled and deleted servers resolve through the shared operational path.
+  Enrolling servers publish nothing.
+- Notification-only: no SMTP/webhook outbox alert. It never changes agent health
+  classification, makes an AI call, frees space, adjusts clocks or authorizes any
+  response. No schema, route or UI change.
+
+Remaining in #342: certificate expiry, metric history, configurable thresholds,
+preflight blockers and SMART/NVMe or kernel-error signals.
+
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
