@@ -164,15 +164,19 @@ def _deployment_type(status):
     return None
 
 
+def telemetry_state(telemetry, now):
+    """Return (state, collected) for retained telemetry: fresh, stale, missing or invalid (future-dated)."""
+    collected = _timestamp(telemetry.get('collected') if isinstance(telemetry, dict) else None)
+    if collected is not None and collected > now + CLOCK_SKEW_SECONDS:
+        return 'invalid', collected
+    if collected is None:
+        return 'missing', None
+    return ('stale' if now - collected > TELEMETRY_STALE_SECONDS else 'fresh'), collected
+
+
 def classify(host, status, now):
     """Classify one server's agent from retained records. Pure; returns redacted fields only."""
-    collected = _timestamp((host.telemetry or {}).get('collected') if isinstance(host.telemetry, dict) else None)
-    if collected is not None and collected > now + CLOCK_SKEW_SECONDS:
-        telemetry = 'invalid'
-    elif collected is None:
-        telemetry = 'missing'
-    else:
-        telemetry = 'stale' if now - collected > TELEMETRY_STALE_SECONDS else 'fresh'
+    telemetry, collected = telemetry_state(host.telemetry, now)
     status = status if isinstance(status, dict) else None
     state = status.get('state') if status else None
     state = state if state in VERIFICATION_STATES else None

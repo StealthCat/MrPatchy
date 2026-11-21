@@ -1,3 +1,7 @@
+## 1.83.0 — 2026-11-21
+
+1. [PR #1258](https://github.com/StealthCat/MrPatchy/pull/1258): Add fixed-text, admin-only operational notifications for fresh agent reports of low free disk, inodes, memory or an unsynchronized kernel clock; preserve active notifications through unknown or stale telemetry and apply 15% capacity-clear hysteresis. Compatibility: notification-only, with no schema, route, UI, auth, scheduling or agent-health classification change; no SMTP/webhook alert and no AI call. Limits: thresholds remain fixed at 10% alert and 15% clear; other #342 resource signals, including certificate expiry, history, configurable thresholds, preflight blockers and SMART/NVMe or kernel-error signals, remain out of scope. No remediation or response authorization.
+
 ## 1.82.0 — 2026-11-21
 
 1. [PR #1252](https://github.com/StealthCat/MrPatchy/pull/1252): Add an administrator-only fleet view and bounded release for failed automatic AI plan attempts across enabled servers; use the existing eligibility predicate, audit marking and worker gates. Compatibility: new endpoints and display/action only; no schema, admission, reservation, approval, notification or response-authorization change, and per-server counts remain unchanged. Limits: release sends no provider request and enqueues no work; startup-change plans are not automatic and are not covered.
