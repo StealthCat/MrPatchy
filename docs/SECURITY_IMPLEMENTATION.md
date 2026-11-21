@@ -3886,6 +3886,16 @@ unavailable and never implies a plan will start.
 - **Limitations:** this is a point-in-time read for one server. A fleet-wide
   plan queue view and startup-change plans (never automatic) are not covered.
 
+### Fail-closed pause in shared AI queues — Roadmap A/C checkpoint #1309
+
+The shared SQLite/MySQL filter now agrees with the per-server status and the
+outbound provider check. A missing policy or a policy object with no
+`paused` field is resumed by default. An explicit JSON false resumes it.
+Other stored field types and non-object policies are paused. Fleet counts,
+server backlog status and work selection use the same filter. A malformed
+server's work stays queued while other eligible servers can claim work.
+Administrators can still repair the saved policy through the audited control.
+
 ### Per-server process-triage queue breakdown — worker checkpoint #975
 
 `GET /api/investigation-status` reports fleet-wide totals only. When the queue
@@ -3949,16 +3959,6 @@ unthrottled by Mr Patchy, or legacy attempts against the legacy hourly limit.
 Previously it always advertised the legacy investigation limit, which only
 applies in legacy mode. This is display-only: admission, spend, pause, lifecycle
 and authorization behavior are unchanged. A browser regression covers every mode.
-
-### Fail-closed pause in shared AI queues — Roadmap A/C checkpoint #1309
-
-The shared SQLite/MySQL filter now agrees with the per-server status and the
-outbound provider check. A missing policy or a policy object with no
-`paused` field is resumed by default. An explicit JSON false resumes it.
-Other stored field types and non-object policies are paused. Fleet counts,
-server backlog status and work selection use the same filter. A malformed
-server's work stays queued while other eligible servers can claim work.
-Administrators can still repair the saved policy through the audited control.
 
 ### SSH evidence delay in the triage benchmark — worker checkpoint #524
 
