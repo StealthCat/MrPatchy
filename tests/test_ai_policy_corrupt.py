@@ -59,6 +59,22 @@ def test_administrator_can_repair_a_bad_revision_without_resuming_ai(admin):
         assert s.scalar(select(Audit.id).where(Audit.action == 'server AI policy repaired'))
 
 
+def test_api_save_with_resume_on_a_repair_revision_is_audited_as_resume(admin):
+    # The panel always repairs to paused; the API still accepts an audited
+    # resume against a repair revision, as documented in SECURITY_IMPLEMENTATION.
+    seed()
+    corrupt({'paused': 'fixture-private-value', 'revision': ['not a revision']})
+    policy = admin.get(BASE).json()
+    assert policy['needs_repair']
+    resumed = admin.put(BASE, json={'paused': False, 'expected_revision': policy['revision'],
+                                    'reason': 'Replace the malformed policy and resume server AI'})
+    assert resumed.status_code == 200
+    assert resumed.json()['paused'] is False and resumed.json()['needs_repair'] is False
+    with Session() as s:
+        assert s.scalar(select(Audit.id).where(Audit.action == 'server AI resumed'))
+        assert not s.scalar(select(Audit.id).where(Audit.action == 'server AI policy repaired'))
+
+
 def test_one_corrupt_policy_does_not_stop_automatic_plans_for_other_servers(admin, monkeypatch):
     now = seed()
     with Session() as s:

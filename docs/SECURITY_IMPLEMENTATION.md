@@ -4162,7 +4162,10 @@ browser, full-suite and coordinator integration checks remain required.
 
 The administrator's server AI panel distinguishes a malformed policy from an
 intentional pause. The repair action opens the existing audited save flow and
-writes a valid paused policy. Resuming remains a separate action after repair.
+writes a valid paused policy; the panel offers resuming only as a separate
+action after repair. The server AI API itself is unchanged and still accepts an
+audited administrator save with `paused: false` against a repair revision,
+which is recorded as `server AI resumed`, as it was before this checkpoint.
 The panel does not render the malformed value. A malformed revision that
 cannot be submitted to the existing API is represented by an opaque value
 derived from the stored policy, so a later change still rejects a stale save.
