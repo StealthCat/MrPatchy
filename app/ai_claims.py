@@ -112,6 +112,10 @@ FREE_HIT_SCAN=50
 # Per process; admission runs under the distributed ``ai-triage`` lock, so
 # passes in one process never overlap. ``None`` starts from the oldest subject.
 _free_hit_cursor=None
+# Fleet candidate rows that existed when the cursor was recorded. Candidates are
+# never deleted or reactivated, so a larger count means a newly published one.
+# Revocation removes hits and never needs a restart.
+_free_hit_candidates=None
 
 
 def _elect_host(s,election_filters,live_counts,signature,now):
@@ -156,9 +160,12 @@ def _free_hit(s,model,election_filters):
     at most ``FREE_HIT_SCAN`` subjects. A pass without a hit records where it
     stopped, and the next pass resumes after that subject and wraps to the oldest,
     so a hit behind any number of older paid subjects is reached in a bounded
-    number of passes (#1241). A hit restarts the next pass from the oldest.
+    number of passes (#1241). A hit restarts the next pass from the oldest. A
+    candidate published since the cursor was recorded makes the next pass probe
+    from the oldest too, without moving the cursor back, because it can turn
+    subjects behind the cursor into exact hits ahead of newer ones (#1291).
     """
-    global _free_hit_cursor
+    global _free_hit_cursor,_free_hit_candidates
     from . import known_good
     key=lambda row:(row.first_seen,row.id)
 
@@ -171,8 +178,14 @@ def _free_hit(s,model,election_filters):
                 Behavior.first_seen,Behavior.id).limit(limit)))
         return sorted(rows,key=key)[:limit]
 
+    candidates=s.scalar(select(func.count()).select_from(known_good.Entry))
     cursor=_free_hit_cursor
-    if cursor is None or cursor[0] is None:
+    if cursor is not None and cursor[0] is None:cursor=None
+    # A candidate published since the cursor was recorded can turn subjects
+    # behind it into exact hits; probe from the oldest so they win (#1291).
+    restart=(cursor is not None and _free_hit_candidates is not None
+        and candidates>_free_hit_candidates)
+    if cursor is None or restart:
         probe=window(limit=FREE_HIT_SCAN)
     else:
         seen,subject=cursor
@@ -183,9 +196,15 @@ def _free_hit(s,model,election_filters):
             probe+=window(or_(Behavior.first_seen.is_(None),~after),limit=FREE_HIT_SCAN-len(probe))
     for row in probe:
         if known_good.exact_hit_available(s,row,model):
-            _free_hit_cursor=None
+            _free_hit_cursor=_free_hit_candidates=None
             return row
-    _free_hit_cursor=key(probe[-1]) if probe else None
+    last=key(probe[-1]) if probe else None
+    if restart and probe and (last[0] is None or last<cursor):
+        # A restart never rewinds the rotation, so the #1241 bound still holds
+        # apart from one extra pass per publication.
+        last=cursor
+    _free_hit_cursor=last
+    _free_hit_candidates=candidates if last is not None else None
     return None
 
 

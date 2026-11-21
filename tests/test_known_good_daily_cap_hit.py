@@ -289,6 +289,7 @@ def test_revocation_after_claim_cannot_send_during_provider_backoff(client, prov
 @pytest.fixture
 def fresh_cursor(monkeypatch):
     monkeypatch.setattr(ai_claims, '_free_hit_cursor', None, raising=False)
+    monkeypatch.setattr(ai_claims, '_free_hit_candidates', None, raising=False)
 
 
 @pytest.fixture
@@ -360,4 +361,94 @@ def test_a_stale_cursor_still_probes_the_oldest_subjects(client, provider, fresh
     seed(first_seen=2)
     worker.investigate_one()
     assert reused() and held('older-miss')
+    assert provider.bodies == []
+
+
+def _publish_candidate_for_misses(digest='f' * 64, assessment='assessment-late'):
+    """Publish a new fleet candidate; the default matches every ``seed(hit=False)`` artifact."""
+    snapshot = complete()
+    snapshot['sha256'] = digest
+    snapshot['investigation']['details']['known_good_context']['artifact']['sha256'] = digest
+    with Session() as s:
+        source = retained(id=assessment, subject='behavior-' + assessment, snapshot=snapshot)
+        source.model = MODEL
+        source.policy_hash = ai_assessments.digest([ai.investigation_policy()])
+        s.add(source)
+        s.flush()
+        assert known_good.publish(s, source)['published']
+        s.commit()
+
+
+def test_a_new_candidate_restarts_the_rotation_so_the_oldest_new_hit_is_claimed_first(
+        client, provider, fresh_cursor, probes, monkeypatch):
+    # #1291: after a pass without a hit, a candidate published before the next
+    # pass makes subjects behind the cursor exact hits. The oldest must win.
+    monkeypatch.setattr(ai_claims, 'FREE_HIT_SCAN', 2)
+    configure()
+    exhaust()
+    misses = ['miss-%d' % index for index in range(4)]
+    for index, subject in enumerate(misses):
+        seed(hit=False, subject=subject, host='host-three', first_seen=10 + index)
+
+    worker.investigate_one()
+    assert probes == ['miss-0', 'miss-1'] and ai_claims._free_hit_cursor is not None
+    assert all(held(subject) for subject in misses)
+
+    _publish_candidate_for_misses()
+    worker.investigate_one()
+
+    assert reused('miss-0')
+    assert all(held(subject) for subject in misses[1:])
+    # Restarted from the oldest: its own probe, then the re-check under the
+    # host queue gate. No newer subject was probed.
+    assert probes[2:] == ['miss-0', 'miss-0']
+    assert provider.bodies == [] and [status for status, _ in ledger()] == ['settled']
+    assert ai_claims._free_hit_cursor is None
+
+
+def test_without_a_new_candidate_the_rotation_still_resumes_after_the_cursor(
+        client, provider, fresh_cursor, probes, monkeypatch):
+    # Control for #1291: an unchanged candidate set keeps the #1241 rotation,
+    # and a revocation (which never creates a hit) does not restart it.
+    monkeypatch.setattr(ai_claims, 'FREE_HIT_SCAN', 2)
+    configure()
+    exhaust()
+    for index in range(4):
+        seed(hit=False, subject='miss-%d' % index, host='host-three', first_seen=10 + index)
+
+    worker.investigate_one()
+    _revoke_only_candidate()
+    worker.investigate_one()
+    assert probes == ['miss-0', 'miss-1']  # no active candidate: no probe pass at all
+    # Reopen the probe path without publishing a row. The product never
+    # reactivates a candidate; this only shows the count, not activity, drives
+    # the restart.
+    with Session() as s:
+        s.query(known_good.Entry).update({'active': True})
+        s.commit()
+    worker.investigate_one()
+    assert probes == ['miss-0', 'miss-1', 'miss-2', 'miss-3']
+    assert ai_claims._free_hit_cursor == (13, 'miss-3')
+    assert provider.bodies == []
+
+
+def test_a_restart_without_a_hit_does_not_rewind_the_rotation(client, provider, fresh_cursor, probes, monkeypatch):
+    # #1291: an unrelated publication costs one pass from the oldest, and the
+    # rotation then continues where it stopped instead of starting over.
+    monkeypatch.setattr(ai_claims, 'FREE_HIT_SCAN', 2)
+    configure()
+    exhaust()
+    for index in range(6):
+        seed(hit=False, subject='miss-%d' % index, host='host-three', first_seen=10 + index)
+
+    worker.investigate_one()
+    worker.investigate_one()
+    assert ai_claims._free_hit_cursor == (13, 'miss-3')
+    _publish_candidate_for_misses('e' * 64, 'assessment-unrelated')  # matches no subject
+    worker.investigate_one()
+    assert probes[4:] == ['miss-0', 'miss-1']  # restart pass from the oldest
+    assert ai_claims._free_hit_cursor == (13, 'miss-3')  # not rewound
+    worker.investigate_one()
+    assert probes[6:] == ['miss-4', 'miss-5']  # the rotation resumes after the cursor
+    assert all(held('miss-%d' % index) for index in range(6))
     assert provider.bodies == []
