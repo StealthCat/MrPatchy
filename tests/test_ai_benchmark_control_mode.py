@@ -69,19 +69,19 @@ def test_reports_from_different_modes_are_refused(baseline_mode, candidate_mode)
         compare(baseline, candidate)
 
 
-@pytest.mark.parametrize('value', ['rate', 'rate_and_daily', 'Unthrottled', '', None, 1, ['legacy']])
+@pytest.mark.parametrize('value', ['Unthrottled', '', None, 1, ['legacy']])
 def test_unknown_or_malformed_modes_are_refused(value):
-    with pytest.raises(ComparisonError, match='candidate.ai_control_mode must be one of legacy, unthrottled, daily_cap'):
+    with pytest.raises(ComparisonError, match='candidate.ai_control_mode must be one of legacy, unthrottled, daily_cap, rate, rate_and_daily'):
         compare(report(ai_control_mode='legacy'), report('parallel', 4, ai_control_mode=value))
 
 
 def test_comparator_modes_match_the_benchmark_choices():
     help_text = run('--help', timeout=30).stdout
-    assert '--control-mode {legacy,unthrottled,daily_cap}' in help_text
-    assert compare_ai_benchmarks.CONTROL_MODES == ('legacy', 'unthrottled', 'daily_cap')
+    assert '--control-mode {legacy,unthrottled,daily_cap,rate,rate_and_daily}' in help_text
+    assert compare_ai_benchmarks.CONTROL_MODES == ('legacy', 'unthrottled', 'daily_cap', 'rate', 'rate_and_daily')
 
 
-@pytest.mark.parametrize('value', ['rate', 'rate_and_daily', 'LEGACY', ''])
+@pytest.mark.parametrize('value', ['Rate', 'LEGACY', ''])
 def test_benchmark_refuses_unsupported_modes_before_starting(value):
     result = run('--control-mode', value, timeout=30)
     assert result.returncode == 2 and result.stdout == ''
@@ -147,7 +147,7 @@ def test_capped_comparison_requires_complete_synthetic_settlement(budget):
 
 
 def test_budget_evidence_cannot_be_attached_to_an_uncapped_report():
-    with pytest.raises(ComparisonError, match='fixture_budget applies only to daily_cap'):
+    with pytest.raises(ComparisonError, match='fixture_budget applies only to capped modes'):
         compare(report(), report('parallel', 4, fixture_budget=capped_budget()))
 
 
@@ -168,3 +168,45 @@ def test_daily_cap_serial_and_parallel_settle_all_calls_without_changing_the_wor
     assert uncapped['workload_fingerprint'] == parallel['workload_fingerprint']
     with pytest.raises(ComparisonError, match='ai_control_mode differs'):
         compare(uncapped, parallel)
+
+
+@pytest.mark.parametrize('evidence', [
+    None, {'starts_per_hour': 999, 'admitted_starts': 8, 'dispatch_wait_seconds': 25},
+    {'starts_per_hour': 1000, 'admitted_starts': 7, 'dispatch_wait_seconds': 25},
+    {'starts_per_hour': 1000, 'admitted_starts': 8, 'dispatch_wait_seconds': 27},
+])
+def test_paced_comparisons_refuse_missing_or_inconsistent_evidence(evidence):
+    pacing = {'starts_per_hour': 1000, 'admitted_starts': 8, 'dispatch_wait_seconds': 25}
+    common = {'ai_control_mode': 'rate', 'elapsed_seconds': 26, 'runs_per_second': 0.308}
+    with pytest.raises(ComparisonError, match=r'candidate\.fixture_rate'):
+        compare(report(**common, fixture_rate=pacing),
+                report('parallel', 4, **common, fixture_rate=evidence))
+
+
+def test_rate_evidence_is_refused_when_the_report_could_not_have_waited_for_all_starts():
+    pacing = {'starts_per_hour': 1000, 'admitted_starts': 8, 'dispatch_wait_seconds': 0.5}
+    with pytest.raises(ComparisonError, match='elapsed time cannot contain the recorded pacing'):
+        compare(report(ai_control_mode='rate', fixture_rate=pacing), report('parallel', 4))
+    with pytest.raises(ComparisonError, match='fixture_rate applies only to paced modes'):
+        compare(report(fixture_rate=pacing), report('parallel', 4))
+
+
+@pytest.mark.parametrize('mode', ['rate', 'rate_and_daily'])
+def test_serial_and_parallel_fixtures_wait_for_real_paced_starts(mode):
+    serial = _benchmark(1, '--control-mode', mode, '--same-server')
+    parallel = _benchmark(4, '--control-mode', mode, '--same-server')
+    for sample in (serial, parallel):
+        pacing = sample['fixture_rate']
+        assert pacing['starts_per_hour'] == 1000 and pacing['admitted_starts'] == 4
+        assert 0 < pacing['dispatch_wait_seconds'] <= sample['elapsed_seconds']
+        assert sample['elapsed_seconds'] >= 10.8
+        assert sample['completed_subjects'] == 4 and sample['errors'] == 0
+        assert sample['provider_calls'] == 6 and sample['stages']['ssh_evidence']['count'] == 2
+        if mode == 'rate_and_daily':
+            assert sample['fixture_budget']['settled_calls'] == 6
+        else:
+            assert 'fixture_budget' not in sample
+    result = compare(serial, parallel)
+    assert result['capability_equivalent'] is True
+    for side, sample in (('baseline', serial), ('candidate', parallel)):
+        assert result[side]['fixture_rate'] == sample['fixture_rate']

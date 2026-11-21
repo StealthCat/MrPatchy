@@ -24,7 +24,7 @@ authorization are unchanged and plans remain manual-only.
 """
 import time
 
-from sqlalchemy import literal, select
+from sqlalchemy import JSON, func, literal, select, type_coerce, union_all
 from sqlalchemy.orm import aliased
 
 from . import ai_control_status, ai_policy, host_lifecycle, incidents
@@ -65,16 +65,47 @@ def _readiness(session, host_ids, cfg):
     return states
 
 
-def _awaiting(session, host_id):
-    query = (select(incidents.Incident.updated)
-             .where(incidents.Incident.host_id == host_id, *incidents.awaiting_auto_plan(),
-                    incidents.automatic_candidate_sql())
-             .order_by(incidents.Incident.updated, incidents.Incident.id)
-             .limit(AWAITING_LIMIT + 1))
-    rows = list(session.scalars(query))
-    truncated = len(rows) > AWAITING_LIMIT
-    rows = rows[:AWAITING_LIMIT]
-    return len(rows), truncated, (float(rows[0]) if rows else None)
+def _awaiting_candidates(host_id):
+    incident = incidents.Incident
+    return (
+        select(incident.updated)
+        .where(incident.host_id == host_id, *incidents.awaiting_auto_plan(),
+               incidents.automatic_candidate_sql())
+        .order_by(incident.updated, incident.id)
+        .limit(AWAITING_LIMIT + 1)
+    )
+
+
+def _awaiting_query(host_ids, *, outer_references):
+    # Cap the rows fed to each aggregate and include one extra match to detect truncation.
+    if not outer_references:
+        # MySQL before 8.0.14 cannot correlate a derived table. Each union
+        # arm keeps the same limit without referring to an outer query.
+        arms = []
+        for host_id in host_ids:
+            bounded = _awaiting_candidates(host_id).subquery()
+            arms.append(select(literal(host_id), func.count(), func.min(bounded.c.updated)))
+        return union_all(*arms) if len(arms) > 1 else arms[0]
+
+    bounded = _awaiting_candidates(Host.id).correlate(Host).subquery()
+    # Aggregate count and oldest in one bounded scan, returning both in a scalar.
+    summary = select(func.json_array(func.count(), func.min(bounded.c.updated))).scalar_subquery()
+    return select(Host.id, type_coerce(summary, JSON)).where(Host.id.in_(host_ids))
+
+
+def _awaiting(session, host_ids):
+    """Read capped counts and oldest matching timestamps in one statement."""
+    if not host_ids:
+        return {}
+    dialect = session.connection().dialect
+    outer_references = dialect.name != 'mysql' or dialect.server_version_info >= (8, 0, 14)
+    rows = session.execute(_awaiting_query(host_ids, outer_references=outer_references))
+    values = ((host_id, *summary) for host_id, summary in rows) if outer_references else rows
+    return {
+        host_id: (min(found, AWAITING_LIMIT), found > AWAITING_LIMIT,
+                  float(first) if first is not None else None)
+        for host_id, found, first in values
+    }
 
 
 def _job(state, created):
@@ -120,8 +151,8 @@ def _pacing(session, cfg, now):
     return {'mode': cfg['ai_control_mode'], 'limit': None, 'used': None, 'remaining': None, 'next_at': None}
 
 
-def _host(session, host_id, state, jobs):
-    awaiting, truncated, oldest = _awaiting(session, host_id)
+def _host(host_id, state, jobs, summaries):
+    awaiting, truncated, oldest = summaries.get(host_id, (0, False, None))
     active, latest = jobs.get(host_id, (None, None))
     return {
         'enabled': state != 'off',
@@ -142,7 +173,8 @@ def status(session, host_id, now=None):
     policy = row.value if row and isinstance(row.value, dict) else {}
     jobs = _plan_jobs(session, [host_id])
     state = _readiness(session, [host_id], cfg)[host_id] if policy.get('auto_ai_plan') else 'off'
-    return {'generated_at': now, **_host(session, host_id, state, jobs), 'pacing': _pacing(session, cfg, now)}
+    summaries = _awaiting(session, [host_id])
+    return {'generated_at': now, **_host(host_id, state, jobs, summaries), 'pacing': _pacing(session, cfg, now)}
 
 
 def fleet(session, now=None):
@@ -165,7 +197,8 @@ def fleet(session, now=None):
     host_ids = [host_id for host_id, _ in listed]
     jobs = _plan_jobs(session, host_ids)
     states = _readiness(session, host_ids, cfg)
-    items = [{'host_id': host_id, 'host_name': name, **_host(session, host_id, states[host_id], jobs)}
+    summaries = _awaiting(session, host_ids)
+    items = [{'host_id': host_id, 'host_name': name, **_host(host_id, states[host_id], jobs, summaries)}
              for host_id, name in listed]
     return {
         'generated_at': now,

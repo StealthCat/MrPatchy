@@ -11233,9 +11233,9 @@ they measured, and the comparator could not detect a mixed pair.
   | legacy | 7.04/s | 11.02/s |
   | unthrottled | 7.21/s | 10.41/s |
 
-- **Follow-up:** #1231 covers the daily-cap fixture. The `rate` and
-  `rate_and_daily` modes still need fixtures that measure intentional pacing.
-  Production measurements remain open.
+- **Follow-up:** #1231 covers the daily-cap fixture. #1245 covers the
+  shared-rate fixture, alone and with the daily cap. Production measurements
+  remain open.
 - **Unchanged:** no runtime, admission, provider, schema or
   response-authorization behavior.
 
@@ -11257,7 +11257,30 @@ Existing legacy and unthrottled reports keep their format.
 SQLite and disposable MySQL tests exercise both cross-server and same-server
 workloads. This covers the ordinary capped path with available headroom. Tests
 for exhausted caps, deferral and restart remain separate. Production latency
-and benchmarking rate-paced modes remain open.
+remains unmeasured. #1245 extends the same fixture to rate-paced modes.
+
+
+### Rate-paced triage benchmarks — Roadmap A checkpoint #1245
+
+Use `--control-mode rate` or `--control-mode rate_and_daily` with the disposable
+loopback benchmark. Both fixtures use the recorded shared gate at 1,000
+starts/hour. Each investigation consumes one start and its follow-up can
+continue under that start. The dispatcher observes the persisted next start
+time and waits while earlier work can finish. It refuses to emit a complete
+report if the ledger lacks a start for any investigation.
+
+Reports include the fixture rate, durable starts and dispatch waiting time.
+The waiting interval can overlap earlier investigations, so it is already
+included in total elapsed time. The comparator requires consistent evidence
+and refuses an elapsed time too short for the claimed starts. The combined
+mode checks the synthetic spend ledger as well. Legacy and unthrottled
+reports and retained comparisons are still accepted with their existing
+format.
+
+SQLite and disposable MySQL exercise serial and parallel workloads with
+follow-up calls. These are loopback measurements with deliberate pacing
+and cap headroom. Production speeds and exhausted-cap throughput are outside
+this checkpoint.
 
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
@@ -11923,6 +11946,23 @@ latency is unmeasured. This status work leaves scheduling, provider admission
 and response authorization intact.
 
 
+### Batch awaiting-incident summaries — Roadmap A checkpoint #1238
+
+The fleet automatic AI plan status now reads per-server counts and oldest
+timestamps in one database statement. Each listed host's subquery applies
+the same automatic-candidate exclusions and its existing limit before
+aggregating. An extra qualifying row still signals truncation. The
+single-server status uses the same summary and the fleet totals still
+describe the listed servers only. SQLite and newer MySQL versions correlate
+the bounded read. MySQL releases before 8.0.14 use one UNION statement
+with an independent bounded read per server.
+
+The SQLite fleet fixture used one incident-summary statement with both 12
+and 100 hosts, down from 12 and 100. Both layouts now use 12 total status
+reads. The measured improvement is in database round trips. Production load
+time remains unmeasured. Scheduling, provider admission and response
+authorization remain outside this status change.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
@@ -11949,7 +11989,17 @@ Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit
 - **Change:** with the global cap gate closed, admission elects only from a bounded, oldest-first window (`FREE_HIT_SCAN = 50` per verdict range) of subjects that pass the normal pause, lifecycle, saturation, claim and retry filters, and claims the oldest one whose read-only probe `known_good.exact_hit_available()` hits. The probe derives evidence as the worker does (`file_status.before_ai(..., persist=False)`), honours an administrator Refresh and an authenticated `changed` artifact, and runs the strict `known_good.lookup`. It is re-checked under the host queue gate. With the global gate open, a subject whose own quote exceeds the headroom is also claimed when it probes as a hit. The election and oldest-subject queries moved unchanged into `_elect_host()` and `_oldest()`.
 - **Unchanged:** every subject that would call the provider keeps today's deferral, with no claim, run or reservation. The rate gate, provider backoff, pause, lifecycle, data-sharing and Refresh behavior are unchanged. If evidence changes between the probe and the worker's own lookup, the atomic `ai_budget.reserve()` still refuses the provider call, so nothing is sent or charged and the existing policy-wait deferral applies. No schema, API, UI, roles or response authorization change.
 - **Validation:** `tests/test_known_good_daily_cap_hit.py` has 8 tests. Five fail on main `c5c1504`: the exhausted cap, a quote below one reservation (the issue's reproduction), an older paid subject in front of a newer hit, pause then resume, and the probe itself. The other three pass both before and after: a paid subject, a Re-triage and a revoked candidate all stay held. The related SQLite admission, budget, claims, file-status, known-good, triage, retry, pause and worker-control selection passes (419 passed).
-- **Remaining:** while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
+- **Remaining:** ~~while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear.~~ Addressed by the #1241 worker checkpoint below. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
+
+### Rotating free known-good hit probe window — worker checkpoint #1241 (roadmap A/B)
+
+The #1030 checkpoint bounded closed-gate admission to the 50 oldest eligible subjects (`FREE_HIT_SCAN`). A free exact hit behind 50 or more older paid subjects was therefore never probed while the daily cap, rate admission or provider backoff stayed closed, which under an exhausted cap meant waiting for the reset.
+
+- **Change:** `ai_claims._free_hit()` now rotates its window. A pass without a hit records the `(first_seen, id)` of the last subject it probed. The next pass resumes after it and, at the queue end, wraps to the oldest subjects it has not reached, so a hit behind N older non-hit subjects is claimed within `ceil((N+1)/FREE_HIT_SCAN)` closed-gate admissions. A found hit clears the cursor, so the next pass starts from the oldest again and consecutive hits stay oldest-first. A cursor beyond every eligible subject wraps within the same pass.
+- **Scope of the cursor:** it is per process and in memory. Admission runs under the distributed `ai-triage` lock, so passes in one process never overlap. Several processes each rotate independently. A restart starts again from the oldest subject. No schema change.
+- **Unchanged:** at most `FREE_HIT_SCAN` probes per admission; the pause, lifecycle, saturation, claim, retry, Refresh and revocation filters; the re-check under the host queue gate; and every paid subject's deferral with no claim, run, reservation or provider call. While the gate is open, election is unchanged. No API, UI, role or response-authorization change.
+- **Validation:** three tests in `tests/test_known_good_daily_cap_hit.py`. Two fail on main `9f972053`: a hit behind a full window of 50 older paid subjects, and a wrap that reaches a new hit older than the cursor. The third, a stale cursor, is a control.
+- **Remaining:** after a pass without a hit, a hit that appears before the cursor waits for the wrap, so it may be claimed after a newer hit. MySQL was not run locally.
 ### dhclient hook contract — worker checkpoint #1063 (roadmap F)
 
 ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
@@ -12329,3 +12379,30 @@ There is no live differential against a built apcupsd: this session's classifier
 - agent collection of the config, `ExecStart`, directory metadata and package authentication of `apccontrol`;
 - a catalog entry, provenance, persistence, UI and AI classification;
 - RPM/EPEL layouts, `multimon.conf`/CGI and the contents of the sourced `config` are not modeled.
+
+### NUT upsmon command contract — Roadmap F checkpoint #1247
+
+- **Outcome:** `app/nut_upsmon.py` is a pure contract with no I/O. It takes the text of `upsmon.conf`, the observed `upsmon` argv and the daemon's `NUT_CONFPATH`, and reports which commands Network UPS Tools' `upsmon` runs through `/bin/sh`, as which user and on which events:
+  - `SHUTDOWNCMD` runs as root. In the default split mode it runs in the privileged parent, and under `-p` in the single root process.
+  - `NOTIFYCMD "<message>"` runs for each notify event whose effective flags include `EXEC` and not `IGNORE`. It runs as `RUN_AS_USER` in split mode, or as root under `-p`.
+- **Semantics:** taken from NUT v2.8.1 `clients/upsmon.c` and `common/parseconf.c`:
+  - The parseconf state machine is modeled byte for byte: `#` comments, `\` literals and continuation, quoted words that span lines, a bare `=` word, discarded control and non-ASCII bytes, and the 512-byte word and 32-word line limits.
+  - A `#` inside quotes is a parse error. The rest of that line is then read as a new line, so a directive hidden behind it still applies.
+  - Directive names are exact-case, apart from `DEBUG_MIN`, and the last value wins.
+  - `NOTIFYFLAG` matches the event name case-insensitively and takes exact-case flags joined by `+`. Each line replaces the earlier flags. The default flags are `SYSLOG+WALL`.
+  - A `RUN_AS_USER` in the file overrides `-u`.
+  - getopt stops at the first operand.
+- **Fails closed:** each of these is a blocking gap:
+  - an unobserved config, argv or environment;
+  - NUL bytes, text that is not UTF-8, and over-limit input;
+  - an argv that makes upsmon exit instead of monitoring (`-c`, `-h`, `-V`, `-K`, `-i`, an unknown option or a missing argument);
+  - a captured config path different from the one upsmon reads.
+
+  Notify message templates are reported as a hash with flags for shell-active characters, a UPS-name substitution and possible truncation. A template whose `printf` conversions are not modeled leaves its event `unresolved`.
+- **Redaction:** `MONITOR` and `CERTIDENT` passwords, notify message text and the text of unknown or other directives are never copied into the result.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Startup-fatal `MONITOR` and `MINSUPPLIES` conditions are not modeled. The contract can over-report commands for a daemon that exits, but it does not under-report.
+  - Reload behavior is not modeled: split-mode parents ignore a changed `SHUTDOWNCMD`, and the account is not re-applied.
+  - Not yet done: account resolution, agent collection, a catalog entry, package provenance, UI and AI classification.
+- **Differential:** the tokenizer and directive handling were compared with the real NUT v2.8.1 `parseconf.c` and the `upsmon.c` `parse_conf_arg`, `set_notifyflag` and `set_notifymsg` handlers, compiled into a harness. There were 0 mismatches in 13,000 random configs; the 60 configs that hit the fatal 5-word `MONITOR` exit were excluded, as documented. `parse_argv` matched glibc `getopt` with the upsmon optstring on 3,000 random argv lists.
