@@ -84,7 +84,7 @@ def test_recent_attempt_reads_use_range_and_preserve_strict_cutoff(admin, monkey
         event.remove(db.engine, 'before_cursor_execute', capture)
 
     assert len(queries) == 2
-    assert 'min(' in queries[0][0].lower()
+    assert 'ORDER BY behaviors.attempted DESC' in queries[0][0]
     assert 'min(' not in queries[1][0].lower()
     with db.engine.connect() as connection:
         assert connection.scalars(select(ai_claims.Claim.subject)).all() == []
@@ -95,5 +95,6 @@ def test_recent_attempt_reads_use_range_and_preserve_strict_cutoff(admin, monkey
                 assert any(f'USING COVERING INDEX {ATTEMPT_INDEX} (attempted>?)' in row[3] for row in plan)
             else:
                 plan = connection.exec_driver_sql('EXPLAIN ' + statement, parameters).mappings().all()
-                behavior, = [row for row in plan if row['table'] == 'behaviors']
-                assert behavior['type'] == 'range' and behavior['key'] == ATTEMPT_INDEX, plan
+                behavior_scans = [row for row in plan if row['table'] == 'behaviors']
+                assert behavior_scans and all(row['type'] == 'range' and row['key'] == ATTEMPT_INDEX
+                                              for row in behavior_scans), plan
