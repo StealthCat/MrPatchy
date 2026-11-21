@@ -12544,3 +12544,28 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### keepalived script contract — worker checkpoint #1307 (roadmap F, in progress)
+
+keepalived runs administrator-configured programs on VRRP state changes, health checks, LVS events and at startup and shutdown. They run as root, or as `script_user` / `keepalived_script`.
+
+- **Increment 1 (draft):** the pure `app/keepalived_scripts.py` ports these keepalived 2.2.8 functions:
+  - `lib/parser.c`: `read_line` preprocessing, `decomment`, the brace split, and `alloc_strvec_r`
+  - `lib/notify.c`: `alloc_strvec_quoted_escaped` and `notify_script_init`
+- **What it yields:** the argv and configured user/group of a single script keyword line.
+- **Fails closed:** `include`, definitions, standard `$_*` parameters, `~SEQ`/`~LST`, `@` conditionals without an observed `config_id`, continuations, over-buffer lines, NUL bytes, invalid UTF-8 and over-limit input all make the result incomplete.
+- **Increment 2 (draft):** `vrrp_programs` emulates `process_stream`, `alloc_value_block` and `skip_block` as the VRRP process runs them. It uses the 2.2.8 keyword tables for `vrrp_instance`, `vrrp_sync_group`, `vrrp_script` and `authentication`, and every root keyword. All build-conditional keywords are present in the Ubuntu binary.
+  - **What it yields:** every notify and `vrrp_script` program, with its argv, runtime-appended argument count, configured or default user, and source block.
+  - **Defaults and precedence:** first-wins notify slots, last-wins `script`, duplicate-name skipping, and the cached default user (`script_user`, `keepalived_script`, root, or refused under `enable_script_security`) in walk order.
+  - **Blocking gaps:** unknown keywords, unexpected or missing braces, unbalanced or unterminated blocks, unnamed blocks, unmodelled nested blocks, and an unobserved `keepalived_script` account. In 2.2.8 an unknown keyword's `{` is ignored and its `}` closes the enclosing block, so later scripts move.
+- **Increment 3 (draft):** `keepalived_programs` adds the `global_defs` scripts and tags each program with the process that runs it. `vrrp_programs` also gains the FIFO scripts.
+  - **Parent:** only the parent runs `startup_script` and `shutdown_script`, first wins. It parses every non-global root as inactive, so it resolves default users from `global_defs` order alone.
+  - **VRRP child:** runs `notify_fifo_script` and `vrrp_notify_fifo_script` only when the matching FIFO is named, and appends the FIFO path as the last argument. A `vrrp_notify_fifo` that names the global FIFO is dropped along with its script.
+  - **When the VRRP child starts:** only with a `vrrp_instance` or `static_*` root (`have_vrrp_config`), or under `--all`. An unobserved `--all` with no VRRP configuration is a blocking gap.
+  - **Default-user refusal:** under `enable_script_security` with no `keepalived_script` account, refusal is sticky (`default_user_fail`). A later `script_user` does not revive it. A dropped notify script leaves its slot free for a later line.
+  - **Not modelled:** runtime outcomes stay out of scope. These are FIFO creation or open failure, invalid configured users, insecure-script disabling under script security, and the `-P`/`-C` daemon flags.
+- **Remaining:**
+  - The checker process: `virtual_server`, `real_server` and `MISC_CHECK`, plus `quorum_*` and `notify_up`/`notify_down`. These blocks are skipped by brace count and are blocking gaps for now.
+  - BFD and track-process program review.
+  - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
+- **Acceptance:** stays incomplete until those are delivered.
