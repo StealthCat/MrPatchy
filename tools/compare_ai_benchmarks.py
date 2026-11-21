@@ -330,6 +330,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     if base['fixture_rate'] is not None:
         if base['fixture_rate']['starts_per_hour'] != current['fixture_rate']['starts_per_hour']:
             raise ComparisonError('capability mismatch: fixture_rate.starts_per_hour differs')
+    queue_timing = _compare_queue_timings(baseline, candidate, base, current)
     controls = (
         'database', 'runs', 'fixture_hosts', 'single_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
@@ -344,7 +345,6 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     for stage in STAGES:
         if base['stages'][stage]['count'] != current['stages'][stage]['count']:
             raise ComparisonError(f'capability mismatch: stages.{stage}.count differs')
-    queue_timing = _compare_queue_timings(baseline, candidate, base, current)
     return {
         'schema_version': SCHEMA_VERSION,
         'fixture_only': True,
