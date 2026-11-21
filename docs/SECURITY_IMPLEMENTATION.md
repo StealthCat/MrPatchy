@@ -3592,6 +3592,21 @@ counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
 
+### Use the real legacy triage reopening time — Roadmap A checkpoint #1255
+
+Investigations and the shared AI controls report the same legacy reopening time.
+Each overfull one-hour window clears when the entry ranked at its allowance
+leaves the window. If both recent behavior attempts and triage runs hold
+admission closed, the later opening applies. A window with no scheduled
+opening reports no time. The query retains the existing historical count and
+uses the indexed attempt and run timestamps without adding query round trips.
+
+The SQLite and MySQL acceptance fixtures exercise each counter independently
+and both together, compare the admin endpoints and verify actual claim
+eligibility immediately before and at the reported boundary. Explicit AI
+control modes retain their own gate timing. This checkpoint changes queue
+visibility. Admission, reservations and provider calls follow the existing path.
+
 ### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
 
 The shared AI start gates and automatic AI plan status now fetch each legacy
