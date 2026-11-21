@@ -35,10 +35,22 @@ each notify and ``vrrp_script`` program with its argv, its configured or
 default user and its source block. Structure keepalived would report as a
 configuration error (unknown keywords, unexpected or missing braces,
 unbalanced or unterminated blocks) is a blocking gap, because a ``}`` that
-binds to the wrong level silently moves later scripts. ``global_defs`` is
-walked only for ``script_user`` and ``enable_script_security``; its own
-startup, shutdown and FIFO scripts and the checker process's ``virtual_server``
-scripts are the next increment and are blocking gaps when present.
+binds to the wrong level silently moves later scripts.
+
+Increment 3 models ``global_defs`` (``core/global_parser.c``) in the two
+processes that run its scripts. The parent alone runs ``startup_script`` and
+``shutdown_script`` (``startup_shutdown_script`` returns early in children),
+and the parent parses every other root block as inactive, so its default-user
+lookups come from ``global_defs`` only. The VRRP child runs
+``notify_fifo_script`` and ``vrrp_notify_fifo_script`` when the matching
+``notify_fifo``/``vrrp_notify_fifo`` is named (``fifo_open``), with the FIFO
+path appended as the last argument; a ``vrrp_notify_fifo`` that names the
+global FIFO is dropped with its script (``init_global_data``). The VRRP child
+starts only when the configuration has ``vrrp_instance`` or ``static_*`` roots
+(``have_vrrp_config``) unless keepalived runs with ``--all``. Default-user
+failure is sticky (``default_user_fail``): a later ``script_user`` does not
+undo it. ``lvs_notify_fifo_script`` runs in the checker process and, with the
+checker's ``virtual_server`` scripts, stays a blocking gap.
 
 This module performs no I/O, runs nothing and authorizes nothing; ``origin``
 is always ``not_assessed``.
@@ -47,7 +59,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 SOURCE_VERSIONS = ('2.2.8',)
 MAXBUF = 1024
 MAX_TEXT = 262144
@@ -62,7 +74,7 @@ BLOCKING = frozenset({
     'parameter_expansion', 'sequence', 'conditional_unresolved', 'continuation', 'unterminated_quote',
     'gaps_truncated', 'unknown_keyword', 'unexpected_brace', 'missing_brace', 'unbalanced_brace',
     'unterminated_block', 'unmodelled_nested_block', 'unnamed_block', 'unparsable_script',
-    'global_script_not_modelled', 'checker_not_modelled', 'default_user_unobserved', 'missing_user',
+    'checker_not_modelled', 'default_user_unobserved', 'missing_user', 'vrrp_process_start_unobserved',
 })
 
 
@@ -427,14 +439,24 @@ ROOT_KEYWORDS = {
     **{k: 'plain' for k in ('linkbeat_use_polling', 'net_namespace', 'net_namespace_ipvs', 'namespace_with_ipsets',
                             'use_pid_dir', 'instance', 'child_wait_time')},
 }
-GLOBAL_SCRIPT_KEYWORDS = ('startup_script', 'shutdown_script', 'notify_fifo_script', 'vrrp_notify_fifo_script',
-                          'lvs_notify_fifo_script')
+# global_defs FIFO keywords (notify_fifo / notify_fifo_script handlers) by FIFO type.
+FIFO_KEYWORDS = {'notify_fifo': 'global', 'vrrp_notify_fifo': 'vrrp', 'lvs_notify_fifo': 'lvs'}
+FIFO_SCRIPT_KEYWORDS = {k + '_script': v for k, v in FIFO_KEYWORDS.items()}
+PARENT_SCRIPT_KEYWORDS = ('startup_script', 'shutdown_script')
+# Root keywords whose handler sets global_data->have_vrrp_config, even with a NULL strvec when inactive.
+VRRP_CONFIG_ROOTS = ('vrrp_instance', 'static_ipaddress', 'static_routes', 'static_rules')
 _BOB, _EOB = b'{', b'}'
 
 
 class _Walk:
-    def __init__(self, lines: list[dict[str, Any]], gaps: list, keepalived_script_exists: bool | None):
+    def __init__(self, lines: list[dict[str, Any]], gaps: list, keepalived_script_exists: bool | None,
+                 process: str = 'vrrp'):
         self.lines, self.pos, self.gaps = lines, 0, gaps
+        self.process = process  # 'vrrp' (the VRRP child) or 'parent'
+        self.have_vrrp_config = False
+        self.fifo_names: dict[str, str] = {}
+        self.fifo_scripts: dict[str, dict[str, Any]] = {}
+        self.parent_scripts: set = set()
         self.programs: list[dict[str, Any]] = []
         self.ks_exists = keepalived_script_exists
         self.skip = 0  # keepalived's skip_sublevel
@@ -472,19 +494,24 @@ class _Walk:
     def record(self, block: dict, keyword: str, parsed: dict, line_no: int, extra: int = 0) -> dict | None:
         if parsed['status'] != 'ok':
             return None
-        entry = {'block': block['kind'], 'name': block['name'], 'keyword': keyword, 'line': line_no,
-                 'argv': parsed['argv'], 'runtime_extra_args': extra, 'user': parsed['user'],
-                 'group': parsed['group'], 'user_source': 'configured', 'runs': True, 'origin': 'not_assessed'}
+        entry = self.entry(block['kind'], block['name'], keyword, line_no, parsed['argv'], extra)
+        entry.update(user=parsed['user'], group=parsed['group'])
         if parsed['user'] is None:
             self.apply_default(entry, line_no)
         self.programs.append(entry)
         return entry
 
+    def entry(self, block: str, name: str | None, keyword: str, line_no: int, argv: list, extra: int) -> dict:
+        return {'process': self.process, 'block': block, 'name': name, 'keyword': keyword, 'line': line_no,
+                'argv': argv, 'runtime_extra_args': extra, 'user': None, 'group': None,
+                'user_source': 'configured', 'runs': True, 'not_run_reason': None, 'origin': 'not_assessed'}
+
     def apply_default(self, entry: dict, line_no: int) -> None:
         d = self.default_user(line_no)
         entry.update(user=d['user'], group=d['group'], user_source='default:' + d['via'])
         if d['via'] == 'refused':
-            entry['runs'] = False  # keepalived drops the script: no keepalived_script and script security
+            # keepalived drops the script: no keepalived_script account and script security enabled.
+            entry.update(runs=False, not_run_reason='default_user_refused')
 
     def skip_block(self, need_bob: bool) -> None:
         self.skip = -1 if need_bob else 1
@@ -536,6 +563,14 @@ class _Walk:
         if kind is None:
             _gap(self.gaps, 'unknown_keyword', line_no, f'keepalived 2.2.8 has no {name!r} keyword here.')
             return
+        if level == 0 and name in VRRP_CONFIG_ROOTS:
+            self.have_vrrp_config = True
+        if level == 0 and self.process == 'parent' and kind != 'global_defs':
+            # global_init_keywords installs every non-global root inactive: skip_sublevel, no handler work.
+            self.skip_block(words[-1] != _BOB or len(words) == 1)
+            if kind != 'plain':
+                self.stream(None, words[-1] != _BOB or len(words) == 1, level + 1, None)
+            return
         if kind == 'plain':
             return
         if kind == 'value':
@@ -546,10 +581,11 @@ class _Walk:
             if name in seen:
                 return  # "notify script already specified - ignoring"
             parsed = script_line(item['text'])
-            if self.record(block, name, parsed, line_no, _NOTIFY_EXTRA.get(name, 0)) is not None:
-                seen.add(name)
-            else:
+            entry = self.record(block, name, parsed, line_no, _NOTIFY_EXTRA.get(name, 0))
+            if entry is None:
                 _gap(self.gaps, 'unparsable_script', line_no, 'keepalived logs and ignores this script.')
+            elif entry['runs']:
+                seen.add(name)  # a dropped script leaves the slot free for a later line
             return
         if kind == 'vscript':
             parsed = script_line(item['text'])
@@ -572,7 +608,7 @@ class _Walk:
         elif kind == 'inactive':
             self.skip_block(bob_needed)
             _gap(self.gaps, 'checker_not_modelled', line_no, f'{name} scripts run in the checker process, '
-                 'which this increment does not model.')
+                 'which this contract does not model yet.')
             self.stream(None, bob_needed, level + 1, None)
         elif kind in ('instance', 'sync_group'):
             self.named_block(kind, words, item, bob_needed, level)
@@ -614,9 +650,7 @@ class _Walk:
         if block['script'] is None or block['user_error']:
             return
         argv, line_no = block['script']
-        entry = {'block': 'vrrp_script', 'name': block['name'], 'keyword': 'script', 'line': line_no, 'argv': argv,
-                 'runtime_extra_args': 0, 'user': None, 'group': None, 'user_source': 'configured', 'runs': True,
-                 'origin': 'not_assessed'}
+        entry = self.entry('vrrp_script', block['name'], 'script', line_no, argv, 0)
         if block['user'] is not None:
             entry['user'], entry['group'] = block['user']
         else:
@@ -645,17 +679,73 @@ class _Walk:
                 continue
             if name != 'global_defs':
                 continue
-            key = _text(first)
-            if key == 'notification_email':
-                self.value_block(words, item['line'])
-            elif key == 'script_user' and len(words) >= 2:
-                # set_default_script_user: later default lookups use it; earlier ones keep their result.
+            self.global_keyword(_text(first), words, item)
+
+    def global_keyword(self, key: str, words: list, item: dict) -> None:
+        line_no = item['line']
+        if key == 'notification_email':
+            self.value_block(words, line_no)
+        elif key == 'script_user' and len(words) >= 2:
+            # set_default_script_user: later default lookups use it; earlier ones keep their result. A failed
+            # default lookup is sticky (default_user_fail), so a later script_user cannot revive defaults.
+            if self.default is None or self.default['via'] != 'refused':
                 self.script_user = (_text(words[1]), _text(words[2]) if len(words) > 2 else None)
                 self.default = None
-            elif key == 'enable_script_security':
-                self.security = True
-            elif key in GLOBAL_SCRIPT_KEYWORDS:
-                _gap(self.gaps, 'global_script_not_modelled', item['line'], f'{key} is not modelled yet.')
+        elif key == 'enable_script_security':
+            self.security = True
+        elif key in FIFO_KEYWORDS and len(words) >= 2:
+            fifo = FIFO_KEYWORDS[key]
+            if fifo in self.fifo_names:
+                return  # "notify_fifo already specified - ignoring"
+            if len(words) == 2 and self.default_user(line_no)['via'] == 'refused':
+                return  # "Failed to set default user for fifo - ignoring"
+            self.fifo_names[fifo] = _text(words[1])
+        elif key in FIFO_SCRIPT_KEYWORDS and len(words) >= 2:
+            fifo = FIFO_SCRIPT_KEYWORDS[key]
+            if fifo in self.fifo_scripts:
+                return  # "notify_fifo_script already specified - ignoring"
+            if fifo == 'lvs' and self.process == 'vrrp':
+                _gap(self.gaps, 'checker_not_modelled', line_no, 'lvs_notify_fifo_script runs in the checker '
+                     'process, which this contract does not model yet.')
+            entry = self.global_script(key, item, 1)
+            if entry is not None and entry['runs']:
+                entry['fifo_type'] = fifo
+                self.fifo_scripts[fifo] = entry
+        elif key in PARENT_SCRIPT_KEYWORDS and self.process == 'parent' and len(words) >= 2:
+            if key in self.parent_scripts:
+                return  # "startup script already specified"
+            entry = self.global_script(key, item, 0)
+            if entry is not None and entry['runs']:
+                self.parent_scripts.add(key)
+                self.programs.append(entry)
+
+    def global_script(self, key: str, item: dict, extra: int) -> dict | None:
+        """notify_script_init for a global_defs script; the default-user lookup happens here in every process."""
+        parsed = script_line(item['text'])
+        if parsed['status'] != 'ok':
+            _gap(self.gaps, 'unparsable_script', item['line'], f'keepalived logs and ignores this {key}.')
+            return None
+        entry = self.entry('global_defs', None, key, item['line'], parsed['argv'], extra)
+        entry.update(user=parsed['user'], group=parsed['group'])
+        if parsed['user'] is None:
+            self.apply_default(entry, item['line'])
+        return entry
+
+    def finish_fifos(self) -> None:
+        """init_global_data and fifo_open for the VRRP child: which FIFO scripts it starts."""
+        names = self.fifo_names
+        if names.get('vrrp') is not None and names.get('vrrp') == names.get('global'):
+            # "notify FIFO has been specified for global and vrrp FIFO - ignoring vrrp FIFO"
+            names.pop('vrrp')
+            self.fifo_scripts.pop('vrrp', None)
+        for fifo in ('global', 'vrrp'):
+            entry = self.fifo_scripts.get(fifo)
+            if entry is None:
+                continue
+            entry['fifo'] = names.get(fifo)
+            if entry['fifo'] is None:
+                entry.update(runs=False, not_run_reason='no_fifo')
+            self.programs.append(entry)
 
     def value_block(self, words: list, line_no: int) -> None:
         """alloc_value_block: lines up to the first line ending in "}" are values, never keywords."""
@@ -681,18 +771,63 @@ class _Walk:
                 return
 
 
-def vrrp_programs(text: Any, *, config_id: str | None = None,
-                  keepalived_script_exists: bool | None = None) -> dict[str, Any]:
+def _readable(gaps: list) -> bool:
+    return not any(g['code'] in ('over_limit', 'binary', 'invalid_utf8') for g in gaps)
+
+
+def _vrrp_walk(pre: dict, keepalived_script_exists: bool | None, run_all_children: bool | None) -> tuple:
+    gaps = list(pre['gaps'])
+    walk = _Walk(pre['lines'], gaps, keepalived_script_exists)
+    starts: bool | None = False
+    if _readable(gaps):
+        walk.stream(ROOT_KEYWORDS, False, 0, None)
+        walk.finish_fifos()
+        starts = True if walk.have_vrrp_config or run_all_children else (None if run_all_children is None else False)
+        if starts is not True and walk.programs:
+            for entry in walk.programs:
+                if entry['runs']:
+                    entry.update(runs=starts, not_run_reason='vrrp_process_not_started')
+            if starts is None:
+                _gap(gaps, 'vrrp_process_start_unobserved', None, 'No vrrp_instance or static_* block starts the '
+                     'VRRP process; whether keepalived runs with --all was not observed.')
+    return walk, gaps, starts
+
+
+def vrrp_programs(text: Any, *, config_id: str | None = None, keepalived_script_exists: bool | None = None,
+                  run_all_children: bool | None = None) -> dict[str, Any]:
     """Programs the keepalived 2.2.8 VRRP process runs, from one captured, include-free ``keepalived.conf``.
 
     ``keepalived_script_exists`` says whether that account exists on the host (``None`` when not observed);
-    it decides the default script user when ``global_defs`` sets no ``script_user``.
+    it decides the default script user when ``global_defs`` sets no ``script_user``. ``run_all_children`` is
+    whether keepalived was started with ``--all`` (``None`` when not observed); it matters only when the
+    configuration has no VRRP configuration of its own.
     """
     pre = logical_lines(text, config_id=config_id)
-    gaps = list(pre['gaps'])
-    walk = _Walk(pre['lines'], gaps, keepalived_script_exists)
-    if not any(g['code'] in ('over_limit', 'binary', 'invalid_utf8') for g in gaps):
-        walk.stream(ROOT_KEYWORDS, False, 0, None)
+    walk, gaps, starts = _vrrp_walk(pre, keepalived_script_exists, run_all_children)
     return {'contract_version': CONTRACT_VERSION, 'source_versions': list(SOURCE_VERSIONS),
-            'programs': walk.programs, 'gaps': gaps,
+            'vrrp_process_starts': starts, 'programs': walk.programs, 'gaps': gaps,
+            'complete': not any(g['blocking'] for g in gaps), 'origin': 'not_assessed'}
+
+
+def keepalived_programs(text: Any, *, config_id: str | None = None, keepalived_script_exists: bool | None = None,
+                        run_all_children: bool | None = None) -> dict[str, Any]:
+    """Programs the keepalived 2.2.8 parent and VRRP processes run; each entry names its ``process``.
+
+    The parent's ``startup_script`` and ``shutdown_script`` come first. Each process resolves default script
+    users on its own, so the parent's defaults depend only on ``global_defs`` order.
+    """
+    pre = logical_lines(text, config_id=config_id)
+    walk, gaps, starts = _vrrp_walk(pre, keepalived_script_exists, run_all_children)
+    parent_programs: list = []
+    if _readable(gaps):
+        parent_gaps: list = []
+        parent = _Walk(pre['lines'], parent_gaps, keepalived_script_exists, process='parent')
+        parent.stream(ROOT_KEYWORDS, False, 0, None)
+        parent_programs = parent.programs
+        seen = {(g['code'], g['line']) for g in gaps}
+        for g in parent_gaps:  # structure gaps repeat the VRRP walk's; keep only the parent's own
+            if (g['code'], g['line']) not in seen:
+                _gap(gaps, g['code'], g['line'], g['detail'])
+    return {'contract_version': CONTRACT_VERSION, 'source_versions': list(SOURCE_VERSIONS),
+            'vrrp_process_starts': starts, 'programs': parent_programs + walk.programs, 'gaps': gaps,
             'complete': not any(g['blocking'] for g in gaps), 'origin': 'not_assessed'}

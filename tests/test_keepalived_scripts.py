@@ -1,4 +1,4 @@
-"""keepalived script-line contract, first increment (#1307), against traced keepalived 2.2.8 semantics."""
+"""keepalived script contract (#1307), against traced keepalived 2.2.8 semantics."""
 from app import keepalived_scripts as ks
 
 
@@ -198,7 +198,7 @@ def test_structural_errors_are_blocking():
                        ('vrrp_instance V {\n notify /bin/x\n', 'unterminated_block'),
                        ('vrrp_instance {\n notify /bin/x\n}\n', 'unnamed_block'),
                        ('garp_group {\n interfaces {\n eth0\n }\n}\n', 'unmodelled_nested_block'),
-                       ('global_defs {\n startup_script /bin/s\n}\n', 'global_script_not_modelled'),
+                       ('global_defs {\n lvs_notify_fifo_script /bin/s\n}\n', 'checker_not_modelled'),
                        ('}\n', 'unbalanced_brace')):
         r = ks.vrrp_programs(conf, keepalived_script_exists=False)
         assert not r['complete'] and code in [g['code'] for g in r['gaps']], (conf, r['gaps'])
@@ -210,3 +210,80 @@ def test_value_block_on_one_line_and_preprocessing_gaps_carry_through():
     assert r['complete'] and [f[3] for f in found] == [['/bin/n']]
     r = ks.vrrp_programs('include /etc/keepalived/*.conf\n', keepalived_script_exists=False)
     assert not r['complete'] and r['gaps'][0]['code'] == 'include'
+
+
+# --- Increment 3: global_defs scripts in the parent and the VRRP child, traced against keepalived 2.2.8 ------
+
+
+def every(conf, **kw):
+    r = ks.keepalived_programs(conf, **kw)
+    return [(p['process'], p['keyword'], p['argv'], p['user'], p['runs']) for p in r['programs']], r
+
+
+def test_parent_runs_startup_and_shutdown_with_its_own_default_user_order():
+    # The VRRP child looks up the default for notify before script_user; the parent parses vrrp_instance
+    # inactive, so its first lookup is startup_script, after script_user.
+    conf = ('vrrp_instance V {\n notify /bin/n\n}\n'
+            'global_defs {\n script_user svc\n startup_script "/bin/start --now"\n startup_script /bin/second\n'
+            ' startup_script_timeout 30\n shutdown_script /bin/stop root\n}\n')
+    found, r = every(conf, keepalived_script_exists=True)
+    assert r['complete'], r['gaps']
+    assert found == [('parent', 'startup_script', ['/bin/start', '--now'], 'svc', True),
+                     ('parent', 'shutdown_script', ['/bin/stop'], 'root', True),
+                     ('vrrp', 'notify', ['/bin/n'], 'keepalived_script', True)]
+    assert r['programs'][0]['user_source'] == 'default:script_user'
+    assert [p['keyword'] for p in ks.vrrp_programs(conf, keepalived_script_exists=True)['programs']] == ['notify']
+
+
+def test_vrrp_child_runs_fifo_scripts_with_the_fifo_appended():
+    conf = ('global_defs {\n notify_fifo /run/ka.fifo\n notify_fifo_script "/bin/fifo -v" svc\n'
+            ' notify_fifo_script /bin/ignored\n vrrp_notify_fifo /run/v.fifo\n vrrp_notify_fifo_script /bin/vfifo\n}\n'
+            'vrrp_instance V {\n state BACKUP\n}\n')
+    found, r = every(conf, keepalived_script_exists=False)
+    assert r['complete'], r['gaps']
+    assert found == [('vrrp', 'notify_fifo_script', ['/bin/fifo', '-v'], 'svc', True),
+                     ('vrrp', 'vrrp_notify_fifo_script', ['/bin/vfifo'], 'root', True)]
+    assert [(p['fifo'], p['runtime_extra_args']) for p in r['programs']] == [('/run/ka.fifo', 1), ('/run/v.fifo', 1)]
+
+
+def test_fifo_script_needs_its_fifo_and_a_vrrp_fifo_naming_the_global_fifo_is_dropped():
+    conf = ('global_defs {\n notify_fifo /run/ka.fifo\n vrrp_notify_fifo /run/ka.fifo\n'
+            ' vrrp_notify_fifo_script /bin/vfifo\n notify_fifo_script /bin/g\n}\nvrrp_instance V {\n}\n')
+    found, _ = every(conf, keepalived_script_exists=False)
+    assert found == [('vrrp', 'notify_fifo_script', ['/bin/g'], 'root', True)]
+    found, r = every('global_defs {\n vrrp_notify_fifo_script /bin/v\n}\nvrrp_instance V {\n}\n',
+                     keepalived_script_exists=False)
+    assert found == [('vrrp', 'vrrp_notify_fifo_script', ['/bin/v'], 'root', False)]
+    assert r['programs'][0]['not_run_reason'] == 'no_fifo' and r['complete']
+
+
+def test_default_user_refusal_is_sticky_and_frees_the_notify_slot():
+    conf = ('global_defs {\n enable_script_security\n}\n'
+            'vrrp_instance V {\n notify_master /bin/a\n notify_master /bin/b svc\n}\n'
+            'global_defs {\n script_user later\n}\nvrrp_instance W {\n notify /bin/c\n}\n')
+    found, r = every(conf, keepalived_script_exists=False)
+    assert found == [('vrrp', 'notify_master', ['/bin/a'], None, False),
+                     ('vrrp', 'notify_master', ['/bin/b'], 'svc', True),
+                     ('vrrp', 'notify', ['/bin/c'], None, False)]
+    assert r['programs'][2]['not_run_reason'] == 'default_user_refused'
+
+
+def test_vrrp_child_starts_only_with_vrrp_config_or_all():
+    conf = 'global_defs {\n notify_fifo /run/f\n notify_fifo_script /bin/f\n}\n'
+    r = ks.keepalived_programs(conf, keepalived_script_exists=False)
+    assert r['vrrp_process_starts'] is None and r['programs'][0]['runs'] is None and not r['complete']
+    assert r['gaps'][0]['code'] == 'vrrp_process_start_unobserved'
+    r = ks.keepalived_programs(conf, keepalived_script_exists=False, run_all_children=False)
+    assert r['complete'] and r['programs'][0]['runs'] is False
+    r = ks.keepalived_programs(conf, keepalived_script_exists=False, run_all_children=True)
+    assert r['complete'] and r['programs'][0]['runs'] is True
+    r = ks.keepalived_programs('static_ipaddress {\n 192.0.2.1/24 dev eth0\n}\n' + conf,
+                               keepalived_script_exists=False)
+    assert r['vrrp_process_starts'] is True and r['programs'][0]['runs'] is True
+
+
+def test_parent_walk_adds_no_duplicate_structure_gaps():
+    conf = 'bogus 1\nvrrp_instance V {\n nope 2\n}\nglobal_defs {\n startup_script ""\n}\n'
+    r = ks.keepalived_programs(conf, keepalived_script_exists=False)
+    assert [(g['code'], g['line']) for g in r['gaps']] == [
+        ('unknown_keyword', 1), ('unknown_keyword', 3), ('unparsable_script', 6)]
