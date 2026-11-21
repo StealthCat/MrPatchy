@@ -31,9 +31,27 @@ module.exports=async(page,capture)=>{
   await page.getByText('Not scheduled',{exact:true}).waitFor();
   await page.getByText('Historical AI score',{exact:true}).click();await page.getByText('Saved installation assessment',{exact:true}).waitFor();
   await capture('update-importance');
-  await page.locator('#select-all-updates').click();await page.locator('#patch-selected').click();await page.locator('#confirm-patch').waitFor();
-  assert.match(await page.locator('#confirm-patch').innerText(),/2 selected updates/);
-  assert.equal(await page.locator('#modal-body pre').innerText(),'openssl:amd64\ncurl:amd64');await page.keyboard.press('Escape');
+  // Advisory resource/clock preflight warnings in the patch review dialog (#1261); they never disable the confirmation.
+  const preflight=route=>route.fulfill({json:{state:'attention',threshold_percent:10,collected:now-30,warnings:[{code:'disk-space-low',title:'Root file system space is low',guidance:'Free space before installing. <b>x</b>',available_percent:4.2},{code:'clock-unsynchronized',title:'System clock is not synchronized',guidance:'Check time synchronization.',available_percent:null}],gaps:['These warnings are advisory.']}});
+  await page.route('**/api/hosts/*/patch-preflight',preflight);
+  try{
+   await page.locator('#select-all-updates').click();await page.locator('#patch-selected').click();await page.locator('#confirm-patch').waitFor();
+   assert.match(await page.locator('#confirm-patch').innerText(),/2 selected updates/);
+   assert.equal(await page.locator('#modal-body pre').innerText(),'openssl:amd64\ncurl:amd64');
+   const summary=page.locator('#modal-body .preflight-summary');
+   assert.equal(await summary.getAttribute('data-preflight-state'),'attention');assert.equal(await summary.getAttribute('role'),'alert');
+   assert.equal(await summary.locator('[data-preflight-warning]').count(),2);
+   assert.match(await summary.innerText(),/Root file system space is low · 4\.2% available/);
+   assert.equal(await summary.locator('b').count(),0);assert.equal(await page.locator('#confirm-patch').isEnabled(),true);
+   await capture('patch-preflight',false);await page.keyboard.press('Escape');
+  }finally{await page.unroute('**/api/hosts/*/patch-preflight',preflight);}
+  const failed=route=>route.fulfill({status:500,json:{detail:'boom'}});
+  await page.route('**/api/hosts/*/patch-preflight',failed);
+  try{
+   await page.locator('#patch-selected').click();await page.locator('#confirm-patch').waitFor();
+   assert.equal(await page.locator('#modal-body .preflight-summary').getAttribute('data-preflight-state'),'unavailable');
+   assert.equal(await page.locator('#confirm-patch').isEnabled(),true);await page.keyboard.press('Escape');
+  }finally{await page.unroute('**/api/hosts/*/patch-preflight',failed);}
  }finally{await page.unroute('**/api/hosts/*/packages?*',packages);}
 	 const status=route=>route.fulfill({json:{pending:4,ready:0,hourly_limit:20,recent_attempts:2,worker_seen:now,reason:'backoff',message:'Failed investigations are waiting for the retry interval.',retry_at:now+1200,scoring_deferred:2,scoring_ready:1,scoring_next_at:now+1200,plan_deferred:2,plan_next_at:now+900,plan_deferred_by_action:{'release-plan':{deferred:0,ready:0,next_at:null},'security-plan':{deferred:1,ready:1,next_at:null},'startup-plan':{deferred:1,ready:0,next_at:now+900}},per_server_limit:2,per_server_limit_min:1,per_server_limit_max:4,last_error:'OpenAI API HTTP 429 (insufficient_quota)'}});
  const runs=route=>route.fulfill({json:{items:[{id:'fixture-run',purpose:'triage',state:'error',stage:'failed',started:now,model:'fixture-model',calls:1,message:'OpenAI API HTTP 429 (insufficient_quota); request ID req_fixture'}],more:false}});
