@@ -70,7 +70,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT_VERSION = 4
+CONTRACT_VERSION = 5
 SOURCE_VERSIONS = ('2.2.8',)
 MAXBUF = 1024
 MAX_TEXT = 262144
@@ -451,6 +451,9 @@ ROOT_KEYWORDS = {
     **{k: 'plain' for k in ('linkbeat_use_polling', 'net_namespace', 'net_namespace_ipvs', 'namespace_with_ipsets',
                             'use_pid_dir', 'instance', 'child_wait_time')},
 }
+# Value-list keywords inside opaque roots (read_value_block in vrrp/vrrp_parser.c): values, never keywords or
+# programs. bfd_instance, vrrp_track_process and track_file install no script or nested-block keyword.
+OPAQUE_VALUE_BLOCKS = {'track_group': ('group',), 'garp_group': ('interfaces',)}
 # global_defs FIFO keywords (notify_fifo / notify_fifo_script handlers) by FIFO type.
 FIFO_KEYWORDS = {'notify_fifo': 'global', 'vrrp_notify_fifo': 'vrrp', 'lvs_notify_fifo': 'lvs'}
 FIFO_SCRIPT_KEYWORDS = {k + '_script': v for k, v in FIFO_KEYWORDS.items()}
@@ -753,6 +756,7 @@ class _Walk:
 
     def opaque_block(self, name: str, bob_needed: bool, level: int) -> None:
         """Known roots whose keywords run no program: walked for structure, and global_defs for the script user."""
+        seen: set = set()
         while True:
             item, words = self.next()
             if item is None:
@@ -771,9 +775,18 @@ class _Walk:
                 self.skip = 1
                 self.stream(None, False, level + 2, None)
                 continue
+            key = _text(first)
+            if key in OPAQUE_VALUE_BLOCKS.get(name, ()):
+                if name == 'track_group' and key in seen:
+                    # static_track_group_group_handler: "Group list already specified" -> skip_block(true)
+                    _gap(self.gaps, 'unmodelled_nested_block', item['line'],
+                         'keepalived skips a repeated track_group group list by brace count.')
+                seen.add(key)
+                self.value_block(words, item['line'])
+                continue
             if name != 'global_defs':
                 continue
-            self.global_keyword(_text(first), words, item)
+            self.global_keyword(key, words, item)
 
     def global_keyword(self, key: str, words: list, item: dict) -> None:
         line_no = item['line']

@@ -12570,7 +12570,9 @@ keepalived runs administrator-configured programs on VRRP state changes, health 
   - **Addresses:** these follow `inet_stosockaddr`. An invalid virtual or real server address skips its block. A port the contract cannot decide is a blocking gap.
   - **Dropped servers:** a virtual server left with no real servers loses its scripts. So does a non-TUN real server whose address family differs from its virtual server's.
   - **Not modelled:** post-parse validation that later removes servers. It can only over-report programs. `vrrp_programs` on its own still reports the checker blocks as a blocking gap.
+- **Increment 5 (draft):** the BFD, track-process and track-file review, traced against `bfd/bfd_parser.c`, `bfd/bfd_daemon.c`, `trackers/track_file.c` and `vrrp/vrrp_parser.c`.
+  - **No programs:** `bfd_instance`, `vrrp_track_process` and `track_file`/`vrrp_track_file` install no script keyword. The only `fork()` under `bfd/` starts the BFD daemon child itself, and no tracker executes a configured program.
+  - **Value lists:** `track_group` `group` and `garp_group` `interfaces` are `read_value_block` lists. Their lines are now walked as values, so ordinary track-group and GARP configurations no longer raise a blocking `unmodelled_nested_block`. A repeated `track_group` `group` list, which keepalived skips by brace count, still fails closed.
 - **Remaining:**
-  - BFD and track-process program review.
   - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
 - **Acceptance:** stays incomplete until those are delivered.

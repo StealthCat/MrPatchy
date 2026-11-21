@@ -197,7 +197,7 @@ def test_structural_errors_are_blocking():
                        ('vrrp_instance V {\n virtual_ipaddress\n 192.0.2.1\n }\n}\n', 'missing_brace'),
                        ('vrrp_instance V {\n notify /bin/x\n', 'unterminated_block'),
                        ('vrrp_instance {\n notify /bin/x\n}\n', 'unnamed_block'),
-                       ('garp_group {\n interfaces {\n eth0\n }\n}\n', 'unmodelled_nested_block'),
+                       ('garp_group {\n other {\n eth0\n }\n}\n', 'unmodelled_nested_block'),
                        ('global_defs {\n lvs_notify_fifo_script /bin/s\n}\n', 'checker_not_modelled'),
                        ('}\n', 'unbalanced_brace')):
         r = ks.vrrp_programs(conf, keepalived_script_exists=False)
@@ -400,3 +400,43 @@ def test_checker_skips_vrrp_roots_and_needs_virtual_server_or_all():
     found, r = every(conf, keepalived_script_exists=False, run_all_children=False)
     assert r['complete'] and r['checker_process_starts'] is False
     assert ('checker', 'lvs_notify_fifo_script', ['/bin/l'], 'root', False) in found
+
+
+def test_track_bfd_and_garp_roots_run_no_program_and_their_value_lists_are_values():
+    conf = """
+track_group TG {
+  group {
+    VI_1
+    notify_master /tmp/not-a-script
+  }
+}
+garp_group {
+  garp_interval 1
+  interfaces { eth0 notify /tmp/not-a-script }
+  interface eth1
+}
+bfd_instance B {
+  neighbor_ip 192.0.2.9
+  weight 10
+}
+vrrp_track_process P {
+  process nginx
+  param_match initial
+}
+track_file F {
+  file /run/f
+  init_file 0 overwrite
+}
+vrrp_instance VI_1 {
+  notify_master /bin/m
+}
+"""
+    r = ks.vrrp_programs(conf, keepalived_script_exists=False)
+    assert r['complete'], r['gaps']
+    assert [(p['block'], p['argv']) for p in r['programs']] == [('vrrp_instance', ['/bin/m'])]
+
+
+def test_repeated_track_group_list_fails_closed():
+    conf = 'track_group TG {\n group {\n VI_1\n }\n group {\n VI_2\n }\n}\nvrrp_instance VI_1 {\n}\n'
+    r = ks.vrrp_programs(conf, keepalived_script_exists=False)
+    assert not r['complete'] and [g['code'] for g in r['gaps']] == ['unmodelled_nested_block']
