@@ -12585,6 +12585,6 @@ snmpd runs configured programs whenever an SNMP manager reads, or for writable e
   - `persistentDir`, a premib token that moves the persistent directory;
   - snmpd handlers reached from an `snmp`-type file, because the type registration order is not derived.
 
-  `-c`/`-C` stay blocking. `evaluate` still takes its order on trust, so its results carry `read_order_not_derived`.
-- **Validation (increment 2):** 9 more tests (27 in total), traced from `read_config.c`. The amd64 library path and `/var/lib/snmp` are the Debian configure values, and have not yet been checked against a live install.
-- **Remaining (#1327):** model `-c`/`-C`, derive the type registration order, and run differential validation against the packaged snmpd. Agent collection, a catalog entry, package provenance, persistence, UI and AI classification also remain.
+  `-c FILE[,FILE...]` is now modelled: the last `-c` wins, and its absolute files are read with the snmpd handlers after both types, or before them with a leading `-`. A relative `-c` name, `-C`, `-Y` and `--token=value` stay blocking. `evaluate` still takes its order on trust, so its results carry `read_order_not_derived`.
+- **Validation (increment 2):** 10 more tests (28 in total), traced from `read_config.c`. The amd64 library path and `/var/lib/snmp` are the Debian configure values, and have not yet been checked against a live install.
+- **Remaining (#1327):** model `-C`, derive the type registration order, and run differential validation against the packaged snmpd. Agent collection, a catalog entry, package provenance, persistence, UI and AI classification also remain.

@@ -362,10 +362,29 @@ def test_undescribed_paths_environment_and_argv_configuration_block():
     assert 'environment_not_observed' in codes(result)
     assert {'/usr/share/snmp', '/var/lib/snmp'} <= {gap.get('path') for gap in result['gaps']}
     assert result['complete'] is False
-    result = run_snapshot({'/etc/snmp/snmpd.conf': ''}, argv=[*sp.DEFAULT_ARGV, '-c', '/tmp/x.conf'])
+    result = run_snapshot({'/etc/snmp/snmpd.conf': ''}, argv=[*sp.DEFAULT_ARGV, '-C'])
     assert 'argv_config_not_modelled' in codes(result)
     result = run_snapshot({'/etc/snmp/snmpd.conf': None})
     assert 'file_not_observed' in codes(result)
     long_dir = '/' + 'd' * 290
     result = run_snapshot({}, {long_dir: []}, environ={'SNMPCONFPATH': long_dir})
     assert 'path_truncated' in codes(result)
+
+
+def test_argv_c_files_read_after_or_with_a_dash_before_the_search_path():
+    files = {
+        '/etc/snmp/snmpd.conf': 'extend dup /bin/etc\n',
+        '/opt/one.conf': 'extend dup /bin/one\nextend one /bin/one\n',
+        '/opt/two.conf': '[snmp]\nextend no /bin/no\n',
+    }
+    dirs = {'/opt': ['one.conf', 'two.conf']}
+    after = run_snapshot(files, dirs, argv=[*sp.DEFAULT_ARGV, '-c', '/opt/one.conf,,/opt/missing.conf,/opt/two.conf'])
+    assert order(after) == ['/etc/snmp/snmpd.conf', '/opt/one.conf', '/opt/two.conf']
+    assert programs(after, name='dup')[0]['argv'] == ['/bin/etc'] and programs(after, name='no') == []
+    assert after['complete'] is True, after['gaps']
+    # The last -c wins, and a leading '-' reads its files first.
+    before = run_snapshot(files, dirs, argv=[*sp.DEFAULT_ARGV, '-c', '/opt/two.conf', '-c', '-/opt/one.conf'])
+    assert order(before) == ['/opt/one.conf', '/etc/snmp/snmpd.conf']
+    assert programs(before, name='dup')[0]['argv'] == ['/bin/one']
+    relative = run_snapshot(files, dirs, argv=[*sp.DEFAULT_ARGV, '-c', 'one.conf'])
+    assert 'optional_config_relative' in codes(relative) and relative['complete'] is False

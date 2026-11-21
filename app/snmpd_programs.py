@@ -77,11 +77,16 @@ Read order (``evaluate_snapshot``) follows ``read_config_files_of_type`` and
   target is the raw rest of the line, trailing blanks included. Included files
   start in the includer's permanent context and do not change it, and nesting
   deeper than 16 is refused.
+- ``-c FILE[,FILE...]`` (the last one wins) reads absolute, existing files
+  with the snmpd handlers after both types, or before them when the value
+  starts with ``-``. A relative name resolves against snmpd's working
+  directory, which is not observed, so it is a blocking gap. ``-C`` stays a
+  gap.
 
 Fail-closed rules: ``evaluate`` takes the order on trust, so it always carries
 the blocking ``read_order_not_derived`` gap and treats includes as
 ``include_not_modelled``. In both modes, command-line configuration
-(``-c``, ``-C``, ``-Y`` and ``--token=value``), unknown bracketed types,
+(``-C``, ``-Y``, ``--token=value`` and, in ``evaluate``, ``-c``), unknown bracketed types,
 paths the snapshot does not describe, an unobserved environment,
 directives that load code (``dlmod``, ``perl``, ``procfix``), symbolic OIDs,
 unobserved files and account databases, NUL bytes, invalid UTF-8 and
@@ -135,7 +140,7 @@ BLOCKING = frozenset({
     'argv_config_not_modelled', 'include_not_modelled', 'context_unresolved', 'code_loading_directive',
     'oid_unresolved', 'account_unresolved', 'accounts_not_observed', 'name_unresolved', 'snmpd_crash',
     'path_not_observed', 'path_truncated', 'directory_not_listed', 'include_dir_relative', 'include_dir_order_unknown',
-    'persistent_dir_directive', 'type_order_not_derived', 'environment_not_observed',
+    'persistent_dir_directive', 'type_order_not_derived', 'environment_not_observed', 'optional_config_relative',
 })
 
 _C_SPACE = ' \t\n\v\f\r'
@@ -260,6 +265,7 @@ class _State:
         self.extend_names: dict[str, set[str]] = {}
         self.user_specs: list[tuple[str, str]] = []
         self.group_specs: list[tuple[str, str]] = []
+        self.optional_config: str | None = None
 
     def gap(self, code: str, **detail: Any) -> None:
         if len(self.gaps) < MAX_GAPS:
@@ -325,7 +331,10 @@ def _parse_argv(argv: Sequence[str], state: _State) -> dict[str, Any]:
                 state.user_specs.append(('argv', value or ''))
             elif char == 'g':
                 state.group_specs.append(('argv', value or ''))
-            elif char in 'cY-':
+            elif char == 'c':
+                # netsnmp_ds_set_string: the last -c wins.
+                state.optional_config = value or ''
+            elif char in 'Y-':
                 if char == '-' and (value or '').lower() in ('help', 'version'):
                     state.gap('argv_invalid', option='--' + (value or ''))
                     return {'init': init, 'noinit': noinit}
@@ -631,6 +640,8 @@ def evaluate(config_files: Sequence[Mapping[str, Any]], *, argv: Sequence[str] |
     state = _State()
     state.gap('read_order_not_derived')
     modules = _prepare(argv, state)
+    if state.optional_config is not None:
+        state.gap('argv_config_not_modelled', option='c')
     digest = hashlib.sha256()
     if len(config_files) > MAX_FILES:
         state.gap('too_many_files', count=len(config_files))
@@ -764,6 +775,19 @@ class _Reader:
         _read_file(path, text, self.modules, self.state, context=context, reader=self, level=level + 1)
         return True
 
+    def read_optional(self, value: str) -> None:
+        """``read_configs_optional``: comma-separated files read with the snmpd handlers."""
+        self.type_header = 'snmpd'
+        for name in value.split(','):
+            if not name:
+                continue
+            if not name.startswith('/'):
+                # stat() and fopen() resolve a relative name against snmpd's working directory.
+                self.state.gap('optional_config_relative', path=name)
+                continue
+            if self.exists(name):
+                self.read(name, 'snmpd', 0, 'argv_c')
+
     def include(self, token: str, target: str, path: str, line: int, context: str, level: int) -> None:
         lowered = token.lower()
         if lowered == 'includefile':
@@ -823,9 +847,17 @@ def evaluate_snapshot(snapshot: Mapping[str, Any], *, argv: Sequence[str] | None
         state.gap('environment_not_observed')
         environ = {}
     reader = _Reader(snapshot, modules, state, environ, lib_path)
+    optional = state.optional_config
+    if optional is not None and optional.startswith('-'):
+        # read_configs(): a leading '-' reads the -c files before the search path.
+        reader.read_optional(optional[1:])
+        optional = None
     reader.read_type('snmpd', 'snmpd')
     reader.type_header = 'snmp'
     reader.read_type('snmp', 'snmp')
+    if optional is not None:
+        reader.type_header = 'snmpd'
+        reader.read_optional(optional)
     extra = {'read_order': reader.order, 'search_path': reader.envconfpath if reader.envconfpath is not None
              else reader.confpath, 'persistent_dir': reader.perspath}
     return _finish(state, modules, reader.digest, passwd_text, group_text, extra)
