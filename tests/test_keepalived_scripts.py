@@ -239,20 +239,24 @@ def test_vrrp_child_runs_fifo_scripts_with_the_fifo_appended():
     conf = ('global_defs {\n notify_fifo /run/ka.fifo\n notify_fifo_script "/bin/fifo -v" svc\n'
             ' notify_fifo_script /bin/ignored\n vrrp_notify_fifo /run/v.fifo\n vrrp_notify_fifo_script /bin/vfifo\n}\n'
             'vrrp_instance V {\n state BACKUP\n}\n')
-    found, r = every(conf, keepalived_script_exists=False)
+    found, r = every(conf, keepalived_script_exists=False, run_all_children=False)
     assert r['complete'], r['gaps']
     assert found == [('vrrp', 'notify_fifo_script', ['/bin/fifo', '-v'], 'svc', True),
-                     ('vrrp', 'vrrp_notify_fifo_script', ['/bin/vfifo'], 'root', True)]
-    assert [(p['fifo'], p['runtime_extra_args']) for p in r['programs']] == [('/run/ka.fifo', 1), ('/run/v.fifo', 1)]
+                     ('vrrp', 'vrrp_notify_fifo_script', ['/bin/vfifo'], 'root', True),
+                     ('checker', 'notify_fifo_script', ['/bin/fifo', '-v'], 'svc', False)]
+    assert [(p['fifo'], p['runtime_extra_args']) for p in r['programs']] == [
+        ('/run/ka.fifo', 1), ('/run/v.fifo', 1), ('/run/ka.fifo', 1)]
+    assert r['programs'][-1]['not_run_reason'] == 'checker_process_not_started'
 
 
 def test_fifo_script_needs_its_fifo_and_a_vrrp_fifo_naming_the_global_fifo_is_dropped():
     conf = ('global_defs {\n notify_fifo /run/ka.fifo\n vrrp_notify_fifo /run/ka.fifo\n'
             ' vrrp_notify_fifo_script /bin/vfifo\n notify_fifo_script /bin/g\n}\nvrrp_instance V {\n}\n')
-    found, _ = every(conf, keepalived_script_exists=False)
-    assert found == [('vrrp', 'notify_fifo_script', ['/bin/g'], 'root', True)]
+    found, _ = every(conf, keepalived_script_exists=False, run_all_children=False)
+    assert found == [('vrrp', 'notify_fifo_script', ['/bin/g'], 'root', True),
+                     ('checker', 'notify_fifo_script', ['/bin/g'], 'root', False)]
     found, r = every('global_defs {\n vrrp_notify_fifo_script /bin/v\n}\nvrrp_instance V {\n}\n',
-                     keepalived_script_exists=False)
+                     keepalived_script_exists=False, run_all_children=False)
     assert found == [('vrrp', 'vrrp_notify_fifo_script', ['/bin/v'], 'root', False)]
     assert r['programs'][0]['not_run_reason'] == 'no_fifo' and r['complete']
 
@@ -287,3 +291,112 @@ def test_parent_walk_adds_no_duplicate_structure_gaps():
     r = ks.keepalived_programs(conf, keepalived_script_exists=False)
     assert [(g['code'], g['line']) for g in r['gaps']] == [
         ('unknown_keyword', 1), ('unknown_keyword', 3), ('unparsable_script', 6)]
+
+
+LVS = '''global_defs {
+    lvs_notify_fifo /run/lvs.fifo
+    lvs_notify_fifo_script /bin/lvsfifo
+}
+virtual_server 192.0.2.1 80 {
+    lb_kind DR
+    quorum_up "/bin/qup 'a b'" svc
+    quorum_up /ignored/second
+    quorum_down /bin/qdown
+    real_server 10.0.0.1 80 {
+        notify_up /bin/up
+        notify_down /bin/down ops
+        HTTP_GET {
+            url {
+                path /
+                status_code 200
+            }
+            connect_timeout 3
+        }
+        MISC_CHECK {
+            misc_path "/bin/old"
+            misc_path "/bin/misc -x"
+            user nobody
+        }
+    }
+    real_server 10.0.0.2 80 {
+        SMTP_CHECK {
+            host {
+                connect_ip 10.0.0.2
+            }
+        }
+        MISC_CHECK {
+            misc_path /bin/misc2
+        }
+    }
+}
+'''
+
+
+def test_checker_runs_quorum_notify_misc_and_lvs_fifo_scripts():
+    found, r = every(LVS, keepalived_script_exists=False)
+    assert r['complete'], r['gaps']
+    assert r['checker_process_starts'] is True and r['vrrp_process_starts'] is None
+    assert [f for f in found if f[0] == 'checker'] == [
+        ('checker', 'quorum_up', ['/bin/qup', 'a b'], 'svc', True),
+        ('checker', 'quorum_down', ['/bin/qdown'], 'root', True),
+        ('checker', 'notify_up', ['/bin/up'], 'root', True),
+        ('checker', 'notify_down', ['/bin/down'], 'ops', True),
+        ('checker', 'misc_path', ['/bin/misc', '-x'], 'nobody', True),
+        ('checker', 'misc_path', ['/bin/misc2'], 'root', True),
+        ('checker', 'lvs_notify_fifo_script', ['/bin/lvsfifo'], 'root', True)]
+    checker = [p for p in r['programs'] if p['process'] == 'checker']
+    assert [p['block'] for p in checker[:5]] == ['virtual_server', 'virtual_server', 'real_server', 'real_server',
+                                                 'MISC_CHECK']
+    assert checker[2]['name'] == '10.0.0.1 80' and checker[2]['virtual_server'] == '192.0.2.1 80'
+    assert checker[-1]['fifo'] == '/run/lvs.fifo'
+    # vrrp_programs alone still flags the checker blocks it does not model.
+    assert 'checker_not_modelled' in [g['code'] for g in ks.vrrp_programs(LVS, keepalived_script_exists=False)['gaps']]
+
+
+def test_virtual_server_without_real_servers_or_with_a_mismatched_family_drops_scripts():
+    conf = ('virtual_server 192.0.2.1 80 {\n quorum_up /bin/q\n real_server 2001:db8::1 80 {\n notify_up /bin/u\n'
+            ' }\n}\nvirtual_server fwmark 7 {\n real_server 2001:db8::2 80 {\n lvs_method TUN\n notify_up /bin/t\n'
+            ' }\n real_server 10.0.0.3 80 {\n notify_up /bin/v4\n }\n quorum_down /bin/qd\n}\n')
+    found, r = every(conf, keepalived_script_exists=False)
+    assert r['complete'], r['gaps']
+    assert [(f[1], f[2][0], f[4]) for f in found] == [
+        ('quorum_up', '/bin/q', False), ('notify_up', '/bin/u', False), ('notify_up', '/bin/t', True),
+        ('notify_up', '/bin/v4', True), ('quorum_down', '/bin/qd', True)]
+    assert [p['not_run_reason'] for p in r['programs'][:2]] == ['virtual_server_without_real_servers',
+                                                                'real_server_family_mismatch']
+
+
+def test_invalid_addresses_skip_blocks_and_uncertain_ones_fail_closed():
+    conf = ('virtual_server 192.0.2.300 80 {\n quorum_up /bin/bad\n real_server 10.0.0.1 80 {\n notify_up /bin/x\n'
+            ' }\n}\nvirtual_server 192.0.2.1 0 {\n real_server 10.0.0.1 99999 {\n notify_up /bin/y\n }\n'
+            ' real_server 10.0.0.2 {\n notify_up /bin/z\n }\n}\n')
+    found, r = every(conf, keepalived_script_exists=False)
+    assert r['complete'], r['gaps']
+    assert [f[2] for f in found] == [['/bin/z']]
+    r = ks.keepalived_programs('virtual_server 192.0.2.1 +80 {\n real_server 10.0.0.1 80 {\n}\n}\n',
+                               keepalived_script_exists=False)
+    assert [g['code'] for g in r['gaps']] == ['address_unverified'] and not r['complete']
+
+
+def test_misc_check_default_user_order_and_missing_path():
+    conf = ('virtual_server 192.0.2.1 80 {\n real_server 10.0.0.1 80 {\n MISC_CHECK {\n user\n misc_timeout 5\n'
+            ' }\n MISC_CHECK {\n misc_path /bin/m\n }\n }\n}\nglobal_defs {\n script_user svc\n}\n')
+    found, r = every(conf, keepalived_script_exists=True)
+    assert r['complete'], r['gaps']
+    assert found == [('checker', 'misc_path', ['/bin/m'], 'keepalived_script', True)]
+    found, r = every('global_defs {\n enable_script_security\n}\n' + conf.rsplit('global_defs', 1)[0],
+                     keepalived_script_exists=False)
+    assert found == [('checker', 'misc_path', ['/bin/m'], None, False)]
+    assert r['programs'][0]['not_run_reason'] == 'default_user_refused'
+
+
+def test_checker_skips_vrrp_roots_and_needs_virtual_server_or_all():
+    conf = 'global_defs {\n lvs_notify_fifo /f\n lvs_notify_fifo_script /bin/l\n}\nvrrp_instance V {\n notify /bin/n\n}\n'
+    found, r = every(conf, keepalived_script_exists=False)
+    assert ('checker', 'lvs_notify_fifo_script', ['/bin/l'], 'root', None) in found
+    assert 'checker_process_start_unobserved' in [g['code'] for g in r['gaps']] and not r['complete']
+    found, r = every(conf, keepalived_script_exists=False, run_all_children=True)
+    assert r['complete'] and ('checker', 'lvs_notify_fifo_script', ['/bin/l'], 'root', True) in found
+    found, r = every(conf, keepalived_script_exists=False, run_all_children=False)
+    assert r['complete'] and r['checker_process_starts'] is False
+    assert ('checker', 'lvs_notify_fifo_script', ['/bin/l'], 'root', False) in found

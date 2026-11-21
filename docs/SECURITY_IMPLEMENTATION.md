@@ -12564,8 +12564,13 @@ keepalived runs administrator-configured programs on VRRP state changes, health 
   - **When the VRRP child starts:** only with a `vrrp_instance` or `static_*` root (`have_vrrp_config`), or under `--all`. An unobserved `--all` with no VRRP configuration is a blocking gap.
   - **Default-user refusal:** under `enable_script_security` with no `keepalived_script` account, refusal is sticky (`default_user_fail`). A later `script_user` does not revive it. A dropped notify script leaves its slot free for a later line.
   - **Not modelled:** runtime outcomes stay out of scope. These are FIFO creation or open failure, invalid configured users, insecure-script disabling under script security, and the `-P`/`-C` daemon flags.
+- **Increment 4 (draft):** `keepalived_programs` adds the checker process, from `check/check_parser.c` and the `check/check_*.c` keyword tables.
+  - **What it yields:** `virtual_server` `quorum_up`/`quorum_down` and `real_server` `notify_up`/`notify_down` (first wins), and `MISC_CHECK` `misc_path` (last wins, with the block's `user` or the default user looked up when the block ends). It also yields the checker's own copy of the global `notify_fifo_script`, plus `lvs_notify_fifo_script`.
+  - **When the checker starts:** only with a `virtual_server` root (`have_checker_config`) or under `--all`. The `vrrp_*` roots are inactive there.
+  - **Addresses:** these follow `inet_stosockaddr`. An invalid virtual or real server address skips its block. A port the contract cannot decide is a blocking gap.
+  - **Dropped servers:** a virtual server left with no real servers loses its scripts. So does a non-TUN real server whose address family differs from its virtual server's.
+  - **Not modelled:** post-parse validation that later removes servers. It can only over-report programs. `vrrp_programs` on its own still reports the checker blocks as a blocking gap.
 - **Remaining:**
-  - The checker process: `virtual_server`, `real_server` and `MISC_CHECK`, plus `quorum_*` and `notify_up`/`notify_down`. These blocks are skipped by brace count and are blocking gaps for now.
   - BFD and track-process program review.
   - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
 - **Acceptance:** stays incomplete until those are delivered.

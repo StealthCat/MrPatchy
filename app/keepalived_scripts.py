@@ -49,8 +49,19 @@ global FIFO is dropped with its script (``init_global_data``). The VRRP child
 starts only when the configuration has ``vrrp_instance`` or ``static_*`` roots
 (``have_vrrp_config``) unless keepalived runs with ``--all``. Default-user
 failure is sticky (``default_user_fail``): a later ``script_user`` does not
-undo it. ``lvs_notify_fifo_script`` runs in the checker process and, with the
-checker's ``virtual_server`` scripts, stays a blocking gap.
+undo it. ``lvs_notify_fifo_script`` runs in the checker process; ``vrrp_programs``
+still reports the checker's blocks as a blocking gap.
+
+Increment 4 adds the checker process to ``keepalived_programs`` (``check/check_parser.c`` and the
+``check/check_*.c`` keyword tables). It reports ``virtual_server`` ``quorum_up``/``quorum_down``,
+``real_server`` ``notify_up``/``notify_down`` (first wins), ``MISC_CHECK`` ``misc_path`` (last wins, with the
+block's ``user`` or the default user looked up at the end of the block) and the checker's own copy of the
+global ``notify_fifo_script`` plus ``lvs_notify_fifo_script``. The ``vrrp_*`` roots are inactive there. The
+checker starts only with a ``virtual_server`` root (``have_checker_config``) or ``--all``. Addresses follow
+``inet_stosockaddr``: an invalid virtual or real server address skips its block, and a port this contract
+cannot decide is a blocking gap. A virtual server left with no real servers is dropped with its scripts, and so
+is a non-TUN real server whose address family differs from the virtual server's (``rs_end_handler``).
+Post-parse validation that later removes servers is not modelled, so it can only over-report programs.
 
 This module performs no I/O, runs nothing and authorizes nothing; ``origin``
 is always ``not_assessed``.
@@ -59,7 +70,7 @@ from __future__ import annotations
 
 from typing import Any
 
-CONTRACT_VERSION = 3
+CONTRACT_VERSION = 4
 SOURCE_VERSIONS = ('2.2.8',)
 MAXBUF = 1024
 MAX_TEXT = 262144
@@ -75,6 +86,7 @@ BLOCKING = frozenset({
     'gaps_truncated', 'unknown_keyword', 'unexpected_brace', 'missing_brace', 'unbalanced_brace',
     'unterminated_block', 'unmodelled_nested_block', 'unnamed_block', 'unparsable_script',
     'checker_not_modelled', 'default_user_unobserved', 'missing_user', 'vrrp_process_start_unobserved',
+    'checker_process_start_unobserved', 'address_unverified', 'checker_on_dropped_real_server',
 })
 
 
@@ -447,6 +459,83 @@ PARENT_SCRIPT_KEYWORDS = ('startup_script', 'shutdown_script')
 VRRP_CONFIG_ROOTS = ('vrrp_instance', 'static_ipaddress', 'static_routes', 'static_rules')
 _BOB, _EOB = b'{', b'}'
 
+# --- Increment 4: the checker process (check/check_parser.c, check/check_*.c, keepalived 2.2.8) ----------
+
+# init_vrrp_keywords(false) in the checker process: these roots are inactive and skipped there.
+VRRP_PARSER_ROOTS = frozenset({
+    'track_group', 'static_ipaddress', 'static_routes', 'static_rules', 'vrrp_sync_group', 'garp_group',
+    'linkbeat_interfaces', 'vrrp_instance', 'vrrp_script', 'vrrp_track_process', 'interface_up_down_delays'})
+CHECKER_ROOT_KEYWORDS = {**ROOT_KEYWORDS, 'virtual_server': 'vs', 'virtual_server_group': 'vsg', 'SSL': 'ssl'}
+SSL_KEYWORDS = {k: 'plain' for k in ('password', 'ca', 'certificate', 'key')}
+_COMMON = ('retry', 'delay_before_retry', 'warmup', 'delay_loop', 'alpha', 'log_all_failures')
+_CONNECTION = ('connect_ip', 'connect_port', 'bindto', 'bind_port', 'bind_if', 'connect_timeout', 'fwmark')
+
+
+def _plain(*names: str) -> dict[str, Any]:
+    return {k: 'plain' for k in names}
+
+
+_CONN_COMMON = _plain(*(_CONNECTION + _COMMON))
+# Build-conditional keywords (regex*, enable_sni, snmp_name, flag-*) take no braces and run nothing, so
+# keepalived treats them alike whether a build knows them or logs them as unknown.
+_URL_KEYWORDS = _plain('path', 'digest', 'status_code', 'virtualhost', 'regex', 'regex_no_match', 'regex_options',
+                       'regex_min_offset', 'regex_max_offset', 'regex_stack', 'tls_compliant')
+_HTTP_KEYWORDS = {**_CONN_COMMON, **_plain('nb_get_retry', 'virtualhost', 'http_protocol', 'enable_sni',
+                                           'fast_recovery', 'tls_compliant'), 'url': ('sub', _URL_KEYWORDS)}
+CHECKER_KEYWORDS = {
+    'TCP_CHECK': _CONN_COMMON, 'PING_CHECK': _CONN_COMMON,
+    'UDP_CHECK': {**_CONN_COMMON, **_plain('payload', 'require_reply', 'min_reply_length', 'max_reply_length')},
+    'SMTP_CHECK': {**_CONN_COMMON, 'helo_name': 'plain', 'host': ('sub', _CONN_COMMON)},
+    'HTTP_GET': _HTTP_KEYWORDS, 'SSL_GET': _HTTP_KEYWORDS,
+    'DNS_CHECK': {**_CONN_COMMON, **_plain('type', 'name')},
+    'FILE_CHECK': _plain('track_file', 'weight'), 'BFD_CHECK': _plain('name', 'alpha'),
+}
+MISC_KEYWORDS = {**_plain(*_COMMON), 'misc_path': 'misc_path', 'user': 'misc_user',
+                 **_plain('misc_timeout', 'misc_dynamic')}
+REAL_SERVER_KEYWORDS = {
+    **_plain('weight', 'uthreshold', 'lthreshold', 'inhibit_on_failure', 'alpha', 'retry', 'delay_before_retry',
+             'warmup', 'connect_timeout', 'delay_loop', 'smtp_alert', 'virtualhost', 'snmp_name'),
+    'lvs_method': 'fwd', 'notify_up': 'script', 'notify_down': 'script',
+    'MISC_CHECK': ('misc', MISC_KEYWORDS), **{k: ('sub', v) for k, v in CHECKER_KEYWORDS.items()},
+}
+VIRTUAL_SERVER_KEYWORDS = {
+    **_plain('retry', 'delay_before_retry', 'warmup', 'connect_timeout', 'delay_loop', 'inhibit_on_failure',
+             'lb_algo', 'lvs_sched', 'hashed', 'ops', 'flag-1', 'flag-2', 'flag-3', 'sh-port', 'sh-fallback',
+             'mh-port', 'mh-fallback', 'persistence_engine', 'persistence_timeout', 'persistence_granularity',
+             'protocol', 'ha_suspend', 'smtp_alert', 'virtualhost', 'snmp_name', 'alpha', 'omega', 'quorum',
+             'hysteresis', 'weight', 'sorry_server', 'sorry_server_inhibit', 'sorry_server_lvs_method'),
+    'ip_family': 'ipfam', 'lb_kind': 'fwd', 'lvs_method': 'fwd', 'quorum_up': 'script', 'quorum_down': 'script',
+    'real_server': ('rs', REAL_SERVER_KEYWORDS),
+}
+
+
+def _port_valid(port: str | None) -> bool | None:
+    """The port half of ``inet_stosockaddr``: an all-zero port means none. ``None`` where not certain."""
+    if port is None or not port.strip('0'):
+        return True
+    if port.isascii() and port.isdigit():
+        return 1 <= int(port) <= 65535
+    return None
+
+
+def _address(ip: str, port: str | None) -> tuple[bool | None, str | None]:
+    """``inet_stosockaddr``: (valid, family). ``valid`` is ``None`` where this port cannot be certain."""
+    family = 'inet6' if ':' in ip else 'inet'
+    ok = _port_valid(port)
+    if ok is not True:
+        return ok, family
+    cut = min([i for i in (ip.find('-'), ip.find('/')) if i >= 0], default=len(ip))
+    host = ip[:cut]
+    if '%' in host or not host.isascii():
+        return False, family
+    import ipaddress
+    try:
+        (ipaddress.IPv6Address if family == 'inet6' else ipaddress.IPv4Address)(host)
+    except ValueError:
+        return False, family
+    return True, family
+
+
 
 class _Walk:
     def __init__(self, lines: list[dict[str, Any]], gaps: list, keepalived_script_exists: bool | None,
@@ -454,6 +543,7 @@ class _Walk:
         self.lines, self.pos, self.gaps = lines, 0, gaps
         self.process = process  # 'vrrp' (the VRRP child) or 'parent'
         self.have_vrrp_config = False
+        self.have_checker_config = False
         self.fifo_names: dict[str, str] = {}
         self.fifo_scripts: dict[str, dict[str, Any]] = {}
         self.parent_scripts: set = set()
@@ -565,7 +655,8 @@ class _Walk:
             return
         if level == 0 and name in VRRP_CONFIG_ROOTS:
             self.have_vrrp_config = True
-        if level == 0 and self.process == 'parent' and kind != 'global_defs':
+        if level == 0 and ((self.process == 'parent' and kind != 'global_defs')
+                           or (self.process == 'checker' and name in VRRP_PARSER_ROOTS)):
             # global_init_keywords installs every non-global root inactive: skip_sublevel, no handler work.
             self.skip_block(words[-1] != _BOB or len(words) == 1)
             if kind != 'plain':
@@ -601,6 +692,9 @@ class _Walk:
                 return
             block['user'] = (_text(words[1]), _text(words[2]) if len(words) > 2 else None)
             block['user_error'] = False
+            return
+        if kind in ('vs', 'vsg', 'ssl', 'fwd', 'ipfam', 'misc_path', 'misc_user') or isinstance(kind, tuple):
+            self.checker_keyword(kind, name, words, item, level, block)
             return
         bob_needed = self.strip_bob(words)
         if kind == 'auth':
@@ -731,14 +825,14 @@ class _Walk:
             self.apply_default(entry, item['line'])
         return entry
 
-    def finish_fifos(self) -> None:
-        """init_global_data and fifo_open for the VRRP child: which FIFO scripts it starts."""
+    def finish_fifos(self, own: str = 'vrrp') -> None:
+        """init_global_data and notify_fifo_open for a child: the global FIFO script, then the child's own."""
         names = self.fifo_names
-        if names.get('vrrp') is not None and names.get('vrrp') == names.get('global'):
-            # "notify FIFO has been specified for global and vrrp FIFO - ignoring vrrp FIFO"
-            names.pop('vrrp')
-            self.fifo_scripts.pop('vrrp', None)
-        for fifo in ('global', 'vrrp'):
+        if names.get(own) is not None and names.get(own) == names.get('global'):
+            # "notify FIFO %s has been specified for global and vrrp/LVS FIFO - ignoring vrrp/LVS FIFO"
+            names.pop(own)
+            self.fifo_scripts.pop(own, None)
+        for fifo in ('global', own):
             entry = self.fifo_scripts.get(fifo)
             if entry is None:
                 continue
@@ -746,6 +840,123 @@ class _Walk:
             if entry['fifo'] is None:
                 entry.update(runs=False, not_run_reason='no_fifo')
             self.programs.append(entry)
+
+    # --- the checker process --------------------------------------------------------------------------
+    def checker_keyword(self, kind: Any, name: str, words: list, item: dict, level: int, block: dict | None) -> None:
+        line_no = item['line']
+        if kind == 'vsg':
+            if len(words) < 2:
+                _gap(self.gaps, 'unnamed_block', line_no, 'A virtual_server_group has no name.')
+                self.skip_block(True)
+                self.stream(None, True, level + 1, None)
+                return
+            self.value_block([words[0]] + words[2:], line_no)  # vsg_handler drops the name first
+            return
+        if kind in ('ipfam', 'fwd', 'misc_path', 'misc_user'):
+            self.checker_value(kind, words, item, block)
+            return
+        bob_needed = self.strip_bob(words)
+        if kind == 'ssl':
+            self.stream(SSL_KEYWORDS, bob_needed, level + 1, None)
+        elif kind == 'vs':
+            self.virtual_server(words, item, bob_needed, level)
+        elif kind[0] == 'rs':
+            self.real_server(kind[1], words, item, bob_needed, level, block)
+        elif kind[0] == 'misc':
+            self.misc_check(kind[1], item, bob_needed, level, block)
+        else:
+            self.stream(kind[1], bob_needed, level + 1, None)
+
+    def checker_value(self, kind: str, words: list, item: dict, block: dict) -> None:
+        value = _text(words[1]) if len(words) > 1 else None
+        if kind == 'ipfam':
+            family = value if value in ('inet', 'inet6') else None
+            if family is not None and block['af'] in (None, family):
+                block['af'] = family  # unknown or conflicting families are logged and ignored
+        elif kind == 'fwd':
+            if value in ('NAT', 'DR', 'TUN'):
+                block['fwd'] = value  # svr_forwarding_handler; other methods are logged and ignored
+        elif kind == 'misc_path':
+            parsed = script_line(item['text'])
+            if parsed['status'] != 'ok':
+                _gap(self.gaps, 'unparsable_script', item['line'], 'keepalived cannot parse this misc_path.')
+                block['path'] = None
+            else:
+                block['path'] = (parsed['argv'], item['line'])  # set_script_params_array: the last wins
+        elif len(words) >= 2:
+            block['user'] = (value, _text(words[2]) if len(words) > 2 else None)
+        # A "user" without a name is logged; the default user still applies at the end of the block.
+
+    def virtual_server(self, words: list, item: dict, bob_needed: bool, level: int) -> None:
+        self.have_checker_config = True
+        line_no = item['line']
+        params = [_text(w) for w in words[1:3]]
+        block = {'kind': 'virtual_server', 'name': ' '.join(params) or None, 'seen': set(), 'af': None,
+                 'fwd': 'NAT', 'real_servers': 0}
+        valid: bool | None = True
+        if not params or (params[0] in ('group', 'fwmark') and len(params) < 2):
+            valid = None
+        elif params[0] == 'fwmark':
+            valid = True if params[1].isascii() and params[1].isdigit() and int(params[1]) <= 0xffffffff else None
+        elif params[0] != 'group':
+            valid, block['af'] = _address(params[0], params[1] if len(params) > 1 else None)
+        if valid is None:
+            _gap(self.gaps, 'address_unverified', line_no, 'Whether keepalived accepts this virtual_server '
+                 'address was not modelled.')
+        if valid is not True:
+            block['af'] = None
+            self.skip_block(True)  # alloc_vs: "Invalid virtual server IP address - skipping"
+        start = len(self.programs)
+        if self.stream(VIRTUAL_SERVER_KEYWORDS, bob_needed, level + 1, block) or valid is not True:
+            return
+        if not block['real_servers']:
+            # vs_end_handler: "Virtual server has no real servers - ignoring"
+            for entry in self.programs[start:]:
+                if entry['runs']:
+                    entry.update(runs=False, not_run_reason='virtual_server_without_real_servers')
+
+    def real_server(self, table: dict, words: list, item: dict, bob_needed: bool, level: int, vs: dict) -> None:
+        params = [_text(w) for w in words[1:3]]
+        block = {'kind': 'real_server', 'name': ' '.join(params) or None, 'seen': set(), 'fwd': vs['fwd'],
+                 'virtual_server': vs['name']}
+        valid, family = _address(params[0], params[1] if len(params) > 1 else None) if params else (None, None)
+        if valid is None:
+            _gap(self.gaps, 'address_unverified', item['line'], 'Whether keepalived accepts this real_server '
+                 'address was not modelled.')
+        if valid is not True:
+            self.skip_block(True)  # alloc_rs: "Invalid real server ip address/port - skipping"
+        start = len(self.programs)
+        if self.stream(table, bob_needed, level + 1, block) or valid is not True:
+            return
+        for entry in self.programs[start:]:
+            entry['virtual_server'] = vs['name']
+        # rs_end_handler: outside TUN forwarding the address families must agree.
+        if block['fwd'] != 'TUN' and vs['af'] not in (None, family):
+            for entry in self.programs[start:]:
+                if entry['keyword'] == 'misc_path' and entry['runs']:
+                    _gap(self.gaps, 'checker_on_dropped_real_server', entry['line'], 'keepalived frees this '
+                         'real server but leaves its checker queued.')
+                if entry['runs']:
+                    entry.update(runs=False, not_run_reason='real_server_family_mismatch')
+            return
+        if vs['af'] is None and block['fwd'] != 'TUN':
+            vs['af'] = family
+        vs['real_servers'] += 1
+
+    def misc_check(self, table: dict, item: dict, bob_needed: bool, level: int, rs: dict) -> None:
+        block = {'kind': 'MISC_CHECK', 'path': None, 'user': None}
+        if self.stream(table, bob_needed, level + 1, block):
+            return
+        # misc_end_handler: no misc_path drops the checker; otherwise the default user is looked up now.
+        if block['path'] is None:
+            return
+        argv, line_no = block['path']
+        entry = self.entry('MISC_CHECK', rs['name'], 'misc_path', line_no, argv, 0)
+        if block['user'] is not None:
+            entry['user'], entry['group'] = block['user']
+        else:
+            self.apply_default(entry, item['line'])
+        self.programs.append(entry)
 
     def value_block(self, words: list, line_no: int) -> None:
         """alloc_value_block: lines up to the first line ending in "}" are values, never keywords."""
@@ -809,25 +1020,54 @@ def vrrp_programs(text: Any, *, config_id: str | None = None, keepalived_script_
             'complete': not any(g['blocking'] for g in gaps), 'origin': 'not_assessed'}
 
 
+def _checker_walk(pre: dict, keepalived_script_exists: bool | None, run_all_children: bool | None) -> tuple:
+    gaps: list = []
+    walk = _Walk(pre['lines'], gaps, keepalived_script_exists, process='checker')
+    walk.stream(CHECKER_ROOT_KEYWORDS, False, 0, None)
+    walk.finish_fifos('lvs')
+    starts = True if walk.have_checker_config or run_all_children else (None if run_all_children is None else False)
+    if starts is not True and walk.programs:
+        for entry in walk.programs:
+            if entry['runs']:
+                entry.update(runs=starts, not_run_reason='checker_process_not_started')
+        if starts is None:
+            _gap(gaps, 'checker_process_start_unobserved', None, 'No virtual_server block starts the checker '
+                 'process; whether keepalived runs with --all was not observed.')
+    return walk, gaps, starts
+
+
+def _merge_gaps(gaps: list, extra: list) -> None:
+    seen = {(g['code'], g['line']) for g in gaps}
+    for g in extra:  # structure gaps repeat across process walks; keep each once
+        if (g['code'], g['line']) not in seen:
+            seen.add((g['code'], g['line']))
+            _gap(gaps, g['code'], g['line'], g['detail'])
+
+
 def keepalived_programs(text: Any, *, config_id: str | None = None, keepalived_script_exists: bool | None = None,
                         run_all_children: bool | None = None) -> dict[str, Any]:
-    """Programs the keepalived 2.2.8 parent and VRRP processes run; each entry names its ``process``.
+    """Programs the keepalived 2.2.8 parent, VRRP and checker processes run; each entry names its ``process``.
 
-    The parent's ``startup_script`` and ``shutdown_script`` come first. Each process resolves default script
-    users on its own, so the parent's defaults depend only on ``global_defs`` order.
+    The parent's ``startup_script`` and ``shutdown_script`` come first, then the VRRP child's programs, then
+    the checker child's. Each process resolves default script users on its own, in its own walk order.
     """
     pre = logical_lines(text, config_id=config_id)
     walk, gaps, starts = _vrrp_walk(pre, keepalived_script_exists, run_all_children)
+    # The VRRP walk skips the checker's blocks; the checker walk below models them.
+    gaps[:] = [g for g in gaps if g['code'] != 'checker_not_modelled']
     parent_programs: list = []
+    checker_programs: list = []
+    checker_starts: bool | None = False
     if _readable(gaps):
         parent_gaps: list = []
         parent = _Walk(pre['lines'], parent_gaps, keepalived_script_exists, process='parent')
         parent.stream(ROOT_KEYWORDS, False, 0, None)
         parent_programs = parent.programs
-        seen = {(g['code'], g['line']) for g in gaps}
-        for g in parent_gaps:  # structure gaps repeat the VRRP walk's; keep only the parent's own
-            if (g['code'], g['line']) not in seen:
-                _gap(gaps, g['code'], g['line'], g['detail'])
+        _merge_gaps(gaps, parent_gaps)
+        checker, checker_gaps, checker_starts = _checker_walk(pre, keepalived_script_exists, run_all_children)
+        checker_programs = checker.programs
+        _merge_gaps(gaps, checker_gaps)
     return {'contract_version': CONTRACT_VERSION, 'source_versions': list(SOURCE_VERSIONS),
-            'vrrp_process_starts': starts, 'programs': parent_programs + walk.programs, 'gaps': gaps,
+            'vrrp_process_starts': starts, 'checker_process_starts': checker_starts,
+            'programs': parent_programs + walk.programs + checker_programs, 'gaps': gaps,
             'complete': not any(g['blocking'] for g in gaps), 'origin': 'not_assessed'}
