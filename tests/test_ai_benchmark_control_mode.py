@@ -171,7 +171,7 @@ def test_daily_cap_serial_and_parallel_settle_all_calls_without_changing_the_wor
 
 
 @pytest.mark.parametrize('evidence', [
-    None, {'starts_per_hour': 999, 'admitted_starts': 8, 'dispatch_wait_seconds': 25},
+    None, {'starts_per_hour': 1001, 'admitted_starts': 8, 'dispatch_wait_seconds': 25},
     {'starts_per_hour': 1000, 'admitted_starts': 7, 'dispatch_wait_seconds': 25},
     {'starts_per_hour': 1000, 'admitted_starts': 8, 'dispatch_wait_seconds': 27},
 ])
@@ -183,6 +183,33 @@ def test_paced_comparisons_refuse_missing_or_inconsistent_evidence(evidence):
                 report('parallel', 4, **common, fixture_rate=evidence))
 
 
+def test_custom_rates_must_match_for_a_valid_comparison():
+    def paced(execution, concurrency, rate):
+        return report(execution, concurrency, ai_control_mode='rate', elapsed_seconds=32,
+                      runs_per_second=0.25, fixture_rate={
+                          'starts_per_hour': rate, 'admitted_starts': 8, 'dispatch_wait_seconds': 29,
+                      })
+
+    serial = paced('serial', 1, 900)
+    parallel = paced('parallel', 4, 900)
+    assert compare(serial, parallel)['candidate']['fixture_rate']['starts_per_hour'] == 900
+    with pytest.raises(ComparisonError, match='capability mismatch: fixture_rate.starts_per_hour differs'):
+        compare(serial, paced('parallel', 4, 850))
+
+
+@pytest.mark.parametrize('arguments, error', [
+    (['--rate-per-hour', '900'], 'requires --control-mode rate or rate_and_daily'),
+    (['--control-mode', 'daily_cap', '--rate-per-hour', '900'], 'requires --control-mode rate or rate_and_daily'),
+    (['--control-mode', 'rate', '--rate-per-hour', '0'], 'must be between 1 and 1000'),
+    (['--control-mode', 'rate', '--rate-per-hour', '1001'], 'must be between 1 and 1000'),
+    (['--control-mode', 'rate', '--rate-per-hour', '11'], 'more than 300 seconds'),
+])
+def test_benchmark_refuses_invalid_custom_rate_before_opening_mysql(arguments, error):
+    result = run('--database', 'mysql', '--runs', '2', *arguments, timeout=30)
+    assert result.returncode == 2 and result.stdout == ''
+    assert error in result.stderr
+
+
 def test_rate_evidence_is_refused_when_the_report_could_not_have_waited_for_all_starts():
     pacing = {'starts_per_hour': 1000, 'admitted_starts': 8, 'dispatch_wait_seconds': 0.5}
     with pytest.raises(ComparisonError, match='elapsed time cannot contain the recorded pacing'):
@@ -191,15 +218,19 @@ def test_rate_evidence_is_refused_when_the_report_could_not_have_waited_for_all_
         compare(report(fixture_rate=pacing), report('parallel', 4))
 
 
-@pytest.mark.parametrize('mode', ['rate', 'rate_and_daily'])
-def test_serial_and_parallel_fixtures_wait_for_real_paced_starts(mode):
-    serial = _benchmark(1, '--control-mode', mode, '--same-server')
-    parallel = _benchmark(4, '--control-mode', mode, '--same-server')
+@pytest.mark.parametrize('mode, custom_rate', [('rate', None), ('rate_and_daily', 900)])
+def test_serial_and_parallel_fixtures_wait_for_real_paced_starts(mode, custom_rate):
+    options = ['--control-mode', mode, '--same-server']
+    if custom_rate is not None:
+        options.extend(['--rate-per-hour', str(custom_rate)])
+    serial = _benchmark(1, *options)
+    parallel = _benchmark(4, *options)
+    effective_rate = custom_rate or 1000
     for sample in (serial, parallel):
         pacing = sample['fixture_rate']
-        assert pacing['starts_per_hour'] == 1000 and pacing['admitted_starts'] == 4
+        assert pacing['starts_per_hour'] == effective_rate and pacing['admitted_starts'] == 4
         assert 0 < pacing['dispatch_wait_seconds'] <= sample['elapsed_seconds']
-        assert sample['elapsed_seconds'] >= 10.8
+        assert sample['elapsed_seconds'] >= round(3 * 3600 / effective_rate, 3)
         assert sample['completed_subjects'] == 4 and sample['errors'] == 0
         assert sample['provider_calls'] == 6 and sample['stages']['ssh_evidence']['count'] == 2
         if mode == 'rate_and_daily':
