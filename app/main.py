@@ -3481,6 +3481,23 @@ def security_auto_plan_failed_retry(host_id:str,user=Depends(admin_user)):
             s.commit()
             return result
 
+@app.get('/api/security/auto-plan-failed')
+def fleet_security_auto_plan_failed(user=Depends(admin_user)):
+    """Count failed automatic AI plan attempts across active servers (#1251). Read-only."""
+    from . import auto_plan_retry
+    with Session() as s:
+        return {'failed':auto_plan_retry.fleet_failed_count(s)}
+
+@app.post('/api/security/auto-plan-failed/retry')
+def fleet_security_auto_plan_failed_retry(user=Depends(admin_user)):
+    """Release failed automatic plan attempts across active servers (#1251). Sends nothing now."""
+    from . import auto_plan_retry
+    with worker.Lock('security-plan-queue'):
+        with Session() as s:
+            result=auto_plan_retry.release_fleet(s,user['username'])
+            s.commit()
+            return result
+
 class SecurityScanPolicy(SecurityScanInput):
     enabled:bool=False
     auto_ai_plan:bool=False

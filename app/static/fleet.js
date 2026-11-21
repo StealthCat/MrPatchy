@@ -549,7 +549,7 @@ async function users(revision=renderRevision){
 
 async function fleetSecurityCoverage(revision){
  const root=$('#content');let offset=0,query='',ticket=0;
- root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>'+(isAdmin()?'<section class="card" id="fleet-auto-plans" aria-labelledby="fleet-auto-plans-title"><h2 id="fleet-auto-plans-title">Automatic AI plans across the fleet</h2><div class="fleet-auto-plans-body"></div></section>':'');
+ root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>'+(isAdmin()?'<section class="card" id="fleet-auto-plans" aria-labelledby="fleet-auto-plans-title"><h2 id="fleet-auto-plans-title">Automatic AI plans across the fleet</h2><div class="fleet-auto-plans-body"></div><div class="fleet-auto-plan-retry" hidden></div></section>':'');
  const current=()=>currentView(revision,'security')&&root.isConnected;
  const load=async()=>{const turn=++ticket;try{
   const data=await api('/security/coverage?offset='+offset+'&q='+encodeURIComponent(query));if(!current()||turn!==ticket)return;
@@ -558,7 +558,7 @@ async function fleetSecurityCoverage(revision){
   root.querySelector('#coverage-results').innerHTML='<p>'+data.summary.servers+' servers on this page · '+data.summary.disabled+' disabled · '+data.summary.open_incidents+' open or acknowledged scanner incidents</p>'+data.items.map(h=>'<article class="card"><div class="card-head"><h2>'+esc(h.name)+'</h2><a class="button" href="'+serverLink(h.id,'security')+'">Review server security</a></div><p>'+badge(h.enabled?'enabled':'disabled')+' · Last contact '+date(h.last_seen)+' · '+h.open_incidents+' open incidents · ClamAV age limit '+h.expected_hours+' hours · YARA age limit 24 hours</p>'+(!h.enabled?'<p class="notice">Management is disabled. These results are historical; collection is suspended.</p>':'')+'<div class="server-grid">'+engine('ClamAV',h.engines.ClamAV)+engine('YARA',h.engines.YARA)+'</div></article>').join('')+(data.items.length?'':'<p>No matching managed servers.</p>');
   root.querySelector('#coverage-prev').disabled=!offset;root.querySelector('#coverage-next').disabled=!data.more;
  }catch(error){if(current()&&turn===ticket)root.querySelector('#coverage-results').innerHTML=PatchyUI.error('Unable to load coverage',esc(error.message));}};
- root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root),fleetAutoPlans(revision,root)]);
+ root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root),fleetAutoPlans(revision,root),fleetAutoPlanRetry(revision,root)]);
 }
 
 // Stored advisory-scan ledger only (#911): version applicability, never exploitation evidence, a clean-host verdict
@@ -612,6 +612,28 @@ async function fleetAutoPlans(revision,root){
   try{const data=await api('/security/auto-plan-status');if(!current())return;body.innerHTML=fleetAutoPlansContent(data);}
   catch(error){if(!current())return;body.innerHTML='<div class="notice" role="alert"><p>Automatic AI plan status is unavailable right now. This never means a plan will start; pause, holds and shared start gates still apply. The rest of this page is unaffected.</p><button type="button" class="fleet-auto-plans-refresh">Retry automatic plan status</button></div>';}
   body.querySelectorAll('.fleet-auto-plans-refresh').forEach(button=>button.onclick=load);
+ };
+ await load();
+}
+// Fleet-wide release of failed automatic AI plan attempts (#1251). Admin-only; counts active servers only.
+// Releasing sends no provider request: the automatic schedule retries each incident through the same gates.
+async function fleetAutoPlanRetry(revision,root){
+ const box=root.querySelector('.fleet-auto-plan-retry');if(!box||!isAdmin())return;let ticket=0;
+ const load=async()=>{
+  const turn=++ticket,current=()=>turn===ticket&&box.isConnected&&currentView(revision,'security')&&isAdmin();
+  let data;try{data=await api('/security/auto-plan-failed');}catch{data=null;}
+  if(!current())return;
+  const failed=data&&Number.isSafeInteger(data.failed)&&data.failed>0?data.failed:0;
+  if(!failed){box.hidden=true;box.innerHTML='';return;}
+  box.innerHTML=`<p><strong>${esc(failed.toLocaleString())} open incident${failed===1?'':'s'}</strong> across enabled servers ${failed===1?'had its':'had their'} automatic AI plan attempt fail and will not be tried again automatically.</p><p class="help">Fix the cause first, such as the saved key, model or provider quota; the failed operations in Activity show the error. Retrying sends no provider request now: it lets the automatic schedule try each incident once more, one plan per server at a time, and AI pause, response holds and the shared AI start gates still apply. Disabled servers are not included.</p><div class="actions"><button type="button" class="fleet-auto-plan-retry-run">Retry failed automatic plans</button></div>`;
+  box.hidden=false;
+  box.querySelector('.fleet-auto-plan-retry-run').onclick=async e=>{const b=e.currentTarget;b.disabled=true;
+   try{const r=await api('/security/auto-plan-failed/retry','POST');if(!current())return;
+    const released=Number.isSafeInteger(r?.released)?r.released:0,left=Number.isSafeInteger(r?.remaining)?r.remaining:0;
+    toast(released?`Released ${released.toLocaleString()} failed automatic plan attempt${released===1?'':'s'} for retry${left?`; ${left.toLocaleString()} still waiting, run it again`:''}`:'Nothing was released; the attempts may have changed');
+    box.closest('#fleet-auto-plans')?.querySelector('.fleet-auto-plans-refresh')?.click();
+    load();}
+   catch(error){if(current())toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};
  };
  await load();
 }
