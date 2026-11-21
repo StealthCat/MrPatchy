@@ -402,6 +402,50 @@ def test_idle_triage_polls_do_not_take_the_claim_lock(admin, monkeypatch):
     assert all(query.lstrip().upper().startswith('SELECT') for query in statements)
 
 
+def test_fully_leased_queue_skips_idle_locks_but_admits_peers_and_recovers(admin, monkeypatch):
+    seed(count=2)
+    with Session() as s:
+        s.get(Behavior, 'subject-1').verdict = 'low'
+        s.commit()
+    first = ai_claims.acquire()
+    assert first is not None and first.subject == 'subject-0'
+
+    locks = []
+    original_lock = ai_claims.Lock
+
+    def observe_lock(name):
+        locks.append(name)
+        return original_lock(name)
+
+    monkeypatch.setattr(ai_claims, 'Lock', observe_lock)
+    for _ in range(4):
+        assert ai_claims.acquire() is None
+    assert locks == []
+
+    with Session() as s:
+        assert s.get(ai_claims.Claim, first.subject).token == first.token
+        assert s.get(ai_runs.AIRun, first.run_id).state == 'running'
+        s.get(Behavior, 'subject-1').verdict = 'pending'
+        s.commit()
+    peer = ai_claims.acquire()
+    assert peer is not None and peer.subject == 'subject-1'
+    assert locks == ['ai-triage']
+
+    with Session() as s:
+        s.get(Behavior, first.subject).verdict = 'low'
+        s.get(ai_claims.Claim, first.subject).expires = 0
+        s.commit()
+    assert ai_claims.acquire() is None
+    assert locks == ['ai-triage', 'ai-triage']
+    with Session() as s:
+        assert s.get(ai_claims.Claim, first.subject) is None
+        assert s.get(ai_runs.AIRun, first.run_id).state == 'interrupted'
+        assert s.get(ai_claims.Claim, peer.subject).token == peer.token
+        assert s.get(ai_runs.AIRun, peer.run_id).state == 'running'
+    with peer:
+        pass
+
+
 @pytest.mark.parametrize('claim_state', ['expired', 'orphaned', 'live'])
 def test_idle_triage_still_recovers_abandoned_runs(admin, claim_state):
     seed(count=1)
