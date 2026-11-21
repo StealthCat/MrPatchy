@@ -3740,8 +3740,11 @@ either an answer (`answer`) or a lost connection (`failure`).
   - An answer settles at its actual cost.
   - A failure becomes `uncertain`. Its full ceiling stays counted in the old window
     of `ai_budget.history()`, and the reset never releases it.
-- **New window unchanged.** In both cases the new window's counted spend and next
-  eligibility are identical before and after the late outcome.
+- **New window unchanged.** The next window's cap is set to exactly one
+  reservation ceiling. In both cases the new window's counted spend and next
+  eligibility are identical before and after the late outcome. A distinct second
+  subject is not claimed, reserved or sent, either before or after it, so it
+  defers to the following reset.
 - **Stale run rejected.** Only the successor's assessment is accepted, and the lost
   run stays `interrupted`.
 
@@ -3752,6 +3755,7 @@ either an answer (`answer`) or a lost connection (`failure`).
 | Settlement or `mark_uncertain` rewrites `reset_at` to the current window | Both variants fail |
 | A late uncertain row past its reset is released | The `failure` variant fails |
 | Rows are counted regardless of their own window | Both variants fail: the successor is deferred |
+| Preflight and reserve ignore spend already counted in the window | Both variants fail: the second subject is sent |
 
 No defect was found and there is no runtime change. Failover and before/after
 production performance remain open.

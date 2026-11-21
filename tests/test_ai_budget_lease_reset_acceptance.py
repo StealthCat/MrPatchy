@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from app import ai, ai_assessments, ai_budget, ai_runs, worker
-from app.db import Behavior, Session
+from app.db import Behavior, Session, Setting
 from tests.test_ai_budget_lease_acceptance import (
     EVIDENCE,
     MODEL,
@@ -41,6 +41,24 @@ def cross_reset(monkeypatch):
     return reset
 
 
+def set_cap(cap):
+    with Session() as s:
+        setting=s.get(Setting,'config');setting.value={**setting.value,'ai_daily_cap_usd':float(cap)}
+        s.commit()
+
+
+def second_subject_defers(provider,sent):
+    """A distinct subject is not claimed, reserved or sent while the window has no
+    room for another conservative reservation."""
+    worker.investigate_one()
+    with Session() as s:
+        assert len(provider.sent)==sent and len(ledger(s))==2
+        behavior=s.get(Behavior,OTHER);assert behavior.verdict=='pending' and not behavior.approved
+
+
+OTHER='subject-1'
+
+
 def new_window(s):
     state=ai_budget.status(s)
     return Decimal(state['counted_usd']),ai_budget.waiting(s,time.time(),ai.investigation_payload(EVIDENCE,MODEL))
@@ -61,6 +79,8 @@ def test_lost_call_keeps_its_window_and_successor_uses_only_the_new_one(admin,mo
         assert held.status=='sent' and Decimal(ai_budget.status(s)['counted_usd'])==ceiling
         # A second reservation would not fit in this window.
         assert ceiling*2>cap
+    # The next window has room for exactly one reservation of the same size.
+    set_cap(ceiling)
     # The reset passes while the call is still in flight, then the heartbeat is lost.
     assert cross_reset(monkeypatch)==old_reset
     lost_run=expire_lease()
@@ -74,7 +94,12 @@ def test_lost_call_keeps_its_window_and_successor_uses_only_the_new_one(admin,mo
         rows=ledger(s);new_reset=ai_budget.status(s)['next_reset']
         assert [(row.run_id,row.reset_at) for row in rows]==[(lost_run,old_reset),(successor,new_reset)]
         before=new_window(s)
-        assert before[0]==rows[1].actual_usd
+        assert before[0]==rows[1].actual_usd and rows[1].reservation_usd==ceiling
+        s.add(Behavior(id=OTHER,host_id='host-0',evidence=dict(EVIDENCE)));s.commit()
+    # Settling the successor at its actual cost leaves less than one reservation, so a
+    # distinct second subject defers to the following reset.
+    second_subject_defers(provider,2)
+    assert before[0]+ceiling>ceiling and before[1]==new_reset
     # The late answer or failure reaches the lost worker only now.
     provider.release.set();lost.join(timeout=WAIT);assert not lost.is_alive()
     assert [run for run,_ in provider.sent]==[lost_run,successor]
@@ -105,3 +130,8 @@ def test_lost_call_keeps_its_window_and_successor_uses_only_the_new_one(admin,mo
         assert s.get(ai_runs.AIRun,lost_run).state=='interrupted'
         assert s.get(ai_runs.AIRun,successor).state=='complete'
         behavior=s.get(Behavior,SUBJECT);assert behavior.verdict=='low' and not behavior.approved
+    # The late outcome frees no new-window headroom: the second subject still defers
+    # to the following reset, with no further provider call or ledger row.
+    second_subject_defers(provider,2)
+    with Session() as s:
+        assert ai_budget.waiting(s,time.time(),ai.investigation_payload(EVIDENCE,MODEL))==new_reset
