@@ -12554,5 +12554,13 @@ keepalived runs administrator-configured programs on VRRP state changes, health 
   - `lib/notify.c`: `alloc_strvec_quoted_escaped` and `notify_script_init`
 - **What it yields:** the argv and configured user/group of a single script keyword line.
 - **Fails closed:** `include`, definitions, standard `$_*` parameters, `~SEQ`/`~LST`, `@` conditionals without an observed `config_id`, continuations, over-buffer lines, NUL bytes, invalid UTF-8 and over-limit input all make the result incomplete.
-- **Remaining:** the keyword-tree block walk. In 2.2.8 an unknown keyword's `{` is ignored, and its contents are parsed at the enclosing level, so any unknown keyword in a script-bearing block must be a blocking gap. Also remaining: default-user resolution, the per-program inventory and a differential check against the real binary.
+- **Increment 2 (draft):** `vrrp_programs` emulates `process_stream`, `alloc_value_block` and `skip_block` as the VRRP process runs them. It uses the 2.2.8 keyword tables for `vrrp_instance`, `vrrp_sync_group`, `vrrp_script` and `authentication`, and every root keyword. All build-conditional keywords are present in the Ubuntu binary.
+  - **What it yields:** every notify and `vrrp_script` program, with its argv, runtime-appended argument count, configured or default user, and source block.
+  - **Defaults and precedence:** first-wins notify slots, last-wins `script`, duplicate-name skipping, and the cached default user (`script_user`, `keepalived_script`, root, or refused under `enable_script_security`) in walk order.
+  - **Blocking gaps:** unknown keywords, unexpected or missing braces, unbalanced or unterminated blocks, unnamed blocks, unmodelled nested blocks, and an unobserved `keepalived_script` account. In 2.2.8 an unknown keyword's `{` is ignored and its `}` closes the enclosing block, so later scripts move.
+- **Remaining:**
+  - The `global_defs` startup, shutdown and FIFO scripts.
+  - The checker process: `virtual_server`, `real_server` and `MISC_CHECK`, plus `quorum_*` and `notify_up`/`notify_down`. These blocks are skipped by brace count and are blocking gaps for now.
+  - BFD and track-process program review.
+  - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
 - **Acceptance:** stays incomplete until those are delivered.

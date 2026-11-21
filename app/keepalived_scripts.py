@@ -27,17 +27,27 @@ replace (``$_PWD``, ``$_INSTANCE``, ``$_RANDOM``, ``$_HASH``, ``$_BANG``),
 ``config_id`` was not observed, trailing-backslash continuations and physical
 lines too long for keepalived's buffer.
 
-The block walk that assigns these lines to ``global_defs``, ``vrrp_script``,
-``vrrp_instance``, ``vrrp_sync_group``, ``virtual_server``, ``real_server``
-and ``MISC_CHECK`` blocks, and the resulting per-program inventory, are the
-next increment. This module performs no I/O, runs nothing and authorizes
-nothing; ``origin`` is always ``not_assessed``.
+Increment 2 adds ``vrrp_programs``: an emulation of ``process_stream`` and
+``alloc_value_block`` as the VRRP child process runs them, with the 2.2.8
+keyword tables for ``vrrp_instance``, ``vrrp_sync_group`` and ``vrrp_script``
+(every build-conditional keyword is present in the Ubuntu binary). It reports
+each notify and ``vrrp_script`` program with its argv, its configured or
+default user and its source block. Structure keepalived would report as a
+configuration error (unknown keywords, unexpected or missing braces,
+unbalanced or unterminated blocks) is a blocking gap, because a ``}`` that
+binds to the wrong level silently moves later scripts. ``global_defs`` is
+walked only for ``script_user`` and ``enable_script_security``; its own
+startup, shutdown and FIFO scripts and the checker process's ``virtual_server``
+scripts are the next increment and are blocking gaps when present.
+
+This module performs no I/O, runs nothing and authorizes nothing; ``origin``
+is always ``not_assessed``.
 """
 from __future__ import annotations
 
 from typing import Any
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 SOURCE_VERSIONS = ('2.2.8',)
 MAXBUF = 1024
 MAX_TEXT = 262144
@@ -50,7 +60,9 @@ _STD_DEFINITIONS = (b'_PWD', b'_INSTANCE', b'_RANDOM', b'_HASH', b'_BANG')
 BLOCKING = frozenset({
     'over_limit', 'binary', 'invalid_utf8', 'line_over_buffer', 'include', 'definition',
     'parameter_expansion', 'sequence', 'conditional_unresolved', 'continuation', 'unterminated_quote',
-    'gaps_truncated',
+    'gaps_truncated', 'unknown_keyword', 'unexpected_brace', 'missing_brace', 'unbalanced_brace',
+    'unterminated_block', 'unmodelled_nested_block', 'unnamed_block', 'unparsable_script',
+    'global_script_not_modelled', 'checker_not_modelled', 'default_user_unobserved', 'missing_user',
 })
 
 
@@ -363,3 +375,324 @@ def script_line(line: bytes, *, user_offset: int = 2) -> dict[str, Any]:
 
 def _text(value: bytes) -> str:
     return value.decode('utf-8', 'surrogateescape')
+
+
+
+# --- Increment 2: the VRRP process block walk -------------------------------------------------------
+
+# lib/notify.c set_vrrp_notify_script extra_params: ``notify`` gets type, name, state and priority appended.
+_NOTIFY_EXTRA = {'notify': 4}
+_VRRP_NOTIFY = ('notify_backup', 'notify_master', 'notify_fault', 'notify_stop', 'notify')
+_INSTANCE_NOTIFY = _VRRP_NOTIFY + ('notify_deleted', 'notify_master_rx_lower_pri')
+_TRACK_VALUE = ('track_interface', 'track_script', 'track_file', 'track_process', 'track_bfd')
+
+# vrrp/vrrp_parser.c init_vrrp_keywords, keepalived 2.2.8.
+SYNC_GROUP_KEYWORDS = {
+    **{k: 'value' for k in ('group',) + _TRACK_VALUE},
+    **{k: 'script' for k in _VRRP_NOTIFY},
+    **{k: 'plain' for k in ('smtp_alert', 'global_tracking', 'sync_group_tracking_weight',
+                            'notify_priority_changes')},
+}
+INSTANCE_KEYWORDS = {
+    **{k: 'value' for k in ('unicast_peer', 'virtual_ipaddress', 'virtual_ipaddress_excluded', 'virtual_routes',
+                            'virtual_rules') + _TRACK_VALUE},
+    **{k: 'script' for k in _INSTANCE_NOTIFY},
+    'authentication': 'auth',
+    **{k: 'plain' for k in (
+        'use_vmac', 'use_vmac_addr', 'vmac_xmit_base', 'use_ipvlan', 'unicast_fault_no_peer', 'check_unicast_src',
+        'old_unicast_checksum', 'native_ipv6', 'state', 'interface', 'vrf', 'dont_track_primary', 'mcast_src_ip',
+        'unicast_src_ip', 'mcast_dst_ip', 'track_src_ip', 'virtual_router_id', 'unicast_ttl', 'version',
+        'priority', 'advert_int', 'no_virtual_ipaddress', 'promote_secondaries', 'linkbeat_use_polling',
+        'v3_checksum_as_v2', 'accept', 'no_accept', 'skip_check_adv_addr', 'strict_mode', 'preempt', 'nopreempt',
+        'preempt_delay', 'debug', 'smtp_alert', 'notify_priority_changes', 'lvs_sync_daemon_interface',
+        'garp_master_delay', 'garp_master_refresh', 'garp_master_repeat', 'garp_master_refresh_repeat',
+        'garp_lower_prio_delay', 'garp_lower_prio_repeat', 'down_timer_adverts', 'timer_expired_backup',
+        'garp_extra_if', 'vmac_garp_intvl', 'lower_prio_no_advert', 'higher_prio_send_advert',
+        'kernel_rx_buf_size')},
+}
+AUTH_KEYWORDS = {'auth_type': 'plain', 'auth_pass': 'plain'}
+SCRIPT_KEYWORDS = {'script': 'vscript', 'user': 'vuser',
+                   **{k: 'plain' for k in ('interval', 'timeout', 'weight', 'rise', 'fall', 'init_fail')}}
+
+# Root keywords every process installs (core/global_parser.c, vrrp/vrrp_parser.c, check/check_parser.c,
+# bfd/bfd_parser.c, trackers/track_file.c). In the VRRP process the checker roots are inactive and skipped.
+ROOT_KEYWORDS = {
+    'vrrp_instance': 'instance', 'vrrp_sync_group': 'sync_group', 'vrrp_script': 'vscript_block',
+    'global_defs': 'global_defs',
+    **{k: 'value' for k in ('static_ipaddress', 'static_routes', 'static_rules', 'linkbeat_interfaces',
+                            'interface_up_down_delays')},
+    **{k: 'opaque' for k in ('track_group', 'garp_group', 'vrrp_track_process', 'track_file', 'vrrp_track_file',
+                             'bfd_instance')},
+    **{k: 'inactive' for k in ('virtual_server', 'virtual_server_group', 'SSL')},
+    **{k: 'plain' for k in ('linkbeat_use_polling', 'net_namespace', 'net_namespace_ipvs', 'namespace_with_ipsets',
+                            'use_pid_dir', 'instance', 'child_wait_time')},
+}
+GLOBAL_SCRIPT_KEYWORDS = ('startup_script', 'shutdown_script', 'notify_fifo_script', 'vrrp_notify_fifo_script',
+                          'lvs_notify_fifo_script')
+_BOB, _EOB = b'{', b'}'
+
+
+class _Walk:
+    def __init__(self, lines: list[dict[str, Any]], gaps: list, keepalived_script_exists: bool | None):
+        self.lines, self.pos, self.gaps = lines, 0, gaps
+        self.programs: list[dict[str, Any]] = []
+        self.ks_exists = keepalived_script_exists
+        self.skip = 0  # keepalived's skip_sublevel
+        self.default: dict[str, Any] | None = None  # cached get_default_script_user result
+        self.script_user: tuple[str, str | None] | None = None
+        self.security = False
+        self.names: dict[str, set] = {'instance': set(), 'sync_group': set()}
+
+    def next(self):
+        while self.pos < len(self.lines):
+            item = self.lines[self.pos]
+            self.pos += 1
+            words = split_words(item['text'])
+            if words:
+                return item, words
+        return None, None
+
+    # get_default_script_user / set_default_script_user in lib/notify.c
+    def default_user(self, line_no: int) -> dict[str, Any]:
+        if self.default is None:
+            if self.script_user is not None:
+                self.default = {'user': self.script_user[0], 'group': self.script_user[1], 'via': 'script_user'}
+            elif self.ks_exists is None:
+                _gap(self.gaps, 'default_user_unobserved', line_no,
+                     'Whether the keepalived_script account exists was not observed.')
+                self.default = {'user': None, 'group': None, 'via': 'unobserved'}
+            elif self.ks_exists:
+                self.default = {'user': DEFAULT_SCRIPT_USER, 'group': None, 'via': 'keepalived_script'}
+            elif self.security:
+                self.default = {'user': None, 'group': None, 'via': 'refused'}
+            else:
+                self.default = {'user': 'root', 'group': None, 'via': 'daemon_user'}
+        return self.default
+
+    def record(self, block: dict, keyword: str, parsed: dict, line_no: int, extra: int = 0) -> dict | None:
+        if parsed['status'] != 'ok':
+            return None
+        entry = {'block': block['kind'], 'name': block['name'], 'keyword': keyword, 'line': line_no,
+                 'argv': parsed['argv'], 'runtime_extra_args': extra, 'user': parsed['user'],
+                 'group': parsed['group'], 'user_source': 'configured', 'runs': True, 'origin': 'not_assessed'}
+        if parsed['user'] is None:
+            self.apply_default(entry, line_no)
+        self.programs.append(entry)
+        return entry
+
+    def apply_default(self, entry: dict, line_no: int) -> None:
+        d = self.default_user(line_no)
+        entry.update(user=d['user'], group=d['group'], user_source='default:' + d['via'])
+        if d['via'] == 'refused':
+            entry['runs'] = False  # keepalived drops the script: no keepalived_script and script security
+
+    def skip_block(self, need_bob: bool) -> None:
+        self.skip = -1 if need_bob else 1
+
+    # process_stream(keywords_vec, need_bob)
+    def stream(self, table: dict | None, need_bob: bool, level: int, block: dict | None) -> bool:
+        while True:
+            item, words = self.next()
+            if item is None:
+                if level > 0:
+                    _gap(self.gaps, 'unterminated_block', None, 'The configuration ended inside a block.')
+                return False
+            line_no, first = item['line'], words[0]
+            if self.skip == -1:
+                if first == _BOB:
+                    self.skip, need_bob = 1, False
+                    continue
+                self.skip = 0
+            if self.skip:
+                for w in words:
+                    if w == _BOB:
+                        self.skip += 1
+                    elif w == _EOB:
+                        self.skip -= 1
+                        if self.skip == 0:
+                            break
+                if w == _EOB and self.skip == 0 and level > 0:
+                    return True
+                continue
+            if need_bob:
+                need_bob = False
+                if first == _BOB and level > 0:
+                    continue
+                _gap(self.gaps, 'missing_brace', line_no, 'A block keyword was not followed by "{".')
+            elif first == _BOB:
+                _gap(self.gaps, 'unexpected_brace', line_no, 'keepalived ignores this "{", so its "}" closes the '
+                     'enclosing block.')
+                continue
+            if first == _EOB:
+                if level > 0:
+                    return False
+                _gap(self.gaps, 'unbalanced_brace', line_no, 'A "}" has no open block.')
+                continue
+            self.keyword(table, words, item, level, block)
+
+    def keyword(self, table: dict | None, words: list, item: dict, level: int, block: dict | None) -> None:
+        line_no, name = item['line'], words[0].decode('utf-8', 'surrogateescape')
+        kind = table.get(name) if table is not None else None
+        if kind is None:
+            _gap(self.gaps, 'unknown_keyword', line_no, f'keepalived 2.2.8 has no {name!r} keyword here.')
+            return
+        if kind == 'plain':
+            return
+        if kind == 'value':
+            self.value_block(words, line_no)
+            return
+        if kind == 'script':
+            seen = block['seen']
+            if name in seen:
+                return  # "notify script already specified - ignoring"
+            parsed = script_line(item['text'])
+            if self.record(block, name, parsed, line_no, _NOTIFY_EXTRA.get(name, 0)) is not None:
+                seen.add(name)
+            else:
+                _gap(self.gaps, 'unparsable_script', line_no, 'keepalived logs and ignores this script.')
+            return
+        if kind == 'vscript':
+            parsed = script_line(item['text'])
+            if parsed['status'] == 'ok':
+                block['script'] = (parsed['argv'], line_no)
+            else:
+                _gap(self.gaps, 'unparsable_script', line_no, 'keepalived keeps the earlier script, if any.')
+            return
+        if kind == 'vuser':
+            if len(words) < 2:
+                _gap(self.gaps, 'missing_user', line_no, 'keepalived drops a vrrp_script whose user is invalid.')
+                block['user_error'] = True
+                return
+            block['user'] = (_text(words[1]), _text(words[2]) if len(words) > 2 else None)
+            block['user_error'] = False
+            return
+        bob_needed = self.strip_bob(words)
+        if kind == 'auth':
+            self.stream(AUTH_KEYWORDS, bob_needed, level + 1, block)
+        elif kind == 'inactive':
+            self.skip_block(bob_needed)
+            _gap(self.gaps, 'checker_not_modelled', line_no, f'{name} scripts run in the checker process, '
+                 'which this increment does not model.')
+            self.stream(None, bob_needed, level + 1, None)
+        elif kind in ('instance', 'sync_group'):
+            self.named_block(kind, words, item, bob_needed, level)
+        elif kind == 'vscript_block':
+            self.vscript_block(words, item, bob_needed, level)
+        else:
+            self.opaque_block(name, bob_needed, level)
+
+    @staticmethod
+    def strip_bob(words: list) -> bool:
+        if words[-1] == _BOB and len(words) > 1:
+            words.pop()
+            return False
+        return True
+
+    def named_block(self, kind: str, words: list, item: dict, bob_needed: bool, level: int) -> None:
+        table = INSTANCE_KEYWORDS if kind == 'instance' else SYNC_GROUP_KEYWORDS
+        block = {'kind': 'vrrp_instance' if kind == 'instance' else 'vrrp_sync_group', 'name': None, 'seen': set()}
+        if len(words) != 2:
+            _gap(self.gaps, 'unnamed_block', item['line'], f'keepalived skips a {block["kind"]} without one name.')
+            self.skip_block(True)
+        else:
+            block['name'] = _text(words[1])
+            if block['name'] in self.names[kind]:
+                self.skip_block(True)  # "already defined": skipped, not an error that hides programs
+            self.names[kind].add(block['name'])
+        self.stream(table, bob_needed, level + 1, block)
+
+    def vscript_block(self, words: list, item: dict, bob_needed: bool, level: int) -> None:
+        if len(words) < 2:
+            _gap(self.gaps, 'unnamed_block', item['line'], 'A vrrp_script has no name.')
+            self.skip_block(True)
+            self.stream(None, bob_needed, level + 1, None)
+            return
+        block = {'kind': 'vrrp_script', 'name': _text(words[1]), 'script': None, 'user': None, 'user_error': False}
+        if self.stream(SCRIPT_KEYWORDS, bob_needed, level + 1, block):
+            return
+        # vrrp_vscript_end_handler
+        if block['script'] is None or block['user_error']:
+            return
+        argv, line_no = block['script']
+        entry = {'block': 'vrrp_script', 'name': block['name'], 'keyword': 'script', 'line': line_no, 'argv': argv,
+                 'runtime_extra_args': 0, 'user': None, 'group': None, 'user_source': 'configured', 'runs': True,
+                 'origin': 'not_assessed'}
+        if block['user'] is not None:
+            entry['user'], entry['group'] = block['user']
+        else:
+            self.apply_default(entry, line_no)
+        self.programs.append(entry)
+
+    def opaque_block(self, name: str, bob_needed: bool, level: int) -> None:
+        """Known roots whose keywords run no program: walked for structure, and global_defs for the script user."""
+        while True:
+            item, words = self.next()
+            if item is None:
+                _gap(self.gaps, 'unterminated_block', None, f'The configuration ended inside {name}.')
+                return
+            first = words[0]
+            if bob_needed:
+                bob_needed = False
+                if first == _BOB:
+                    continue
+                _gap(self.gaps, 'missing_brace', item['line'], f'{name} was not followed by "{{".')
+            if first == _EOB:
+                return
+            if first == _BOB:
+                _gap(self.gaps, 'unmodelled_nested_block', item['line'], f'A nested block in {name} is not modelled.')
+                self.skip = 1
+                self.stream(None, False, level + 2, None)
+                continue
+            if name != 'global_defs':
+                continue
+            key = _text(first)
+            if key == 'notification_email':
+                self.value_block(words, item['line'])
+            elif key == 'script_user' and len(words) >= 2:
+                # set_default_script_user: later default lookups use it; earlier ones keep their result.
+                self.script_user = (_text(words[1]), _text(words[2]) if len(words) > 2 else None)
+                self.default = None
+            elif key == 'enable_script_security':
+                self.security = True
+            elif key in GLOBAL_SCRIPT_KEYWORDS:
+                _gap(self.gaps, 'global_script_not_modelled', item['line'], f'{key} is not modelled yet.')
+
+    def value_block(self, words: list, line_no: int) -> None:
+        """alloc_value_block: lines up to the first line ending in "}" are values, never keywords."""
+        need_bob = True
+        if len(words) > 1 and words[1] == _BOB:
+            need_bob = False
+            if len(words) > 2 and words[-1] == _EOB:
+                return
+        while True:
+            item, vec = self.next()
+            if item is None:
+                _gap(self.gaps, 'unterminated_block', line_no, 'The configuration ended inside a value block.')
+                return
+            if need_bob:
+                need_bob = False
+                if vec[0] == _BOB:
+                    if len(vec) == 1:
+                        continue
+                    vec = vec[1:]
+                else:
+                    _gap(self.gaps, 'missing_brace', item['line'], 'A value block was not opened with "{".')
+            if vec[-1] == _EOB:
+                return
+
+
+def vrrp_programs(text: Any, *, config_id: str | None = None,
+                  keepalived_script_exists: bool | None = None) -> dict[str, Any]:
+    """Programs the keepalived 2.2.8 VRRP process runs, from one captured, include-free ``keepalived.conf``.
+
+    ``keepalived_script_exists`` says whether that account exists on the host (``None`` when not observed);
+    it decides the default script user when ``global_defs`` sets no ``script_user``.
+    """
+    pre = logical_lines(text, config_id=config_id)
+    gaps = list(pre['gaps'])
+    walk = _Walk(pre['lines'], gaps, keepalived_script_exists)
+    if not any(g['code'] in ('over_limit', 'binary', 'invalid_utf8') for g in gaps):
+        walk.stream(ROOT_KEYWORDS, False, 0, None)
+    return {'contract_version': CONTRACT_VERSION, 'source_versions': list(SOURCE_VERSIONS),
+            'programs': walk.programs, 'gaps': gaps,
+            'complete': not any(g['blocking'] for g in gaps), 'origin': 'not_assessed'}
