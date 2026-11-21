@@ -3430,6 +3430,23 @@ in-flight cases fail. No defect was found and runtime code is unchanged. CI runs
 the file on SQLite and on the MySQL shards. Draining a worker inside a
 separate-machine deployment is still covered only by the planned roadmap G
 remote-worker acceptance.
+
+### Scheduler coordinator loss under a daily spend cap — milestone 4 acceptance #1289
+
+`tests/test_ai_budget_coordinator_failover.py` starts a disposable process that
+owns the real scheduler lock. A registered follower runs the worker dispatch
+loop, performs a capped investigation and leaves update scoring for the
+coordinator. After the lock owner dies, the same follower becomes coordinator
+and dispatches the queued score against the same ledger window.
+
+With headroom, the score gets its own settled receipt alongside the first
+unreconciled reservation. A tighter fixture cap fits either request on its own.
+The earlier reservation then defers the score to the reset and the ledger still
+contains only the triage charge. Dispatch is deterministic within the test and
+provider replies are fixtures. SQLite and MySQL check the same lock-owner loss
+contract. Database writer failover and multi-host deployment acceptance remain
+open.
+
 ### Server AI pause and global AI disable under a daily cap — worker checkpoint #998
 
 `tests/test_ai_budget_pause_acceptance.py` covers part of milestone 4's
