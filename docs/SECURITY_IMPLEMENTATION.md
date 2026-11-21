@@ -3223,6 +3223,18 @@ Worker checkpoint #1154 keeps the triage contention fixtures within one configur
   window.
 
 No runtime behaviour changes. The rest of milestone 4 remains open.
+
+### AI Settings current budget boundary — worker checkpoint #1278 (roadmap A)
+
+The current window card in Settings → AI uses the saved budget snapshot's
+`next_reset_authoritative` flag. When earlier-window spend can carry across
+the configured boundary, the card shows a recheck time and explains that the
+spend may still count. Authoritative reset dates retain their original label.
+
+The browser regression covers both labels and the existing spend amounts,
+with narrow, tablet and desktop layout checks. Admission and accounting
+continue to use the existing budget policy.
+
 ### Concurrent cap admissions racing settings saves — worker checkpoint #990
 
 `tests/test_ai_budget_settings_race_acceptance.py` covers the milestone 4 item
@@ -12063,17 +12075,6 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Safety:** malformed amounts, counts or times render as "Unavailable". Text is escaped. Nothing appears while no cap is enabled.
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
-
-### AI Settings current budget boundary — worker checkpoint #1278 (roadmap A)
-
-The current window card in Settings → AI uses the saved budget snapshot's
-`next_reset_authoritative` flag. When earlier-window spend can carry across
-the configured boundary, the card shows a recheck time and explains that the
-spend may still count. Authoritative reset dates retain their original label.
-
-The browser regression covers both labels and the existing spend amounts,
-with narrow, tablet and desktop layout checks. Admission and accounting
-continue to use the existing budget policy.
 
 ### Free exact known-good hits under an exhausted daily cap — worker checkpoint #1030
 
