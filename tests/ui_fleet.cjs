@@ -45,6 +45,17 @@ module.exports=async(page,capture)=>{
    assert.equal(await summary.locator('b').count(),0);assert.equal(await page.locator('#confirm-patch').isEnabled(),true);
    await capture('patch-preflight',false);await page.keyboard.press('Escape');
   }finally{await page.unroute('**/api/hosts/*/patch-preflight',preflight);}
+  // A known warning beside an unreadable signal is partial (#1262 coordinator return): the warning still shows as an alert.
+  const partial=route=>route.fulfill({json:{state:'partial',threshold_percent:10,collected:now-30,warnings:[{code:'disk-space-low',title:'Root file system space is low',guidance:'Free space before installing.',available_percent:5}],gaps:['Not reported or not interpretable: clock synchronization.','These warnings are advisory.']}});
+  await page.route('**/api/hosts/*/patch-preflight',partial);
+  try{
+   await page.locator('#patch-selected').click();await page.locator('#confirm-patch').waitFor();
+   const summary=page.locator('#modal-body .preflight-summary');
+   assert.equal(await summary.getAttribute('data-preflight-state'),'partial');assert.equal(await summary.getAttribute('role'),'alert');
+   assert.equal(await summary.locator('[data-preflight-warning="disk-space-low"]').count(),1);
+   assert.match(await summary.innerText(),/Preflight warnings from the reported signals/);assert.match(await summary.innerText(),/clock synchronization/);
+   assert.equal(await page.locator('#confirm-patch').isEnabled(),true);await page.keyboard.press('Escape');
+  }finally{await page.unroute('**/api/hosts/*/patch-preflight',partial);}
   const failed=route=>route.fulfill({status:500,json:{detail:'boom'}});
   await page.route('**/api/hosts/*/patch-preflight',failed);
   try{

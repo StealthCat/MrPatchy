@@ -92,6 +92,27 @@ def test_uninterpretable_signals_are_partial_and_named():
     assert 'root file system space' in result['gaps'][0] and 'clock synchronization' in result['gaps'][0]
 
 
+
+@pytest.mark.parametrize('fields,expected,missing', [
+    ({'disk': (1000, 50)}, ['disk-space-low'], 'clock synchronization'),
+    ({'memory': (1000, 20)}, ['memory-low'], 'clock synchronization'),
+])
+def test_known_warning_with_unreadable_signal_is_partial_and_keeps_warning(fields, expected, missing):
+    record = telemetry(**fields)
+    record.pop('clock_sync')
+    result = preflight.assess(record, NOW)
+    assert result['state'] == 'partial'
+    assert codes(result) == expected and result['warnings'][0]['available_percent'] is not None
+    assert result['gaps'][0].startswith('Not reported or not interpretable:') and missing in result['gaps'][0]
+
+
+def test_unsynchronized_clock_with_unreadable_disk_is_partial_and_keeps_clock_warning():
+    record = telemetry(synchronized=False)
+    record['device_health']['bytes']['available'] = 5000  # inconsistent, so unknown
+    result = preflight.assess(record, NOW)
+    assert result['state'] == 'partial' and codes(result) == ['clock-unsynchronized']
+    assert 'root file system space' in result['gaps'][0]
+
 def add_host(host_id, record, deleted_at=0):
     with Session() as s:
         s.add(Host(id=host_id, name=host_id, address='192.0.2.9', fingerprint='', state='online',

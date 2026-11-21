@@ -62,5 +62,7 @@ def assess(telemetry, now):
     gaps = list(GAPS)
     if unknown:
         gaps.insert(0, 'Not reported or not interpretable: ' + ', '.join(unknown) + '.')
-    return {**base, 'state': 'attention' if warnings else ('partial' if unknown else 'clear'),
+    # An unreadable signal makes the record partial even when other signals warn:
+    # the known warnings are kept, and the gap names what could not be read.
+    return {**base, 'state': 'partial' if unknown else ('attention' if warnings else 'clear'),
             'warnings': warnings, 'gaps': gaps}
