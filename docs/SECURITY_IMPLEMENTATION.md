@@ -6310,6 +6310,67 @@ mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
 response-authorization change.
 
+### sysvinit inittab contract — worker checkpoint #1110
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/inittab.py` is a pure, versioned contract for sysvinit's `/etc/inittab`.
+On a host whose PID 1 is sysvinit `init`, each accepted entry runs as root at
+boot, on entering a runlevel, on respawn, or on a power or keyboard event. It
+takes captured inittab text and whether `/etc/inittab.d` and `/etc/initscript`
+exist, and performs no I/O.
+
+- **Source.** `read_inittab()` and `spawn()` in sysvinit 3.14 and 3.15
+  `src/init.c`, which are identical. The rules come from reading that source;
+  no compiled init was run.
+- **Lines.** `fgets` reads into a 256-byte buffer. A line that has no newline
+  within 255 bytes is skipped as "possibly too long", and so is a final line
+  without a newline. Comment and blank lines are skipped before that check.
+  Because of this, init's 256-byte process limit can never trigger.
+- **Fields.** `id:runlevels:action:process` are split with `strsep`, and the
+  process keeps any further colons. Rejections are recorded with init's own
+  message: a missing field, an id over 4 bytes, runlevels over 11, an action
+  over 32, an unknown action (matched case-insensitively), or a duplicate id
+  (`~~` excepted).
+- **Effective runlevels.** Empty runlevels become `0123456789`, or
+  `S0123456789` for power and ctrl-alt-del actions. `sysinit` gets `#`, and
+  `boot` and `bootwait` get `*`. A lowercase `s` is kept as written, so it
+  does not select single-user mode; this is noted on the entry.
+- **Implicit and default entries.** When no entry covers `S`, init appends
+  `~~:S:wait:/sbin/sulogin`, and the result reports that entry as `implicit`.
+  The default runlevel is the highest runlevel character of the first
+  `initdefault` entry, uppercased. A value outside `0-9S`, or no
+  `initdefault` entry, means init prompts on the console.
+- **Commands.** Each entry reports its trigger, whether init waits for it, and
+  how `spawn()` starts it:
+  - one leading `+` is dropped, which also stops utmp/wtmp records;
+  - a readable `/etc/initscript` wraps the command outside runlevel S;
+  - otherwise a process containing a shell metacharacter, and not starting
+    with `@`, runs as `/bin/sh -c`;
+  - any other process is split into at most 14 words and stops at `#`. A
+    word that starts with `#` still adds an empty argument, and dropped words
+    are counted.
+- **Fail closed.** The result is incomplete when any of these holds:
+  - the inittab text, the `/etc/inittab.d` listing or the `/etc/initscript`
+    state was not observed;
+  - `/etc/inittab.d` contains `*.tab` files, which this slice does not
+    resolve yet;
+  - the input has invalid UTF-8 or NUL bytes, or is over the limit;
+  - the `initdefault` runlevels contain non-ASCII bytes. `get_init_default()`
+    keeps the highest plain `char`, which is signed on x86_64 (those bytes
+    never win) and unsigned on arm (they do), so the default runlevel and
+    prompt are left unresolved.
+
+  Every result names what it cannot observe: whether PID 1 is sysvinit
+  (systemd ignores the file, and BusyBox init uses another format), the
+  runlevel in use, the programs an entry runs, respawn throttling, and how
+  much of a shell-mode process init copies (`spawn()` sizes that copy with
+  `strlen()` on an uninitialised buffer). `origin`
+  is always `not_assessed`, and no result is a safety verdict.
+
+**Not covered:** `/etc/inittab.d` parsing, agent collection, catalog wiring,
+persistence, baselines and alerts, UI, provenance, AI classification and
+native acceptance. No schema, API, auth or response-authorization change.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
