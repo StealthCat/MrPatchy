@@ -12103,6 +12103,21 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+
+### dhcpcd hook contract — worker checkpoint #1363 (roadmap F)
+
+`dhcpcd-run-hooks` sources `/etc/dhcpcd.enter-hook`, every `<hookdir>/*` entry and `/etc/dhcpcd.exit-hook` as root on every dhcpcd event. dhcpcd is the DHCP client on Raspberry Pi OS and is packaged as `dhcpcd-base` on current Debian and Ubuntu. Neither the startup catalog nor the dhclient contract covered it.
+
+- **Change:** a new pure module, `app/dhcpcd_hooks.py`. From captured `lstat`/`stat` metadata it reports which files are sourced, in which order, and why other entries are not.
+- **Reference:** the hook loop of the packaged `dhcpcd-run-hooks` in `dhcpcd-base` 10.0.6-1ubuntu3.2 and 10.1.0-8 (identical files, hook directory `/usr/lib/dhcpcd/dhcpcd-hooks`) and 10.5.2-6 (`/usr/libexec/dhcpcd-hooks`, otherwise the same loop). The script's SHA-256 selects the hook directory.
+  - The glob is sorted in byte order, because `/bin/sh` is dash, which uses `strcmp`. Dotfiles are not matched.
+  - Paths ending in `~` are skipped, and so are paths that a `nohook` word matches as `*/word`, `*/NN-word` or `*/NN-word.sh`.
+  - A remaining path is sourced when `[ -f ]` holds, which means a regular file after following symlinks. No executable bit is needed.
+- **Gaps, never reported as covered:** a missing or unrecognized script hash, an unobserved or unreadable hook directory, an enter or exit hook with neither metadata nor confirmed absence, an unobserved symlink target, malformed or duplicate input, the 1024-entry cap, and a `nohook` word containing a glob character. Unquoted `$skip_hooks` expansion makes such a word depend on dhcpcd's working directory. When `nohook` words are not supplied, none are assumed, so the result can only over-report.
+- **Unobserved, stated in every result:** whether dhcpcd is the client in use, a replacement `dhcpcd.conf` `script`, which `nohook` options apply per interface, and hook contents.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Validation:** `tests/test_dhcpcd_hooks.py` has 16 tests. One runs the reference loop verbatim under dash on 150 random fixture trees, with paths rewritten, random `nohook` words and the `.` replaced by a print, and compares the sourced list and order. Five mutations are each caught: case-insensitive order, sourcing `~` paths, dropping the `.sh` skip pattern, matching dotfiles, and sourcing directories.
+- **Remaining:** collection, `dhcpcd.conf` `script`/`nohook` parsing, a catalog entry, provenance against the package's shipped hooks, and UI.
 ### Provider backoff under reversed failure writes — Roadmap A checkpoint #1117
 
 Shared provider backoff retains the latest recorded failure timestamp. If an
