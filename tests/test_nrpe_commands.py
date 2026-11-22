@@ -177,7 +177,8 @@ def test_root_after_privilege_drop_refuses_start():
         ('command[x]=/bin/x\n', DAEMON),                                     # no nrpe_user: stays root
         ('nrpe_user=nagios\ncommand[x]=/bin/x\n', {**DAEMON, 'start_group': 'root'}),  # EGID stays 0
         ('nrpe_user=0\nnrpe_group=nagios\ncommand[x]=/bin/x\n', DAEMON),
-        ('nrpe_user=root\nnrpe_group=nagios\ncommand[x]=/bin/x\n', NAGIOS),
+        ('nrpe_user=root\ncommand[x]=/bin/x\n', DAEMON),                     # root start: EUID 0
+        ('command[x]=/bin/x\n', {'mode': 'daemon', 'start_user': 'nagios', 'start_group': 'root'}),
         ('nrpe_user=nagios\nnrpe_group=00\ncommand[x]=/bin/x\n', DAEMON),
         ('command[x]=/bin/x\n', {'mode': 'inetd', 'start_user': 'root', 'start_group': 'nagios'}),
         ('command[x]=/bin/x\n', {'mode': 'inetd', 'start_user': 'nagios', 'start_group': '0'}),
@@ -190,6 +191,21 @@ def test_root_after_privilege_drop_refuses_start():
     inetd = run('nrpe_user=nagios\nnrpe_group=nagios\ncommand[x]=/bin/x\n',
                 daemon={'mode': 'inetd', 'start_user': 'root', 'start_group': 'root'})
     assert inetd['starts'] is False and inetd['commands'] == []
+
+
+def test_non_root_start_keeps_its_account_when_root_is_configured():
+    # A non-root process cannot setgid(0)/seteuid(0); drop_privileges only logs, check_privileges passes on the
+    # effective (starting) account and my_system's child fails SETEUID(0)/setuid(0) the same way.
+    for config in ('nrpe_user=root\nnrpe_group=nagios\n', 'nrpe_user=0\nnrpe_group=nagios\n',
+                   'nrpe_user=nagios\nnrpe_group=root\n', 'nrpe_group=0\n'):
+        result = run(config + 'command[check_x]=/usr/lib/nagios/plugins/check_x\n', daemon=NAGIOS)
+        assert result['starts'] is True and result['complete'], config
+        command = by_name(result)['check_x']
+        assert (command['user'], command['group'], command['fallback_user']) == ('nagios', 'nagios', None), config
+    # With the starting group unobserved, a configured root group leaves an unknown group: a blocking gap.
+    unknown = run('nrpe_group=root\ncommand[x]=/bin/x\n', daemon={'mode': 'daemon', 'start_user': 'nagios'})
+    assert unknown['starts'] is True and not unknown['complete'] and by_name(unknown)['x']['group'] is None
+    assert 'start_group_not_observed' in {gap['code'] for gap in unknown['gaps']}
 
 
 def test_unobserved_start_group_is_blocking_and_non_root_fallback_kept():

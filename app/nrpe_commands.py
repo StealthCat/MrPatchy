@@ -38,9 +38,11 @@ The semantics come from nrpe 4.1.0 ``src/nrpe.c`` (``read_config_file``,
   ``drop_privileges(nrpe_user, nrpe_group)`` and then ``check_privileges``, which exits when
   the effective UID *or* GID is still 0. A failed lookup or ``seteuid`` is only logged, so an
   unresolvable ``nrpe_user`` leaves the starting account, and nrpe exits if that is root. In
-  inetd mode privileges are never dropped and ``check_privileges`` runs first. So commands
-  never run as root at start: the account is ``nrpe_user`` (or the starting account when
-  that is not root), or nrpe does not start.
+  inetd mode privileges are never dropped and ``check_privileges`` runs first. The check is
+  on the *effective* account: a non-root start cannot ``setgid(0)`` or ``seteuid(0)``, so a
+  configured ``nrpe_user``/``nrpe_group`` of root (or 0) leaves the starting account in effect
+  and nrpe starts. So commands never run as root at start: the account is ``nrpe_user`` (or
+  the starting account when that is not root), or nrpe does not start.
 
 Unobserved, unreadable or over-limit input, relative include paths, include cycles,
 truncated paths and build-dependent values are explicit blocking gaps. No record is
@@ -83,6 +85,8 @@ UNOBSERVED = (
     'Whether nrpe_user and nrpe_group resolve to real accounts, and whether a name other than root or 0 maps to '
     'UID or GID 0, is not observed. A name that does not resolve leaves the starting account, and nrpe exits if '
     'that is root.',
+    'With a root start, an initgroups failure other than EPERM makes drop_privileges return before seteuid, '
+    'so nrpe stays root and exits; that failure is not observed.',
     'A SIGHUP reload re-reads the configuration without running check_privileges again, so a file changed to '
     'nrpe_user=root after start can run commands as root until restart; configuration text cannot show this.',
     'The contents of the programs that command lines name are not read.',
@@ -427,11 +431,19 @@ def evaluate(files: Any = None, directories: Any = None, *, config_path: str = D
     settings = walk.settings
     prefix = settings.get(b'command_prefix')
     arguments = _flag(settings, b'dont_blame_nrpe')
+    configured_user = _text(settings[b'nrpe_user']) if b'nrpe_user' in settings else None
+    configured_group = _text(settings[b'nrpe_group']) if b'nrpe_group' in settings else None
     if mode == 'inetd':
+        # drop_privileges returns at once under inetd, so the starting account is the effective one.
         user, group = start_user, start_group
+    elif _is_root(start_user):
+        user = start_user if configured_user is None else configured_user
+        group = start_group if configured_group is None else configured_group
     else:
-        user = _text(settings[b'nrpe_user']) if b'nrpe_user' in settings else start_user
-        group = _text(settings[b'nrpe_group']) if b'nrpe_group' in settings else start_group
+        # A non-root start cannot setgid(0) or seteuid(0); drop_privileges only logs the failure, so a
+        # configured root account leaves the starting account in effect and check_privileges passes.
+        user = start_user if configured_user is None or _is_root(configured_user) else configured_user
+        group = start_group if configured_group is None or _is_root(configured_group) else configured_group
     if _is_root(user) or _is_root(group):
         if result['starts'] is not True:
             result['complete'] = False
@@ -444,7 +456,7 @@ def evaluate(files: Any = None, directories: Any = None, *, config_path: str = D
     if group is None:
         _gap(gaps, 'start_group_not_observed', 'The effective group is not set by nrpe_group and the starting group '
              'was not observed; nrpe exits if it is root.')
-    fallback = None if mode == 'inetd' or _is_root(start_user) or b'nrpe_user' not in settings else start_user
+    fallback = None if mode == 'inetd' or _is_root(start_user) or user == start_user else start_user
     latest: dict[str, dict[str, Any]] = {}
     overridden: dict[str, list[dict[str, Any]]] = {}
     for definition in walk.definitions:
