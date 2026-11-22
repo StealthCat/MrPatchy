@@ -139,11 +139,51 @@ def test_interface_override_and_toggles():
     ('-mx', 'unknown_api_mode'), ('--api-mode=', 'unknown_api_mode'), ('--no-s', 'ambiguous_option'),
     ('--bogus', 'unknown_option'), ('--help=1', 'unexpected_argument'), ('-r', 'missing_argument'),
     ('--run', 'missing_argument'), ('-k -y', 'unknown_option'),
+    # parse_args signals with precedence kill > resume > info > suspend.
+    ('-S -z', 'info'), ('-z -R', 'resume'), ('-S -k', 'kill'), ('-v -S', 'suspend'),
 ])
 def test_modes_that_start_no_daemon(value, reason):
     result = ia.resolve(obs(args={'state': 'known', 'value': value}))
     assert result['daemon']['starts'] is False and result['daemon']['exit_reason'] == reason
     assert result['events'] == {}
+
+
+def test_foreground_daemon_is_a_gap():
+    result = ia.resolve(obs(args={'state': 'known', 'value': '-n -I'}))
+    assert result['daemon']['daemonizes'] is False and result['daemon']['starts']
+    assert codes(result) == ['foreground_daemon'] and not result['covered']
+    result = ia.resolve(obs(args={'state': 'known', 'value': '-n --no-daemon -I'}))
+    assert result['daemon']['daemonizes'] is True and result['covered']
+
+
+def test_failed_action_stops_daemon_without_ignore_retval():
+    result = ia.resolve(obs())
+    assert result['daemon']['failed_action_stops_daemon'] is False
+    assert result['daemon']['first_action_stops_daemon'] is False
+    assert result['events']['up']['always_fails'] is False
+    # -I toggles: two of them leave failures fatal again.
+    result = ia.resolve(obs(args={'state': 'known', 'value': '-q -I -I'}, action_d={'state': 'absent'}))
+    assert result['daemon']['failed_action_stops_daemon'] is True
+    assert result['events']['up']['always_fails'] and result['events']['down']['always_fails']
+    assert result['daemon']['first_action_stops_daemon'] is True and result['covered']
+    other = {'name': 'h', 'kind': 'other', 'executable': True}
+    ok = {'name': 'a', 'kind': 'regular', 'executable': True}
+    result = ia.resolve(obs(args={'state': 'known', 'value': '-q'},
+                            action_d={'state': 'listed', 'entries': [ok, other]}))
+    # The regular entry still runs before run-parts reports the failure.
+    assert [p['path'] for p in result['events']['up']['run_parts']['programs']] == [ia.ACTION_D + '/a']
+    assert result['events']['up']['always_fails'] and result['daemon']['first_action_stops_daemon']
+    result = ia.resolve(obs(args={'state': 'known', 'value': '-q'},
+                            run_targets={ia.DEFAULT_RUN: {'state': 'absent'}}))
+    assert result['daemon']['run_state'] == 'exec_fails'
+    assert result['daemon']['first_action_stops_daemon'] is True
+    result = ia.resolve(obs(action_d={'state': 'unknown'}))
+    assert result['daemon']['first_action_stops_daemon'] is None and not result['covered']
+
+
+def test_interface_with_glob_characters_is_a_gap():
+    result = ia.resolve(obs(interface='eth[0]'))
+    assert 'interface_pathname_expansion' in codes(result) and not result['covered']
 
 
 def test_end_of_options_and_permuted_operands():

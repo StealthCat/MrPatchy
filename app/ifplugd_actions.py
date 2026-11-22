@@ -33,6 +33,14 @@ prefixes and ``--name=value``. Within ``parse_args``, ``-i``, ``-r`` and ``-x``
 keep their last value and ``-p``, ``-q`` and ``-l`` toggle. An unknown option
 or an invalid ``-m`` mode exits before the daemon starts. ``-h``, ``-k``,
 ``-S``, ``-R``, ``-z``, ``-v`` and ``-c`` exit without starting a daemon.
+``-n`` keeps the daemon in the init script's foreground, which is a gap.
+
+A failed action stops the daemon unless ``-I`` is toggled on, and the daemon
+then skips its shutdown action. The result says so, and it marks an event
+whose action always fails: an absent or non-executable run target, a missing
+``action.d``, or an ``action.d`` entry that is neither a directory nor a
+regular file. ``run-parts`` exits 1 for those, and ``set -e`` in
+``ifplugd.action`` passes that on.
 
 Shell is never evaluated. ``ARGS`` is accepted as an already-expanded value and
 split on the default IFS. A word with a pathname-expansion character is a gap.
@@ -80,8 +88,9 @@ LONG_OPTIONS = {
 }
 _TAKES_ARGUMENT = frozenset('irtTudmx')
 # parse_args checks these in this order once parsing finishes.
-_NO_DAEMON = (('h', 'help'), ('k', 'kill'), ('R', 'resume'), ('S', 'suspend'),
-              ('z', 'info'), ('v', 'version'), ('c', 'check_running'))
+# -k, -R, -z and -S share one branch that signals in that precedence.
+_NO_DAEMON = (('h', 'help'), ('k', 'kill'), ('R', 'resume'), ('z', 'info'),
+              ('S', 'suspend'), ('v', 'version'), ('c', 'check_running'))
 _API_MODES = frozenset('emwpaiEMWPAI')
 
 FILE_STATES = ('present', 'absent', 'unknown')
@@ -163,6 +172,9 @@ def _directory(value: Any, name: str) -> dict[str, Any]:
 def daemon_words(interface: str, args: str) -> tuple[list[str], list[dict[str, Any]]]:
     """Return the argv words after the program name for ``ifplugd -i $IF $A``."""
     gaps: list[dict[str, Any]] = []
+    if _GLOB.search(interface):
+        # ``-i $IF`` and ifupdown.action's ``ifup $1`` are unquoted too.
+        _gap(gaps, 'interface_pathname_expansion', interface=interface)
     words = ['-i', interface]
     for word in _IFS.split(args):
         if not word:
@@ -182,7 +194,8 @@ def parse_options(words: list[str]) -> dict[str, Any]:
     state: dict[str, Any] = {
         'interface': None, 'run': DEFAULT_RUN, 'extra_arg': None,
         'no_startup_script': False, 'no_shutdown_script': False,
-        'initial_down': False, 'flags': set(), 'exit': None,
+        'initial_down': False, 'daemonize': True, 'ignore_retval': False,
+        'flags': set(), 'exit': None,
     }
 
     def apply(letter: str, value: str | None) -> bool:
@@ -198,6 +211,10 @@ def parse_options(words: list[str]) -> dict[str, Any]:
             state['no_shutdown_script'] = not state['no_shutdown_script']
         elif letter == 'l':
             state['initial_down'] = not state['initial_down']
+        elif letter == 'n':
+            state['daemonize'] = not state['daemonize']
+        elif letter == 'I':
+            state['ignore_retval'] = not state['ignore_retval']
         elif letter == 'm' and (not value or value[0] not in _API_MODES):
             # tolower(optarg[0]) in the C locale; an empty argument reads the
             # terminating NUL and is refused too.
@@ -293,10 +310,11 @@ def _collation_safe(names: list[str]) -> bool:
 def _run_parts(directory: dict[str, Any], interface: str, event: str,
                gaps: list[dict[str, Any]]) -> dict[str, Any]:
     if directory['state'] == 'absent':
-        return {'state': 'directory_missing', 'programs': [], 'skipped': []}
+        # opendir fails and run-parts exits 1 before running anything.
+        return {'state': 'directory_missing', 'programs': [], 'skipped': [], 'always_fails': True}
     if directory['state'] != 'listed':
         _gap(gaps, 'action_d_unobserved', path=ACTION_D)
-        return {'state': 'unknown', 'programs': [], 'skipped': []}
+        return {'state': 'unknown', 'programs': [], 'skipped': [], 'always_fails': None}
     if not directory['complete']:
         _gap(gaps, 'action_d_incomplete', path=ACTION_D)
     selected = [entry for entry in directory['entries'] if _RUN_PARTS_NAME.fullmatch(entry['name'])]
@@ -339,8 +357,11 @@ def _run_parts(directory: dict[str, Any], interface: str, event: str,
         _gap(gaps, 'order_locale_dependent', path=ACTION_D, names=names)
     if event == 'down':
         programs.reverse()
+    # A non-directory, non-regular entry makes run-parts exit 1 after the
+    # others run; ifplugd.action has ``set -e``, so the action fails.
+    always_fails = any(item['reason'] == 'not_regular_file' for item in skipped)
     return {'state': 'listed', 'programs': programs, 'skipped': skipped,
-            'order': 'byte' if order_known else 'unresolved'}
+            'order': 'byte' if order_known else 'unresolved', 'always_fails': always_fails}
 
 
 def resolve(observation: Any) -> dict[str, Any]:
@@ -400,6 +421,10 @@ def resolve(observation: Any) -> dict[str, Any]:
         'starts': options['exit'] is None, 'exit_reason': options['exit'],
         'runs_on_startup': 'up' if not options['no_startup_script'] else None,
         'runs_on_shutdown': None if options['no_shutdown_script'] else 'down',
+        'daemonizes': options['daemonize'],
+        # action() returns -1 on a non-zero status unless -I, and the daemon
+        # then exits without running its shutdown action.
+        'failed_action_stops_daemon': not options['ignore_retval'],
     }
     if options['initial_down']:
         daemon['runs_on_startup'] = 'up_or_down'
@@ -409,6 +434,10 @@ def resolve(observation: Any) -> dict[str, Any]:
     if not daemon['starts']:
         result['covered'] = not gaps
         return result
+    if not daemon['daemonizes']:
+        # -n keeps ifplugd in the foreground of the init script loop, so its
+        # lifetime and the later interfaces depend on the service manager.
+        _gap(gaps, 'foreground_daemon')
 
     run = options['run']
     target = targets.get(run)
@@ -418,6 +447,7 @@ def resolve(observation: Any) -> dict[str, Any]:
         return result
     if target['state'] == 'absent' or target['kind'] in ('broken_symlink', 'directory', 'other'):
         daemon['run_state'] = 'exec_fails'
+        daemon['first_action_stops_daemon'] = daemon['failed_action_stops_daemon']
         result['covered'] = not gaps
         return result
     if target['kind'] != 'regular' or target['executable'] is None:
@@ -425,6 +455,7 @@ def resolve(observation: Any) -> dict[str, Any]:
         return result
     if not target['executable']:
         daemon['run_state'] = 'exec_fails'
+        daemon['first_action_stops_daemon'] = daemon['failed_action_stops_daemon']
         result['covered'] = not gaps
         return result
 
@@ -435,7 +466,12 @@ def resolve(observation: Any) -> dict[str, Any]:
         invocation: dict[str, Any] = {'argv': [run, options['interface'], event, *tail], 'account': 'root'}
         if stock:
             invocation['run_parts'] = _run_parts(action_d, options['interface'], event, gaps)
+            invocation['always_fails'] = invocation['run_parts']['always_fails']
         result['events'][event] = invocation
+    if stock:
+        fails = [result['events'][event]['always_fails'] for event in ('up', 'down')]
+        daemon['first_action_stops_daemon'] = (
+            None if None in fails else bool(any(fails) and daemon['failed_action_stops_daemon']))
     if not stock:
         _gap(gaps, 'run_target_not_modelled', path=run, sha256=target['sha256'])
     result['covered'] = not gaps
