@@ -111,6 +111,20 @@ def _validate_derived_throughput(runs, elapsed, throughput, label):
             f'{label}.runs / {label}.elapsed_seconds')
 
 
+def _compare_connections(baseline, candidate):
+    connection_delta = None
+    if baseline is not None and candidate is not None:
+        connection_delta = _delta(baseline['connections'], candidate['connections'])
+    return {
+        'baseline': baseline,
+        'candidate': candidate,
+        'connection_delta': connection_delta,
+        'scope': 'Connections count distinct loopback HTTP peers that served a request. '
+                 'Each request after the first on a peer counts as reuse. '
+                 'Missing measurements are null.',
+    }
+
+
 def _queue_age(report, label):
     """Return the seeded fixture queue age, which is an input, not a result.
 
@@ -419,20 +433,6 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
             'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
-    }
-
-
-def _compare_connections(baseline, candidate):
-    connection_delta = None
-    if baseline is not None and candidate is not None:
-        connection_delta = _delta(baseline['connections'], candidate['connections'])
-    return {
-        'baseline': baseline,
-        'candidate': candidate,
-        'connection_delta': connection_delta,
-        'scope': 'Connections count distinct loopback HTTP peers that served a request. '
-                 'Each request after the first on a peer counts as reuse. '
-                 'Missing measurements are null.',
     }
 
 
