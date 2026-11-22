@@ -807,15 +807,15 @@ def parse_entry(buffer: str) -> dict[str, Any]:
 
 
 def entries_from_records(records: Iterable[Mapping[str, Any]],
-                         amd_mount_paths: Iterable[str] | None = ()) -> dict[str, Any]:
+                         amd_mount_paths: Iterable[str] | None = None) -> dict[str, Any]:
     """Turn ``read_master`` records into the entries automount would mount.
 
     Applies ``master_parse_entry`` bookkeeping: ``-null`` hides later entries
     for that mount point, a repeated indirect mount point in the same read is
     ignored (``/-`` direct maps accumulate), and an entry with no explicit
     format becomes ``amd`` when autofs.conf has a ``[ <mount point> ]`` amd
-    section. ``amd_mount_paths`` is that section list, or ``None`` when
-    autofs.conf was not captured.
+    section. ``amd_mount_paths`` is that section list (empty when autofs.conf
+    was captured and has none), or ``None`` when it was not captured.
     """
     gaps: list[dict[str, Any]] = []
     amd = None if amd_mount_paths is None else {p.rstrip('/') for p in amd_mount_paths if isinstance(p, str)}
@@ -866,7 +866,7 @@ ENTRY_BLOCKING = frozenset({'entry_grammar_not_modelled', 'amd_sections_not_obse
 def evaluate_master(master_map_name: str | None = None, files: Mapping[str, Any] | None = None,
                     stats: Mapping[str, Any] | None = None, dirs: Mapping[str, Any] | None = None,
                     nss_sources: Iterable[str] | None = None, map_texts: Mapping[str, Any] | None = None,
-                    amd_mount_paths: Iterable[str] | None = ()) -> dict[str, Any]:
+                    amd_mount_paths: Iterable[str] | None = None) -> dict[str, Any]:
     """Read the master map, parse its entries and resolve the program maps automount runs as root.
 
     The arguments combine ``read_master``, ``entries_from_records`` and

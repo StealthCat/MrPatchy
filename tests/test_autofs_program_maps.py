@@ -239,7 +239,7 @@ def test_parse_entry_fails_closed_on_scanner_quirks_and_syntax_errors():
 def test_entries_apply_null_duplicate_and_poison_rules():
     recs = [{'buffer': b} for b in ['/a -null', '/a /etc/auto.a', '/b /etc/auto.b', '/b /etc/auto.b2',
                                     '/- /etc/auto.d1', '/- /etc/auto.d2', '/c foo:bar', '/d /etc/auto.d']]
-    out = ap.entries_from_records(recs)
+    out = ap.entries_from_records(recs, amd_mount_paths=())
     assert [e['map'] for e in out['entries']] == ['/etc/auto.b', '/etc/auto.d1', '/etc/auto.d2']
     assert [r['status'] for r in out['parsed']] == ['null', 'nulled', 'entry', 'duplicate', 'entry', 'entry',
                                                      'unmodelled', 'unmodelled']
@@ -262,7 +262,12 @@ def test_evaluate_master_end_to_end_finds_root_program_maps():
     stats = {'/etc/auto.master': REG, '/etc/auto.master.d': {'kind': 'directory', 'mode': 0o40755},
              '/etc/auto.master.d/x.autofs': REG, '/etc/auto.misc': REG, '/etc/auto.smb': REG_X,
              '/opt/m': REG_X, '/etc/auto.x': REG_X}
-    r = ap.evaluate_master(None, files, stats, {'/etc/auto.master.d': ['x.autofs', '.y.autofs', 'z.conf']})
+    dirs = {'/etc/auto.master.d': ['x.autofs', '.y.autofs', 'z.conf']}
+    r = ap.evaluate_master(None, files, stats, dirs, amd_mount_paths=())
+    assert r['complete']
+    # Without autofs.conf, the relative auto.smb could be amd format.
+    r2 = ap.evaluate_master(None, files, stats, dirs)
+    assert not r2['complete'] and [g['code'] for g in r2['gaps']] == ['amd_sections_not_observed']
     assert [(p['path'], p['cwd']) for p in r['programs']] == [('/etc/auto.smb', '/smb'), ('/opt/m', '/p'),
                                                                ('/etc/auto.x', '/x')]
     assert r['entries'][3]['options'] == ['-rw']
@@ -272,6 +277,6 @@ def test_evaluate_master_end_to_end_finds_root_program_maps():
 def test_evaluate_master_unmodelled_entry_poisons_later_entries_and_blocks():
     files = {'/etc/auto.master': '/a weird:map\n/b /etc/auto.b\n'}
     stats = {'/etc/auto.master': REG, '/etc/auto.b': REG_X}
-    r = ap.evaluate_master(None, files, stats)
+    r = ap.evaluate_master(None, files, stats, amd_mount_paths=())
     assert r['programs'] == [] and not r['complete']
     assert [g['code'] for g in r['gaps']] == ['entry_grammar_not_modelled']
