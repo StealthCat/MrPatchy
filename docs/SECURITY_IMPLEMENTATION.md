@@ -3528,6 +3528,19 @@ connection tests. The groups sum to the counted total in the budget status.
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
 
+### Current-window unreconciled spend breakdown — Roadmap A checkpoint #1351
+
+AI Settings now distinguishes the counted amount still marked sent without
+reconciled usage from the counted amount with a recorded uncertain outcome.
+Both come from the same current-window budget aggregate, including any
+previously admitted reservations still counted after a timezone change.
+The existing combined uncertainty value remains available. An older API without
+the split still shows the combined total and reconciliation summary.
+
+A sent row can outlive a worker and its diagnostics. The breakdown reports
+ledger state and gives no running-call, invoice or recovery guarantee. It
+does not write reservations or change admission.
+
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
 The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
