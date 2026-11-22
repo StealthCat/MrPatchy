@@ -12544,3 +12544,15 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### ifplugd action contract — worker checkpoint #1377 (roadmap F)
+
+- **What it covers:** `app/ifplugd_actions.py` is a pure, versioned contract. For one interface the Debian init script starts, it reports which root programs `ifplugd` runs when the link goes up or down, with which argv, and in which order. The daemon runs `execl(run, run, IF, up|down, extra_arg)` as root; the shipped `run` script hands the event to `run-parts` over `/etc/ifplugd/action.d/`, forward for `up` and `--reverse` for `down`, without the extra argument.
+- **Pinned source:** ifplugd `0.28` with the Debian `0.28-19.7` patch series (`parse_args`, `action`, `debian/ifplugd.init`, `debian/ifplugd.action`, `debian/ifupdown.action`) and debianutils `5.21` `run-parts.c`.
+  - The daemon argv is `-i $IF $A`, with `$A` split on the default IFS. A word with `*`, `?` or `[` is a gap, because the unquoted expansion also globs.
+  - Options follow glibc `getopt_long` without `POSIXLY_CORRECT`: permuted operands, `--`, unambiguous long prefixes and `--name=value`. `-i`, `-r` and `-x` keep their last value, and `-p`, `-q` and `-l` toggle. An unknown or ambiguous option, a missing argument or an invalid `-m` mode stops the daemon from starting, as do `-h`, `-k`, `-S`, `-R`, `-z`, `-v` and `-c`.
+  - `run-parts` selection: names must match `^[a-zA-Z0-9_-]+$`; broken symlinks, directories, other non-regular files and non-executable regular files are skipped, each with its reason; a missing `action.d` runs nothing.
+- **Fail closed:** the run target and the shipped `ifupdown` action are understood only by SHA-256. Any other run target is reported as the root program it is, with a `run_target_not_modelled` gap. An order is stated only when byte order and a case-folding, punctuation-ignoring collation agree; otherwise `order_locale_dependent`. Unobserved `ARGS`, run targets, directories or entries are gaps, and malformed or over-cap input is refused.
+- **Validation:** `tests/test_ifplugd_actions.py` has 34 tests. Two differentials run against real binaries: 40 random `action.d` trees against `run-parts --test` (`LC_ALL=C`), and 3,000 random argv lists against glibc `getopt_long` compiled with ifplugd's option tables.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** sourcing `/etc/default/ifplugd`, `INTERFACES=auto|all` and the udev `HOTPLUG_INTERFACES` agent path, agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
