@@ -43,9 +43,11 @@ is always ``not_assessed`` and no result is a safety verdict.
 ``read_master`` (increment 2) reads the master map as automount does: the
 ``read_one`` record splitter, ``+`` includes with self-include and depth-16
 limits, ``+dir:`` ``*.autofs`` directories in ``versionsort`` order, typed and
-nsswitch master sources and the ``auto_master`` fallback. The entry grammar
-(``daemon/master_tok.l`` and ``daemon/master_parse.y``) is not parsed yet;
-``evaluate`` callers pass tokenized entries.
+nsswitch master sources and the ``auto_master`` fallback. ``parse_entry`` and
+``entries_from_records`` (increment 3) parse each record with a fail-closed
+subset of the ``daemon/master_tok.l``/``daemon/master_parse.y`` grammar and
+apply the ``-null``, duplicate and amd-section bookkeeping of
+``master_parse_entry``; ``evaluate_master`` runs all three steps.
 """
 from __future__ import annotations
 
@@ -719,3 +721,175 @@ def read_master(master_map_name: str | None = None, files: Mapping[str, Any] | N
         ],
         'authorizes_response': False,
     }
+
+
+# ---------------------------------------------------------------------------
+# Increment 3: the entry grammar (``daemon/master_tok.l``, ``daemon/master_parse.y``
+# and the ``master_parse_entry`` bookkeeping in the same file).
+#
+# The flex scanner has longest-match rules that fire anywhere in a map name
+# (``-hosts``, ``--``+blank, ``//``, ``<maptype>:``, ``<attr>=``) and keeps its
+# start condition across buffers after an aborted parse. Rather than
+# transcribe every quirk, ``parse_entry`` accepts only a narrow subset whose
+# tokenization was checked rule by rule against the scanner; anything else is
+# ``unmodelled``, and every later record in the same read is unmodelled too,
+# because an aborted parse can leave the scanner in a non-initial state.
+# ---------------------------------------------------------------------------
+
+MAP_TYPES = ('file', 'program', 'exec', 'sss', 'yp', 'nis', 'nisplus', 'ldap', 'ldaps', 'hesiod', 'userdir')
+MAP_FORMATS = ('sun', 'hesiod', 'amd')
+_KEYWORDS = frozenset(MAP_TYPES) | {'multi'}
+
+# PATHSTR without escapes or quotes: printable ASCII except blank, '"' and '\'.
+_PATH = r'/[!#-\[\]-~]*'
+# A map-name character in MAPSTR that no rule other than '.' can start or
+# extend: printable ASCII except blank, '"', '\', ':', '=' and ','.
+_NAME = r'[!#-+\--9;<>-\[\]-~]+'
+_TYPED = r'(?P<type>' + '|'.join(sorted(MAP_TYPES, key=len, reverse=True)) + r')(?:,(?P<fmt>sun|hesiod|amd))?:'
+# One OPTSTR word that lexes to exactly one OPTION token or daemon keyword,
+# or a timeout option that lexes to OPT_TIMEOUT / OPT_NTIMEOUT then NUMBER.
+_TIMEOUT = r'(?:-[tn]|--timeout|--negative-timeout)(?:[ \t]*=[ \t]*|[ \t]*)[0-9]+(?=[ \t,]|\Z)'
+_OPT = r'(?:' + _TIMEOUT + r'|-?[A-Za-z_][A-Za-z0-9_-]*(?:=[A-Za-z0-9_.:-]+)?)'
+_SEP = r'(?:[ \t]*,[ \t]*|[ \t]+)'
+_ENTRY = re.compile(
+    r'(?P<path>' + _PATH + r')[ \t]+'
+    r'(?:(?P<int>-hosts|-null)|(?:' + _TYPED + r')?(?P<name>' + _NAME + r'))'
+    r'(?P<opts>[ \t]+' + _OPT + r'(?:' + _SEP + _OPT + r')*)?'
+    r'[ \t]*\Z')
+_OPT_WORD = re.compile(_OPT)
+_DAEMON_OPT = re.compile(
+    r'(?:-?(?:symlink|nobind|nobrowse|shared|slave|private|strictexpire|browse)|-[gvdwr])\Z|' + _TIMEOUT)
+
+
+def parse_entry(buffer: str) -> dict[str, Any]:
+    """Parse one ``"<path> <entry>"`` record buffer as ``master_parse_entry`` would.
+
+    Returns ``{'status': 'entry' | 'unmodelled', 'mount_point', 'type',
+    'format', 'map', 'options'}``. ``status == 'entry'`` only for the subset
+    this contract models; ``options`` are the mount options passed to the map
+    module after the map name (daemon options such as ``--timeout`` are not).
+    """
+    out: dict[str, Any] = {'status': 'unmodelled', 'mount_point': None, 'type': None, 'format': None,
+                           'map': None, 'options': []}
+    if not isinstance(buffer, str) or len(buffer) > MAPENT_MAX_LEN + KEY_MAX_LEN + 2:
+        return out
+    m = _ENTRY.match(buffer)
+    if not m:
+        return out
+    if m.group('int') is None:
+        name = m.group('name')
+        # Inside a map name the scanner starts other tokens at "-hosts",
+        # "-null", "-xfn", "--"+blank and "//"; a name equal to a map-type
+        # keyword followed by a blank lexes as MAPTYPE. A leading "-" is left
+        # out rather than reasoned about.
+        if name.startswith('-') or '//' in name or '--' in name or \
+                any(k in name for k in ('-hosts', '-null', '-xfn')) or name in _KEYWORDS:
+            return out
+    words = _OPT_WORD.findall(m.group('opts') or '')
+    # "-D NAME=value" with a blank is one MACROSTR token; not modelled.
+    if '-D' in words:
+        return out
+    path = m.group('path')
+    # master_parse_entry strips trailing slashes; "/" alone would become "".
+    stripped = path.rstrip('/')
+    if not stripped:
+        return out
+    mtype = m.group('type')
+    if mtype == 'exec':
+        mtype = 'program'
+    if m.group('int') == '-hosts':
+        mtype, name = 'hosts', None
+    elif m.group('int') == '-null':
+        mtype, name = 'null', None
+    out.update(status='entry', mount_point=stripped, type=mtype, format=m.group('fmt'), map=name,
+               options=[w for w in words if not _DAEMON_OPT.match(w)])
+    return out
+
+
+def entries_from_records(records: Iterable[Mapping[str, Any]],
+                         amd_mount_paths: Iterable[str] | None = ()) -> dict[str, Any]:
+    """Turn ``read_master`` records into the entries automount would mount.
+
+    Applies ``master_parse_entry`` bookkeeping: ``-null`` hides later entries
+    for that mount point, a repeated indirect mount point in the same read is
+    ignored (``/-`` direct maps accumulate), and an entry with no explicit
+    format becomes ``amd`` when autofs.conf has a ``[ <mount point> ]`` amd
+    section. ``amd_mount_paths`` is that section list, or ``None`` when
+    autofs.conf was not captured.
+    """
+    gaps: list[dict[str, Any]] = []
+    amd = None if amd_mount_paths is None else {p.rstrip('/') for p in amd_mount_paths if isinstance(p, str)}
+    nulled: set[str] = set()
+    seen: set[str] = set()
+    parsed: list[dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
+    poisoned = False
+    for rec in records or ():
+        buf = rec.get('buffer') if isinstance(rec, Mapping) else None
+        p = parse_entry(buf) if not poisoned else dict(parse_entry(''), status='unmodelled')
+        if p['status'] != 'entry':
+            if not poisoned:
+                _gap(gaps, 'entry_grammar_not_modelled', 'A master map entry uses syntax this contract does not '
+                     'model; it and every later entry in the read are not resolved.', buffer=(buf or '')[:200])
+            poisoned = True
+            parsed.append({'buffer': buf, 'status': 'unmodelled'})
+            continue
+        mount = p['mount_point']
+        if p['type'] == 'null':
+            nulled.add(mount)
+            parsed.append({'buffer': buf, 'status': 'null', 'mount_point': mount})
+            continue
+        if mount in nulled:
+            parsed.append({'buffer': buf, 'status': 'nulled', 'mount_point': mount})
+            continue
+        if mount in seen and mount != '/-':
+            parsed.append({'buffer': buf, 'status': 'duplicate', 'mount_point': mount})
+            continue
+        seen.add(mount)
+        fmt = p['format']
+        if fmt is None:
+            if amd is None:
+                if p['type'] is None and p['map'] and not p['map'].startswith('/'):
+                    _gap(gaps, 'amd_sections_not_observed', 'autofs.conf was not captured, so whether this '
+                         'relative map is amd format is unknown.', mount_point=mount)
+            elif mount in amd:
+                fmt = 'amd'
+        entry = {'mount_point': mount, 'type': p['type'], 'format': fmt, 'map': p['map'], 'options': p['options']}
+        entries.append(entry)
+        parsed.append({'buffer': buf, 'status': 'entry', **entry})
+    return {'entries': entries, 'parsed': parsed, 'gaps': gaps}
+
+
+ENTRY_BLOCKING = frozenset({'entry_grammar_not_modelled', 'amd_sections_not_observed'})
+
+
+def evaluate_master(master_map_name: str | None = None, files: Mapping[str, Any] | None = None,
+                    stats: Mapping[str, Any] | None = None, dirs: Mapping[str, Any] | None = None,
+                    nss_sources: Iterable[str] | None = None, map_texts: Mapping[str, Any] | None = None,
+                    amd_mount_paths: Iterable[str] | None = ()) -> dict[str, Any]:
+    """Read the master map, parse its entries and resolve the program maps automount runs as root.
+
+    The arguments combine ``read_master``, ``entries_from_records`` and
+    ``evaluate``. ``files`` supplies both master maps and text maps unless
+    ``map_texts`` is given.
+    """
+    nss = None if nss_sources is None else list(nss_sources)
+    read = read_master(master_map_name, files, stats, dirs, nss)
+    built = entries_from_records(read['records'], amd_mount_paths)
+    result = evaluate(built['entries'], stats, files if map_texts is None else map_texts, nss)
+    for g in built['gaps']:
+        g['blocking'] = g['code'] in ENTRY_BLOCKING
+    gaps = read['gaps'] + built['gaps'] + result['gaps']
+    if len(gaps) > MAX_GAPS:
+        gaps = gaps[:MAX_GAPS - 1] + [{'code': 'gaps_truncated', 'detail': 'More gaps exist than are listed.',
+                                        'blocking': True}]
+    for e, src in zip(result['entries'], built['entries']):
+        e['options'] = src['options']
+    result.update(master_map_name=read['master_map_name'], records=built['parsed'], gaps=gaps,
+                  complete=not any(g['blocking'] for g in gaps))
+    result['not_observed'] = [
+        ('Whether autofs is installed, enabled and running, and whether automount was started with a master map '
+         'on its command line, which overrides master_map_name.'),
+        *NOT_OBSERVED[2:],
+    ]
+    return result

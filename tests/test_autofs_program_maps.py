@@ -202,3 +202,76 @@ def test_master_reading_fails_closed_on_unobserved_remote_and_overflowing_input(
 
 def test_strverscmp_matches_glibc_examples():
     assert ap._versionsort(['a10', 'a9', 'a09', 'a1', 'a']) == ['a', 'a09', 'a1', 'a9', 'a10']
+
+
+# --- increment 3: entry grammar -------------------------------------------------
+
+def test_parse_entry_common_forms():
+    assert ap.parse_entry('/misc /etc/auto.misc --timeout=60') == {
+        'status': 'entry', 'mount_point': '/misc', 'type': None, 'format': None, 'map': '/etc/auto.misc',
+        'options': []}
+    p = ap.parse_entry('/net -hosts -nobind,-rw')
+    assert (p['type'], p['map'], p['options']) == ('hosts', None, ['-rw'])
+    p = ap.parse_entry('/x/ exec:/usr/local/bin/m -rw,soft -t5')
+    assert (p['mount_point'], p['type'], p['map'], p['options']) == ('/x', 'program', '/usr/local/bin/m',
+                                                                     ['-rw', 'soft'])
+    p = ap.parse_entry('/y nis,sun:auto.y')
+    assert (p['type'], p['format'], p['map']) == ('nis', 'sun', 'auto.y')
+    # OPTIONSTR is longer than OPTTOUT+NUMBER here, so this is a mount option.
+    assert ap.parse_entry('/x foo -t=5x')['options'] == ['-t=5x']
+
+
+def test_parse_entry_fails_closed_on_scanner_quirks_and_syntax_errors():
+    for buf in ['/x file -rw',          # keyword then blank lexes as MAPTYPE
+                '/x file:nis -rw',      # second MAPTYPE: syntax error
+                '/x a-hosts',           # "-hosts" starts MAPHOSTS mid-name
+                '/x a--',               # MULTISEP / not modelled
+                '/x /etc//auto.x',      # "//" switches to DNSTR
+                '/x a:b', '/x foo,rw',  # COLON / name punctuation
+                '/x foo ,rw', '/x foo rw,', '/x foo rw,,ro',  # options syntax errors
+                '/x foo # c',           # '#' is skipped by the default rule
+                '/x foo -D X=1',        # MACROSTR with a blank
+                '/x multi /a -- /b',    # multi maps
+                '/x "q"', '/x a\\b', 'x /etc/auto.x', '/ foo', '/x', '/x ldap:ou=a,dc=b']:
+        assert ap.parse_entry(buf)['status'] == 'unmodelled', buf
+
+
+def test_entries_apply_null_duplicate_and_poison_rules():
+    recs = [{'buffer': b} for b in ['/a -null', '/a /etc/auto.a', '/b /etc/auto.b', '/b /etc/auto.b2',
+                                    '/- /etc/auto.d1', '/- /etc/auto.d2', '/c foo:bar', '/d /etc/auto.d']]
+    out = ap.entries_from_records(recs)
+    assert [e['map'] for e in out['entries']] == ['/etc/auto.b', '/etc/auto.d1', '/etc/auto.d2']
+    assert [r['status'] for r in out['parsed']] == ['null', 'nulled', 'entry', 'duplicate', 'entry', 'entry',
+                                                     'unmodelled', 'unmodelled']
+    assert [g['code'] for g in out['gaps']] == ['entry_grammar_not_modelled']
+
+
+def test_amd_mount_sections_set_format_and_unobserved_config_blocks_relative_names():
+    recs = [{'buffer': '/amd auto.amd'}, {'buffer': '/abs /etc/auto.abs'}]
+    out = ap.entries_from_records(recs, amd_mount_paths=['/amd/'])
+    assert [e['format'] for e in out['entries']] == ['amd', None] and out['gaps'] == []
+    out = ap.entries_from_records(recs, amd_mount_paths=None)
+    assert [(g['code'], g['mount_point']) for g in out['gaps']] == [('amd_sections_not_observed', '/amd')]
+
+
+def test_evaluate_master_end_to_end_finds_root_program_maps():
+    files = {'/etc/auto.master': '/misc /etc/auto.misc --timeout=60\n/net -hosts\n/smb auto.smb\n'
+                                 '/p program:/opt/m -rw\n+dir:/etc/auto.master.d\n',
+             '/etc/auto.master.d/x.autofs': '/x /etc/auto.x\n',
+             '/etc/auto.misc': 'cd -fstype=iso9660,ro :/dev/cdrom\n'}
+    stats = {'/etc/auto.master': REG, '/etc/auto.master.d': {'kind': 'directory', 'mode': 0o40755},
+             '/etc/auto.master.d/x.autofs': REG, '/etc/auto.misc': REG, '/etc/auto.smb': REG_X,
+             '/opt/m': REG_X, '/etc/auto.x': REG_X}
+    r = ap.evaluate_master(None, files, stats, {'/etc/auto.master.d': ['x.autofs', '.y.autofs', 'z.conf']})
+    assert [(p['path'], p['cwd']) for p in r['programs']] == [('/etc/auto.smb', '/smb'), ('/opt/m', '/p'),
+                                                               ('/etc/auto.x', '/x')]
+    assert r['entries'][3]['options'] == ['-rw']
+    assert r['complete'] and r['authorizes_response'] is False and r['origin'] == 'not_assessed'
+
+
+def test_evaluate_master_unmodelled_entry_poisons_later_entries_and_blocks():
+    files = {'/etc/auto.master': '/a weird:map\n/b /etc/auto.b\n'}
+    stats = {'/etc/auto.master': REG, '/etc/auto.b': REG_X}
+    r = ap.evaluate_master(None, files, stats)
+    assert r['programs'] == [] and not r['complete']
+    assert [g['code'] for g in r['gaps']] == ['entry_grammar_not_modelled']
