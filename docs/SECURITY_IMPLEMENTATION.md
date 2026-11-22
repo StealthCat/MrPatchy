@@ -3555,6 +3555,16 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+### In-app notice for uncertain AI charges — Roadmap A/J checkpoint #1337
+
+When an uncertain provider charge still counts against an enabled daily AI
+cap with headroom, administrators receive one in-app notice linked to AI
+Settings. In-flight sent reservations do not trigger it. The notice uses the
+existing budget totals, including carryover, and resolves when the condition
+ends or the cap exhaustion notice takes over. Polling and changes to the
+number or amount of uncertain charges do not create extra revisions while it
+is active. It contains fixed text and changes no ledger, SMTP or webhook state.
+
 ### Unknown pricing and usage under a daily cap — worker checkpoint #994
 
 Milestone 4 acceptance for **unknown pricing/usage**.

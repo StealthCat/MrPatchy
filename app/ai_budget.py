@@ -219,6 +219,7 @@ def status(session,now=None):
 
 DAILY_CAP_NOTIFICATION=dict(source='ai-budget',kind='daily-cap',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
 DAILY_CAP_WARNING_NOTIFICATION=dict(source='ai-budget',kind='daily-cap-warning',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
+UNCERTAIN_CHARGE_NOTIFICATION=dict(source='ai-budget',kind='uncertain-charge',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
 # Default advance-warning percent of the cap. Administrators can change it with
 # `ai_daily_cap_warning_percent` (0 turns the warning off, #810).
 DAILY_CAP_WARNING_DEFAULT_PERCENT=80
@@ -249,6 +250,21 @@ def _resolve_notification(session,spec,reason,now):
                 deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
 
 
+def _publish_uncertain_charge_notification(session, active, now):
+    from . import notifications
+
+    if active:
+        notifications.publish(session, **UNCERTAIN_CHARGE_NOTIFICATION,
+            subject_revision='retained-uncertain', severity='low', deep_link='#settings/ai',
+            minimum_role='admin', now=now,
+            reason='An AI provider call ended without a confirmed charge. Its reserved amount is still counted '
+                   'toward the daily cap. Review uncertain charges in AI Settings. Counted spend is a local estimate.')
+    else:
+        _resolve_notification(session, UNCERTAIN_CHARGE_NOTIFICATION,
+            'The daily cap no longer has both a counted uncertain charge and remaining headroom. '
+            'AI Settings shows the current budget.', now)
+
+
 def publish_cap_notification(session,cfg,now):
     """Publish admin attention while the current capped window has no remaining spend.
 
@@ -269,8 +285,11 @@ def publish_cap_notification(session,cfg,now):
     from .notifications import NotificationEvent, NotificationRevision
     capped=bool(cfg.get('ai_enabled')) and cfg['ai_control_mode'] in ai_pricing.CAP_MODES
     warning=False
+    uncertain_charge = False
     if capped:
-        _enabled,name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,cfg,now)
+        _enabled,name,_start,reset,groups,counted,cap,_reconciliation=_state(session,cfg,now)
+        # Sent reservations may still complete normally. Exhaustion already has its own notice.
+        uncertain_charge = groups['uncertain'] > 0 and counted < cap
         reset_text=datetime.fromtimestamp(reset,timezone.utc).isoformat().replace('+00:00','Z')
         percent=warning_percent(cfg)
         if percent and counted<cap and counted>=cap*Decimal(percent)/100:
@@ -298,6 +317,7 @@ def publish_cap_notification(session,cfg,now):
                 notifications.publish(session,**DAILY_CAP_WARNING_NOTIFICATION,
                     subject_revision=subject_revision,
                     severity='low',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
+    _publish_uncertain_charge_notification(session, uncertain_charge, now)
     if not warning:
         _resolve_notification(session,DAILY_CAP_WARNING_NOTIFICATION,
             'Shared daily AI spend is no longer approaching the cap: the window reset, the cap, mode or warning threshold '
