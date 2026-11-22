@@ -82,7 +82,7 @@ _TAKES_ARGUMENT = frozenset('irtTudmx')
 # parse_args checks these in this order once parsing finishes.
 _NO_DAEMON = (('h', 'help'), ('k', 'kill'), ('R', 'resume'), ('S', 'suspend'),
               ('z', 'info'), ('v', 'version'), ('c', 'check_running'))
-_API_MODES = frozenset('emwpai')
+_API_MODES = frozenset('emwpaiEMWPAI')
 
 FILE_STATES = ('present', 'absent', 'unknown')
 DIR_STATES = ('listed', 'absent', 'unknown')
@@ -198,11 +198,11 @@ def parse_options(words: list[str]) -> dict[str, Any]:
             state['no_shutdown_script'] = not state['no_shutdown_script']
         elif letter == 'l':
             state['initial_down'] = not state['initial_down']
-        elif letter == 'm':
-            # tolower(optarg[0]); an empty argument reads the terminating NUL.
-            if not value or value[0].lower() not in _API_MODES:
-                state['exit'] = 'unknown_api_mode'
-                return False
+        elif letter == 'm' and (not value or value[0] not in _API_MODES):
+            # tolower(optarg[0]) in the C locale; an empty argument reads the
+            # terminating NUL and is refused too.
+            state['exit'] = 'unknown_api_mode'
+            return False
         state['flags'].add(letter)
         return True
 
