@@ -12544,3 +12544,29 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### Postfix master.cf service contract — worker checkpoint #1338 (roadmap F)
+
+Postfix `master(8)` reads `master.cf` at startup and on every `postfix reload`. It starts each service listed there as root, from `$daemon_directory`. The `pipe(8)` and `spawn(8)` services then run the external command given by `argv=` as the `user=` account, which is the usual way to attach content filters and mail-triggered scripts. The startup inventory did not model this path.
+
+- **Change:** the pure `app/postfix_master.py` takes captured `master.cf` text, captured `main.cf` parameter values and an optional `/etc/services` port map. It returns each service master starts: name, type, flags, wakeup, maxproc, the program and the argument vector master builds, whether the daemon keeps root or drops to the mail owner, and any earlier entries the service overrides. For `pipe` and `spawn` it also returns the external `argv=` command, its SHA-256, its `${...}` macros and the `user=`/group account, or the daemon refusal that keeps the command from running. It performs no I/O and never runs a command.
+- **Fidelity (Postfix 3.8.6):** follows the rules in `readllines`, `get_master_ent` and `master_config`:
+  - continuation lines, with comment lines dropped inside them;
+  - `master_service_disable` matching, plus empty `inet_protocols`, applied before any other validation;
+  - `-` defaults, `y`/`n`, `atoi` and conditional `?` wakeup;
+  - the compatibility-level `chroot` default;
+  - `{}` grouping;
+  - last-entry-wins by type and canonical endpoint;
+  - master's own `-l`/`-z`/`-n`/`-t`/`-u`/`-c`/`-o stress=` arguments.
+
+  `pipe`/`spawn` attributes are parsed after `single_server`'s `getopt("+cdDi:lm:n:o:r:s:St:uvVz")`, following `get_service_attr`. The result is `config_error`, with no services, only for the refusals the module models exactly.
+- **Fail closed:** the result is incomplete when:
+  - `master.cf` or `main.cf` is unobserved;
+  - a needed parameter requires `$` expansion;
+  - the build-specific `daemon_directory` is missing;
+  - two inet entries might name the same endpoint only through unobserved name or port resolution;
+  - the input has invalid UTF-8, NUL bytes, is over the size limit, or holds out-of-range integers.
+
+  Some validations are not modelled: host name syntax and resolution, `inet_interfaces`, account and numeric-ID lookups, and command existence. They can only stop master or the daemon, so the result over-reports and says so. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_postfix_master.py` has 12 tests with vectors derived from the source. There is no live differential against a running Postfix yet.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
