@@ -139,3 +139,41 @@ def test_limits_disclosed_and_no_verdict():
     assert result['complete'] is True and result['commands'] == []
     assert any('getpwnam' in line for line in result['unobserved'])
     assert 'not a safety verdict' in result['note']
+
+
+TAIL = ('check process x with pidfile /run/x.pid\n'
+        '  start program = "/bin/start"\n'
+        "  stop program = \"/bin/stop 'a b'\"\n")
+
+
+@pytest.mark.parametrize('head, trailer', [
+    ("set mail-format { message: Monit's alert }\n", "# it's fine\n"),
+    ('set mail-format {\n  message: line one\n  "quoted\n  it\'s\n}\n', "# it's\n"),
+    ('set mail-format { subject: 5" disk }\n', '# say "hi\n'),
+    ("set mail-format { from: O'Brien <ob@example.com> }\n", "# it's\n"),
+    ("set mail-format {\n  reply-to: it's@example.com\n}\n", "# it's\n"),
+    ("check host h with address 1.2.3.4\n  if failed url http://h/it's then alert\n", "# it's\n"),
+    ("check host h with address 1.2.3.4\n  if failed port 80 protocol http http headers [X-A: it's] then alert\n",
+     ''),
+])
+def test_quotes_inside_mail_fields_urls_and_headers_do_not_hide_programs(head, trailer):
+    # l.l consumes these contexts whole, so their quote characters never open a string (monit 5.33.0).
+    result = run(head + TAIL + trailer)
+    assert [c['argv'] for c in result['commands']] == [['/bin/start'], ['/bin/stop', 'a b']]
+
+
+def test_quoted_http_headers_are_blocking():
+    result = run('check host h with address 1.2.3.4\n'
+                 '  if failed port 80 protocol http http headers [X-A: "v"] then alert\n' + TAIL)
+    assert 'unmodelled_http_headers' in codes(result) and result['complete'] is False
+
+
+@pytest.mark.parametrize('url', ['http://h/a\tb', 'http://u\nx:p@h/', 'http://h:a\nb@x/'])
+def test_urls_not_ended_by_space_or_newline_are_blocking(url):
+    result = run(f'check host h with address 1.2.3.4\n  if failed url {url} then alert\n' + TAIL)
+    assert 'unmodelled_url' in codes(result) and result['complete'] is False
+
+
+def test_mail_field_words_without_colon_are_ordinary():
+    result = run('check process message with pidfile /p\n  start program = "/bin/m"\n')
+    assert [c['argv'] for c in result['commands']] == [['/bin/m']] and result['complete'] is True

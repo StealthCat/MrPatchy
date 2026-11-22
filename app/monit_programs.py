@@ -17,6 +17,8 @@ case-insensitive) and ``src/p.y``:
   also strips leading and trailing white space and quote characters.
 * ``as uid``/``and gid`` take a name or a number and ``timeout N seconds`` sets
   the command timeout. Without a uid or gid the program runs as monit's own user.
+* ``subject:``, ``message:``, ``from:``/``reply-to:`` mail-format fields, URLs and ``http headers`` lists
+  are consumed as l.l does, so quote characters inside them never open a string.
 * ``#`` starts a comment outside an argument list. ``include`` takes a quoted or
   bare glob, and each match is lexed in place; including the control file or a
   file already being included is skipped as a loop, as monit does.
@@ -44,7 +46,7 @@ BLOCKING = frozenset({
     'input_malformed', 'text_too_large', 'carriage_return', 'unbalanced_quotes', 'unterminated_arguments',
     'escape_sequence', 'unquoted_arguments', 'extra_arguments', 'empty_arguments', 'too_many_arguments',
     'include_not_observed', 'include_too_deep', 'too_many_files', 'too_many_commands', 'user_option_malformed',
-    'command_outside_service', 'gaps_truncated',
+    'command_outside_service', 'gaps_truncated', 'unmodelled_url', 'unmodelled_http_headers',
 })
 UNOBSERVED = (
     'User and group names are reported as written; monit resolves them with getpwnam/getgrnam when it parses.',
@@ -68,6 +70,12 @@ _WORD = re.compile(r'[^\s"\';,()@:{}%]+')
 _INCLUDE_QUOTED = re.compile(r'"[^"\r\n]+"|\'[^\'\r\n]+\'')
 _INCLUDE_BARE = re.compile(r'[^ \t\r\n]+')
 _STRIP = '"\' \t\n\v\f\r'
+# INITIAL rules whose text, quotes included, never reaches the program grammar: mail-format fields, URLs and
+# http headers lists. Each is matched only where flex's longest match would pick it over a plain word.
+_MAILFIELD = re.compile(r'(subject|message|from|reply-to):', re.I)
+_URL = re.compile(r'[a-zA-Z0-9]+://')
+_HEADERS = re.compile(r'http headers[ \r\t]+', re.I)
+_URL_PASSWORD = re.compile(r':[^@ ]+@')
 
 
 def _gap(gaps: list[dict[str, Any]], code: str, where: dict[str, Any] | None = None, detail: str = '') -> None:
@@ -127,6 +135,11 @@ class _Lexer:
                 continue
             word = _WORD.match(text, i)
             wlen = word.end() - i if word else 0
+            skipped = self._skip_context(text, i, wlen, where)
+            if skipped is not None:
+                line += text.count('\n', i, skipped)
+                i = skipped
+                continue
             arg = _ARGSTART.match(text, i)
             if arg and arg.end() - i > wlen:
                 role = arg.group(1).lower()
@@ -187,6 +200,56 @@ class _Lexer:
                 self.program_state = False  # l.l's single-character rule resets check_state
             i += 1
         self.stack.pop()
+
+    def _skip_context(self, text: str, i: int, wlen: int, where: dict[str, Any]) -> int | None:
+        """Return where a mail-format field, URL or http headers list that starts at ``i`` ends, or None.
+
+        l.l consumes ``subject:`` to ``}`` or a newline, ``message:`` to ``}`` (across lines), ``from:`` and
+        ``reply-to:`` addresses (ADDRESS_COND) to ``}``, a newline, ``{`` or a control character, a URL
+        (URL_COND) to white space, and an ``http headers`` list (HTTP_HEADER_COND) to ``]``. Quote characters
+        inside them never open a string, so lexing them as ordinary tokens could hide real program definitions.
+        """
+        n = len(text)
+        field = _MAILFIELD.match(text, i)
+        if field and field.end() - i > wlen:
+            kind, j = field.group(1).lower(), field.end()
+            if kind == 'subject':
+                while j < n and text[j] not in '}\n':
+                    j += 1
+            elif kind == 'message':
+                end = text.find('}', j)
+                j = n if end < 0 else end
+            else:
+                while j < n and text[j] not in '}{\n' and ord(text[j]) >= 0x20:
+                    j += 1
+                if j < n and text[j] == '\n':
+                    j += 1
+            return j
+        url = _URL.match(text, i)
+        if url and url.end() - i > wlen:
+            j = url.end()
+            while j < n and text[j] not in ' \r\n\t':
+                j += 1
+            # A tab or CR inside a path, query or fragment does not end the URL, and the user:password@ rules can
+            # match across a newline; neither is modelled.
+            spans_line = any(
+                (m := _URL_PASSWORD.match(text, k)) is not None and any(c in m.group(0) for c in '\n\r\t')
+                for k in range(url.end() - 1, j) if text[k] == ':')
+            user = re.compile(r'[^:@ ]+:[^@: ]+@').match(text, url.end())
+            if (j < n and text[j] in '\r\t') or spans_line or (user and any(c in user.group(0) for c in '\n\r\t')):
+                _gap(self.gaps, 'unmodelled_url', where, 'The URL is not ended by a space or newline; '
+                                                         'URL_COND is not modelled there.')
+            return j
+        headers = _HEADERS.match(text, i)
+        if headers and headers.end() - i > wlen:
+            end = text.find(']', headers.end())
+            j = n if end < 0 else end + 1
+            if end < 0 or any(c in text[headers.end():j] for c in '"\''):
+                _gap(self.gaps, 'unmodelled_http_headers', where, 'Quoted or unterminated http headers lists '
+                                                                  'are not modelled.')
+                return None if end < 0 else j
+            return j
+        return None
 
     def _arguments(self, text: str, i: int, line: int, path: str, role: str) -> tuple[int, int]:
         start = {'file': path, 'line': line}
