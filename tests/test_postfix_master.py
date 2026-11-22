@@ -134,3 +134,12 @@ def test_unprivileged_pipe_is_reported_with_a_caveat():
     r = run('t unix - y n - - pipe user=x argv=/bin/cmd\n')
     cmd = r['services'][0]['external_command']
     assert cmd['status'] == 'runs' and 'mail owner' in cmd['detail']
+
+
+def test_commands_resolve_against_daemon_directory():
+    r = run('a unix - n n - - pipe user=x argv=/y\nb unix - - - - - /usr/local/bin/evil\n'
+            'c unix - - - - - ../../../../tmp/x\n')
+    s = by_name(r)
+    assert s[('a', 'unix')]['outside_daemon_directory'] is False
+    assert s[('b', 'unix')]['program_normalized'] == '/usr/lib/postfix/sbin/usr/local/bin/evil'
+    assert s[('c', 'unix')]['program_normalized'] == '/tmp/x' and s[('c', 'unix')]['outside_daemon_directory']

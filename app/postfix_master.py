@@ -110,6 +110,10 @@ NOT_OBSERVED = (
     'Whether each command exists in daemon_directory, and what a non-Postfix program there does with -u.',
     'Per-delivery expansion of pipe argv= macros such as ${recipient}, and which mail reaches each transport.',
     'Services started outside master, such as postdrop and sendmail, and main.cf content_filter routing.',
+    ('Commands named by main.cf or by -o overrides, such as mailbox_command or milters. -o overrides are '
+     'reported only as raw arguments.'),
+    ('The -d, -v and -s arguments and whether a virtual inet service is loopback-only, which depend on how '
+     'master was started and on inet_interfaces, so args and program_sha256 can differ from the live process.'),
 )
 
 
@@ -635,7 +639,11 @@ def _service(entry: dict[str, Any], overridden: list[int], daemon_dir: str | Non
         'line': entry['line'], 'name': entry['name'], 'type': entry['type'], 'starts': True, 'reason': '',
         'overridden_lines': overridden, 'private': entry['private'], 'unprivileged': entry['unprivileged'],
         'chroot': entry['chroot'], 'wakeup': entry['wakeup'], 'conditional_wakeup': entry['conditional_wakeup'],
-        'max_proc': entry['max_proc'], 'command': command, 'program': program, 'args': args,
+        'max_proc': entry['max_proc'], 'command': command, 'program': program,
+        'program_normalized': None if program is None else posixpath.normpath(program),
+        'outside_daemon_directory': None if program is None else not posixpath.normpath(program).startswith(
+            posixpath.normpath(daemon_dir).rstrip('/') + '/'),
+        'args': args,
         'starts_as': 'root',
         'privileges': 'drops_to_mail_owner' if entry['unprivileged'] else 'keeps_root',
         'program_sha256': None if program is None else hashlib.sha256(

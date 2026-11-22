@@ -12568,5 +12568,5 @@ Postfix `master(8)` reads `master.cf` at startup and on every `postfix reload`. 
   - the input has invalid UTF-8, NUL bytes, is over the size limit, or holds out-of-range integers.
 
   Some validations are not modelled: host name syntax and resolution, `inet_interfaces`, account and numeric-ID lookups, and command existence. They can only stop master or the daemon, so the result over-reports and says so. `origin` is `not_assessed`, and no result is a safety verdict.
-- **Validation:** `tests/test_postfix_master.py` has 12 tests with vectors derived from the source. There is no live differential against a running Postfix yet.
+- **Validation:** `tests/test_postfix_master.py` has 13 tests with vectors derived from the source. There is no live differential against a running Postfix yet.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
