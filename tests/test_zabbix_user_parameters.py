@@ -145,3 +145,53 @@ def test_suffix_product_wraps_like_str2uint64():
         result = run(f'AllowRoot={value}\nUserParameter=a,id\n')
         assert result['config_error']['code'] == 'wrong_value', value
         assert result['user_parameters'] == []
+
+
+def test_absolute_load_module_runs_at_agent_start_as_run_as_user():
+    # Regression for the reviewed head: this was complete with no modules.
+    result = run('AllowRoot=1\nLoadModule=/tmp/evil.so\n')
+    assert result['complete'] and result['status'] == 'complete'
+    [module] = result['modules']
+    assert module['path'] == '/tmp/evil.so' and module['runs'] is True
+    assert module['trigger'] == 'agent_start' and module['line'] == 2
+    assert module['load_success'] == 'not_assessed' and module['path_source'] is None
+    assert result['run_as']['when_started_as_root'] == 'root'
+    assert 'module_load_success' in result['not_modeled']
+
+
+def test_relative_load_module_uses_last_load_module_path():
+    result = run('LoadModulePath=/opt\nLoadModulePath=/tmp\nLoadModule=evil.so\n'
+                 'LoadModule=/usr/lib/a.so\n')
+    assert result['complete']
+    assert [(m['path'], m['runs']) for m in result['modules']] == [
+        ('/tmp/evil.so', True), ('/usr/lib/a.so', True)]
+    assert result['modules'][0]['path_source']['line'] == 2
+
+
+def test_relative_load_module_without_path_is_a_blocking_gap():
+    result = run('LoadModule=evil.so\n')
+    assert not result['complete'] and 'default_module_path_unknown' in result['gaps']
+    assert result['modules'][0]['path'] is None
+
+
+def test_relative_module_path_value_is_a_blocking_gap():
+    result = run('LoadModulePath=mods\nLoadModule=x.so\n')
+    assert not result['complete'] and 'relative_module_path' in result['gaps']
+    assert result['modules'][0]['path'] == 'mods/x.so'
+
+
+def test_empty_load_module_stops_the_agent_before_user_parameters():
+    result = run('LoadModulePath=/m\nLoadModule=/a.so\nLoadModule=\nLoadModule=/b.so\n'
+                 'UserParameter=k,id\n')
+    assert result['status'] == 'config_error'
+    assert result['config_error']['code'] == 'load_module_empty'
+    assert [m['runs'] for m in result['modules']] == [False, False, False]
+    assert result['user_parameters'][0]['runs'] is False
+
+
+def test_module_full_name_is_truncated_like_zbx_snprintf():
+    name = 'a' * 2030
+    result = run('LoadModulePath=/opt/zabbix/modules\nLoadModule=' + name + '\n')
+    module = result['modules'][0]
+    assert module['truncated'] is True and len(module['path']) == 2047
+    assert module['path'].startswith('/opt/zabbix/modules/aaa')

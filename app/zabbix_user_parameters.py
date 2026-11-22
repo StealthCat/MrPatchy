@@ -40,8 +40,21 @@ Semantics follow Zabbix 6.0.14 (Debian 12 ``zabbix-agent``)
   set. With ``UnsafeUserParameters=0`` flexible parameters containing
   ``\\'"`*?[]{}~$!&;()<>|#@`` or a newline are refused before execution.
 
-Not modeled, so the result can only over-report: collisions with built-in or
-loadable-module item keys, unknown parameter names (strict mode stops the
+- **Modules.** ``LoadModule`` accumulates in parse order and ``LoadModulePath``
+  keeps the last value (``modules.c`` ``zbx_load_module``). An absolute name is
+  used as given; any other name becomes ``<LoadModulePath>/<name>``, truncated
+  to 2047 bytes, and is ``dlopen``-ed with ``RTLD_NOW`` when the agent starts,
+  after the privilege drop and before UserParameters are registered. Its
+  constructors, ``zbx_module_init()`` and item callbacks therefore run inside
+  the agent as the same user. Without ``LoadModulePath`` the compiled-in
+  ``DEFAULT_LOAD_MODULE_PATH`` (``${libdir}/modules``) is distribution-specific
+  and reported as a blocking gap, as is a resolved path that is not absolute
+  (``dlopen`` resolves it against the agent's working directory). An empty
+  name resolves to a directory, which ``dlopen`` refuses, so the agent stops.
+
+Not modeled, so the result can only over-report: whether ``dlopen``, the
+module API version check or ``zbx_module_init`` succeeds (a failure stops the
+agent), collisions with built-in or loadable-module item keys, unknown parameter names (strict mode stops the
 agent), ``AllowKey``/``DenyKey`` pattern validation and other parameters'
 values. ``zabbix_agent2`` (Go) uses a different parser and is out of scope.
 """
@@ -73,8 +86,9 @@ _SUFFIX = {'': 1, 'K': 1024, 'M': 1024 ** 2, 'G': 1024 ** 3, 'T': 1024 ** 4}
 _POSITIONAL = re.compile(r'\$([1-9])')
 BLOCKING_GAPS = frozenset({
     'unobserved_file', 'unobserved_directory', 'relative_include', 'invalid_utf8',
-    'nul_byte', 'input_limit',
+    'nul_byte', 'input_limit', 'default_module_path_unknown', 'relative_module_path',
 })
+FULL_NAME_MAX = MAX_STRING_LEN - 1  # zbx_snprintf into char full_name[MAX_STRING_LEN]
 
 
 class _Stop(Exception):
@@ -192,6 +206,7 @@ def assess(files: Mapping[str, str | bytes],
     gaps: list[str] = []
     gap_paths: list[dict[str, str]] = []
     params: list[dict[str, Any]] = []
+    module_lines: list[dict[str, Any]] = []
     scalars: dict[str, dict[str, Any]] = {}
     access_rules: list[dict[str, Any]] = []
     sources: list[str] = []
@@ -236,7 +251,9 @@ def assess(files: Mapping[str, str | bytes],
                 parse_include(value, path, lineno, level)
             elif name == 'UserParameter':
                 params.append({'raw': value, 'source': path, 'line': lineno})
-            elif name in ('User', 'UserParameterDir'):
+            elif name == 'LoadModule':
+                module_lines.append({'name': value, 'source': path, 'line': lineno})
+            elif name in ('User', 'UserParameterDir', 'LoadModulePath'):
                 scalars[name] = {'value': value, 'source': path, 'line': lineno}
             elif name in ('AllowRoot', 'UnsafeUserParameters'):
                 number = _uint(value)
@@ -295,6 +312,39 @@ def assess(files: Mapping[str, str | bytes],
     except _Gap as missing:
         gap(missing.code, missing.path)
 
+    module_path_entry = scalars.get('LoadModulePath')
+    modules: list[dict[str, Any]] = []
+    for item in module_lines:
+        name = item['name']
+        record = {'name': name, 'source': item['source'], 'line': item['line'],
+                  'trigger': 'agent_start', 'load': 'dlopen_rtld_now',
+                  'load_success': 'not_assessed'}
+        if name.startswith('/'):
+            full: str | None = name
+        elif module_path_entry is None:
+            full = None
+            gap('default_module_path_unknown', name)
+        else:
+            full = module_path_entry['value'] + '/' + name
+        if full is not None:
+            raw = full.encode('utf-8')
+            if len(raw) > FULL_NAME_MAX:
+                full = raw[:FULL_NAME_MAX].decode('utf-8', 'surrogateescape')
+                record['truncated'] = True
+            if not full.startswith('/'):
+                gap('relative_module_path', full)
+        record['path'] = full
+        record['path_source'] = (None if name.startswith('/') or module_path_entry is None
+                                 else {k: module_path_entry[k] for k in ('source', 'line')})
+        if name == '' and error is None:
+            record['status'] = 'config_error'
+            record['reason'] = 'module_path_is_directory'
+            error = {'code': 'load_module_empty', 'source': item['source'],
+                     'line': item['line'], 'detail': ''}
+        else:
+            record['status'] = 'configured'
+        modules.append(record)
+
     entries: list[dict[str, Any]] = []
     registered: dict[str, dict[str, Any]] = {}
     for item in params:
@@ -349,6 +399,11 @@ def assess(files: Mapping[str, str | bytes],
         if not started and record['status'] == 'registered':
             record['reason'] = 'agent_refuses_to_start'
 
+    for record in modules:
+        record['runs'] = started and record['status'] == 'configured'
+        if not record['runs'] and record['status'] == 'configured':
+            record['reason'] = 'agent_refuses_to_start'
+
     system_run_allow = [r for r in access_rules if r['type'] == 'allow' and _may_match_system_run(r['pattern'])]
     # A modeled refusal is definitive even when other files were unobserved:
     # the agent stops either at that refusal or at an earlier one.
@@ -372,12 +427,13 @@ def assess(files: Mapping[str, str | bytes],
             'account_resolution': 'not_assessed',
         },
         'user_parameters': entries,
+        'modules': modules,
         'remote_commands': {
             'system_run': ('possible' if system_run_allow else 'denied') if started else 'agent_refuses_to_start',
             'rules': access_rules,
             'rule_evaluation': 'not_modeled_over_reports',
         },
-        'not_modeled': ['builtin_key_collisions', 'unknown_parameter_names',
+        'not_modeled': ['module_load_success', 'builtin_key_collisions', 'unknown_parameter_names',
                         'key_access_pattern_validation', 'other_parameter_values'],
         'origin': 'not_assessed',
         'verdict': None,
