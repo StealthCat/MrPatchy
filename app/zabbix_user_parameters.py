@@ -68,6 +68,7 @@ UNSAFE_PARAMETER_CHARS = '\\\'"`*?[]{}~$!&;()<>|#@\n'
 
 _KEY = re.compile(r'[0-9A-Za-z._-]+(\[\*\])?\Z')
 _UINT = re.compile(r'([0-9]+)([KMGT]?)\Z')
+UINT64_MAX = 2 ** 64 - 1
 _SUFFIX = {'': 1, 'K': 1024, 'M': 1024 ** 2, 'G': 1024 ** 3, 'T': 1024 ** 4}
 _POSITIONAL = re.compile(r'\$([1-9])')
 BLOCKING_GAPS = frozenset({
@@ -155,10 +156,19 @@ def _fgets(data: bytes) -> Iterable[bytes]:
 
 
 def _uint(value: str) -> int | None:
+    """Port of ``str2uint64(value, "KMGT")``.
+
+    ``is_uint64_n`` refuses digits above ``UINT64_MAX``, but the suffix factor
+    is then applied with ``*value *= factor`` and no overflow check, so the
+    product wraps modulo 2**64 (for example ``18014398509481984K`` is 0).
+    """
     m = _UINT.match(value)
     if not m:
         return None
-    return int(m.group(1)) * _SUFFIX[m.group(2)]
+    number = int(m.group(1))
+    if number > UINT64_MAX:
+        return None
+    return (number * _SUFFIX[m.group(2)]) & UINT64_MAX
 
 
 def _as_bytes(value: str | bytes) -> bytes:

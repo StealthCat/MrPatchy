@@ -129,3 +129,19 @@ def test_match_glob_port():
 
 def test_fingerprint_is_stable():
     assert run('UserParameter=k,id\n')['fingerprint'] == run('UserParameter=k,id\n')['fingerprint']
+
+
+def test_suffix_product_wraps_like_str2uint64():
+    # str2uint64 multiplies by the KMGT factor in uint64 without an overflow
+    # check: 2**54 * 1K and 2**24 * 1T both wrap to 0, which the agent accepts.
+    for value in ('18014398509481984K', '16777216T', '00018014398509481984K'):
+        result = run(f'AllowRoot={value}\nUnsafeUserParameters={value}\nUserParameter=a,id\n')
+        assert result['status'] == 'complete', value
+        assert result['config_error'] is None
+        assert result['run_as']['when_started_as_root'] == 'zabbix'
+        assert result['user_parameters'][0]['runs'] is True
+    # A wrapped product that is not 0 or 1, and digits above UINT64_MAX, still stop the agent.
+    for value in ('18014398509481985K', '18446744073709551616', '18446744073709551616K'):
+        result = run(f'AllowRoot={value}\nUserParameter=a,id\n')
+        assert result['config_error']['code'] == 'wrong_value', value
+        assert result['user_parameters'] == []
