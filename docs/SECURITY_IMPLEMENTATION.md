@@ -12558,6 +12558,7 @@ Each `openvpn@`, `openvpn-server@` and `openvpn-client@` unit starts one root Op
 
   It performs no I/O and never runs a command.
 - **Fidelity:** it follows the OpenVPN 2.6.19 option reader: command-line arguments in order, nested `config` to 10 levels, fatal lines of 256 bytes or more, the UTF-8 BOM, `parse_line` quoting, escapes, comments and its 16-parameter limit, `--` prefixes, inline `<tag>` blocks and their end tag, immediate `cd`, later-wins script overrides, `,` substitution for `ipchange` and `tls-verify`, `argv_parse_cmd` splitting and the plugin library path rules. It reports `config_error`, with no scripts, only for the refusals it models exactly.
+- **Relaxed option errors:** a `setenv opt` prefix is stripped and the rest of the line is read as a normal option, on the command line and in files. So `setenv opt up /x` registers an `up` script, and `setenv opt plugin`, `cd`, `config`, `user` and `script-security` take effect too. After that prefix, after `setenv FORWARD_COMPATIBLE 1`, and for names listed by `ignore-unknown-option`, OpenVPN only warns about a missing or extra parameter on a modelled option and ignores the line. The result lists those lines under `warnings` (`option_ignored`). Other refusals, such as too many script arguments or a missing `via-env`/`via-file`, stay fatal. An inline flag such as `<up-restart>` is an unrecognized option, as upstream treats it.
 - **Fail closed:** an unobserved file, `config stdin`, invalid UTF-8, NUL bytes, over-limit input and `chroot` make the result incomplete. The following can only stop OpenVPN, so the result over-reports in those cases and says so:
   - unknown or invalid options it does not model;
   - a missing or non-executable script;
@@ -12565,9 +12566,11 @@ Each `openvpn@`, `openvpn-server@` and `openvpn-client@` unit starts one root Op
   - a server-only script without `--mode server`.
 
   `origin` is `not_assessed`; no result is a safety verdict.
-- **Validation:** `tests/test_openvpn_scripts.py` (26 tests). A harness compiled from the unmodified OpenVPN 2.6.19 `parse_line` source tokenized 40,000 random lines, with 0 disagreements against the Python tokenizer. Running the packaged binary for a full-reader differential was not possible in this environment.
+- **Validation:** `tests/test_openvpn_scripts.py` (46 tests). A harness compiled from the unmodified OpenVPN 2.6.19 `parse_line` source tokenized 40,000 random lines, with 0 disagreements against the Python tokenizer.
+  - A differential ran the packaged Ubuntu 24.04 `openvpn` 2.6.19 binary at `--verb 4` on 2,400 random configurations. They mixed `setenv opt` prefixes, `FORWARD_COMPATIBLE`, `ignore-unknown-option`, script, identity, `cd` and `script-security` lines with varying arity.
+  - The result had 0 false negatives or script/identity mismatches. The only differences were over-reports where OpenVPN stopped on an invalid `setenv` line, which this contract does not model.
+  - The same corpus gave 35 mismatches on the previously reviewed head.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:**
-  - a full-reader differential against the real binary;
   - agent collection of the unit instances, configuration files and working directories;
   - a catalog entry, package provenance, persistence, UI and AI classification.

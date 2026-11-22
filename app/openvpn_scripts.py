@@ -30,6 +30,12 @@ reader:
 - A lone ``<tag>`` parameter starts an inline block that ends at the first line
   whose leading-whitespace-stripped text starts with ``</tag>``; a missing end
   tag stops OpenVPN. Script, plugin and include options cannot be inline.
+- A ``setenv opt`` prefix is removed and the rest of the line is a normal
+  option, so ``setenv opt up /x`` registers an ``up`` script. After that
+  prefix, after ``setenv FORWARD_COMPATIBLE 1`` and for names listed by
+  ``ignore-unknown-option``, a missing or extra parameter on a modelled option
+  is only a warning: OpenVPN ignores that line and carries on. The result lists
+  those lines under ``warnings``.
 - ``cd`` changes the process directory immediately, so it affects later relative
   ``config`` paths, and the final directory is where relative scripts and
   ``./`` plugins are found. A later script option replaces an earlier one.
@@ -239,6 +245,9 @@ class _State:
         self.plugins: list[dict[str, Any]] = []
         self.files_read: list[str] = []
         self.gaps: list[dict[str, str]] = []
+        self.warnings: list[dict[str, Any]] = []
+        self.forward_compatible = False
+        self.ignore_unknown: list[str] = []
         self.overrides: list[dict[str, Any]] = []
 
     def gap(self, code: str, detail: str) -> None:
@@ -251,17 +260,56 @@ class _State:
         return posixpath.normpath(value if value.startswith('/') else posixpath.join(self.cwd, value))
 
 
+def _unrecognized(st: _State, name: str, setenv_opt: bool, detail: str, where: dict[str, Any]) -> None:
+    # add_option's final branch logs at msglevel_fc, which is only a warning after a
+    # 'setenv opt' prefix or 'setenv FORWARD_COMPATIBLE 1', and for ignore-unknown-option names.
+    if setenv_opt or st.forward_compatible or name in st.ignore_unknown:
+        if len(st.warnings) < MAX_GAPS:
+            st.warnings.append({'code': 'option_ignored', 'option': name,
+                                'detail': 'unrecognized option or %s; OpenVPN warns and ignores it' % detail,
+                                'source': where})
+        return
+    raise ConfigError('unrecognized option or %s: %s' % (detail, name))
+
+
 def _add_option(st: _State, p: list[str], *, is_inline: bool, level: int, where: dict[str, Any]) -> None:
+    setenv_opt = False
+    if len(p) >= 2 and p[0] == 'setenv' and p[1] == 'opt':
+        # options.c add_option: the prefix is stripped and the rest is a normal option.
+        p = p[2:] if len(p) > 2 else ['setenv opt']
+        setenv_opt = True
     name = p[0]
+    args = p[1:]
+    if name == 'setenv':
+        if len(args) == 2 and args[0] == 'FORWARD_COMPATIBLE' and args[1] == '1':
+            st.forward_compatible = True
+        return
+    if name == 'ignore-unknown-option':
+        if args:
+            st.ignore_unknown.extend(a.removeprefix('--') for a in args)
+        return
     if name not in _MODELED:
+        if setenv_opt and name == 'setenv opt':
+            _unrecognized(st, name, setenv_opt, 'missing parameter', where)
+        return
+    if name in _FLAGS:
+        if args:
+            _unrecognized(st, name, setenv_opt, 'extra parameter', where)
+            return
+        if is_inline:
+            raise ConfigError('option %r is not expected to be inline' % name)
+        st.flags.add(name)
         return
     if is_inline:
         raise ConfigError('option %r is not expected to be inline' % name)
-    args = p[1:]
     if name in SCRIPT_OPTIONS:
         _event, max_parms, comma = SCRIPT_OPTIONS[name]
-        if not args or (name == 'tls-crypt-v2-verify' and len(args) != 1):
-            raise ConfigError('unrecognized option or missing parameter: ' + name)
+        if not args:
+            _unrecognized(st, name, setenv_opt, 'missing parameter', where)
+            return
+        if name == 'tls-crypt-v2-verify' and len(args) != 1:
+            _unrecognized(st, name, setenv_opt, 'extra parameter', where)
+            return
         if len(p) > max_parms:
             raise ConfigError('--%s takes at most %d parameters' % (name, max_parms - 1))
         method = None
@@ -273,19 +321,17 @@ def _add_option(st: _State, p: list[str], *, is_inline: bool, level: int, where:
         if name in st.scripts:
             st.overrides.append({'option': name, 'replaced': st.scripts[name]['source'], 'by': where})
         st.scripts[name] = {'command': command, 'method': method, 'source': where}
-    elif name in _FLAGS:
-        if args:
-            raise ConfigError('unrecognized option or extra parameter: ' + name)
-        st.flags.add(name)
     elif name == 'plugin':
         if not args:
-            raise ConfigError('unrecognized option or missing parameter: plugin')
+            _unrecognized(st, name, setenv_opt, 'missing parameter', where)
+            return
         if len(st.plugins) >= MAX_PLUGINS:
             raise ConfigError('plugin add failed: more than %d plugins' % MAX_PLUGINS)
         st.plugins.append({'argv': list(args), 'source': where})
     else:
         if len(args) != 1:
-            raise ConfigError('unrecognized option or missing or extra parameter: ' + name)
+            _unrecognized(st, name, setenv_opt, 'missing or extra parameter', where)
+            return
         value = args[0]
         if name == 'config':
             _read_config(st, value, level, where)
@@ -410,6 +456,7 @@ def evaluate(*, args: Sequence[str], files: Mapping[str, Any], working_directory
                 g['code'] in BLOCKING for g in st.gaps),
             'files_read': st.files_read, 'scripts': [], 'plugins': [], 'gaps': st.gaps,
             'script_security': st.script_security, 'privilege_drop': None, 'overridden': [],
+            'warnings': st.warnings,
         })
         return result
     user, group = st.values.get('user'), st.values.get('group')
@@ -477,5 +524,6 @@ def evaluate(*, args: Sequence[str], files: Mapping[str, Any], working_directory
         'plugins': plugins,
         'overridden': st.overrides,
         'gaps': st.gaps,
+        'warnings': st.warnings,
     })
     return result

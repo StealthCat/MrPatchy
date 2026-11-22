@@ -143,3 +143,61 @@ def test_bom_single_argument_and_argv_errors():
     assert r['status'] == 'config_error'
     with pytest.raises(ValueError):
         ov.unit_arguments('openvpn-server@', '../x')
+
+
+def test_setenv_opt_prefix_registers_scripts_and_plugins():
+    # options.c add_option strips 'setenv opt' and handles the rest as a normal option.
+    r = run_server('setenv opt script-security 2\nsetenv opt up /tmp/evil\nsetenv opt plugin /tmp/evil.so\n'
+                   'setenv opt user nobody\n')
+    assert r['status'] == 'loads' and r['complete'] and r['script_security'] == 2
+    [up] = r['scripts']
+    assert up['executable'] == '/tmp/evil' and up['permitted'] is True
+    assert [p['path'] for p in r['plugins']] == ['/tmp/evil.so']
+    assert r['privilege_drop']['user'] == 'nobody'
+    assert run_server('setenv opt cd /tmp\nsetenv opt up ./x\n')['scripts'][0]['executable'] == '/tmp/x'
+    r = run_server('setenv opt config /etc/openvpn/server/inc.conf\n',
+                   {SRV + '/inc.conf': 'setenv opt tls-verify /bin/a,b\n'})
+    assert r['scripts'][0]['argv'] == ['/bin/a', 'b']
+
+
+def test_setenv_opt_on_the_command_line():
+    r = ov.evaluate(args=['--setenv', 'opt', 'up', '/tmp/evil', '--setenv', 'opt', 'down-pre'],
+                    files={}, working_directory='/')
+    assert r['status'] == 'loads' and r['scripts'][0]['executable'] == '/tmp/evil'
+    assert 'before the tunnel device closes' not in r['scripts'][0]['event']  # down-pre without down
+    r = ov.evaluate(args=['--setenv', 'opt', 'down', '/bin/d', '--down-pre'], files={}, working_directory='/')
+    assert r['scripts'][0]['event'] == 'before the tunnel device closes (down-pre)'
+
+
+@pytest.mark.parametrize('conf', [
+    'setenv opt up\nup /bin/x\n', 'setenv opt\nup /bin/x\n',
+    'setenv opt down-pre yes\nup /bin/x\n', 'setenv opt user a b\nup /bin/x\n',
+    'setenv opt tls-crypt-v2-verify a b\nup /bin/x\n', 'setenv opt plugin\nup /bin/x\n',
+    'setenv FORWARD_COMPATIBLE 1\nup\nup /bin/x\n', 'setenv opt setenv FORWARD_COMPATIBLE 1\nuser a b\nup /bin/x\n',
+    'ignore-unknown-option up\nup\nup /bin/x\n', 'ignore-unknown-option --cd\ncd a b\nup /bin/x\n',
+])
+def test_relaxed_arity_errors_are_ignored_warnings(conf):
+    r = run_server(conf)
+    assert r['status'] == 'loads' and r['complete']
+    assert [s['executable'] for s in r['scripts']] == ['/bin/x']
+    assert r['warnings'] and r['warnings'][0]['code'] == 'option_ignored'
+    assert r['privilege_drop'] is None and r['working_directory'] == SRV
+
+
+@pytest.mark.parametrize('conf', [
+    # Errors outside add_option's final branch stay fatal after the prefix.
+    'setenv opt up a b\n', 'setenv opt auth-user-pass-verify /bin/a env\n', 'setenv opt up "/bin/x\n',
+    # Relaxation does not apply before it is enabled, or to other names.
+    'up\nsetenv FORWARD_COMPATIBLE 1\n', 'setenv FORWARD_COMPATIBLE 0\nup\n', 'ignore-unknown-option down\nup\n',
+    'setenv FORWARD_COMPATIBLE 1 x\nup\n',
+])
+def test_relaxation_keeps_other_errors_fatal(conf):
+    r = run_server(conf)
+    assert r['status'] == 'config_error' and r['scripts'] == []
+
+
+def test_inline_flag_is_an_unrecognized_option():
+    assert run_server('<up-restart>\n</up-restart>\n')['status'] == 'config_error'
+    r = run_server('setenv FORWARD_COMPATIBLE 1\n<up-restart>\n</up-restart>\nup /bin/x\n')
+    assert r['status'] == 'loads' and r['warnings'][0]['option'] == 'up-restart'
+    assert run_server('setenv FORWARD_COMPATIBLE 1\n<up>\n/bin/x\n</up>\n')['status'] == 'config_error'
