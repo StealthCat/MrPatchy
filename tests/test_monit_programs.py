@@ -1,0 +1,141 @@
+"""Tests for the pure Monit control-file program contract (#1373)."""
+from __future__ import annotations
+
+import pytest
+
+from app import monit_programs as mp
+
+RC = '/etc/monit/monitrc'
+
+
+def run(text, includes=None):
+    return mp.evaluate({'control': {'path': RC, 'text': text}, 'includes': includes or {}})
+
+
+def cmds(result):
+    return [(c['service'], c['role'], c['argv'], c['uid'], c['gid']) for c in result['commands']]
+
+
+def codes(result):
+    return {g['code'] for g in result['gaps']}
+
+
+def test_process_start_stop_restart_with_user_and_timeout():
+    result = run('check process web with pidfile /run/web.pid\n'
+                 '  start program = "/usr/sbin/web start" as uid www and gid 33 with timeout 12 seconds\n'
+                 '  stop "/usr/sbin/web stop"\n'
+                 '  restart = "/usr/sbin/web reload"\n')
+    assert cmds(result) == [('web', 'start', ['/usr/sbin/web', 'start'], 'www', 33),
+                            ('web', 'stop', ['/usr/sbin/web', 'stop'], None, None),
+                            ('web', 'restart', ['/usr/sbin/web', 'reload'], None, None)]
+    assert result['commands'][0]['timeout_seconds'] == 12
+    assert result['services'] == [{'kind': 'process', 'name': 'web', 'file': RC, 'line': 1}]
+    assert result['complete'] is True
+
+
+def test_keywords_are_case_insensitive_and_program_equals_optional():
+    result = run('check process a with pidfile /p\n  START PROGRAM"/bin/a"\n  stopprogram="/bin/b"\n')
+    assert [c['role'] for c in result['commands']] == ['start', 'stop']
+
+
+def test_argument_splitting_follows_the_lexer():
+    result = run("check process a with pidfile /p\n"
+                 "  start \"/bin/echo   'x  y'  z#q 'p'q x'y\n   '  sp  ' \"\n")
+    assert result['commands'][0]['argv'] == ['/bin/echo', 'x  y', 'z#q', "'p'q", "x'y", 'sp']
+    assert result['complete'] is True
+
+
+def test_check_program_path_and_exec_actions():
+    result = run('check program probe with path "/usr/local/bin/probe --fast" as uid nobody timeout 7 seconds\n'
+                 '  if status != 0 then exec "/usr/local/bin/page oncall" as uid 0\n'
+                 '     else if succeeded then execute "/bin/true"\n')
+    assert cmds(result) == [('probe', 'check', ['/usr/local/bin/probe', '--fast'], 'nobody', None),
+                            ('probe', 'exec', ['/usr/local/bin/page', 'oncall'], 0, None),
+                            ('probe', 'exec', ['/bin/true'], None, None)]
+
+
+def test_path_outside_check_program_is_not_a_command():
+    result = run('check file conf with path "/etc/app.conf"\n  if changed checksum then alert\n')
+    assert result['commands'] == [] and result['complete'] is True
+
+
+def test_comments_hide_commands_outside_argument_lists():
+    result = run('# start program = "/bin/hidden"\ncheck process a with pidfile /p  # stop "/bin/no"\n'
+                 '  start "/bin/echo #kept"\n')
+    assert cmds(result) == [('a', 'start', ['/bin/echo', '#kept'], None, None)]
+
+
+def test_includes_are_lexed_in_supplied_order_and_loops_skipped():
+    inc = {'/etc/monit/conf.d/*': [
+        {'path': '/etc/monit/conf.d/a', 'text': 'check process a with pidfile /a\n  start "/bin/a"\n'},
+        {'path': RC, 'text': 'check process loop with pidfile /x\n  start "/bin/loop"\n'},
+        {'path': '/etc/monit/conf.d/b', 'text': 'check process b with pidfile /b\n  start "/bin/b"\n'},
+        {'path': '/etc/monit/conf.d/b~', 'text': 'check process bak with pidfile /b\n  start "/bin/bak"\n'},
+        {'path': '/etc/monit/conf.d/sub/', 'text': None},
+    ], '/etc/monit/empty/*': []}
+    result = run('include /etc/monit/conf.d/*\ninclude "\'/etc/monit/empty/*\'"\n', inc)
+    assert [c['service'] for c in result['commands']] == ['a', 'b']
+    assert result['commands'][1]['file'] == '/etc/monit/conf.d/b'
+
+
+@pytest.mark.parametrize('line,pattern', [("include '/etc/monit/x/*'", '/etc/monit/x/*'),
+                                          ('include " /etc/monit/x/* "', '/etc/monit/x/*'),
+                                          ('include "/etc/monit/x/"*', '"/etc/monit/x/"*')])
+def test_include_pattern_quoting(line, pattern):
+    inc = {pattern: [{'path': '/etc/monit/x/1', 'text': 'check process a with pidfile /a\n  start "/bin/a"\n'}]}
+    result = run(line + '\n', inc)
+    assert len(result['commands']) == 1 and result['complete'] is True
+
+
+@pytest.mark.parametrize('text,code', [
+    ('include /etc/monit/conf.d/*\n', 'include_not_observed'),
+    ('check process a with pidfile /p\n  start program = /bin/a\n', 'unquoted_arguments'),
+    ("check process a with pidfile /p\n  if cpu > 5% then exec '/bin/a'\n", 'unquoted_arguments'),
+    ('check program a with path /bin/a\n', 'unquoted_arguments'),
+    ('check process a with pidfile /p\n  start "/bin/a" "extra"\n', 'extra_arguments'),
+    ('check process a with pidfile /p\n  start "/bin/a" /bin/b\n', 'extra_arguments'),
+    ("check process a with pidfile /p\n  start \"/bin/a 'x\\ty'\"\n", 'escape_sequence'),
+    ("check process a with pidfile /p\n  start \"/bin/a ' \"\n", 'unbalanced_quotes'),
+    ('check process a with pidfile /p\n  start "/bin/a\n', 'unterminated_arguments'),
+    ('check process a with pidfile /p\n  start ""\n', 'empty_arguments'),
+    ('check process a with pidfile /p\r\n  start "/bin/a"\n', 'carriage_return'),
+    ('start "/bin/a"\n', 'command_outside_service'),
+    ('check process a with pidfile /p\n  start "/bin/a" as uid\n', 'user_option_malformed'),
+    ('check process a with pidfile /p\n  start "' + 'x ' * mp.ARGMAX + '"\n', 'too_many_arguments'),
+])
+def test_unmodelled_forms_are_blocking(text, code):
+    result = run(text)
+    assert code in codes(result) and result['complete'] is False
+
+
+def test_backslash_in_a_plain_word_is_literal():
+    result = run('check process a with pidfile /p\n  start "/bin/echo \\t"\n')
+    assert result['commands'][0]['argv'] == ['/bin/echo', '\\t'] and result['complete'] is True
+
+
+def test_over_limit_text_and_malformed_payloads():
+    assert 'text_too_large' in codes(run('#' * (mp.MAX_TEXT + 1)))
+    for payload in ('nope', {'control': {'text': ''}}, {'control': {'path': RC, 'text': ''}, 'includes': []}):
+        result = mp.evaluate(payload)
+        assert 'input_malformed' in codes(result) and result['complete'] is False
+    assert 'input_malformed' in codes(run(None))
+
+
+def test_include_depth_is_bounded():
+    inc = {f'/i{d}': [{'path': f'/f{d}', 'text': f'include /i{d + 1}\n'}] for d in range(40)}
+    result = run('include /i0\n', inc)
+    assert 'include_too_deep' in codes(result) and result['complete'] is False
+
+
+def test_gap_list_is_bounded():
+    gaps: list = []
+    for i in range(60):
+        mp._gap(gaps, 'unquoted_arguments', {'file': RC, 'line': i})
+    assert len(gaps) == mp.MAX_GAPS and gaps[-1]['code'] == 'gaps_truncated'
+
+
+def test_limits_disclosed_and_no_verdict():
+    result = run('')
+    assert result['complete'] is True and result['commands'] == []
+    assert any('getpwnam' in line for line in result['unobserved'])
+    assert 'not a safety verdict' in result['note']
