@@ -12544,3 +12544,30 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### wg-quick hook contract — worker checkpoint #1343 (roadmap F)
+
+Every enabled `wg-quick@NAME.service` runs `wg-quick up NAME` as root at boot and `wg-quick down NAME` when it stops. `wg-quick` evaluates each `[Interface]` `PreUp`, `PostUp`, `PreDown` and `PostDown` value from `/etc/wireguard/NAME.conf` as bash source, using `(eval "$hook")` after it replaces `%i`. The startup inventory did not model these hook lines as a persistence location.
+
+- **Change:** the pure module `app/wg_quick_hooks.py` takes captured `/etc/wireguard` listing metadata and file text, the OS family, the wireguard-tools installation state and, optionally, the enabled `wg-quick@` instances. For each interface file it returns every hook's phase, order, source line, command text after `%i` substitution and SHA-256, plus whether the interface comes up at boot. A separate list gives the up hooks that run at boot. It performs no I/O and never runs a command.
+- **Fidelity:** it reproduces wireguard-tools v1.0.20210914 `parse_options` and `execute_hooks`:
+  - interface-name and `.conf` file-name validation;
+  - ASCII-only case-insensitive keys and `[Interface]` sections, with repeated sections accumulating;
+  - a cut at the first `#` anywhere on a line, so `echo "#x"` is truncated;
+  - a split at the first `=`, where a line with no `=` uses its whole text as both key and value;
+  - C-locale whitespace trimming;
+  - a final line without a newline;
+  - `SaveConfig` values that make `wg-quick` exit before any hook runs.
+
+  Hook keys outside `[Interface]` are listed as misplaced and are not run.
+- **Fail closed:** the following make the result incomplete:
+  - an unobserved family, installation state, listing or file text;
+  - an unreadable file;
+  - NUL bytes, which bash `read` drops;
+  - malformed or over-limit input;
+  - an enabled instance that names a path rather than an interface.
+
+  Unobserved enablement leaves `at_boot` as `unknown`. `wg setconf` validation of the rest of the file is not modeled. When `wg setconf` fails, `PreUp` has already run and `PostUp` does not run, so `PostUp` may be over-reported, and the result says so. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_wg_quick_hooks.py` (9 tests). A differential harness ran the real v1.0.20210914 `parse_options` and the `%i` substitution from `execute_hooks` under bash 5.2 on 4,300 random configurations. These covered sections, case, comments, whitespace, CRLF, missing `=`, `SaveConfig` values and interface names. The harness compared each config's hook lists and `SaveConfig` result with the contract: 0 disagreements.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and enabled instances, a catalog entry, package provenance, persistence, UI and AI classification.
