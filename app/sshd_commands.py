@@ -358,6 +358,9 @@ class _Parser:
                 self.fatal(path, number, '%s must be an absolute path' % keyword)
             self.record(_KINDS[key], value, active, block, where)
         elif key in _USERS:
+            # Upstream parse_localuser: a missing or empty user is fatal even inside a Match block.
+            if not args or args[0] == '':
+                self.fatal(path, number, 'missing %s argument.' % keyword)
             self.record(_USERS[key], args[0], active, block, where)
         elif key == 'subsystem':
             self.subsystem(path, number, args, active, block, where)
@@ -465,7 +468,10 @@ def _command_view(kind: str, entry: dict[str, Any] | None, user: dict[str, Any] 
         if value.lower() == 'none':
             view['reason'] = 'cleared_by_none'
             return view
-        view.update(run_as='authenticating_user', runs=True, reason='runs_through_login_shell')
+        # session.c IS_INTERNAL_SFTP: a forced internal-sftp runs inside sshd, not through the shell.
+        internal = value.startswith('internal-sftp') and value[13:14] in ('', ' ', '\t')
+        view.update(run_as='authenticating_user', runs=True,
+                    reason='in_process_sftp' if internal else 'runs_through_login_shell')
         return view
     view['run_as'] = user['value'] if user else None
     argv = argv_split(value, False)

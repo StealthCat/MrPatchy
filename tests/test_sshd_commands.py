@@ -158,3 +158,20 @@ def test_match_lines_in_one_file_do_not_nest():
     assert r['status'] == 'config_error' and 'without AuthorizedPrincipalsCommandUser' in r['config_error']
     r = run('Match User a\n ForceCommand /a\nMatch User b\n ForceCommand /b\n')
     assert [b['conditions'] for b in r['conditional']] == [[[['user', 'a']]], [[['user', 'b']]]]
+
+
+def test_missing_or_empty_command_user_stops_sshd_even_in_match():
+    for user in ('#x', '""'):
+        for key in ('AuthorizedKeysCommandUser', 'AuthorizedPrincipalsCommandUser'):
+            for text in ('AuthorizedKeysCommand /bin/k %%u\n%s %s\n' % (key, user),
+                         'Match User x\n %s %s\n' % (key, user)):
+                r = run(text)
+                assert r['status'] == 'config_error' and 'missing %s argument' % key in r['config_error']
+                assert not r['commands']
+
+
+def test_forced_internal_sftp_runs_in_process():
+    for value in ('internal-sftp', 'internal-sftp -R', 'internal-sftp\t-d /x'):
+        assert cmd(run('ForceCommand %s\n' % value), 'force_command')['reason'] == 'in_process_sftp'
+    for value in ('internal-sftpx', '/usr/lib/openssh/sftp-server'):
+        assert cmd(run('ForceCommand %s\n' % value), 'force_command')['reason'] == 'runs_through_login_shell'
