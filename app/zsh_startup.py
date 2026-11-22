@@ -29,6 +29,17 @@ Semantics were checked against Ubuntu 24.04 zsh 5.9 (run as root), not recalled:
   falls back to the source.
 * A missing, unreadable or directory file is skipped silently. Root reads a mode
   0000 file.
+* In an interactive zsh-emulation shell with RCS set and not privileged, zsh loads
+  the ``zsh/newuser`` module right after the global ``zshenv`` (``-d`` does not stop
+  it). When none of ``.zshenv``, ``.zprofile``, ``.zshrc`` and ``.zlogin`` exists in
+  ``$ZDOTDIR`` (``access(F_OK)``, which follows symlinks, so a directory or an
+  unreadable file exists and a dangling symlink does not; ``.zlogout`` is not
+  checked), it sources ``<SITESCRIPT_DIR>/newuser`` and, only if that is not found,
+  ``<SCRIPT_DIR>/newuser``. Not found means no usable ``.zwc`` and ``open`` fails, so
+  an absent or unreadable file moves on to the next directory and a directory stops
+  the search. The build's script directories and whether the module loads are
+  supplied, not assumed (checked against the zsh 5.9 ``init.c``, ``newuser.c`` and
+  ``parse.c`` sources).
 * The invoked name selects emulation: after an optional leading ``-`` and one
   leading ``r``, a name starting with ``s`` or ``b`` emulates sh and ``k`` emulates
   ksh (``sh``, ``bzsh``, ``rsh`` and ``ksh`` read ``~/.profile``; ``rzsh`` and
@@ -77,13 +88,17 @@ BLOCKING = frozenset({
     'input_malformed', 'family_not_observed', 'family_unsupported', 'invocation_not_observed',
     'options_unverified', 'ids_not_observed', 'emulation_not_modelled', 'home_not_observed',
     'zdotdir_not_observed', 'zdotdir_relative', 'file_not_observed', 'compiled_file_unverified',
-    'special_file', 'gaps_truncated',
+    'special_file', 'gaps_truncated', 'newuser_not_observed',
 })
+NEWUSER_CHECKED = ('.zshenv', '.zprofile', '.zshrc', '.zlogin')
+MAX_SCRIPT_DIRS = 2
 UNOBSERVED = (
     ('File contents are not read. A startup file can change RCS, GLOBAL_RCS or ZDOTDIR, source other files, '
      'exec or exit, which changes which later files run; that is not followed here.'),
     'Search permission on parent directories, POSIX ACLs and security modules are not assessed.',
     'Whether a compiled .zwc dump is valid for its file name is not checked; see compiled_file_unverified.',
+    ('A newuser script that runs can autoload zsh-newuser-install or other functions from $fpath; those '
+     'are not followed. Files the global zshenv creates before the newuser check are not followed either.'),
     'The passwd shell, chsh history and which programs start zsh are not observed.',
 )
 NOT_A_VERDICT = 'File metadata only. This is not a safety verdict and origin is not assessed.'
@@ -102,6 +117,10 @@ REASONS = {
                           'skipped.',
     'path_too_long': 'The ZDOTDIR path plus the file name reaches PATH_MAX; zsh reports "path too long" and '
                      'skips the file.',
+    'skipped_user_files_exist': 'At least one of .zshenv, .zprofile, .zshrc and .zlogin exists, so the zsh/newuser '
+                                'module sources no script.',
+    'module_unavailable': 'The zsh/newuser module is not installed or cannot load, so no newuser script runs.',
+    'not_reached': 'An earlier newuser script directory was found, so this one is not tried.',
     'unresolved': 'Required metadata was not supplied, so the outcome is not determined.',
 }
 _CONTROL = re.compile(r'[\x00-\x1f\x7f]')
@@ -198,6 +217,9 @@ def evaluate(payload: Any) -> dict[str, Any]:
 
     ``payload`` keys: ``family`` (``debian``/``rpm``), ``invocation`` (``argv0``,
     ``options``, ``interactive``), ``ids`` (``uid``, ``euid``, ``gid``, ``egid``),
+    ``newuser`` (``module``: whether ``zsh/newuser`` loads; ``script_dirs``: the
+    build's SITESCRIPT_DIR then SCRIPT_DIR, at most two absolute paths; needed only
+    when an interactive session may source the newuser script),
     ``environment`` (``HOME`` and ``ZDOTDIR``, each a string or ``None`` for unset;
     an absent key is unobserved) and ``files``: followed-stat observations keyed by
     absolute path, each ``{'type': absent|file|directory|other, 'mtime', 'readable'}``.
@@ -242,7 +264,8 @@ def evaluate(payload: Any) -> dict[str, Any]:
         files = {}
     if family not in GLOBAL_DIRS or invocation is None or result['emulation'] != 'zsh':
         return _finish(result)
-    _sequence(result, invocation, GLOBAL_DIRS[family], user_dir, privileged, files, gaps)
+    _sequence(result, invocation, GLOBAL_DIRS[family], user_dir, privileged, files, gaps,
+              payload.get('newuser'))
     return _finish(result)
 
 
@@ -267,7 +290,8 @@ def _user_dir(env: Any, gaps: list[dict[str, Any]]) -> str | None:
 
 
 def _sequence(result: dict[str, Any], invocation: dict[str, Any], global_dir: str, user_dir: str | None,
-              privileged: bool | None, files: dict[str, Any], gaps: list[dict[str, Any]]) -> None:
+              privileged: bool | None, files: dict[str, Any], gaps: list[dict[str, Any]],
+              newuser: Any = None) -> None:
     flags, login, interactive = invocation['flags'], invocation['login'], invocation['interactive']
     rcs, global_rcs = 'no_rcs' not in flags, 'no_global_rcs' not in flags
     phases = {'env': True, 'login': login, 'interactive': interactive, 'logout': login}
@@ -298,6 +322,63 @@ def _sequence(result: dict[str, Any], invocation: dict[str, Any], global_dir: st
         entry['reason'] = REASONS[entry['decision']]
         if entry['decision'] in ('reads', 'reads_compiled'):
             result['runs'].append({'phase': phase, 'path': path, 'compiled': entry.get('compiled')})
+        if always and interactive:
+            for item in _newuser(rcs, privileged, user_dir, files, gaps, newuser):
+                item['reason'] = REASONS[item['decision']]
+                result['sequence'].append(item)
+                if item['decision'] in ('reads', 'reads_compiled'):
+                    result['runs'].append({'phase': 'newuser', 'path': item['path'],
+                                           'compiled': item.get('compiled')})
+
+
+def _newuser(rcs: bool, privileged: bool | None, user_dir: str | None, files: dict[str, Any],
+             gaps: list[dict[str, Any]], newuser: Any) -> list[dict[str, Any]]:
+    """Entries for the zsh/newuser step of an interactive zsh-emulation shell."""
+    entry: dict[str, Any] = {'phase': 'newuser', 'scope': 'script', 'path': '$SCRIPT_DIR/newuser'}
+    if not rcs:
+        return [{**entry, 'decision': 'skipped_no_rcs'}]
+    if privileged is None or user_dir is None:
+        return [{**entry, 'decision': 'unresolved'}]
+    if privileged:
+        return [{**entry, 'decision': 'skipped_privileged'}]
+    exists: list[bool | None] = []
+    for name in NEWUSER_CHECKED:
+        if len(user_dir) + len(name) + 1 >= PATH_MAX:
+            exists.append(False)  # access() fails with ENAMETOOLONG
+            continue
+        observed = _observe(f'{user_dir}/{name}', files, gaps, zwc=True)['type']
+        exists.append(None if observed is None else observed != 'absent')
+    if any(exists):
+        return [{**entry, 'decision': 'skipped_user_files_exist'}]
+    if None in exists:
+        return [{**entry, 'decision': 'unresolved'}]
+    dirs = newuser.get('script_dirs') if isinstance(newuser, dict) else None
+    if not isinstance(newuser, dict) or not isinstance(newuser.get('module'), bool) or not isinstance(dirs, list) \
+            or len(dirs) > MAX_SCRIPT_DIRS or not all(isinstance(d, str) and _path(d) and d.startswith('/')
+                                                      for d in dirs):
+        _gap(gaps, 'newuser_not_observed', detail='No user startup file exists, so zsh/newuser may source a '
+                                                  'newuser script; whether the module loads and the build\'s '
+                                                  'script directories were not supplied.')
+        return [{**entry, 'decision': 'unresolved'}]
+    if not newuser['module']:
+        return [{**entry, 'decision': 'module_unavailable'}]
+    out: list[dict[str, Any]] = []
+    found = False
+    for directory in dirs:
+        item: dict[str, Any] = {'phase': 'newuser', 'scope': 'script', 'path': f'{directory.rstrip("/")}/newuser'}
+        out.append(item)
+        if found:
+            item['decision'] = 'not_reached'
+            continue
+        _decide(item, files, gaps)
+        # source() reports "not found" only when no compiled dump loads and open() fails.
+        found = item['decision'] not in ('absent', 'skipped_unreadable')
+        if item['decision'] == 'unresolved':
+            for rest in dirs[len(out):]:
+                out.append({'phase': 'newuser', 'scope': 'script', 'path': f'{rest.rstrip("/")}/newuser',
+                            'decision': 'unresolved'})
+            break
+    return out
 
 
 def _decide(entry: dict[str, Any], files: dict[str, Any], gaps: list[dict[str, Any]]) -> None:

@@ -208,3 +208,118 @@ def test_contents_limit_is_disclosed_and_no_verdict():
     result = run()
     assert any('contents are not read' in line for line in result['unobserved'])
     assert 'not a safety verdict' in result['note']
+
+
+SCRIPT_DIRS = ['/usr/share/zsh/scripts', '/usr/share/zsh/5.9/scripts']
+SITE_NEWUSER, VERSION_NEWUSER = (f'{d}/newuser' for d in SCRIPT_DIRS)
+
+
+def fresh_tree(**overrides):
+    """No user startup files; both newuser candidates observed, only the versioned one present."""
+    files = tree()
+    for name in USER:
+        files[f'{HOME}/{name}'] = {'type': 'absent'}
+    files.update({SITE_NEWUSER: {'type': 'absent'}, SITE_NEWUSER + '.zwc': {'type': 'absent'},
+                  VERSION_NEWUSER: {'type': 'file', 'mtime': 100, 'readable': True},
+                  VERSION_NEWUSER + '.zwc': {'type': 'absent'}})
+    files.update(overrides)
+    return files
+
+
+def run_new(options=('-i',), files=None, newuser=None, ids=None, argv0='zsh'):
+    return zs.evaluate({
+        'family': 'debian',
+        'invocation': {'argv0': argv0, 'options': list(options), 'interactive': True},
+        'ids': ids or {'uid': 1000, 'euid': 1000, 'gid': 1000, 'egid': 1000},
+        'environment': {'HOME': HOME, 'ZDOTDIR': None},
+        'files': fresh_tree() if files is None else files,
+        'newuser': {'module': True, 'script_dirs': SCRIPT_DIRS} if newuser is None else newuser,
+    })
+
+
+def newuser_entries(result):
+    return [e for e in result['sequence'] if e['phase'] == 'newuser']
+
+
+def test_newuser_script_runs_after_global_zshenv_when_no_user_files_exist():
+    # The #1372 review case: every user file and .zwc absent used to report complete with no newuser step.
+    result = run_new()
+    assert runs(result) == ['/etc/zsh/zshenv', VERSION_NEWUSER, '/etc/zsh/zshrc']
+    assert [e['decision'] for e in newuser_entries(result)] == ['absent', 'reads']
+    assert result['complete'] is True
+
+
+@pytest.mark.parametrize('overrides', [
+    {f'{HOME}/.zlogout': {'type': 'file', 'mtime': 1, 'readable': True}},  # .zlogout is not checked
+    {f'{HOME}/.zshrc': {'type': 'absent'}},  # a dangling symlink follows to absent
+])
+def test_newuser_still_runs_with_only_zlogout_or_dangling_symlink(overrides):
+    assert VERSION_NEWUSER in runs(run_new(files=fresh_tree(**overrides)))
+
+
+@pytest.mark.parametrize('meta', [{'type': 'file', 'mtime': 1, 'readable': True},
+                                  {'type': 'file', 'mtime': 1, 'readable': False},
+                                  {'type': 'directory', 'mtime': 1}])
+def test_any_existing_checked_user_file_suppresses_newuser(meta):
+    result = run_new(files=fresh_tree(**{f'{HOME}/.zlogin': meta}), newuser={})
+    assert [e['decision'] for e in newuser_entries(result)] == ['skipped_user_files_exist']
+    assert VERSION_NEWUSER not in runs(result) and 'newuser_not_observed' not in codes(result)
+
+
+def test_newuser_ignores_no_global_rcs_but_not_no_rcs_or_privileged():
+    assert runs(run_new(options=['-i', '-d'])) == ['/etc/zsh/zshenv', VERSION_NEWUSER]
+    assert [e['decision'] for e in newuser_entries(run_new(options=['-i', '-f']))] == ['skipped_no_rcs']
+    assert [e['decision'] for e in newuser_entries(run_new(options=['-i', '-p']))] == ['skipped_privileged']
+    privileged = run_new(ids={'uid': 1000, 'euid': 0, 'gid': 1000, 'egid': 1000})
+    assert VERSION_NEWUSER not in runs(privileged)
+
+
+def test_noninteractive_shell_has_no_newuser_step():
+    result = run(files=fresh_tree())
+    assert newuser_entries(result) == [] and result['complete'] is True
+
+
+def test_site_script_wins_and_directory_stops_the_search():
+    site = run_new(files=fresh_tree(**{SITE_NEWUSER: {'type': 'file', 'mtime': 1, 'readable': True}}))
+    assert [e['decision'] for e in newuser_entries(site)] == ['reads', 'not_reached']
+    assert SITE_NEWUSER in runs(site) and VERSION_NEWUSER not in runs(site)
+    directory = run_new(files=fresh_tree(**{SITE_NEWUSER: {'type': 'directory', 'mtime': 1}}))
+    assert [e['decision'] for e in newuser_entries(directory)] == ['skipped_directory', 'not_reached']
+    unreadable = run_new(files=fresh_tree(**{SITE_NEWUSER: {'type': 'file', 'mtime': 1, 'readable': False}}))
+    assert [e['decision'] for e in newuser_entries(unreadable)] == ['skipped_unreadable', 'reads']
+
+
+def test_compiled_newuser_script_is_blocking():
+    result = run_new(files=fresh_tree(**{VERSION_NEWUSER + '.zwc': {'type': 'file', 'mtime': 200}}))
+    assert newuser_entries(result)[1]['decision'] == 'reads_compiled'
+    assert 'compiled_file_unverified' in codes(result) and result['complete'] is False
+
+
+def test_unavailable_module_runs_no_script():
+    result = run_new(newuser={'module': False, 'script_dirs': SCRIPT_DIRS})
+    assert [e['decision'] for e in newuser_entries(result)] == ['module_unavailable']
+    assert result['complete'] is True
+
+
+@pytest.mark.parametrize('newuser', [{}, {'module': True}, {'module': 'yes', 'script_dirs': []},
+                                     {'module': True, 'script_dirs': ['relative']},
+                                     {'module': True, 'script_dirs': ['/a', '/b', '/c']}])
+def test_unobserved_newuser_build_is_blocking(newuser):
+    result = run_new(newuser=newuser)
+    assert 'newuser_not_observed' in codes(result) and result['complete'] is False
+
+
+def test_unobserved_checked_user_file_leaves_newuser_unresolved():
+    files = fresh_tree()
+    del files[f'{HOME}/.zlogin']  # not in an interactive non-login sequence, but newuser checks it
+    result = run_new(files=files)
+    assert newuser_entries(result)[0]['decision'] == 'unresolved'
+    assert 'file_not_observed' in codes(result) and result['complete'] is False
+
+
+def test_unobserved_newuser_candidate_is_blocking():
+    files = fresh_tree()
+    del files[SITE_NEWUSER]
+    result = run_new(files=files)
+    assert [e['decision'] for e in newuser_entries(result)] == ['unresolved', 'unresolved']
+    assert result['complete'] is False
