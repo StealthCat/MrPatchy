@@ -427,19 +427,27 @@ def status(s):
     plan_actions=('release-plan','security-plan','startup-plan')
     plan_where=(Job.action.in_(plan_actions),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
         marker_type,Job.payload['_ai_deferred'].as_boolean()==True)
-    plan_ready_sql=and_(Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids()))
+    plan_unpaused=and_(Job.host_id.in_(host_lifecycle.active_ids()),Job.host_id.not_in(ai_policy.paused_ids()))
+    plan_due=and_(Job.next_at<=now,plan_unpaused)
+    plan_future=Job.next_at>now
     plan_by_action={action:{'deferred':0,'ready':0,'next_at':None} for action in plan_actions}
     # Canonical labels preserve the existing action predicate under MySQL collations.
     plan_action=case(*[(Job.action==action,action) for action in plan_actions]).label('plan_action')
-    plan_rows=s.execute(select(plan_action,func.count(),counted(plan_ready_sql),
-        func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where).group_by('plan_action'))
-    for action,deferred,eligible,next_at in plan_rows:
-        plan_by_action[action]={'deferred':deferred,'ready':eligible,'next_at':next_at}
+    plan_rows=s.execute(select(plan_action,func.count(),counted(plan_due),
+        func.min(case((plan_future,Job.next_at))),
+        func.min(case((and_(plan_future,plan_unpaused),Job.next_at))))
+        .where(*plan_where).group_by('plan_action'))
+    plan_next_eligible=None
+    for action,deferred,due,next_at,eligible_at in plan_rows:
+        plan_by_action[action]={'deferred':deferred,'ready':due,'next_at':next_at}
+        if eligible_at is not None and (plan_next_eligible is None or eligible_at<plan_next_eligible):
+            plan_next_eligible=eligible_at
+    if not cfg['ai_enabled']:plan_next_eligible=None
     plan_deferred=sum(row['deferred'] for row in plan_by_action.values())
     plan_ready=sum(row['ready'] for row in plan_by_action.values())
     plan_next=min((row['next_at'] for row in plan_by_action.values() if row['next_at'] is not None),default=None)
     if scoring_next is not None:retry=min([value for value in (retry,scoring_next) if value is not None])
-    if plan_next:retry=min([value for value in (retry,plan_next) if value is not None])
+    if plan_next_eligible is not None:retry=min([value for value in (retry,plan_next_eligible) if value is not None])
     if provider_backoff['blocked']:
         retry=min([value for value in (retry,provider_backoff['next_at']) if value is not None])
     if admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now:
@@ -454,7 +462,7 @@ def status(s):
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
     elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
     elif not pending_count and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
-    elif not pending_count and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
+    elif not pending_count and plan_next_eligible is not None:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
     elif not pending_count and plan_deferred:reason='blocked';message='Advisory AI planning remains queued until its server AI integration is resumed.'
     elif not pending_count and scoring_ready:reason='ready';message='Deferred update scoring is eligible for the next scheduler slot.'
     elif not pending_count and scoring_next is not None:reason='backoff';message='Update scoring is queued until shared AI eligibility.'
@@ -478,4 +486,5 @@ def status(s):
             'last_run':last_run,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_ready':scoring_ready,'scoring_next_at':scoring_next,
             'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next,
+            'plan_next_eligible_at':plan_next_eligible,
             'plan_deferred_by_action':plan_by_action}
