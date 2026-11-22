@@ -11334,6 +11334,20 @@ and cap headroom. Production speeds and exhausted-cap throughput are outside
 this checkpoint.
 
 
+### Compare provider connection reuse — Roadmap A checkpoint #1341
+
+The serial/parallel comparator now reports the distinct loopback HTTP peers
+that served provider calls, the requests after the first per peer and the
+connection-count change. This lets benchmark readers see whether an equivalent
+parallel workload opened more connections while retaining the same provider
+calls, token totals and workload fingerprint. Counts outside one through the
+number of calls are rejected. Earlier reports without a connection count show
+an unavailable measurement and can still be compared.
+
+The evidence covers the disposable HTTP fixture. It measures neither TLS
+handshake time nor production connection reuse. Matched production transport
+and throughput measurements remain open.
+
 ### Choose the rate for paced triage benchmarks — Roadmap A checkpoint #1253
 
 In `rate` and `rate_and_daily` fixture modes, pass the same `--rate-per-hour` to

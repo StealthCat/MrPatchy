@@ -51,6 +51,31 @@ def test_comparison_reports_equivalent_deltas_and_zero_percent():
     assert 'never treated as zero' in result['interpretation']['cost']
 
 
+def test_comparison_reports_connection_reuse_without_requiring_the_same_count():
+    serial = {**report(), 'connections': 1}
+    parallel = {**report('parallel', 4), 'connections': 4}
+    result = compare_ai_benchmarks.compare(serial, parallel)
+    assert result['capability_equivalent'] is True
+    assert result['connection_reuse']['baseline'] == {'connections': 1, 'requests_on_reused_connections': 11}
+    assert result['connection_reuse']['candidate'] == {'connections': 4, 'requests_on_reused_connections': 8}
+    assert result['connection_reuse']['connection_delta']['absolute'] == 3
+
+
+def test_comparison_leaves_absent_legacy_connection_evidence_unavailable():
+    parallel = {**report('parallel', 4), 'connections': 12}
+    result = compare_ai_benchmarks.compare(report(), parallel)
+    assert result['connection_reuse']['baseline'] is None
+    assert result['connection_reuse']['candidate'] == {'connections': 12, 'requests_on_reused_connections': 0}
+    assert result['connection_reuse']['connection_delta'] is None
+
+
+@pytest.mark.parametrize('count', [0, -1, 13, 1.25, True, None])
+def test_comparison_rejects_invalid_connection_counts(count):
+    parallel = {**report('parallel', 4), 'connections': count}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match=r'candidate[.]connections'):
+        compare_ai_benchmarks.compare(report(), parallel)
+
+
 def test_legacy_report_has_one_server_per_subject():
     baseline, candidate = report(), report('parallel', 4)
     candidate['fixture_hosts'] = candidate['runs']
