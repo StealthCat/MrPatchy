@@ -2220,6 +2220,16 @@ coverage and truncation, and keeps individual run logs available when the summar
 request fails. The panel is read-only and available to administrators. Matched
 production serial/parallel measurements remain outstanding.
 
+### Update-scoring admission timing — Roadmap A checkpoint #1333
+
+AI stage timings for update scoring report one monotonic admission
+measurement for each tracked batch. It covers candidate selection, evidence
+and payload preparation, and committing the running score rows. Recovery,
+host/provider gate checks, provider calls and result persistence happen
+outside this measurement. Idle polls have no run or admission sample.
+Successful runs and provider refusals retain admission in the same redacted
+timing buffer as the other stages. Production throughput remains open.
+
 ### Update-scoring candidate database reads
 
 Candidate discovery reads server IDs and inventory in its existing bounded
