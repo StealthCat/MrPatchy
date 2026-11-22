@@ -757,7 +757,8 @@ def test_nearing_daily_cap_warns_once_per_window_and_hands_over_at_exhaustion(ad
     with Session() as session:
         event=warning_event(session)
         assert event.revision==1 and cap_revision(session, event).reason==first_reason
-        assert notifications.unread_count(session, 'admin')==0
+        unread = notifications.list_for_user(session, 'admin', unread_only=True)
+        assert [item['kind'] for item in unread] == ['uncertain-charge']
         assert not session.query(operations.Alert).filter(operations.Alert.kind.like('%cap%')).count()
     # Reaching the cap resolves the warning; only the exhausted notification is active.
     ledger('0.1')
