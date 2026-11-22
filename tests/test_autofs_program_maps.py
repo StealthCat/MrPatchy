@@ -54,6 +54,34 @@ def test_remote_source_before_files_blocks_completion():
     assert r['programs'] == [] and not r['complete']
 
 
+def test_files_hit_does_not_hide_later_nsswitch_sources():
+    # lookup_nss_read_map rewrites a files SUCCESS to TRYAGAIN and lookup_nss_mount
+    # returns NOTFOUND for keys the local map lacks, so later sources are still consulted.
+    r = ap.evaluate([entry('/home', 'auto.home')], stats={'/etc/auto.home': REG_X}, nss_sources=['files', 'nis'])
+    assert [p['path'] for p in r['programs']] == ['/etc/auto.home']
+    assert r['entries'][0]['resolved'] == 'program'
+    assert [(g['code'], g['source']) for g in r['gaps']] == [('remote_source_unobserved', 'nis')]
+    assert not r['complete']
+
+    r = ap.evaluate([entry('/home', 'auto.home')], stats={'/etc/auto.home': REG},
+                    map_texts={'/etc/auto.home': '* host:/home/&\n'}, nss_sources=['files', 'ldap'])
+    assert r['entries'][0]['resolved'] == 'file' and r['programs'] == []
+    assert [(g['code'], g['source']) for g in r['gaps']] == [('remote_source_unobserved', 'ldap')]
+    assert not r['complete']
+
+    r = ap.evaluate([entry('/home', 'auto.home')], stats={'/etc/auto.home': REG_X},
+                    nss_sources=['files', 'sss', 'files', 'ldap'])
+    assert len(r['programs']) == 1
+    assert [g['source'] for g in r['gaps']] == ['sss', 'ldap']
+
+
+def test_files_last_after_hit_keeps_result_complete():
+    r = ap.evaluate([entry('/home', 'auto.home')], stats={'/etc/auto.home': REG_X}, nss_sources=['files'])
+    assert r['programs'][0]['path'] == '/etc/auto.home' and r['gaps'] == [] and r['complete']
+    r = ap.evaluate([entry('/home', 'auto.home')], stats={'/etc/auto.home': REG_X}, nss_sources=['files', 'files'])
+    assert len(r['programs']) == 1 and r['gaps'] == [] and r['complete']
+
+
 def test_unknown_nsswitch_sources_are_ignored_like_nss_parse():
     r = ap.evaluate([entry(map_='auto.x')], stats={'/etc/auto.x': REG_X}, nss_sources=['dns', 'files'])
     assert r['programs'][0]['path'] == '/etc/auto.x' and r['complete']

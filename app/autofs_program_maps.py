@@ -216,19 +216,27 @@ def _resolve_entry(entry: Mapping[str, Any], stats: Mapping[str, Any], texts: Ma
         _gap(gaps, 'amd_search_path_unobserved', 'An amd-format map name is looked up on a configured '
              'search_path this contract does not read.', mount_point=mount)
         return out
+    # A ``files`` hit does not end the nsswitch search: ``lookup_nss_read_map``
+    # rewrites a files SUCCESS to TRYAGAIN, and ``lookup_nss_mount`` returns
+    # NOTFOUND for keys the local map lacks, so with default actions every
+    # later source is still read and consulted. Criteria such as
+    # ``[NOTFOUND=return]`` are not captured, so each later non-files source
+    # stays a blocking gap while the files result is still reported.
+    found = False
     for source in sources:
         if source == 'files':
-            if '/' in name:
+            if found or '/' in name:
                 continue
             path = posixpath.join(MAP_DIR, name)
-            if resolved(_classify_path(path, stats), path):
-                return out
+            found = resolved(_classify_path(path, stats), path)
             continue
-        out['resolved'] = 'remote'
         _gap(gaps, 'remote_source_unobserved', 'An nsswitch source is queried that this capture cannot observe.',
              mount_point=mount, source=source)
-        return out
-    out['resolved'] = 'not_found'
+        if not found:
+            out['resolved'] = 'remote'
+            return out
+    if not found:
+        out['resolved'] = 'not_found'
     return out
 
 
