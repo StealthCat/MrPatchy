@@ -12544,3 +12544,30 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### dnsmasq script contract — worker checkpoint #1365 (roadmap F)
+
+dnsmasq runs `dhcp-script` and `dhcp-luascript` on every DHCP lease event, and also on ARP changes with `script-arp` and TFTP transfers with `enable-tftp`. It also runs any `conf-script` command through `/bin/sh -c` as root while it reads its configuration. These come from the main file, `conf-file` includes and `conf-dir` directories (Debian passes `-7 /etc/dnsmasq.d,.dpkg-dist,.dpkg-old,.dpkg-new`). The startup inventory did not model any of them.
+
+- **Change:** the pure `app/dnsmasq_scripts.py` takes the daemon's captured argv, configuration texts with device and inode, and `conf-dir` listings. It returns each program dnsmasq would run, its source file and line, the events that activate it and the user it runs as. It also returns the files read, in order, and why every other file was skipped. It performs no I/O and never runs a command.
+- **Fidelity:** the rules follow dnsmasq 2.92 `read_opts`, `one_file`, `read_file`, `one_opt` (`conf-dir`, `dhcp-script`, `dhcp-luascript`, `dhcp-scriptuser`), `dnsmasq.c` and `helper.c`:
+  - getopt order;
+  - the first `-C` is read last;
+  - quotes, escapes and comments after whitespace;
+  - `conf-dir` filters and `strcmp` order;
+  - files are deduplicated by device and inode;
+  - single-value repeats are refused, and a file value overrides the command line;
+  - the script user is applied only when a `dhcp-range` exists, and `no-daemon` keeps root.
+
+  The table of 194 long options and the `OPTSTRING` are generated from `option.c`.
+- **Fail closed:** the following make the result incomplete:
+  - unobserved argv, files, identities or directory entries;
+  - `conf-script` output and stdin configuration;
+  - abbreviated long options;
+  - over-long lines and over-limit input;
+  - Lua scripts when the build's Lua support is unknown.
+
+  A configuration dnsmasq refuses is reported as `refused`, with its reason. Values of unrelated options and the existence of the `dhcp-scriptuser` account are not checked, so the result can only over-report. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_dnsmasq_scripts.py` has 27 tests, and six rule mutations are each caught. No executable differential against a built dnsmasq was run in this slice.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** collection of argv, files and listings, startup-catalog wiring and UI.
