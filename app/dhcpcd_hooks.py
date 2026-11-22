@@ -15,7 +15,7 @@ of them except for the compiled-in hook directory:
   byte order. ``*`` does not match names that start with ``.``.
 * A path that ends with ``~`` is skipped.
 * For each word of ``$skip_hooks`` (dhcpcd sets it from the ``nohook`` options
-  that apply to the interface), a path is skipped when it ends with
+  that apply to the interface, after turning commas into spaces), a path is skipped when it ends with
   ``/<word>``, ``/NN-<word>`` or ``/NN-<word>.sh``, where ``NN`` is two digits.
   The word is compared literally, but ``$skip_hooks`` is expanded unquoted, so
   a word that contains a glob character first goes through pathname expansion.
@@ -119,7 +119,9 @@ def skip_words(nohook: Any, gaps: list[dict[str, Any]]) -> list[str] | None:
             isinstance(value, str) and '\x00' not in value and len(value) <= MAX_PATH for value in nohook):
         _gap(gaps, 'input_malformed', detail='nohook must be a bounded list of strings.')
         return []
-    words = [word for value in nohook for word in re.split(r'[ \t\n]+', value) if word]
+    # dhcpcd turns every comma in a nohook value into a space before it sets skip_hooks
+    # (if-options.c, case 'C': "Commas to spaces for shell").
+    words = [word for value in nohook for word in re.split(r'[ \t\n]+', value.replace(',', ' ')) if word]
     for word in words:
         if _GLOB.search(word):
             _gap(gaps, 'nohook_glob', detail=f'The nohook word {word!r} contains a glob character, so the unquoted '
@@ -201,7 +203,8 @@ def evaluate(files: Any, *, script_sha256: Any = None, hook_dir_state: Any = Non
     and only echoed. ``script_sha256`` is the SHA-256 of the host's ``dhcpcd-run-hooks``; it
     selects the hook directory. ``hook_dir_state`` is ``listed``, ``absent`` or ``unreadable``.
     ``absent`` names the enter and exit hooks confirmed not to exist. ``nohook`` is the list of
-    ``nohook`` values that apply, or ``None`` when they were not observed.
+    raw ``nohook`` option values that apply, or ``None`` when they were not observed. Commas in a
+    value separate words, as dhcpcd turns them into spaces.
     """
     gaps: list[dict[str, Any]] = []
     reference = None

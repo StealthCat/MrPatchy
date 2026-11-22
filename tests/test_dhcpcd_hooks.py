@@ -95,6 +95,17 @@ def test_nohook_words_skip_exact_numbered_and_sh_names_including_enter_hook():
                        f'{DIR}/ntp': 'ntp', dh.ENTER_HOOK: 'dhcpcd.enter-hook'}
 
 
+def test_nohook_commas_separate_words_as_dhcpcd_does():
+    # dhcpcd's if-options.c turns 'nohook a,b' into skip_hooks='a b' before the hook loop runs.
+    files = [f(f'{DIR}/a,b'), f(f'{DIR}/20-a,b'), f(f'{DIR}/20-a'), f(f'{DIR}/b.sh'), f(f'{DIR}/c')]
+    result = run(files, absent=(dh.ENTER_HOOK, dh.EXIT_HOOK), nohook=['a,b'])
+    assert result['complete'] is True and result['nohook_words'] == ['a', 'b']
+    assert paths(result) == [f'{DIR}/20-a,b', f'{DIR}/a,b', f'{DIR}/b.sh', f'{DIR}/c']
+    skipped = {r['path']: r.get('nohook_word') for r in result['files'] if r['reason_code'] == 'skipped_by_nohook'}
+    assert skipped == {f'{DIR}/20-a': 'a'}
+    assert run(files, absent=(dh.ENTER_HOOK, dh.EXIT_HOOK), nohook=[',,c, b.sh'])['nohook_words'] == ['c', 'b.sh']
+
+
 def test_unobserved_nohook_over_reports_without_blocking():
     result = run([f(f'{DIR}/20-resolv.conf')])
     assert result['complete'] is True and result['nohook_observed'] is False
@@ -139,7 +150,7 @@ def _build(root, rng):
     os.mkdir(f'{root}/adir')
     open(f'{root}/afile', 'w').close()
     names = ['01-test', '20-resolv.conf', '30-hostname', '30-hostname.sh', 'ntp', '50-ntp.conf', 'x~', '.dot',
-             'B', 'a', '7-ntp', '99-ntp.sh', 'hostname', 'Z~z', 'résolv', '_x', '10-a.sh~']
+             'B', 'a', '7-ntp', '99-ntp.sh', 'hostname', 'Z~z', 'résolv', '_x', '10-a.sh~', 'a,b', '20-a,b', 'B,ntp']
     files = []
     for name in rng.sample(names, rng.randint(0, len(names))):
         path = f'{hook_dir}/{name}'
@@ -162,7 +173,14 @@ def _build(root, rng):
             files.append(f(path))
         else:
             absent.append(path)
-    words = rng.sample(['ntp', 'resolv.conf', 'hostname', 'hooks/a', 'enter-hook', 'test', 'B'], rng.randint(0, 3))
+    words = rng.sample(['ntp', 'resolv.conf', 'hostname', 'hooks/a', 'enter-hook', 'test', 'B', 'a'], rng.randint(0, 3))
+    # Join some words with commas into one nohook value, as an administrator may write them.
+    values, i = [], 0
+    while i < len(words):
+        n = rng.randint(1, 2)
+        values.append(','.join(words[i:i + n]))
+        i += n
+    words = values
     return hook_dir, enter, exitp, files, words, absent
 
 
@@ -176,7 +194,7 @@ def test_differential_against_reference_hook_loop(tmp_path, monkeypatch):
         loop = REFERENCE_LOOP.replace('@ENTER@', enter).replace('@DIR@', hook_dir).replace('@EXIT@', exitp)
         # Sourcing is observed by recording "$hook" just before the "." would run.
         loop = loop.replace('\t\t. "$hook"', '\t\tprintf "%s\\n" "$hook"')
-        out = subprocess.run(['sh', '-c', loop], env={'PATH': os.environ['PATH'], 'skip_hooks': ' '.join(words)},
+        out = subprocess.run(['sh', '-c', loop], env={'PATH': os.environ['PATH'], 'skip_hooks': ' '.join(words).replace(',', ' ')},
                              cwd=str(root), capture_output=True, check=True).stdout.decode('utf-8').splitlines()
         monkeypatch.setattr(dh, 'ENTER_HOOK', enter)
         monkeypatch.setattr(dh, 'EXIT_HOOK', exitp)
