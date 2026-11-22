@@ -12544,3 +12544,13 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### watchdog daemon program contract — worker checkpoint #1369 (roadmap F)
+
+`app/watchdog_programs.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are `/etc/watchdog.conf` text, the `watchdog_options` value from `/etc/default/watchdog` and `stat`-following entry metadata for the effective `test-directory`. It reports which programs the `watchdog` daemon runs as root on every check interval: each `test-binary` (V0, argv `[path]`), each owner-readable and owner-executable regular file in `test-directory` (V1, `[path, "test"]` and `[path, "repair", "<errcode>", path]`) and the `repair-binary` (`[repair, "<errcode>", "<object>"]`).
+
+- **Fidelity:** transcribed from watchdog 5.16 `src/configfile.c`, `src/read-conf.c`, `src/test_binary.c`, `src/watchdog.c` and `src/run-as-child.c`, and the Debian/Ubuntu `5.16-2` `debian/rules` and `watchdog.service`. It covers C white space (space, tab, CR, LF, backspace only), NUL truncation, first-`=` splitting, no inline comments, last-assignment-wins with blank reset for `repair-binary`/`test-directory`, PATH_MAX, hidden-name skipping and the fatal `interval <= 0` and missing-config paths.
+- **Fail closed:** unobserved or unmodelled `watchdog_options` (including `-c`), an unobserved or unreadable config or directory, an incomplete listing, too many entries, malformed input and relative paths are blocking gaps.
+- **Validation:** `tests/test_watchdog_programs.py` (18 unit tests). It also has an opt-in differential that compiles upstream `configfile.c`/`read-conf.c` with a stub harness (`WATCHDOG_SRC=<watchdog-5.16 tree>`). That differential has **not yet been run**: the authoring sandbox refused to execute the compiled upstream code.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** run the differential, agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
