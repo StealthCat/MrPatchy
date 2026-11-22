@@ -352,10 +352,6 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     for stage in STAGES:
         if base['stages'][stage]['count'] != current['stages'][stage]['count']:
             raise ComparisonError(f'capability mismatch: stages.{stage}.count differs')
-    baseline_transport, candidate_transport = base['transport'], current['transport']
-    connection_delta = None
-    if baseline_transport is not None and candidate_transport is not None:
-        connection_delta = _delta(baseline_transport['connections'], candidate_transport['connections'])
     return {
         'schema_version': SCHEMA_VERSION,
         'fixture_only': True,
@@ -403,14 +399,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'stage_samples': {stage: base['stages'][stage]['count'] for stage in STAGES},
             **({'fixture_budget': base['fixture_budget']} if base['fixture_budget'] is not None else {}),
         },
-        'connection_reuse': {
-            'baseline': baseline_transport,
-            'candidate': candidate_transport,
-            'connection_delta': connection_delta,
-            'scope': 'Connections count distinct loopback HTTP peers that served a request. '
-                     'Each request after the first on a peer counts as reuse. '
-                     'Missing measurements are null.',
-        },
+        'connection_reuse': _compare_connections(base['transport'], current['transport']),
         'deltas': {
             'elapsed_seconds': _delta(base['elapsed_seconds'], current['elapsed_seconds']),
             'runs_per_second': _delta(base['runs_per_second'], current['runs_per_second']),
@@ -430,6 +419,20 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
             'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
+    }
+
+
+def _compare_connections(baseline, candidate):
+    connection_delta = None
+    if baseline is not None and candidate is not None:
+        connection_delta = _delta(baseline['connections'], candidate['connections'])
+    return {
+        'baseline': baseline,
+        'candidate': candidate,
+        'connection_delta': connection_delta,
+        'scope': 'Connections count distinct loopback HTTP peers that served a request. '
+                 'Each request after the first on a peer counts as reuse. '
+                 'Missing measurements are null.',
     }
 
 
