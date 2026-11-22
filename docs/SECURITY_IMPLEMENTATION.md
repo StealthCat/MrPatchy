@@ -12544,3 +12544,14 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### Zabbix agent UserParameter contract — worker checkpoint (roadmap F)
+
+`zabbix_agentd` starts at boot and runs every configured `UserParameter` command through `/bin/sh -c` whenever a Zabbix server or proxy requests that item key. It runs as `User` (default `zabbix`), or as root with `AllowRoot=1`. `AllowKey`/`DenyKey` and the deprecated `EnableRemoteCommands` decide whether the server may run arbitrary `system.run` commands. The startup inventory did not model these server-triggered commands.
+
+- **Change:** the pure `app/zabbix_user_parameters.py` takes captured configuration bytes, captured `Include` directory listings in `readdir` order and confirmed-absent paths. It returns each registered key with its source line, command, argv, working directory, flexible `$1`–`$9` use and unsafe-parameter setting, the run-as user, and the `system.run` access rules. It performs no I/O and never runs a command.
+- **Fidelity:** it follows Zabbix 6.0.14 `cfg.c`, `zabbix_agentd.c`, `zbxconf.c` and `sysinfo.c`, as described in the module docstring. That covers the 2048-byte `fgets` limit, trimming, exact-case names, `Include` file/directory/`*`-pattern rules with unsorted `readdir` order and the ten-level limit, last-value-wins scalars, 0–1 integer checks, first-comma splitting, key syntax and duplicate-key refusal.
+- **Fail closed:** unobserved files or listings, relative includes, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. Parsing continues past an unobserved include, so a later modeled refusal is still reported. Built-in key collisions, unknown parameter names and access-rule pattern validation are not modeled, so the result can only over-report. `origin` is `not_assessed`.
+- **Validation:** `tests/test_zabbix_user_parameters.py` (12 tests). No differential against a real agent yet, because `zabbix-agent` was not installable in the worker environment.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** a differential against the real agent (`zabbix_agentd -p`/`-t`), agent collection, a catalog entry, package provenance, persistence, UI and AI classification. `zabbix_agent2` is out of scope.
