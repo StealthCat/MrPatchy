@@ -7,8 +7,8 @@ command line and as which account. It never reads files, runs a command or autho
 response action.
 
 The semantics come from nrpe 4.1.0 ``src/nrpe.c`` (``read_config_file``,
-``read_config_dir``, ``add_command``, ``find_command``, ``process_macros``, ``my_system``
-and ``drop_privileges``):
+``read_config_dir``, ``add_command``, ``find_command``, ``process_macros``, ``my_system``,
+``drop_privileges`` and ``check_privileges``):
 
 * Lines are read with ``fgets(buf, 2047)``, so a physical line longer than 2046 bytes is
   parsed as several lines. Leading and trailing ``isspace`` characters are stripped, and
@@ -27,12 +27,20 @@ and ``drop_privileges``):
   directory. ``stat`` follows symbolic links.
 * An error stops that file at its line, and definitions read before it stay. An included
   file's error is only logged. An error in the main file makes nrpe refuse to start.
-* For a request, nrpe builds ``"<command_prefix> <command line>"`` (truncated to 2047
-  bytes), expands ``$ARGn$`` macros and runs it with ``popen`` (``/bin/sh -c``). In daemon
-  mode the child calls ``drop_privileges(nrpe_user, nrpe_group)``. A failed lookup or
-  ``setuid`` is only logged, so commands keep the starting account (normally root). In
-  inetd mode privileges are never dropped. Client arguments reach ``$ARGn$`` only with
-  ``dont_blame_nrpe=1`` in a build with ``--enable-command-args``.
+* For a request, nrpe copies the command line into a 2048-byte buffer: up to 2047 bytes
+  with ``strncpy``, or up to 2046 bytes for ``"<command_prefix> <command line>"`` because
+  that path uses ``snprintf(..., sizeof - 1, ...)``. ``process_macros`` splits it on ``$``
+  with ``my_strsep``; every second token is a macro position, and a macro token that
+  *starts* with ``ARG`` is replaced by client argument ``atoi(token + 3)`` when that is 1-16.
+  The result runs with ``popen`` (``/bin/sh -c``). Client arguments reach those macros only
+  with ``dont_blame_nrpe=1`` in a build with ``--enable-command-args``.
+* In daemon, foreground and SRC modes ``set_stdio_sigs`` calls
+  ``drop_privileges(nrpe_user, nrpe_group)`` and then ``check_privileges``, which exits when
+  the effective UID *or* GID is still 0. A failed lookup or ``seteuid`` is only logged, so an
+  unresolvable ``nrpe_user`` leaves the starting account, and nrpe exits if that is root. In
+  inetd mode privileges are never dropped and ``check_privileges`` runs first. So commands
+  never run as root at start: the account is ``nrpe_user`` (or the starting account when
+  that is not root), or nrpe does not start.
 
 Unobserved, unreadable or over-limit input, relative include paths, include cycles,
 truncated paths and build-dependent values are explicit blocking gaps. No record is
@@ -48,7 +56,8 @@ CONTRACT_VERSION = 1
 REFERENCE = {'package': 'nrpe', 'version': '4.1.0', 'source': 'src/nrpe.c at nrpe-4.1.0'}
 DEFAULT_CONFIG = '/etc/nagios/nrpe.cfg'
 FGETS_CHUNK = 2046          # fgets(input_buffer, MAX_INPUT_BUFFER - 1) with MAX_INPUT_BUFFER 2048
-MAX_COMMAND_LINE = 2047     # raw_command[MAX_INPUT_BUFFER], last byte reserved
+MAX_COMMAND_LINE = 2047     # strncpy(raw_command, ..., sizeof(raw_command) - 1)
+MAX_PREFIXED_LINE = 2046    # snprintf(raw_command, sizeof(raw_command) - 1, "%s %s", ...)
 MAX_DIR_VALUE = 255         # strncpy(config_file[MAX_FILENAME_LENGTH], ..., 255)
 MAX_ENTRY_PATH = 254        # snprintf(config_file, MAX_FILENAME_LENGTH - 1, "%s/%s")
 MAX_ARGUMENTS = 16
@@ -58,20 +67,24 @@ MAX_DEPTH = 16
 MAX_COMMANDS = 1024
 MAX_GAPS = 64
 _SPACE = b' \t\n\v\f\r'
-_ARG = re.compile(rb'\$ARG(\d+)\$')
+INT_MIN, INT_MAX = -(2 ** 31), 2 ** 31 - 1
+LONG_MIN, LONG_MAX = -(2 ** 63), 2 ** 63 - 1
 
 BLOCKING = frozenset({
     'input_malformed', 'daemon_not_observed', 'file_not_observed', 'directory_not_observed', 'config_too_large',
     'too_many_files', 'include_cycle', 'include_too_deep', 'relative_include', 'path_truncated',
-    'entry_stat_failed', 'value_not_modelled', 'too_many_commands', 'gaps_truncated',
+    'entry_stat_failed', 'value_not_modelled', 'too_many_commands', 'gaps_truncated', 'start_group_not_observed',
 })
 UNOBSERVED = (
     'Whether nrpe is installed, running and reachable, and which clients allowed_hosts or TLS admit, are not '
     'observed.',
     'Whether the build enables --enable-command-args or --enable-bash-command-substitution is not observed; '
     'arguments_accepted only reports the configuration switch.',
-    'Whether nrpe_user and nrpe_group resolve to real accounts is not observed. A name that does not resolve '
-    'leaves commands running as the starting account.',
+    'Whether nrpe_user and nrpe_group resolve to real accounts, and whether a name other than root or 0 maps to '
+    'UID or GID 0, is not observed. A name that does not resolve leaves the starting account, and nrpe exits if '
+    'that is root.',
+    'A SIGHUP reload re-reads the configuration without running check_privileges again, so a file changed to '
+    'nrpe_user=root after start can run commands as root until restart; configuration text cannot show this.',
     'The contents of the programs that command lines name are not read.',
     'Values of options that cannot stop nrpe (for example allowed_hosts and ssl_* paths) are not validated.',
 )
@@ -116,6 +129,38 @@ def _atoi(value: bytes) -> int:
         raise ValueError('out of range')
     number = int(digits or b'0')
     return -number if sign == b'-' else number
+
+
+def _c_atoi(value: bytes) -> int:
+    """glibc atoi: (int)strtol(value, NULL, 10), saturating to long and truncating to int."""
+    match = re.match(rb'[ \t\n\v\f\r]*([+-]?)(\d*)', value)
+    sign, digits = match.group(1), match.group(2)  # type: ignore[union-attr]
+    number = int(digits or b'0')
+    number = -number if sign == b'-' else number
+    number = max(LONG_MIN, min(LONG_MAX, number))
+    number &= 0xFFFFFFFF
+    return number - 2 ** 32 if number > INT_MAX else number
+
+
+def _argument_macros(line: bytes) -> list[int]:
+    """Mirror process_macros: split on '$', odd tokens are macros, 'ARG' prefix selects atoi(token + 3)."""
+    indexes = set()
+    for position, token in enumerate(line.split(b'$')):
+        if position % 2 == 1 and token.startswith(b'ARG'):
+            index = _c_atoi(token[3:])
+            if 1 <= index <= MAX_ARGUMENTS:
+                indexes.add(index)
+    return sorted(indexes)
+
+
+def _is_root(account: str | None) -> bool:
+    """An account drop_privileges would map to ID 0 without a lookup we cannot observe."""
+    if account is None:
+        return False
+    raw = account.encode('utf-8', 'surrogateescape')
+    if raw and raw.isdigit():
+        return _c_atoi(raw) == 0
+    return account == 'root'
 
 
 def _text(value: bytes) -> str:
@@ -337,7 +382,10 @@ def evaluate(files: Any = None, directories: Any = None, *, config_path: str = D
     missing from the mapping was not observed. ``directories`` maps absolute include_dir paths to a
     list of ``{"name", "type"}`` entries (``type`` is ``file``, ``directory``, ``other`` or ``missing``
     after following symbolic links), ``"absent"`` or ``"unreadable"``. ``daemon`` is ``None`` when the
-    nrpe invocation was not observed, otherwise ``{"mode": "daemon" | "inetd", "start_user": str}``.
+    nrpe invocation was not observed, otherwise ``{"mode": "daemon" | "inetd", "start_user": str}`` with
+    an optional ``"start_group"`` (the starting effective group). Without it, a run whose effective group
+    is not set by ``nrpe_group`` gets a blocking ``start_group_not_observed`` gap, because nrpe exits when
+    that group is root.
     """
     gaps: list[dict[str, Any]] = []
     result: dict[str, Any] = {
@@ -345,16 +393,19 @@ def evaluate(files: Any = None, directories: Any = None, *, config_path: str = D
         'starts': None, 'files': [], 'commands': [], 'gaps': gaps, 'unobserved': list(UNOBSERVED),
         'origin': 'not_assessed', 'note': NOT_A_VERDICT,
     }
-    mode, start_user = 'daemon', 'root'
+    mode, start_user, start_group = 'daemon', 'root', None
     if daemon is None:
         _gap(gaps, 'daemon_not_observed', 'The nrpe invocation was not observed, so daemon mode started as root '
              'is assumed.')
-    elif (not isinstance(daemon, dict) or set(daemon) != {'mode', 'start_user'}
+    elif (not isinstance(daemon, dict) or not {'mode', 'start_user'} <= set(daemon)
+          or not set(daemon) <= {'mode', 'start_user', 'start_group'}
           or daemon['mode'] not in ('daemon', 'inetd') or not isinstance(daemon['start_user'], str)
-          or not daemon['start_user']):
-        _gap(gaps, 'input_malformed', 'daemon must be a mapping with mode (daemon or inetd) and start_user.')
+          or not daemon['start_user']
+          or ('start_group' in daemon and (not isinstance(daemon['start_group'], str) or not daemon['start_group']))):
+        _gap(gaps, 'input_malformed', 'daemon must be a mapping with mode (daemon or inetd), start_user and an '
+             'optional start_group.')
     else:
-        mode, start_user = daemon['mode'], daemon['start_user']
+        mode, start_user, start_group = daemon['mode'], daemon['start_user'], daemon.get('start_group')
     if (not isinstance(files, dict) or not isinstance(directories, dict) or not isinstance(config_path, str)
             or not config_path.startswith('/') or not all(isinstance(key, str) for key in [*files, *directories])):
         _gap(gaps, 'input_malformed', 'files and directories must be mappings keyed by path and config_path must '
@@ -376,8 +427,24 @@ def evaluate(files: Any = None, directories: Any = None, *, config_path: str = D
     settings = walk.settings
     prefix = settings.get(b'command_prefix')
     arguments = _flag(settings, b'dont_blame_nrpe')
-    user = start_user if mode == 'inetd' else _text(settings.get(b'nrpe_user', start_user.encode()))
-    group = None if mode == 'inetd' or b'nrpe_group' not in settings else _text(settings[b'nrpe_group'])
+    if mode == 'inetd':
+        user, group = start_user, start_group
+    else:
+        user = _text(settings[b'nrpe_user']) if b'nrpe_user' in settings else start_user
+        group = _text(settings[b'nrpe_group']) if b'nrpe_group' in settings else start_group
+    if _is_root(user) or _is_root(group):
+        if result['starts'] is not True:
+            result['complete'] = False
+            return result
+        result['starts'] = False
+        result['complete'] = not any(gap['code'] in BLOCKING for gap in gaps)
+        result['refusal'] = ('check_privileges finds effective user or group root after the privilege drop, so nrpe '
+                             'exits ("NRPE daemon cannot be run as user/group root") and runs no commands.')
+        return result
+    if group is None:
+        _gap(gaps, 'start_group_not_observed', 'The effective group is not set by nrpe_group and the starting group '
+             'was not observed; nrpe exits if it is root.')
+    fallback = None if mode == 'inetd' or _is_root(start_user) or b'nrpe_user' not in settings else start_user
     latest: dict[str, dict[str, Any]] = {}
     overridden: dict[str, list[dict[str, Any]]] = {}
     for definition in walk.definitions:
@@ -388,13 +455,14 @@ def evaluate(files: Any = None, directories: Any = None, *, config_path: str = D
     for name in sorted(latest):
         definition = latest[name]
         line = definition['raw'] if prefix is None else prefix + b' ' + definition['raw']
-        truncated = len(line) > MAX_COMMAND_LINE
-        line = line[:MAX_COMMAND_LINE]
-        macros = sorted({int(index) for index in _ARG.findall(line) if 1 <= int(index) <= MAX_ARGUMENTS})
+        limit = MAX_COMMAND_LINE if prefix is None else MAX_PREFIXED_LINE
+        truncated = len(line) > limit
+        line = line[:limit]
+        macros = _argument_macros(line)
         result['commands'].append({
             'name': name, 'path': definition['path'], 'line': definition['line'],
             'command_line': _text(line), 'sha256': hashlib.sha256(line).hexdigest(), 'via': '/bin/sh -c',
-            'user': user, 'group': group, 'fallback_user': None if mode == 'inetd' else start_user,
+            'user': user, 'group': group, 'fallback_user': fallback,
             'prefixed': prefix is not None, 'truncated': truncated, 'argument_macros': macros,
             'arguments_accepted': arguments, 'overrides': overridden.get(name, []),
         })
