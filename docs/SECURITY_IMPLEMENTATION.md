@@ -3475,6 +3475,19 @@ Amounts remain local public-price estimates for comparison with provider billing
 records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
 and the wider roadmap A acceptance remain planned.
 
+### Current-window unreconciled spend breakdown — Roadmap A checkpoint #1351
+
+AI Settings now distinguishes the counted amount still marked sent without
+reconciled usage from the counted amount with a recorded uncertain outcome.
+Both come from the same current-window budget aggregate, including any
+previously admitted reservations still counted after a timezone change.
+The existing combined uncertainty value remains available. An older API without
+the split still shows the combined total and reconciliation summary.
+
+A sent row can outlive a worker and its diagnostics. The read-only
+breakdown describes ledger state. Use provider billing records to verify
+charges.
+
 ### Stale and replayed triage results under a daily cap — milestone 4 checkpoint #1005
 
 `tests/test_ai_budget_stale_result_acceptance.py` drives the real
@@ -3527,19 +3540,6 @@ connection tests. The groups sum to the counted total in the budget status.
   Per-activity history for earlier windows, per-server attribution and
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
-
-### Current-window unreconciled spend breakdown — Roadmap A checkpoint #1351
-
-AI Settings now distinguishes the counted amount still marked sent without
-reconciled usage from the counted amount with a recorded uncertain outcome.
-Both come from the same current-window budget aggregate, including any
-previously admitted reservations still counted after a timezone change.
-The existing combined uncertainty value remains available. An older API without
-the split still shows the combined total and reconciliation summary.
-
-A sent row can outlive a worker and its diagnostics. The breakdown reports
-ledger state and gives no running-call, invoice or recovery guarantee. It
-does not write reservations or change admission.
 
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
