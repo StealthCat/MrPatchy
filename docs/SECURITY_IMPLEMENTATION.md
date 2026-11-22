@@ -12544,3 +12544,16 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### NRPE command contract — worker checkpoint #1335 (roadmap F)
+
+- **Outcome:** `app/nrpe_commands.py` is a pure, I/O-free contract. From captured `nrpe.cfg` text, the files it includes and the `include_dir` listings, it reports which `command[NAME]` definitions the Nagios NRPE daemon runs when an allowed client asks for `NAME`. For each it gives the defining file and line, any overridden definitions, the `command_prefix`-prefixed `/bin/sh -c` command line and its SHA-256, `$ARGn$` macros, whether `dont_blame_nrpe=1` accepts client arguments, and the account: `nrpe_user`/`nrpe_group` in daemon mode with the starting account as fallback, or the inetd account.
+- **Semantics:** nrpe 4.1.0 `src/nrpe.c` (`read_config_file`, `read_config_dir`, `add_command`, `find_command`, `process_macros`, `my_system`, `drop_privileges`):
+  - lines are read in `fgets` chunks of 2046 bytes, with `strtok` name and value splitting;
+  - `command[` anywhere in a name defines a command, and the last definition wins;
+  - `include_dir` reads regular `.cfg` files in byte order (`alphasort`, no `setlocale`), hidden files included, and recurses into non-hidden subdirectories;
+  - a parse error stops only that file, unless it is the main file, in which case nrpe refuses to start;
+  - commands run through `popen` after the privilege drop, and a failed drop only logs a warning.
+- **Fail closed:** blocking gaps cover unobserved files or listings, an unobserved invocation, relative includes, include cycles, truncated paths, failed-`stat` entries, build-dependent `ssl_version=SSLv2` and out-of-range integers. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_nrpe_commands.py` (10 tests) uses vectors derived from the source. Building the downloaded nrpe 4.1.0 for a live differential was not permitted in the worker environment, so that differential is still to do.
+- **Remaining:** native collection of `nrpe.cfg` and `nrpe.d`, startup-inventory wiring, provenance and AI classification. The build flags (`--enable-command-args`), account resolution and `allowed_hosts` reachability are not observed.
