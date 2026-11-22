@@ -40,9 +40,12 @@ incomplete. A text map whose contents were not captured is also incomplete,
 because its includes and submounts can name further program maps. ``origin``
 is always ``not_assessed`` and no result is a safety verdict.
 
-The master-map grammar itself (``daemon/master_tok.l`` and
-``daemon/master_parse.y``), master includes and ``auto.master.d`` are not parsed
-here; callers pass tokenized entries.
+``read_master`` (increment 2) reads the master map as automount does: the
+``read_one`` record splitter, ``+`` includes with self-include and depth-16
+limits, ``+dir:`` ``*.autofs`` directories in ``versionsort`` order, typed and
+nsswitch master sources and the ``auto_master`` fallback. The entry grammar
+(``daemon/master_tok.l`` and ``daemon/master_parse.y``) is not parsed yet;
+``evaluate`` callers pass tokenized entries.
 """
 from __future__ import annotations
 
@@ -262,5 +265,457 @@ def evaluate(entries: Iterable[Mapping[str, Any]], stats: Mapping[str, Any] | No
         'complete': not any(g['blocking'] for g in gaps),
         'origin': 'not_assessed',
         'not_observed': list(NOT_OBSERVED),
+        'authorizes_response': False,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Increment 2: reading the master map (``modules/lookup_file.c``
+# ``read_one``/``lookup_read_master``, ``modules/lookup_dir.c`` and
+# ``daemon/lookup.c`` ``lookup_nss_read_master``/``read_master_map``).
+# The entry grammar (``master_tok.l``/``master_parse.y``) is not parsed here:
+# each non-include record is returned as the ``"<path> <entry>"`` buffer that
+# ``lookup_read_master`` hands to ``master_parse_entry``.
+# ---------------------------------------------------------------------------
+
+DEFAULT_MASTER_MAP_NAME = 'auto.master'
+KEY_MAX_LEN = 255  # NAME_MAX
+MAPENT_MAX_LEN = 16384
+MAX_INCLUDE_DEPTH = 16
+DIR_EXT = '.autofs'
+MAX_RECORDS = 2048
+MAX_READS = 256
+MASTER_REMOTE_TYPES = ('yp', 'nis', 'nisplus', 'ldap', 'ldaps', 'sss')
+# lookup_nss_read_master only tries these nsswitch sources (strncmp prefixes,
+# so "nis" also admits "nisplus"); "yp" and "hesiod" are skipped.
+MASTER_NSS_PREFIXES = ('files', 'nis', 'nisplus', 'ldap', 'sss')
+
+MASTER_BLOCKING = frozenset({
+    'master_file_not_observed', 'master_dir_not_observed', 'remote_source_unobserved', 'master_source_not_modelled',
+    'over_limit', 'gaps_truncated',
+})
+
+_C_SPACE = frozenset(' \t\n\v\f\r')
+_C_BLANK = frozenset(' \t')
+(_ST_BEGIN, _ST_COMPARE, _ST_STAR, _ST_BADENT, _ST_ENTSPC, _ST_GETENT) = range(6)
+(_GOT_NOTHING, _GOT_STAR, _GOT_REAL, _GOT_PLUS) = range(4)
+(_ESC_NONE, _ESC_CHAR, _ESC_VAL, _ESC_ALL) = range(4)
+
+
+class _KeyOverflow(Exception):
+    """read_one wrote past its KEY_MAX_LEN + 1 key buffer; automount's behaviour is undefined."""
+
+
+class _Stream:
+    def __init__(self, text: str) -> None:
+        self.text, self.pos = text, 0
+
+    def getc(self) -> str | None:
+        if self.pos >= len(self.text):
+            self.pos = len(self.text) + 1  # feof
+            return None
+        ch = self.text[self.pos]
+        self.pos += 1
+        return ch
+
+    def ungetc(self, ch: str | None) -> None:
+        if ch is not None:
+            self.pos -= 1
+
+    def eof(self) -> bool:
+        return self.pos > len(self.text)
+
+
+def _read_one(f: _Stream) -> tuple[str, str] | None:
+    """Transcription of ``read_one``: the next (key, mapent) record, or None at EOF."""
+    key: list[str] = []
+    mapent: list[str] | None = None
+    state, getting, gotten, escape = _ST_BEGIN, _GOT_NOTHING, _GOT_NOTHING, _ESC_NONE
+
+    def reset() -> None:
+        nonlocal key, mapent, getting, gotten, escape
+        key, mapent = [], None
+        getting = gotten = _GOT_NOTHING
+        escape = _ESC_NONE
+
+    while (ch := f.getc()) is not None:
+        if escape == _ESC_NONE:
+            if ch == '\\':
+                nch = f.getc()
+                if nch == '\n':
+                    continue
+                f.ungetc(nch)
+                escape = _ESC_CHAR
+            if ch == '"':
+                escape = _ESC_ALL
+        elif escape == _ESC_CHAR:
+            escape = _ESC_VAL
+        elif escape == _ESC_VAL or (escape == _ESC_ALL and ch == '"'):
+            escape = _ESC_NONE
+
+        got_it = nxt = False
+        if state == _ST_BEGIN:
+            if escape == _ESC_NONE:
+                if ch in _C_SPACE:
+                    pass
+                elif ch == '#':
+                    state = _ST_BADENT
+                elif ch == '*':
+                    state = _ST_STAR
+                    key.append(ch)
+                else:
+                    if ch == '+':
+                        gotten = _GOT_PLUS
+                    state = _ST_COMPARE
+                    key.append(ch)
+            elif escape == _ESC_ALL:
+                state = _ST_COMPARE
+                key.append(ch)
+            elif escape == _ESC_CHAR:
+                pass
+            else:
+                state = _ST_BADENT
+        elif state == _ST_COMPARE:
+            if ch == '\n':
+                state = _ST_BEGIN
+                if gotten == _GOT_PLUS:
+                    got_it = True
+                elif escape == _ESC_ALL:
+                    nxt = True
+                elif escape != _ESC_VAL:
+                    got_it = True
+            elif ch in _C_SPACE and escape == _ESC_NONE:
+                getting = _GOT_REAL
+                state = _ST_ENTSPC
+                if gotten == _GOT_PLUS:
+                    got_it = True
+            elif escape == _ESC_CHAR:
+                pass
+            elif len(key) == KEY_MAX_LEN:
+                state = _ST_BADENT
+                gotten = _GOT_NOTHING
+            else:
+                if escape == _ESC_VAL:
+                    key.append('\\')
+                key.append(ch)
+                if len(key) > KEY_MAX_LEN:
+                    # An escape at length KEY_MAX_LEN - 1 skips the equality test and overflows.
+                    raise _KeyOverflow
+        elif state == _ST_STAR:
+            if ch == '\n':
+                state = _ST_BEGIN
+            elif ch in _C_SPACE and gotten < _GOT_STAR and escape == _ESC_NONE:
+                getting = _GOT_STAR
+                state = _ST_ENTSPC
+            elif escape != _ESC_CHAR:
+                state = _ST_BADENT
+        elif state == _ST_BADENT:
+            if ch == '\n':
+                nch = f.getc()
+                if nch is not None and nch in _C_BLANK:
+                    f.ungetc(nch)
+                else:
+                    f.ungetc(nch)
+                    state = _ST_BEGIN
+                    if gotten == _GOT_REAL or gotten == getting:
+                        got_it = True
+                    else:
+                        nxt = True
+            elif ch not in _C_BLANK:
+                gotten = _GOT_NOTHING
+        elif state == _ST_ENTSPC:
+            if ch == '\n':
+                state = _ST_BEGIN
+            elif ch not in _C_SPACE or escape != _ESC_NONE:
+                if escape != _ESC_NONE:
+                    if escape == _ESC_CHAR:
+                        continue
+                    if ord(ch) <= 32:
+                        getting = _GOT_NOTHING
+                        state = _ST_BADENT
+                        continue
+                    mapent = ['\\', ch] if escape == _ESC_VAL else [ch]
+                else:
+                    mapent = [ch]
+                state = _ST_GETENT
+                gotten = getting
+        elif state == _ST_GETENT:
+            if ch == '\n':
+                if escape == _ESC_ALL:
+                    state = _ST_BEGIN
+                    nxt = True
+                else:
+                    nch = f.getc()
+                    if nch is not None and nch in _C_BLANK:
+                        f.ungetc(nch)
+                        state = _ST_BADENT
+                    else:
+                        f.ungetc(nch)
+                        state = _ST_BEGIN
+                        if gotten == _GOT_REAL or gotten == getting:
+                            got_it = True
+            elif len(mapent or ()) < MAPENT_MAX_LEN:
+                if mapent is not None:
+                    mapent.append(ch)
+                nch = f.getc()
+                if nch is None and (gotten == _GOT_REAL or gotten == getting):
+                    got_it = True
+                else:
+                    f.ungetc(nch)
+            else:
+                state = _ST_BADENT
+
+        if got_it:
+            if gotten == _GOT_NOTHING:
+                nxt = True
+            else:
+                return ''.join(key), ''.join(mapent or ())
+        if nxt:
+            reset()
+    return None
+
+
+def _strverscmp(a: str, b: str) -> int:
+    """glibc ``strverscmp`` (used by ``versionsort`` for ``auto.master.d``)."""
+    s_n, s_i, s_f, s_z, cmp, ln = 0, 3, 6, 9, 2, 3
+    next_state = (s_n, s_i, s_z, s_n, s_i, s_i, s_n, s_f, s_f, s_n, s_f, s_z)
+    result_type = (cmp, cmp, cmp, cmp, ln, cmp, cmp, cmp, cmp,
+                   cmp, -1, -1, 1, ln, ln, 1, ln, ln,
+                   cmp, cmp, cmp, cmp, cmp, cmp, cmp, cmp, cmp,
+                   cmp, 1, 1, -1, cmp, cmp, -1, cmp, cmp)
+    p1, p2 = a.encode('latin-1') + b'\0', b.encode('latin-1') + b'\0'
+    if a == b:
+        return 0
+
+    def cls(c: int) -> int:
+        return (c == 0x30) + (0x30 <= c <= 0x39)
+
+    i = 0
+    c1, c2 = p1[0], p2[0]
+    state = s_n + cls(c1)
+    while (diff := c1 - c2) == 0:
+        if c1 == 0:
+            return diff
+        state = next_state[state]
+        i += 1
+        c1, c2 = p1[i], p2[i]
+        state += cls(c1)
+    state = result_type[state * 3 + cls(c2)]
+    if state == cmp:
+        return diff
+    if state == ln:
+        j = i + 1
+        while 0x30 <= p1[j] <= 0x39:
+            if not 0x30 <= p2[j] <= 0x39:
+                return 1
+            j += 1
+        return -1 if 0x30 <= p2[j] <= 0x39 else diff
+    return state
+
+
+def _versionsort(names: Iterable[str]) -> list[str]:
+    import functools
+    return sorted(names, key=functools.cmp_to_key(_strverscmp))
+
+
+class _Master:
+    def __init__(self, files: Mapping[str, Any], stats: Mapping[str, Any], dirs: Mapping[str, Any],
+                 sources: tuple[str, ...], master_set: bool) -> None:
+        self.files, self.stats, self.dirs, self.sources = files, stats, dirs, sources
+        self.master_set = master_set
+        self.depth = 0
+        self.recurse = False
+        self.reads = 0
+        self.records: list[dict[str, Any]] = []
+        self.gaps: list[dict[str, Any]] = []
+
+    def gap(self, code: str, detail: str, **extra: Any) -> None:
+        if len(self.gaps) >= MAX_GAPS:
+            if not any(g['code'] == 'gaps_truncated' for g in self.gaps):
+                self.gaps[-1] = {'code': 'gaps_truncated', 'detail': 'More gaps exist than are listed.',
+                                 'blocking': True}
+            return
+        self.gaps.append({'code': code, 'detail': detail, 'blocking': code in MASTER_BLOCKING, **extra})
+
+    # lookup_file.c lookup_read_master
+    def read_file(self, mapname: str) -> str:
+        # open_lookup runs do_init (absolute path, access(R_OK)) before lookup_read_master.
+        if not mapname.startswith('/'):
+            return 'unavail'
+        seen = _stat(self.stats, mapname)
+        if seen is None:
+            self.gap('master_file_not_observed', 'A master map path was not stat-ed in this capture.', path=mapname)
+            return 'unknown'
+        if seen['kind'] == 'missing':
+            return 'unavail'
+        if self.recurse:
+            return 'tryagain'
+        if self.depth > MAX_INCLUDE_DEPTH:
+            self.gap('include_depth_exceeded', 'automount stops including master maps past depth 16.', path=mapname)
+            return 'unknown'
+        if seen['kind'] == 'directory':
+            return 'success'  # fopen succeeds and the first read fails with EISDIR
+        if seen['kind'] != 'regular':
+            self.gap('master_file_not_observed', 'A master map is neither a regular file nor a directory.',
+                     path=mapname)
+            return 'unknown'
+        text = self.files.get(mapname)
+        if not isinstance(text, str):
+            self.gap('master_file_not_observed', 'A master map file was not captured.', path=mapname)
+            return 'unknown'
+        if len(text) > MAX_TEXT or '\x00' in text or any(ord(c) > 0xFF for c in text):
+            self.gap('over_limit', 'A captured master map is over the size limit or binary.', path=mapname)
+            return 'unknown'
+        self.reads += 1
+        if self.reads > MAX_READS:
+            self.gap('over_limit', 'More master map reads were needed than are evaluated.', path=mapname)
+            return 'unknown'
+        f = _Stream(text)
+        while True:
+            try:
+                rec = _read_one(f)
+            except _KeyOverflow:
+                self.gap('over_limit', 'A master map key overflows automount\'s key buffer; its behaviour is '
+                         'undefined.', path=mapname)
+                return 'unknown'
+            if rec is None:
+                break
+            path, ent = rec
+            if path.startswith('+'):
+                inc = path[1:]
+                # check_master_self_include: full path for '/' names, basenames otherwise.
+                if inc.startswith('/'):
+                    self_inc = inc == mapname
+                else:
+                    self_inc = posixpath.basename(inc) == posixpath.basename(mapname)
+                if self_inc:
+                    self.recurse = True
+                self.depth += 1
+                self.nss_read(inc)
+                self.depth -= 1
+                self.recurse = False
+            else:
+                if len(self.records) >= MAX_RECORDS:
+                    self.gap('over_limit', 'More master map records were read than are evaluated.')
+                    return 'unknown'
+                self.records.append({'source': mapname, 'depth': self.depth, 'buffer': f'{path} {ent}'})
+            if f.eof():
+                break
+        return 'success'
+
+    # lookup_dir.c lookup_read_master
+    def read_dir(self, mapname: str) -> str:
+        if not mapname.startswith('/'):
+            return 'unavail'
+        seen = _stat(self.stats, mapname)
+        if seen is None:
+            self.gap('master_dir_not_observed', 'A master map directory was not stat-ed in this capture.',
+                     path=mapname)
+            return 'unknown'
+        if seen['kind'] != 'directory':
+            # access(R_OK) fails for a missing path; a non-directory is rejected by do_init.
+            return 'unavail'
+        if self.depth > MAX_INCLUDE_DEPTH:
+            self.gap('include_depth_exceeded', 'automount stops including master maps past depth 16.', path=mapname)
+            return 'unavail'
+        names = self.dirs.get(mapname)
+        if not isinstance(names, (list, tuple)) or not all(isinstance(n, str) for n in names):
+            self.gap('master_dir_not_observed', 'A master map directory listing was not captured.', path=mapname)
+            return 'unknown'
+        accepted = [n for n in names if n and not n.startswith('.') and len(n) >= len(DIR_EXT) + 1
+                    and n.endswith(DIR_EXT) and '/' not in n and '\x00' not in n and all(ord(c) <= 0xFF for c in n)]
+        for entry in _versionsort(accepted):
+            self.depth += 1
+            self.nss_read(posixpath.join(mapname, entry))
+            self.depth -= 1
+        return 'success'
+
+    def do_read(self, name: str, source: str) -> str:
+        if source == 'file':
+            return self.read_file(name)
+        if source == 'dir':
+            return self.read_dir(name)
+        self.gap('remote_source_unobserved', 'A master map is read from a source this capture cannot observe.',
+                 source=source, name=name)
+        return 'unknown'
+
+    # daemon/lookup.c lookup_nss_read_master
+    def nss_read(self, name: str) -> str:
+        if name.startswith('/'):
+            return self.do_read(name, 'ldap' if name.startswith('//') else 'file')
+        colon = name.find(':')
+        if colon >= 0:
+            def typed(t: str) -> bool:
+                return name.startswith(t) and len(name) > len(t) and name[len(t)] in ',:'
+            # Upstream tests "sss" as (!strncmp(name, "sss", 3) || name[3] in ",:"), so any
+            # name whose fourth character is ',' or ':' takes this branch.
+            if any(typed(t) for t in ('file', 'yp', 'nis', 'nisplus', 'ldap', 'ldaps', 'dir')) or \
+                    name.startswith('sss') or (len(name) > 3 and name[3] in ',:'):
+                source = name[:colon]
+                if source in ('file', 'dir'):
+                    return self.do_read(name[colon + 1:], source)
+                if source in MASTER_REMOTE_TYPES:
+                    return self.do_read(name, source)
+                self.gap('master_source_not_modelled', 'A typed master map name selects a lookup module this '
+                         'contract does not model.', name=name)
+                return 'unknown'
+        result = 'success'
+        for source in self.sources:
+            if not source.startswith(MASTER_NSS_PREFIXES):
+                continue
+            result = self.read_master_map(name, source)
+            if result != 'success' and self.depth == 0 and not self.master_set and '.' in name:
+                alt = name.replace('.', '_', 1)
+                result = self.read_master_map(alt, source)
+            if result in ('tryagain', 'unknown', 'notfound', 'unavail'):
+                result = 'success'
+                continue
+            break
+        return result
+
+    def read_master_map(self, name: str, source: str) -> str:
+        if source != 'files':
+            self.gap('remote_source_unobserved', 'An nsswitch source is queried for a master map that this '
+                     'capture cannot observe.', source=source, name=name)
+            return 'unknown'
+        if '/' in name:
+            return 'notfound'
+        return self.do_read(posixpath.join(MAP_DIR, name), 'file')
+
+
+def read_master(master_map_name: str | None = None, files: Mapping[str, Any] | None = None,
+                stats: Mapping[str, Any] | None = None, dirs: Mapping[str, Any] | None = None,
+                nss_sources: Iterable[str] | None = None) -> dict[str, Any]:
+    """Read the master map the way automount does and list every entry it would parse.
+
+    ``master_map_name`` is ``master_map_name`` from autofs.conf, or ``None``
+    when it is not set (``auto.master``, with the ``auto_master`` fallback).
+    ``files`` maps a path to its captured text, ``stats`` follows the
+    ``evaluate`` shape, and ``dirs`` maps a directory to its captured entry
+    names. Each record's ``buffer`` is the text ``master_parse_entry`` parses.
+    """
+    files = files if isinstance(files, Mapping) else {}
+    stats = stats if isinstance(stats, Mapping) else {}
+    dirs = dirs if isinstance(dirs, Mapping) else {}
+    if nss_sources is None:
+        sources = DEFAULT_NSS_SOURCES
+    else:
+        sources = tuple(s for s in nss_sources if isinstance(s, str) and s in NSS_SOURCES)
+    master_set = master_map_name is not None
+    name = master_map_name if isinstance(master_map_name, str) and master_map_name else DEFAULT_MASTER_MAP_NAME
+    m = _Master(files, stats, dirs, sources, master_set)
+    m.nss_read(name)
+    return {
+        'contract_version': CONTRACT_VERSION,
+        'source_versions': list(SOURCE_VERSIONS),
+        'master_map_name': name,
+        'records': m.records,
+        'gaps': m.gaps,
+        'complete': not any(g['blocking'] for g in m.gaps),
+        'origin': 'not_assessed',
+        'not_observed': [
+            'Whether automount was started with a master map on its command line, which overrides master_map_name.',
+            'The entry grammar of each record; records are returned as the buffers master_parse_entry parses.',
+        ],
         'authorizes_response': False,
     }

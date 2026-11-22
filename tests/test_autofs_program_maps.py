@@ -119,3 +119,86 @@ def test_entry_and_gap_limits():
     r = ap.evaluate([entry(f'/m{i}', f'/u{i}') for i in range(ap.MAX_ENTRIES + 1)])
     assert len(r['entries']) == ap.MAX_ENTRIES and len(r['gaps']) == ap.MAX_GAPS
     assert 'over_limit' in codes(r) and codes(r)[-1] == 'gaps_truncated' and not r['complete']
+
+
+# --- increment 2: reading the master map -----------------------------------
+
+DIR = {'kind': 'directory', 'mode': 0o40755}
+
+
+def bufs(r):
+    return [rec['buffer'] for rec in r['records']]
+
+
+def test_master_records_follow_read_one_comments_continuations_and_indented_lines():
+    text = ('# comment\n'
+            '/misc /etc/auto.misc --timeout=60\n'
+            '/net \\\n  -hosts\n'
+            '   \n'
+            '/home auto.home\n'
+            '  indented continuation is swallowed\n'
+            '/smb /etc/auto.smb')
+    r = ap.read_master(files={'/etc/auto.master': text}, stats={'/etc/auto.master': REG})
+    assert bufs(r) == ['/misc /etc/auto.misc --timeout=60', '/net -hosts', '/smb /etc/auto.smb']
+    assert r['complete'] and r['master_map_name'] == 'auto.master' and r['authorizes_response'] is False
+
+
+def test_unset_master_map_name_falls_back_to_auto_underscore_master():
+    stats = {'/etc/auto.master': MISSING, '/etc/auto_master': REG}
+    r = ap.read_master(files={'/etc/auto_master': '/x /etc/auto.x\n'}, stats=stats)
+    assert bufs(r) == ['/x /etc/auto.x'] and r['complete']
+    r = ap.read_master('auto.master', files={'/etc/auto_master': '/x /etc/auto.x\n'}, stats=stats)
+    assert bufs(r) == [] and r['complete']
+
+
+def test_plus_includes_recurse_in_order_and_self_include_is_skipped():
+    files = {'/etc/auto.master': '/a /etc/auto.a\n+auto.extra\n+auto.master\n/z /etc/auto.z\n',
+             '/etc/auto.extra': '/b /etc/auto.b\n'}
+    stats = {'/etc/auto.master': REG, '/etc/auto.extra': REG}
+    r = ap.read_master(files=files, stats=stats)
+    assert bufs(r) == ['/a /etc/auto.a', '/b /etc/auto.b', '/z /etc/auto.z'] and r['complete']
+    assert [rec['depth'] for rec in r['records']] == [0, 1, 0]
+
+
+def test_plus_include_options_on_the_same_line_become_their_own_record():
+    # read_one returns "+name" at the first blank; the rest of the line is read as a new record.
+    files = {'/etc/auto.master': '+/etc/inc /extra /etc/auto.e\n', '/etc/inc': ''}
+    r = ap.read_master(files=files, stats={'/etc/auto.master': REG, '/etc/inc': REG})
+    assert bufs(r) == ['/extra /etc/auto.e']
+
+
+def test_dir_include_reads_dot_autofs_files_in_version_order():
+    files = {'/etc/auto.master': '+dir:/etc/auto.master.d\n',
+             '/etc/auto.master.d/a10.autofs': '/ten /etc/t\n', '/etc/auto.master.d/a9.autofs': '/nine /etc/n\n'}
+    stats = {'/etc/auto.master': REG, '/etc/auto.master.d': DIR,
+             '/etc/auto.master.d/a10.autofs': REG, '/etc/auto.master.d/a9.autofs': REG}
+    dirs = {'/etc/auto.master.d': ['a10.autofs', 'a9.autofs', '.hidden.autofs', 'x.conf', '.autofs']}
+    r = ap.read_master(files=files, stats=stats, dirs=dirs)
+    assert bufs(r) == ['/nine /etc/n', '/ten /etc/t'] and r['complete']
+
+
+def test_include_depth_limit_stops_reading_like_automount():
+    files = {f'/etc/m{i}': f'/k{i} /etc/x\n+/etc/m{i + 1}\n' for i in range(20)}
+    stats = {f'/etc/m{i}': REG for i in range(21)}
+    r = ap.read_master('/etc/m0', files=files, stats=stats)
+    assert len(r['records']) == 17 and 'include_depth_exceeded' in codes(r)
+
+
+def test_master_reading_fails_closed_on_unobserved_remote_and_overflowing_input():
+    r = ap.read_master(stats={})
+    assert not r['complete'] and codes(r) == ['master_file_not_observed'] * 2  # auto.master, then auto_master
+    r = ap.read_master(stats={'/etc/auto.master': REG})
+    assert not r['complete']
+    r = ap.read_master(nss_sources=['ldap', 'files'], files={'/etc/auto.master': '/a b\n'},
+                       stats={'/etc/auto.master': REG})
+    assert not r['complete'] and 'remote_source_unobserved' in codes(r)
+    files = {'/etc/auto.master': '+dir:/etc/d\n+ldap:ou=auto.master,dc=x\n+file,sun:/etc/y\n'}
+    r = ap.read_master(files=files, stats={'/etc/auto.master': REG, '/etc/d': DIR})
+    assert codes(r) == ['master_dir_not_observed', 'remote_source_unobserved', 'master_source_not_modelled']
+    overflow = '/' + 'k' * 253 + '\\v rest\n'
+    r = ap.read_master('/etc/auto.master', files={'/etc/auto.master': overflow}, stats={'/etc/auto.master': REG})
+    assert not r['complete'] and codes(r) == ['over_limit']
+
+
+def test_strverscmp_matches_glibc_examples():
+    assert ap._versionsort(['a10', 'a9', 'a09', 'a1', 'a']) == ['a', 'a09', 'a1', 'a9', 'a10']
