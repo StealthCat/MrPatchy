@@ -12568,6 +12568,6 @@ dnsmasq runs `dhcp-script` and `dhcp-luascript` on every DHCP lease event, and a
   - Lua scripts when the build's Lua support is unknown.
 
   A configuration dnsmasq refuses is reported as `refused`, with its reason. Values of unrelated options and the existence of the `dhcp-scriptuser` account are not checked, so the result can only over-report. `origin` is `not_assessed`, and no result is a safety verdict.
-- **Validation:** `tests/test_dnsmasq_scripts.py` has 27 tests, and six rule mutations are each caught. No executable differential against a built dnsmasq was run in this slice.
+- **Validation:** `tests/test_dnsmasq_scripts.py` has 31 tests, and six rule mutations are each caught. No executable differential against a built dnsmasq was run in this slice.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** collection of argv, files and listings, startup-catalog wiring and UI.

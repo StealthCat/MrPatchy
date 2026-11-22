@@ -124,6 +124,8 @@ ESCAPES = {'"': '"', 't': '\t', 'n': '\n', 'e': '\x1b', 'b': '\b', 'r': '\r', '\
 class Refused(Exception):
     """dnsmasq would exit with a configuration error."""
 
+    located = False
+
 
 class _Blocked(Exception):
     """The input does not let the contract follow dnsmasq any further."""
@@ -346,11 +348,17 @@ class _State:
             return
         self.seen.add((dev, ino))
         self.read.append(path)
-        for lineno, line in enumerate(text.splitlines(keepends=True), 1):
+        # fgets() splits on '\n' only; '\r' and other separators stay in the line.
+        lines = [chunk + '\n' for chunk in text.split('\n')]
+        if lines[-1] == '\n':
+            lines.pop()
+        else:
+            lines[-1] = lines[-1][:-1]
+        for lineno, line in enumerate(lines, 1):
             self.lines += 1
             if self.lines > MAX_LINES:
                 raise _Blocked('line_limit', path)
-            if len(line.encode('utf-8', 'surrogateescape')) >= MAXDNAME - 1:
+            if len(line.encode('utf-8', 'surrogateescape')) > MAXDNAME - 1:
                 raise _Blocked('line_too_long', f'{path}:{lineno}')
             try:
                 pairs = parse_line(line)
@@ -368,7 +376,11 @@ class _State:
                 arg = None if arg_pairs is None else _text(arg_pairs)
                 self.option(name, arg, {'path': path, 'line': lineno}, False, arg_pairs)
             except Refused as exc:
-                raise Refused(f'{exc} at line {lineno} of {path}') from None
+                if exc.located:  # Already reported by the included file, as dnsmasq does.
+                    raise
+                located = Refused(f'{exc} at line {lineno} of {path}')
+                located.located = True
+                raise located from None
 
 
 def parse_argv(argv: list[str]) -> list[tuple[str, str | None]]:
@@ -454,12 +466,13 @@ def evaluate(argv: Any, files: Any, dirs: Any = None, *, lua_support: Any = None
             for name, arg in parse_argv(list(argv)):
                 source = {'path': None, 'line': None, 'command_line': True}
                 if name == 'conf-file' and conffile is None:
+                    # opt_string_alloc() of a missing value leaves the default file in place.
                     conffile = arg or None
-                    if conffile is None:
-                        raise Refused('missing --conf-file argument')
                     continue
                 if name == 'conf-file':
-                    state.one_file(arg or '', source)
+                    if not arg:
+                        raise _Blocked('malformed_argv')  # one_file(NULL) is undefined behaviour.
+                    state.one_file(arg, source)
                     continue
                 state.option(name, arg, source, True)
             if conffile is not None:

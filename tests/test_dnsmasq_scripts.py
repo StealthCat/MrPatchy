@@ -191,3 +191,31 @@ def test_option_table_matches_source_counts():
     assert len(d.LONG_OPTIONS) == 194
     assert d.LONG_OPTIONS['conf-file'] == 2 and d.LONG_OPTIONS['dhcp-script'] == 1
     assert d.SHORT_OPTIONS['6'] is True and d.SHORT_OPTIONS['d'] is False
+
+
+def test_only_newline_ends_a_line():
+    # fgets() keeps '\r' in the line; read_file() turns it into a space before '=' is found.
+    prog = only(conf('dhcp-script=/a\rdhcp-script=/b\n'))['dhcp-script']
+    assert prog['command'] == '/a dhcp-script=/b'
+    assert only(conf('dhcp-script=/last'))['dhcp-script']['command'] == '/last'
+
+
+def test_refusal_names_the_innermost_file():
+    extra = {'/etc/inc.conf': {'text': '\nbogus\n', 'dev': 1, 'ino': 2}}
+    result = conf('# head\nconf-file=/etc/inc.conf\n', extra=extra)
+    assert result['refused'] == 'bad option at line 2 of /etc/inc.conf'
+
+
+def test_conf_file_without_value():
+    fs = files(**{d.DEFAULT_CONF: 'dhcp-script=/default\n'})
+    # The first value-less --conf-file leaves the default main file in place.
+    assert only(d.evaluate(['dnsmasq', '--conf-file'], fs, {}))['dhcp-script']['command'] == '/default'
+    assert only(conf('conf-file\n')) == {}
+
+
+def test_line_length_boundary():
+    fits = 'dhcp-script=/' + 'a' * (1023 - len('dhcp-script=/')) + '\n'
+    assert len(fits) == 1024
+    assert only(conf(fits))['dhcp-script']['command'].startswith('/aaa')
+    # One more byte and fgets() would split the line.
+    assert conf('#' + fits)['gaps'][0]['code'] == 'line_too_long'
