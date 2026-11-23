@@ -157,3 +157,21 @@ def test_fail_closed_inputs():
     fifo = run([D], {D: [f('a.json', None, kind='other')]})
     assert fifo['gaps'][0]['code'] == 'entry_unverified'
     assert run([], {})['status'] == 'unresolved'
+
+
+def test_non_record_listing_entries_are_blocking_gaps_and_rest_still_resolve():
+    for bad in ('a.json', None, 7, ['a.json'], {'name': 5, 'kind': 'file', 'text': '{}'}):
+        r = run([D], {D: [bad, f('b.json', hook())]})
+        assert not r['complete'], bad
+        assert any(g['code'] == 'invalid_input' and g['name'] == D and g['blocking'] for g in r['gaps'])
+        assert [h['name'] for h in r['hooks']] == ['b.json']
+        assert [x['name'] for x in r['files']] == ['b.json']
+
+
+def test_non_boolean_rootful_is_a_blocking_gap_and_never_claims_root():
+    for bad in (1, 'yes', 0, '', []):
+        empty = run([D], {D: []}, rootful=bad)
+        assert empty['status'] == 'no_hooks' and not empty['complete'], bad
+        assert any(g['code'] == 'invalid_input' and g['name'] == 'rootful' for g in empty['gaps'])
+        r = run([D], {D: [f('a.json', hook())]}, rootful=bad)
+        assert not r['complete'] and [h['runs_as'] for h in r['hooks']] == [None]

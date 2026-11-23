@@ -430,6 +430,9 @@ def evaluate(*, hooks_dirs: Iterable[str], extension_stages: Iterable[str] = (),
                        rootful=rootful)
     if rootful is None:
         _gap(gaps, 'rootful_unknown', None, 'Whether the engine runs as root was not captured.')
+    elif not isinstance(rootful, bool):
+        _gap(gaps, 'invalid_input', 'rootful', 'rootful must be true, false or None')
+        rootful = None
     valid_stages = set(STAGES) | set(stages_extra)
     loaded: dict[str, dict[str, Any]] = {}
     entries_seen = 0
@@ -450,9 +453,15 @@ def evaluate(*, hooks_dirs: Iterable[str], extension_stages: Iterable[str] = (),
             continue
         first_error: _LoadError | None = None
         first_error_file = None
-        ordered = sorted(listing, key=lambda e: str(e.get('name', '')).encode('utf-8', 'surrogatepass'))
+        records = []
+        for entry in listing:
+            if not isinstance(entry, Mapping) or not isinstance(entry.get('name'), str):
+                _gap(gaps, 'invalid_input', directory, 'listing entry must be a record with a string name')
+                continue
+            records.append(entry)
+        ordered = sorted(records, key=lambda e: e['name'].encode('utf-8', 'surrogatepass'))
         for entry in ordered:
-            name = str(entry.get('name', ''))
+            name = entry['name']
             if not name.endswith('.json'):
                 continue
             entries_seen += 1
