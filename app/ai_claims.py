@@ -13,7 +13,7 @@ from decimal import Decimal
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
-from sqlalchemy import String, Double, select, func, and_, or_, union_all, literal
+from sqlalchemy import String, Double, select, func, and_, or_, union_all, literal, bindparam
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
 from .coordination import Lock
@@ -68,21 +68,27 @@ def owner_valid(s,owner,admitting=False):
     return True
 
 
-def reconcile(s,now):
-    # Called under ai-triage. Never interrupt a different worker's live lease.
+def _recovery_query():
     runs = ai_runs.AIRun
     expired = select(Claim.subject.label('claim_subject'), Claim.run_id.label('run_id')).where(
-        Claim.expires <= now)
+        Claim.expires <= bindparam('expiry_cutoff', type_=Double))
     has_claim = select(Claim.subject).where(Claim.run_id == runs.id).exists()
     orphaned = select(literal(None, String(64)), runs.id).where(
         runs.purpose == 'triage', runs.state == 'running', ~has_claim)
     # The expired branch already includes runs whose last claim is about to be
     # deleted. Select only keys in each branch before loading the recovery rows.
     recovery = union_all(expired, orphaned).subquery()
-    query = (select(Claim, runs).select_from(recovery)
-             .outerjoin(Claim, Claim.subject == recovery.c.claim_subject)
-             .outerjoin(runs, runs.id == recovery.c.run_id))
-    for claim, run in s.execute(query):
+    return (select(Claim, runs).select_from(recovery)
+            .outerjoin(Claim, Claim.subject == recovery.c.claim_subject)
+            .outerjoin(runs, runs.id == recovery.c.run_id))
+
+
+_RECOVERY_QUERY = _recovery_query()
+
+
+def reconcile(s,now):
+    # Called under ai-triage. Never interrupt a different worker's live lease.
+    for claim, run in s.execute(_RECOVERY_QUERY, {'expiry_cutoff': now}):
         _interrupt_run(s, run)
         if claim is not None:
             s.delete(claim)

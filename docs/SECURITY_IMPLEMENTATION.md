@@ -3730,7 +3730,8 @@ Triage admission reads expired claims and running investigations without a
 claim in one statement while holding the existing admission lock. The expired
 branch includes runs linked to a claim slated for deletion. The orphan branch
 matches running triage runs that already have no claim. Both branches project
-keys before loading the rows needed for recovery.
+keys before loading the rows needed for recovery. Each pass supplies its own
+expiry cutoff to the shared statement.
 
 Acceptance covers a healthy admission with a live lease and a mixed recovery
 pass with expiry at the cutoff, missing runs, completed runs, repeated claims
