@@ -338,8 +338,8 @@ def auto_plan_tick(now=None):
             from . import ai_policy
             enabled=[host for host,p in policies.items() if p.get('auto_ai_plan') and not ai_policy.status(s,host)['paused']]
             if not enabled:return
-            from .operations import host_quarantined
-            enabled=[host for host in enabled if not host_quarantined(s,host)]
+            from .operations import unheld_hosts
+            enabled=unheld_hosts(s,enabled)
             if not enabled:return
             query=select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),*awaiting_auto_plan()).order_by(Incident.updated,Incident.id)
             # YARA incidents are never planned automatically, so page past them instead of letting them fill a fixed window.
