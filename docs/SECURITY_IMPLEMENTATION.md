@@ -3724,6 +3724,20 @@ and that a sent call may still be billable. From code reading, not tested here: 
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
 
+### Recover expired and orphaned investigations from one read — worker checkpoint #1461
+
+Triage admission reads expired claims and running investigations without a
+claim in one statement while holding the existing admission lock. The expired
+branch includes runs linked to a claim slated for deletion. The orphan branch
+matches running triage runs that already have no claim. Both branches project
+keys before loading the rows needed for recovery.
+
+Acceptance covers a healthy admission with a live lease and a mixed recovery
+pass with expiry at the cutoff, missing runs, completed runs, repeated claims
+for one run and retained call receipts. Repeating recovery leaves one
+interruption event per recovered run. Cap accounting, claim fencing and the
+caller-owned commit continue to apply. Production throughput remains open.
+
 ### Non-expanding legacy migration proposal — worker checkpoint #879 (fixes #878)
 
 `ai_control_preview.legacy_migration()` derives the suggested move from legacy
