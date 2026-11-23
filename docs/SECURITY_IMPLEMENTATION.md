@@ -10865,6 +10865,12 @@ It includes sent and uncertain rows from still-counted prior windows. The
 display uses reservation time because the ledger has no separate transmission
 timestamp. No call identifiers or diagnostic evidence are needed.
 
+Roadmap A checkpoint #1389 uses one ungrouped exact spend aggregate for budget
+admission and alert gates. The grouped dashboard still reports its status and
+reconciliation breakdown. Both queries share the ledger window predicate and
+count unknown unreleased rows conservatively. Tests verify the query shape and
+nano-dollar boundary on SQLite and MySQL. Production throughput remains open.
+
 The administrator API validates a trailing 1–90 day range and performs fixed-precision
 SQL aggregation without materializing individual ledger records. Result groups are
 bounded to four persisted reset/timezone combinations per requested day (at most 360),
