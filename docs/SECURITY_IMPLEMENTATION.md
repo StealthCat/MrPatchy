@@ -3992,15 +3992,6 @@ python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-d
 python tools/compare_ai_benchmarks.py serial.json parallel.json
 ```
 
-Roadmap A checkpoint #1397 supports matched implementation measurements at a
-fixed concurrency. Generate reports in the baseline and candidate checkouts
-with the same benchmark flags on the same database version, and keep the source
-commit identity with each report. Use
-`python tools/compare_ai_benchmarks.py --fixed-concurrency main.json candidate.json`
-to check equivalence and report fixture latency and throughput deltas. The
-default comparison still requires different concurrency. Production performance
-remains a separate acceptance step.
-
 The benchmark checks that every persisted run belongs to the expected subject
 and server, with a receipt for every provider call. Reports record the observed
 server count, the single-server slot limit, and peak simultaneous loopback
@@ -4016,6 +4007,15 @@ Peak simultaneous provider handling rose from one to four in all three pairs.
 Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
 At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
 one. Matched production measurements remain open.
+
+Roadmap A checkpoint #1397 supports matched implementation measurements at a
+fixed concurrency. Generate reports in the baseline and candidate checkouts
+with the same benchmark flags on the same database version, and keep the source
+commit identity with each report. Use
+`python tools/compare_ai_benchmarks.py --fixed-concurrency main.json candidate.json`
+to check equivalence and report fixture latency and throughput deltas. The
+default comparison still requires different concurrency. Production performance
+remains a separate acceptance step.
 
 ### Native MySQL mode for the triage benchmark — worker checkpoint #976
 

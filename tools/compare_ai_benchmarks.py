@@ -353,7 +353,6 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             raise ComparisonError(f'capability mismatch: stages.{stage}.count differs')
     return {
         'schema_version': SCHEMA_VERSION,
-        **({'comparison_mode': 'fixed_concurrency'} if fixed_concurrency else {}),
         'fixture_only': True,
         'capability_equivalent': True,
         'baseline': {
@@ -410,6 +409,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
                 for stage in STAGES
             },
         },
+        **({'comparison_mode': 'fixed_concurrency'} if fixed_concurrency else {}),
         'interpretation': {
             'latency': 'Negative elapsed/stage deltas indicate lower fixture latency.',
             'throughput': 'Positive throughput deltas indicate higher fixture throughput.',
