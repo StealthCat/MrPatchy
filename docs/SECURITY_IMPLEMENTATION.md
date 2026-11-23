@@ -3992,6 +3992,15 @@ python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-d
 python tools/compare_ai_benchmarks.py serial.json parallel.json
 ```
 
+Roadmap A checkpoint #1393 adds a balanced mixed workload. Run the benchmark
+with `--runs 8 --servers 3` at concurrency 1 and 4 to measure the same eight
+investigations across three servers. The report verifies the retained subject
+assignments and records the per-server slot limit so the comparator rejects
+different layouts or limits. Shared layouts cap benchmark concurrency at that
+limit so a temporarily full server cannot leave a submitted fixture unprocessed.
+Existing one-server and one-server-per-subject reports remain comparable under
+their existing controls. These measurements cover disposable fixtures.
+
 The benchmark checks that every persisted run belongs to the expected subject
 and server, with a receipt for every provider call. Reports record the observed
 server count, the single-server slot limit, and peak simultaneous loopback
