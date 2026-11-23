@@ -52,6 +52,7 @@ def blocked_by(error):
 
 SCORE_HISTORY_INDEX = Index('ix_update_scores_host_name_state_candidate',
     UpdateScore.host_id, UpdateScore.name, UpdateScore.state, UpdateScore.candidate)
+SCORE_RUN_HOST_INDEX = Index('ix_update_scores_run_id_host_id', UpdateScore.run_id, UpdateScore.host_id)
 
 
 def _inventory_scoring_context(inventory):

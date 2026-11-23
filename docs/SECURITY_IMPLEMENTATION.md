@@ -7818,6 +7818,14 @@ missing records and delayed-response races, plus actual 320/768/1440 renders.
 Shared glass navigation, readable responsive facts and existing mascot illustrations
 are reused. No new artwork or operational/approval controls are introduced.
 
+Roadmap A checkpoint [#1435](https://github.com/StealthCat/MrPatchy/issues/1435)
+computes the AI history shared-batch flag in one database read for the visible
+runs. It combines durable links and legacy score links and counts distinct server
+IDs so repeated package scores for one server count once. Startup adds a covering
+index for the legacy association on SQLite and MySQL. Tests cover pagination,
+older scores, duplicate links, the index upgrade and query plans. The broader
+faster-triage roadmap remains in progress.
+
 This is a partial screen-family migration. Investigation evidence/details, other
 AI control/loading states, the remaining finite UI inventory, full remote worker
 provisioning/state/readiness/migration acceptance, deployment/GCP dashboard/node,

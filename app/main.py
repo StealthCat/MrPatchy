@@ -2557,9 +2557,9 @@ def ai_run_list(purpose:str='',host_id:str='',offset:int=0,limit:int=50,state:st
                 select(update_scores.UpdateScore.run_id).where(update_scores.UpdateScore.host_id==host_id)))
         rows=list(s.scalars(query.order_by(ai_runs.AIRun.started.desc(),ai_runs.AIRun.id).offset(offset).limit(limit+1)))
         receipts=ai_runs.call_receipts(s,[r.id for r in rows[:limit]])
-        members=ai_runs.run_hosts(s,[r.id for r in rows[:limit]])
+        shared=ai_runs.shared_run_ids(s,[r.id for r in rows[:limit]])
         return {'items':[object_dict(r)|{'cost':ai_runs.cost_summary(r,receipts[r.id]),
-            'shared_batch':len(members[r.id])>1} for r in rows[:limit]],'more':len(rows)>limit}
+            'shared_batch':r.id in shared} for r in rows[:limit]],'more':len(rows)>limit}
 
 @app.get('/api/ai/runs/{run_id}')
 def ai_run_detail(run_id:str,host_id:str='',user=Depends(admin_user)):
@@ -2571,7 +2571,7 @@ def ai_run_detail(run_id:str,host_id:str='',user=Depends(admin_user)):
             if not linked:raise HTTPException(404,'AI run not linked to this server')
         if not row:raise HTTPException(404,'AI run not found')
         receipts=ai_runs.call_receipts(s,[row.id])[row.id]
-        return object_dict(row)|{'shared_batch':len(ai_runs.run_hosts(s,[row.id])[row.id])>1,'cost':ai_runs.cost_summary(row,receipts), 'api_calls':[object_dict(r) for r in receipts],
+        return object_dict(row)|{'shared_batch':row.id in ai_runs.shared_run_ids(s,[row.id]),'cost':ai_runs.cost_summary(row,receipts), 'api_calls':[object_dict(r) for r in receipts],
             'events':[object_dict(r) for r in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run_id).order_by(ai_runs.AIEvent.id))]}
 
 @app.post('/api/investigations/blocked/retry')
