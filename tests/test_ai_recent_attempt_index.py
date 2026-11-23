@@ -85,7 +85,7 @@ def test_recent_attempt_reads_use_range_and_preserve_strict_cutoff(admin, monkey
 
     assert len(queries) == 2
     assert 'ORDER BY behaviors.attempted DESC' in queries[0][0]
-    assert 'min(' not in queries[1][0].lower()
+    assert queries[1][0].lower().count('exists (') == 2
     with db.engine.connect() as connection:
         assert connection.scalars(select(ai_claims.Claim.subject)).all() == []
         assert connection.scalars(select(ai_runs.AIRun.id)).all() == []

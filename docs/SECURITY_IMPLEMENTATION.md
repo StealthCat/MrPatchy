@@ -3620,6 +3620,12 @@ eligibility immediately before and at the reported boundary. Explicit AI
 control modes retain their own gate timing. This checkpoint changes queue
 visibility. Admission, reservations and provider calls follow the existing path.
 
+Roadmap A checkpoint #1400 bounds legacy process-triage claim admission to
+one query. The two indexed probes seek the configured threshold in recent
+behavior attempts and triage runs. Either match holds admission, with the same
+strict one-hour cutoff. Status still reads full counts to display usage and
+retry deadlines. The query-shape and cutoff regressions exercise real claims.
+
 ### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
 
 The shared AI start gates and automatic AI plan status now fetch each legacy

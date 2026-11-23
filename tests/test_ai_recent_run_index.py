@@ -78,7 +78,7 @@ def test_recent_run_reads_use_purpose_and_time_range(admin, monkeypatch):
 
     def capture(connection, cursor, statement, parameters, context, executemany):
         if ('FROM ai_runs' in statement and 'ai_runs.purpose =' in statement
-                and 'ai_runs.started >' in statement and 'count(' in statement.lower()):
+                and 'ai_runs.started >' in statement):
             queries.append((statement, parameters))
 
     event.listen(db.engine, 'before_cursor_execute', capture)
@@ -96,10 +96,11 @@ def test_recent_run_reads_use_purpose_and_time_range(admin, monkeypatch):
 
     assert len(queries) == 3
     assert 'ORDER BY ai_runs.started DESC' in queries[0][0]
-    assert all('min(' not in statement.lower() for statement, _ in queries[1:])
+    assert queries[1][0].lower().count('exists (') == 2
+    assert 'count(' in queries[2][0].lower()
     with db.engine.connect() as connection:
         assert connection.scalars(select(ai_claims.Claim.subject)).all() == []
-        expected = [(2, now - 3599), (2,), (2,)]
+        expected = [(2, now - 3599), (True,), (2,)]
         for (statement, parameters), result in zip(queries, expected, strict=True):
             assert connection.exec_driver_sql(statement, parameters).one() == result
             if connection.dialect.name == 'sqlite':

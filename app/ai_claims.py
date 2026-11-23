@@ -10,6 +10,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from decimal import Decimal
+from math import ceil
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
@@ -189,6 +190,18 @@ def _free_hit(s,model,election_filters):
     return None
 
 
+def _legacy_allowance_reached(s,limit,now):
+    # The dashboard needs exact totals. Admission only needs a row at the limit.
+    threshold=ceil(limit)
+    if threshold<=0:return True
+    cutoff=now-3600
+    attempts=(select(Behavior.attempted).where(Behavior.attempted>cutoff)
+              .offset(threshold-1).limit(1).exists())
+    runs=(select(ai_runs.AIRun.started).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>cutoff)
+          .offset(threshold-1).limit(1).exists())
+    return s.scalar(select(or_(attempts,runs)))
+
+
 def _needs_admission_lock(s, now):
     """One read probes for possible work or recovery without selecting evidence."""
     pending = select(Behavior.id).where(Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')))
@@ -214,10 +227,8 @@ def acquire(owner=None):
             now=time.time();reconcile(s,now);s.commit()
             cfg=config(s);secret=s.get(Setting,'openai_key')
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not secret or not owner_valid(s,owner,True):return None
-            if cfg['ai_control_mode']=='legacy':
-                recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
-                count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
-                if max(recent,count)>=cfg['ai_hourly_limit']:return None
+            if cfg['ai_control_mode']=='legacy' and _legacy_allowance_reached(s,cfg['ai_hourly_limit'],now):
+                return None
             from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing,known_good
             # A local exact cache hit needs no provider admission. Keep paid
             # work queued while any shared provider start gate is closed.
