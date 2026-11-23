@@ -115,6 +115,19 @@ def test_words_dash_would_reinterpret_are_gaps(text, names, code):
     assert code in _codes(result) and not result['complete']
 
 
+@pytest.mark.parametrize('value, reason', [
+    ('"-f *"', 'pathname_expansion'), ("'-q [ab]'", 'pathname_expansion'),
+    ("'-q \\x'", 'unquoted_backslash')])
+def test_plain_args_fallback_the_unquoted_exec_line_would_change_is_a_gap(value, reason):
+    # exec $DAEMON -i $INTERFACE $A leaves $A unquoted, so dash globs the ARGS fallback.
+    result = ih.resolve(_obs(f'HOTPLUG_INTERFACES=all\nARGS={value}\n', ['eth0']))
+    assert result['gaps'] == [{'code': 'args_not_modelled', 'reason': reason,
+                               'variable': 'ARGS', 'interface': 'eth0'}]
+    assert not result['complete'] and not result['hotplug']
+    other = ih.resolve(_obs(f'HOTPLUG_INTERFACES=all\nARGS={value}\nARGS_eth0=-q\n', ['eth0']))
+    assert other['complete'] and _starts(other) == {'eth0': '-q'}
+
+
 @pytest.mark.parametrize('observation', [
     None, [], {'config': {'state': 'regular'}},
     {'config': {'state': 'nope'}},

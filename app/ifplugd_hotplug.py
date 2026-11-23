@@ -178,7 +178,10 @@ def resolve(observation: Any) -> dict[str, Any]:
         if printed is None:
             continue
         if not printed:
-            source, printed = 'ARGS', variables.get('ARGS', '')
+            source = 'ARGS'
+            printed = _init._fallback_args(variables.get('ARGS', ''), gaps, interface=name)
+            if printed is None:
+                continue
         result['hotplug'].append({
             'interface': name,
             'matched': 'all' if name not in hotplug else 'name',
