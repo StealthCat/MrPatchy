@@ -122,6 +122,29 @@ def test_other_init_system_is_not_applicable_but_complete():
     assert result['applicability'] == 'not_applicable' and result['complete'] is True
 
 
+def test_other_init_system_does_not_run_scripts_at_boot():
+    # Review of #1448: an enabled runlevel link must not project boot execution under another init.
+    result = _run(init_system='systemd', runlevels=['default'])
+    assert result['applicability'] == 'not_applicable'
+    assert result['runs_at_boot'] is False and result['enabled_runlevels'] == ['default']
+    assert result['phases']['start']['run_order'] == ['/etc/local.d/firewall.start']
+
+
+@pytest.mark.parametrize('kw', [{'init_system': None}, {'family': None}, {'family': 'rpm'}])
+def test_unconfirmed_applicability_leaves_boot_execution_unknown(kw):
+    result = _run(**kw)
+    assert result['applicability'] == 'unknown' and result['runs_at_boot'] is None
+    assert result['complete'] is False
+
+
+@pytest.mark.parametrize('family', [[], {}, ['debian'], 5, b'debian'])
+def test_non_string_family_is_malformed_not_an_exception(family):
+    # Review of #1448: captured JSON may hold a list or object here; membership checks used to raise TypeError.
+    result = _run(family=family)
+    assert 'input_malformed' in _codes(result)
+    assert result['applicability'] == 'unknown' and result['complete'] is False
+
+
 @pytest.mark.parametrize('local_d,code', [
     (None, 'directory_not_observed'),
     ({'state': 'unreadable'}, 'directory_unreadable'),

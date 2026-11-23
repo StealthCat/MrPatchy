@@ -30,6 +30,9 @@ Debian 12 ships) and on ``master``. The ``local`` loop is identical in both::
 * ``openrc-run`` sources ``/etc/conf.d/local.RUNLEVEL`` when it exists, otherwise ``/etc/conf.d/local``, as root,
   before running the service. A ``local_start``/``local_stop`` function defined there is called after the scripts.
 
+``runs_at_boot`` is true only when OpenRC on a supported family is confirmed: it is false under another init and
+``None`` while applicability is unknown.
+
 It performs no I/O and never authorizes a response action. Unobserved family, init system, enablement,
 listings or metadata, malformed input, over-limit input and shell-reinterpreted names are blocking gaps.
 """
@@ -171,6 +174,9 @@ def assess(local_d: Any = None, *, family: Any = None, init_system: Any = None, 
     }
     if family is None:
         _gap(gaps, 'family_not_observed')
+    elif not isinstance(family, str):
+        _gap(gaps, 'input_malformed', None, 'Malformed family.')
+        family = None
     elif family not in APPLICABLE_FAMILIES:
         _gap(gaps, 'family_unsupported')
     if init_system is None:
@@ -182,6 +188,10 @@ def assess(local_d: Any = None, *, family: Any = None, init_system: Any = None, 
     elif family in APPLICABLE_FAMILIES:
         result['applicability'] = 'applicable'
     _enablement(runlevels, result, gaps)
+    if result['applicability'] != 'applicable' and result['runs_at_boot'] is not None:
+        # /etc/runlevels only starts local under OpenRC: another init never runs it at boot, and an unconfirmed
+        # init or family leaves boot execution unknown. The listing stays available as metadata.
+        result['runs_at_boot'] = False if result['applicability'] == 'not_applicable' else None
     _shell(shell, result, gaps)
     if local_d is not None and not isinstance(local_d, dict):
         _gap(gaps, 'input_malformed', LOCAL_D, 'Malformed local.d metadata.')
