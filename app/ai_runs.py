@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, case, literal
+from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, case, literal, union_all
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -344,13 +344,26 @@ def task_failure(error):
 
 
 def _status_run_details(s):
-    # Select each newest row before combining them so each branch stays bounded.
+    # Each fixed purpose can seek its newest run using the purpose/start index.
+    candidates = []
+    for purpose in ('triage', 'worker'):
+        newest_for_purpose = (
+            select(AIRun.id, AIRun.started).where(AIRun.purpose == purpose)
+            .order_by(AIRun.started.desc(), AIRun.id.desc()).limit(1).subquery()
+        )
+        candidates.append(select(newest_for_purpose))
+    latest_candidates = union_all(*candidates).subquery()
+    newest = (
+        select(latest_candidates.c.id)
+        .order_by(latest_candidates.c.started.desc(), latest_candidates.c.id.desc())
+        .limit(1).scalar_subquery()
+    )
     latest = select(literal('latest').label('kind'), AIRun.id,
         case((AIRun.state.in_(('error','interrupted')), AIRun.message), else_='').label('detail')).where(
-        AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1).subquery()
+        AIRun.id == newest)
     running = select(literal('running').label('kind'), literal(None).label('id'), AIRun.stage.label('detail')).where(
         AIRun.purpose=='triage', AIRun.state=='running').order_by(AIRun.started.desc()).limit(1).subquery()
-    rows = s.execute(select(latest).union_all(select(running)))
+    rows = s.execute(latest.union_all(select(running)))
     details = {kind:(identifier,detail) for kind,identifier,detail in rows}
     _,running_stage = details.get('running',(None,None))
     last_run,last_error = details.get('latest',(None,''))
