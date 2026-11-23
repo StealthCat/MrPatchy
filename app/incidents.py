@@ -319,16 +319,6 @@ def automatic_candidate_sql():
     return or_(engine.is_(None),engine!='YARA')
 
 
-def _active_plan_for_host(host_id):
-    from .db import Job
-
-    return select(Job.id).where(
-        Job.host_id == host_id,
-        Job.action.in_(('security-plan', 'startup-plan')),
-        Job.state.in_(('queued', 'running')),
-    ).exists()
-
-
 def auto_plan_tick(now=None):
     """Opt-in proposals only. One automatic attempt per incident evidence revision."""
     from .coordination import Lock
@@ -379,6 +369,16 @@ def auto_plan_tick(now=None):
                     enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True})
                     occupied_hosts.add(canonical_host);remaining-=1
                 except ValueError:continue
+
+
+def _active_plan_for_host(host_id):
+    from .db import Job
+
+    return select(Job.id).where(
+        Job.host_id == host_id,
+        Job.action.in_(('security-plan', 'startup-plan')),
+        Job.state.in_(('queued', 'running')),
+    ).exists()
 
 
 def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):
