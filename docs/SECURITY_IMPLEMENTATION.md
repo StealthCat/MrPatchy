@@ -12534,6 +12534,20 @@ There is no live differential against a built apcupsd: this session's classifier
   - a catalog entry, provenance, persistence, UI and AI classification;
   - recommended-profile (`recommend.d`) resolution, variable expansion and `tuned-main.conf` `default_instance_priority` collection.
 
+### ifplugd init-script start contract — worker checkpoint #1377 increment 2 (roadmap F)
+
+- **What it covers:** `app/ifplugd_init.py` is a pure, versioned contract for `/etc/init.d/ifplugd start` at boot. It reports that `/etc/default/ifplugd` is sourced as root shell code. It also reports which `ifplugd -i $IF $A` daemon starts follow, with each `$A` string and whether it came from `ARGS_<IF>` or `ARGS`. Those strings are the `ARGS` input of `app/ifplugd_actions.py`, which is increment 1.
+- **Pinned source:** `/etc/init.d/ifplugd` from `ifplugd_0.28-19.7_amd64.deb` (sha256 `bce99ac5…1136`), run by `dash`.
+  - `INTERFACES` is split on the default IFS. Only the exact values `auto` and `all` select `all_interfaces`. That walks `/sys/class/net/*` in byte order without dot names, and keeps an entry that has `device` and either no regular `type` file or a `type` line that is exactly `1`, and whose name starts with `eth` or `wlan`.
+  - An interface that is not present is skipped. `IF1` replaces only the first `-` with `_`. A non-empty `echo ${ARGS_<IF1>}` (word-split and re-joined) wins; otherwise `$ARGS` is used unchanged.
+- **Fail closed:** the config is understood only as blank lines, comments and simple `NAME=value` assignments, using plain characters, single quotes, or double quotes without `$`, a backquote or a backslash. Any other line, including `export`, a function, a command substitution, a tilde, CR or a continuation, is `config_not_simple_assignment`.
+  - Assigning `IFPLUGD` is `daemon_overridden`, and the replacement is reported as the root program. Assigning `IFS`, `PATH`, `ENV` or `CDPATH` is `config_changes_shell_environment`.
+  - Interface words with glob characters, `/`, `.`/`..`, a backslash or `-n` are gaps. So is an `IF1` that is not a plain name, because `eval` would parse it as a parameter operator or a bad substitution. So is an `ARGS_*` value that `echo` or globbing would change. Unobserved config or interfaces are gaps, and malformed or over-cap input is refused.
+- **Validation:** `tests/test_ifplugd_init.py` has 39 tests. A differential ran 400 random configs and `/sys/class/net` trees against real `dash` running the shipped init script, with a recording `ifplugd` stub. Every complete result matched, more than 200 of them. Three injected model mutations were each caught: replacing every `-`, a strict `type` match, and dropping the `ARGS` fallback.
+- **Not modelled (listed in each result):** positional `start` interfaces, `/lib/lsb/init-functions` and its hooks, the inherited environment, the `ifplugd -c` running-daemon skip, and boot-time interface presence. The `/sys/class/net` observation is taken at collection time.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining for #1377:** the udev `HOTPLUG_INTERFACES` agent path, agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
+
 ### supervisord program contract — worker checkpoint #1259 (roadmap F)
 
 supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x]` it loads from its main file and its `[include] files =` globs, at supervisord start when `autostart` is true (the default), as the section's `user` or as supervisord's own user, normally root. The startup inventory did not model `conf.d/*.conf` as a persistence location.
