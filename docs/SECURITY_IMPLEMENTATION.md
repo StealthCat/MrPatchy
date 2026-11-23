@@ -12544,3 +12544,59 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### SDDM display-script contract — worker checkpoint #1421 (roadmap F)
+
+`app/sddm_display_scripts.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are the files SDDM loads its configuration from, the effective `sddm.service` `ExecStart` and the installation state. From these it reports which commands the `sddm` daemon runs as root around each X11 display:
+
+- the `[X11] DisplayCommand` setup script after the X server starts (default `/usr/share/sddm/scripts/Xsetup`, 30 s limit);
+- the `[X11] DisplayStopCommand` stop script after it stops (default `/usr/share/sddm/scripts/Xstop`, 5 s limit);
+- the X server itself (`ServerPath` plus `ServerArguments`).
+
+Each command comes with its argv, the file and line that set it, and the `PATH` the scripts receive.
+
+**Why it matters.** A single `DisplayCommand=` line in any file under `/etc/sddm.conf.d/` or `/usr/lib/sddm/sddm.conf.d/` makes sddm run an arbitrary program as root at every boot and every greeter restart. No existing startup contract reported this.
+
+**Source of the semantics.** sddm 0.20.0 (`src/common/ConfigReader.cpp`, `Configuration.h`, `src/daemon/XorgDisplayServer.cpp`, `Display.cpp`) and the Ubuntu 24.04 package `sddm 0.20.0-2ubuntu4.2`, a Qt 5 build:
+
+- **Load order.** Files are read from `/usr/lib/sddm/sddm.conf.d`, then `/etc/sddm.conf.d`, then `/etc/sddm.conf`, and later files win.
+- **What is loaded.** Any non-hidden file name is loaded, not only `*.conf`, and symlinks to files are followed. Directories, special files and broken symlinks are skipped, and so are files that cannot be opened.
+- **Line parsing.**
+  - Lines are trimmed with Qt whitespace rules and cut at the first `#` anywhere.
+  - A line containing `=` is an assignment; this is checked before the section-header check, so a line such as `[X11=x]` is an assignment, not a header.
+  - Each file starts in the implicit `General` section, and `XDisplay` is an alias of `X11`.
+  - Keys and section names are case-sensitive.
+  - An empty value is kept rather than replaced by the default.
+- **Display server mode.** `DisplayServer` is lower-cased, and an unknown value falls back to `x11`.
+- **Command splitting.** `DisplayCommand` and `DisplayStopCommand` are split by `QProcess::splitCommand`. `ServerPath` is the program as written, and `ServerArguments` is split on spaces only.
+- **Ubuntu build.** Ubuntu patches `DefaultPath` to `/bin:/usr/bin`. Its packaged `Xsetup` and `Xstop` also run `/sbin/prime-offload` and `/sbin/prime-switch` when those exist.
+
+**Fail closed.** Each of the following is a blocking gap:
+
+- an unobserved or non-Debian family, or unknown installation state;
+- an unobserved or non-default `ExecStart`;
+- an unobserved, unreadable or truncated listing, a malformed entry, or missing metadata or symlink targets;
+- an unobserved or unreadable file, which root may still read;
+- NUL bytes, invalid UTF-8 or over-limit text;
+- files in the deciding directory that set the same key to different values, since `QDir::LocaleAware` order depends on the locale;
+- an empty command, a program without `/` (resolved through the daemon `PATH`) or a relative program;
+- the `x11-user` and `wayland` modes, whose display scripts run through `sddm-helper` and are not modeled.
+
+**Validation.** `tests/test_sddm_display_scripts.py` has 53 tests. They cover:
+
+- load order and overrides, any-name, hidden, special and broken-link entries;
+- the assignment-before-header rule, case sensitivity, `#` cutting, the `XDisplay` alias, and the per-file implicit section;
+- display server fallback and the helper modes;
+- `ServerArguments` splitting, ambiguity and its override by a later group;
+- malformed observations and the gap bound.
+
+A differential test compares `split_command` with a real Qt 6.12 `QProcess.splitCommand` on 3,000 random strings, with 0 mismatches. It runs when `MRPATCHY_QT_PYTHON` names a Python with PySide6, and is skipped otherwise.
+
+**Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change, and `origin` is always `not_assessed`.
+
+**Remaining:**
+
+- agent collection of the files and installation state;
+- a catalog entry, provenance, persistence, UI and AI classification;
+- session commands, the Wayland greeter compositor and the legacy UPower halt/reboot commands;
+- authenticating the packaged `Xsetup`/`Xstop`.
