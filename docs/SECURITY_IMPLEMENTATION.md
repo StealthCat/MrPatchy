@@ -3528,6 +3528,22 @@ connection tests. The groups sum to the counted total in the budget status.
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
 
+### Budget reset guidance from the current ledger snapshot — worker checkpoint #1457
+
+The current daily budget summary reads spend, outstanding receipt counts and
+reset guidance in one grouped ledger statement. A positive charge from a
+prior timezone can outlive the configured reset. The dashboard reports that
+boundary as a recheck whenever the same rows contributing to the displayed
+total include that carryover. A release committed during the read is visible
+on the next refresh.
+
+Acceptance covers a release through the normal unsent-reservation path on
+another connection, positive and zero settled cost, an unknown retained
+status, released rows, and exact timestamp boundaries. The reset indicator
+uses the existing amount and window rules. Admission, reservations and alerts
+continue to use their existing ledger checks. Fleet-wide performance and
+the wider Roadmap A acceptance remain open.
+
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
 The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI

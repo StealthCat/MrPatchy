@@ -75,6 +75,7 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
     unreconciled_count=0
     oldest_reservation=None
+    overlapping=False
     if enabled:
         # At most five result rows, regardless of receipt amounts or unknown statuses.
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
@@ -84,21 +85,26 @@ def _state(session,cfg,now,*,include_reconciliation=False):
         total=_aggregate(session,amount)
         # A row also counts while the window it was admitted under (its own reset_at) is still
         # open, so changing the reset timezone cannot hand back spend from that window.
-        metrics=(func.count(),func.min(BudgetEntry.created)) if include_reconciliation else ()
+        # Carryover is a subset of the counted rows. Computing it in this query
+        # keeps the reset guidance on the same snapshot as the displayed spend.
+        metrics=(func.count(),func.min(BudgetEntry.created),
+            func.max(case((_survives_reset(now,reset,amount),1),else_=0))) if include_reconciliation else ()
         query=select(bucket,total,*metrics).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(bucket)
         for key,value,*summary in session.execute(query):
             total=Decimal(value or 0);counted+=total
             if key in groups:groups[key]+=total
-            if summary and key in ('sent','uncertain'):
-                call_count,oldest=summary
-                unreconciled_count+=call_count
-                if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
-                    oldest_reservation=oldest
+            if summary:
+                call_count,oldest,survives_reset=summary
+                overlapping=overlapping or bool(survives_reset)
+                if key in ('sent','uncertain'):
+                    unreconciled_count+=call_count
+                    if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
+                        oldest_reservation=oldest
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
-    return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation)
+    return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation,overlapping)
 
 
 def waiting(session,now,payload=None,*,settings=None):
@@ -194,17 +200,15 @@ def mark_uncertain(identifier,reason):
                 row.status='uncertain';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
 
 
+def _survives_reset(now,reset,amount):
+    """Match observed positive spend whose original window outlives this reset."""
+    return and_(BudgetEntry.created<=now,BudgetEntry.reset_at>reset,amount>0)
+
+
 def status(session,now=None):
     now=time.time() if now is None else now;cfg=config(session)
     enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
-    unreconciled_count,oldest=reconciliation
-    # A timezone change can leave a previously admitted window open beyond the
-    # configured reset.  In that case the configured boundary is useful for a
-    # recheck, but it cannot promise that recorded headroom will be available.
-    amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
-        else_=BudgetEntry.reservation_usd)
-    overlapping=(enabled and session.scalar(select(BudgetEntry.id).where(
-        BudgetEntry.reset_at>reset,BudgetEntry.created<=now,BudgetEntry.status!='released',amount>0).limit(1)) is not None)
+    unreconciled_count,oldest,overlapping=reconciliation
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
