@@ -12544,3 +12544,25 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### polkit rules.d load-order contract — worker checkpoint #1411 (roadmap F)
+
+polkitd loads every `*.rules` JavaScript file from `/etc/polkit-1/rules.d` and `/usr/share/polkit-1/rules.d` at start and whenever either directory changes. Those rules decide which privileged actions unprivileged users may perform without authenticating, and `polkit.spawn()` runs commands as the polkitd user, so a planted rule is persistent privilege configuration. The startup inventory did not model these directories.
+
+- **Change:** the pure `app/polkit_rules.py` takes captured directory metadata (state, mode, owner, entries and followed symlink targets), the polkit version and the polkitd identity. It returns the files polkitd evaluates in load order, the reason every other entry is not loaded, and owner/writability observations. It performs no I/O and never reads or parses a rule.
+- **Fidelity:** semantics come from polkit 0.120–125, in both the mozjs and duktape backends. Both directories are read, with no shadowing, so a same-named file loads twice. Only the `.rules` suffix is checked; hidden and backup names still load. Files are sorted by basename with `strcmp` and then by full path, so `/etc` comes first. polkitd reads as `User=polkitd` without `CAP_DAC_OVERRIDE`, so files or directories that the polkitd account cannot read are skipped. A compile or evaluation error skips only that file.
+- **Fail closed:** blocking gaps cover these cases, and `origin` is `not_assessed`:
+  - an unobserved or unreadable directory, an incomplete listing, or an unobserved polkit version or polkitd identity;
+  - a version outside 0.120–125, or before 0.106, which uses `.pkla` files;
+  - POSIX ACLs;
+  - FIFOs, sockets and devices named `*.rules`;
+  - malformed, duplicate or over-limit input.
+
+  A symlinked rule loads only if polkitd can search every directory along its target path, so it is reported as `conditional`.
+- **Validation:** `tests/test_polkit_rules.py` has 13 tests. There is no live differential against a running polkitd yet.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:**
+  - a live differential;
+  - agent collection;
+  - a catalog entry, package provenance, persistence, UI and AI classification of rule contents;
+  - `.pkla` local-authority files for polkit 0.105 (Ubuntu 22.04).
