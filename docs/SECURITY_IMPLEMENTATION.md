@@ -3579,6 +3579,17 @@ Milestone 4 acceptance for **unknown pricing/usage**.
   them, and quoting an unpriceable request at zero fails 12.
 - **Unchanged:** no runtime change; no defect was found. Other milestone 4 items
   and measured throughput remain open.
+
+#### Conditional settlement of capped provider receipts — Roadmap A checkpoint #1473
+
+The provider receipt path settles an exact sent or uncertain reservation with
+one indexed write under the shared budget lock. The pricing decision is prepared
+before acquiring that lock. Unavailable and invalid estimates, including
+non-finite amounts, retain the full conservative charge. A later valid estimate
+can settle an uncertain reservation. Reconciliation leaves finalized rows intact.
+The same tests drive the normal provider path on SQLite and MySQL. Fleet
+throughput and the remaining shared spend-control milestones stay open.
+
 ### Daily cap reset across DST days and midnight — worker checkpoint #984
 
 Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one UTC day and one timezone change. `tests/test_ai_budget_reset_acceptance.py` adds acceptance evidence only; no runtime behavior changes.
