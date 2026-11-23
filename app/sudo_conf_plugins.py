@@ -354,13 +354,25 @@ def load_order(parsed: Mapping[str, Any], gaps: list) -> tuple[list[dict[str, An
     return out, None
 
 
+def _stat_observed(stat: Mapping[str, Any] | None) -> bool:
+    """True only when the file type, owner and mode were all captured as real values.
+
+    A missing, ``None``, non-int or ``bool`` field is unobserved, never a default.
+    """
+    if not isinstance(stat, Mapping):
+        return False
+    kind, uid, mode = stat.get('type'), stat.get('uid'), stat.get('mode')
+    return (isinstance(kind, str) and bool(kind)
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in (uid, mode)))
+
+
 def _security(stat: Mapping[str, Any]) -> str | None:
     """``sudo_secure_fd(fd, S_IFREG, ROOT_UID, -1)``: why sudo ignores the file, or None."""
-    if stat.get('type') != 'file':
+    if stat['type'] != 'file':
         return 'not_regular_file'
-    if stat.get('uid') != 0:
+    if stat['uid'] != 0:
         return 'not_owned_by_root'
-    mode = int(stat.get('mode', 0))
+    mode = stat['mode']
     if mode & 0o002:
         return 'world_writable'
     if mode & 0o020:
@@ -373,7 +385,8 @@ def evaluate(*, exists: bool | None, text: str | bytes | None = None,
     """Which plugins and paths ``sudo`` uses, from the captured ``/etc/sudo.conf``.
 
     ``exists`` is None when the file was not checked, ``stat`` holds the opened
-    file's ``type`` ('file', 'directory', ...), ``uid`` and ``mode``.
+    file's ``type`` ('file', 'directory', ...), ``uid`` and ``mode``. A ``stat``
+    missing any of these, or holding a non-int ``uid``/``mode``, is not observed.
     """
     gaps: list[dict[str, Any]] = []
     result: dict[str, Any] = {
@@ -408,7 +421,7 @@ def evaluate(*, exists: bool | None, text: str | bytes | None = None,
     if text is None:
         _gap(gaps, 'file_not_observed', CONF_PATH)
         return finish('not_observed')
-    if stat is None:
+    if not _stat_observed(stat):
         _gap(gaps, 'file_security_not_observed', CONF_PATH,
              'sudo ignores the file unless it is a root-owned regular file that is not group- or world-writable.')
         return finish('not_observed')

@@ -1,4 +1,6 @@
 """Pure sudo.conf plugin and path contract (#1425)."""
+import pytest
+
 from app import sudo_conf_plugins as sc
 
 SECURE = {'type': 'file', 'uid': 0, 'mode': 0o644}
@@ -42,6 +44,28 @@ def test_insecure_file_is_ignored_like_sudo_secure_fd():
         assert r['status'] == 'ignored_insecure' and r['ignored_reason'] == reason and r['complete']
         assert r['paths']['plugin_dir']['value'] == PDIR and r['plugins'][0]['resolved_path'] == PDIR + 'sudoers.so'
 
+
+
+@pytest.mark.parametrize('stat', [
+    {},
+    {'uid': 0, 'mode': 0o644},
+    {'type': 'file', 'mode': 0o644},
+    {'type': 'file', 'uid': 0},
+    {'type': None, 'uid': 0, 'mode': 0o644},
+    {'type': 'file', 'uid': None, 'mode': 0o644},
+    {'type': 'file', 'uid': 0, 'mode': None},
+    {'type': 'file', 'uid': 0, 'mode': '0664'},
+    {'type': 'file', 'uid': '0', 'mode': 0o644},
+    {'type': 'file', 'uid': False, 'mode': 0o644},
+    {'type': 'file', 'uid': 0, 'mode': True},
+    {'type': '', 'uid': 0, 'mode': 0o644},
+])
+def test_partly_observed_stat_fails_closed_instead_of_hiding_plugins(stat):
+    """Review of 8f322530: a dropped or malformed stat field must not read as insecure/secure."""
+    r = run('Plugin sudoers_policy /tmp/evil.so\n', stat)
+    assert r['status'] == 'not_observed' and not r['complete'] and r['plugins'] == []
+    assert r['ignored_reason'] is None
+    assert [g['code'] for g in r['gaps'] if g['blocking']] == ['file_security_not_observed']
 
 def test_plugin_dir_override_moves_the_default_sudoers_object():
     # Verified on sudo 1.9.15p5: the constructor of /tmp/evil/sudoers.so ran as euid 0.

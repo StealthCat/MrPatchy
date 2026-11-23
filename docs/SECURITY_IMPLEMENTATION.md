@@ -12564,13 +12564,13 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
   - the default `sudoers_policy`/`sudoers_audit`/`sudoers_io` fallback, and the move of `sudoers_policy` options to `sudoers_audit`;
   - ignored duplicates, `_clone` instances, and the fatal errors for a second policy plugin, an unset `plugin_dir` and an overlong path.
 - **Fail closed:** a plugin type is reported only for the symbols sudo's own objects export at their packaged path. Any other object, including `sudoers.so` under a changed `plugin_dir`, gets a blocking `plugin_type_unresolved` gap, because a policy-type object changes which defaults load. These also make the result incomplete:
-  - an unchecked file, or an unobserved type, owner or mode;
+  - an unchecked file, or an unobserved type, owner or mode. A `stat` with a missing, `None`, `bool` or non-integer `uid`/`mode`, or a missing type, counts as unobserved rather than as insecure or secure;
   - NUL bytes, over-limit input or invalid UTF-8;
   - more than 128 `Plugin` lines.
 
   `origin` is `not_assessed`; no result is a safety verdict.
 - **Validation:**
-  - `tests/test_sudo_conf_plugins.py` (16 tests).
+  - `tests/test_sudo_conf_plugins.py` (28 tests, including 12 partly observed `stat` cases that failed before the review fix).
   - A ctypes differential harness ran 8,000 random files through the installed sudo 1.9.15p5 `sudo_conf_read_v1`, comparing plugins, options, line numbers, paths and debug entries. There were 0 mismatches.
   - Against the real setuid `sudo` in a disposable container, marker constructors in test objects ran as euid 0 in four cases: a `plugin_dir` override with no `Plugin` lines, a relative path concatenated without a slash, a duplicate policy symbol from another object, and a duplicate I/O symbol. In each case sudo then failed on the missing symbol. A group-writable file was ignored, and an unset `plugin_dir` was fatal.
   - 17 source mutations were all caught.
