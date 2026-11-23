@@ -2288,6 +2288,13 @@ regressions verify the reduced SQL and continued refusal after lifecycle or
 evidence changes. This limits recurring lease-check I/O. Production throughput
 and the wider parallel-investigation acceptance remain open.
 
+Roadmap A checkpoint #1385 resolves the ordinary oldest eligible triage subject
+by ID. With a 48 KB evidence fixture, the real admission path now reads the full
+behavior once under the host queue gate instead of reading it during election
+and again after the gate. Pending/error ordering, retry eligibility and full
+evidence at claim time remain covered. Free known-good probes still read the
+evidence they need to match. Production throughput acceptance remains open.
+
 Worker checkpoint #599 adds a composite approval/verdict/first-seen/identity
 index for the real process-triage admission query. Startup adds the index
 idempotently to existing databases while retaining behavior history and existing
