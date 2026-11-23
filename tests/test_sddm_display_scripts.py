@@ -267,3 +267,15 @@ def test_split_command_matches_real_qt():
     qt = json.loads(out.stdout)
     mismatches = [(c, q, sd.split_command(c)) for c, q in zip(cases, qt) if q != sd.split_command(c)]
     assert not mismatches, mismatches[:5]
+
+
+def test_unobserved_main_config_is_recorded_and_blocking():
+    sources = {SYS: {'state': 'absent'}, ETC: {'state': 'absent'}}
+    result = sd.assess(sources, family='debian', sddm_installed=True, exec_start=['/usr/bin/sddm'])
+    assert result['loaded'][-1] == {'path': MAIN, 'kind': 'file', 'state': 'not_observed'}
+    assert 'config_not_observed' in _codes(result) and not result['complete']
+
+
+def test_bracketed_line_with_equals_is_an_assignment_not_a_section():
+    result = _run({f'{ETC}/a.conf': '[X11]\n[a=b]\nDisplayCommand=/kept/in/x11\n'})
+    assert _cmd(result, 'X11.DisplayCommand')['argv'] == ('/kept/in/x11',)

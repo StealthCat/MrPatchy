@@ -12582,7 +12582,7 @@ Each command comes with its argv, the file and line that set it, and the `PATH` 
 - an empty command, a program without `/` (resolved through the daemon `PATH`) or a relative program;
 - the `x11-user` and `wayland` modes, whose display scripts run through `sddm-helper` and are not modeled.
 
-**Validation.** `tests/test_sddm_display_scripts.py` has 53 tests. They cover:
+**Validation.** `tests/test_sddm_display_scripts.py` has 55 tests. Fifteen of sixteen source mutations are caught; the survivor (a `#` at column 0) is equivalent, because no tracked key can start with `#`. The tests cover:
 
 - load order and overrides, any-name, hidden, special and broken-link entries;
 - the assignment-before-header rule, case sensitivity, `#` cutting, the `XDisplay` alias, and the per-file implicit section;

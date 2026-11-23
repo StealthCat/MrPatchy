@@ -352,13 +352,13 @@ def assess(sources: Any = None, *, exec_start: Any = None, family: Any = None,
     for group in groups:
         for path in group:
             obs = sources.get(path)
+            if path == CONFIG_FILE:
+                state = obs.get('state') if isinstance(obs, dict) and obs.get('state') in FILE_STATES else None
+                result['loaded'].append({'path': path, 'kind': 'file', 'state': state or 'not_observed'})
             if obs is None:
                 _gap(gaps, 'config_not_observed', path)
                 continue
             text = _file_text(obs, path, gaps)
-            if path == CONFIG_FILE:
-                result['loaded'].append({'path': path, 'kind': 'file',
-                                         'state': obs.get('state') if isinstance(obs, dict) else 'not_observed'})
             if text is not None:
                 parsed[path] = parse_file(text)
 
