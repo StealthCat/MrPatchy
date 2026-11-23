@@ -280,8 +280,15 @@ function renderAISettings(data,revision,container){
    if(!result.enabled){purposeResults.innerHTML='<p class="help" role="status">No daily spend cap applies in the current control mode, so no spend is being counted against a cap.</p>';return;}
    const windowText=`Budget window resets ${date(result.next_reset)} · ${esc(result.timezone)}`;
    if(!result.groups.length){purposeResults.innerHTML=`<p class="help" role="status">No billable AI calls are counted in the current budget window. ${windowText}.</p>`+caveats;return;}
-   const rows=result.groups.map(row=>`<tr><th scope="row">${esc(SPEND_PURPOSE_LABELS[row.purpose]||'Other recorded activity')}</th><td>${esc(row.call_count)}</td><td>$${esc(row.settled_usd)}</td><td>$${esc(row.reserved_usd)}</td><td>$${esc(row.uncertain_usd)}</td><td><strong>$${esc(row.counted_usd)}</strong></td></tr>`).join('');
-   purposeResults.innerHTML=`<p class="help">${windowText}</p><div class="table-wrap"><table><caption>AI spend counted against the daily cap, by activity</caption><thead><tr><th scope="col">Activity</th><th scope="col">Calls</th><th scope="col">Settled estimate</th><th scope="col">Reserved</th><th scope="col">Sent or uncertain</th><th scope="col">Counted</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><th scope="row">All activity</th><td>${esc(result.call_count)}</td><td colspan="3"></td><td><strong>$${esc(result.counted_usd)}</strong></td></tr></tfoot></table></div>`+caveats;
+   const hasSplit=result.groups.every(row=>typeof row.sent_usd==='string'&&typeof row.uncertain_outcome_usd==='string');
+   const unreconciledCells=row=>hasSplit
+    ?`<td>$${esc(row.sent_usd)}</td><td>$${esc(row.uncertain_outcome_usd)}</td>`
+    :`<td>$${esc(row.uncertain_usd)}</td>`;
+   const unreconciledHead=hasSplit
+    ?'<th scope="col">Sent without reconciled usage</th><th scope="col">Recorded uncertain outcome</th>'
+    :'<th scope="col">Sent or uncertain</th>';
+   const rows=result.groups.map(row=>`<tr><th scope="row">${esc(SPEND_PURPOSE_LABELS[row.purpose]||'Other recorded activity')}</th><td>${esc(row.call_count)}</td><td>$${esc(row.settled_usd)}</td><td>$${esc(row.reserved_usd)}</td>${unreconciledCells(row)}<td><strong>$${esc(row.counted_usd)}</strong></td></tr>`).join('');
+   purposeResults.innerHTML=`<p class="help">${windowText}</p><div class="table-wrap"><table><caption>AI spend counted against the daily cap, by activity</caption><thead><tr><th scope="col">Activity</th><th scope="col">Calls</th><th scope="col">Settled estimate</th><th scope="col">Reserved</th>${unreconciledHead}<th scope="col">Counted</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><th scope="row">All activity</th><td>${esc(result.call_count)}</td><td colspan="${hasSplit?4:3}"></td><td><strong>$${esc(result.counted_usd)}</strong></td></tr></tfoot></table></div>`+caveats;
   }catch(error){if(alive()&&ticket===purposeGeneration){purposeResults.innerHTML=PatchyUI.error('Current-window spend by activity could not be loaded',esc(error.message));}}
   finally{if(ticket===purposeGeneration&&purposeRefresh.isConnected)purposeRefresh.disabled=false;}
  };
