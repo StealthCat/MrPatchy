@@ -12544,3 +12544,22 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### TCP wrappers command contract — worker checkpoint #1390 (roadmap F)
+
+Every libwrap-linked service (`tcpd` started from inetd or xinetd, or a daemon linked against `libwrap0`) reads `/etc/hosts.allow` and `/etc/hosts.deny` on each connection. With the language extensions that Debian and Ubuntu build in (`-DPROCESS_OPTIONS -DACLEXEC`), an entry such as `ALL : ALL : spawn (/tmp/x %h) &` runs `/bin/sh -c` as the daemon's own user on every matching connection. The startup inventory did not model these files.
+
+- **Change:** the pure `app/tcp_wrappers.py` takes the captured state and text of both files. It returns every `spawn`, `twist` and `aclexec` command with its file and line, its daemon and client lists, the `%` expansions it uses, its effect, the options before it that can refuse at runtime, and whether an earlier entry makes it unreachable. It performs no I/O and never runs a command.
+- **Fidelity:** the contract follows `tcp-wrappers_7.6.q` with the 35 patches of Debian/Ubuntu `7.6.q-33`:
+  - `table_match()` stops at the first match, and `hosts.deny` is consulted only after `hosts.allow` has no match.
+  - `xgets()` handles backslash continuation and the 2048-byte logical line. A logical line that does not fit, or that has no final newline, stops the rest of the file, and that includes a too-long comment.
+  - `#` starts a comment only in column 0.
+  - `split_at()` is bracket-aware.
+  - `process_options()` runs options in order: `\:` unescaping, ASCII case-insensitive keywords, and the value and must-be-last errors that abort later options after earlier commands have already run.
+  - `percent_x()` handles the expansion letters, including the patched `%r`/`%R`.
+- **Identity finding:** the Debian `initgroups` patch, taken from Red Hat, inverts the `dry_run` test. `user` and `group` therefore change identity only in `tcpdchk`/`tcpdmatch` dry runs, never in a real daemon. Every command is reported as running as the daemon process's user, and any preceding `user`/`group` options are listed as `identity_options_ignored`.
+- **Shadowing is never overclaimed:** a later entry counts as shadowed only by an earlier entry in the same file whose daemon and client lists each contain `ALL` and no `EXCEPT`. An unconditional `hosts.allow` entry shadows `hosts.deny` unless it names `aclexec`, because a non-zero `aclexec` exit unmatches the entry. The match functions never `tcpd_jump()`, so this rule cannot be cut short.
+- **Fail closed:** unobserved or non-regular files and NUL bytes are gaps, and over-limit or malformed observations raise `Invalid`. The result lists what it does not model: which daemons link libwrap, per-request matching, netgroup/DNS/ident lookups, runtime account and option-value lookups, `twist` in a resident process, and the contents of the commands.
+- **Validation:** `tests/test_tcp_wrappers.py` (35 tests). The model was checked line by line against the patched source. No differential against a compiled libwrap has been run.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection, a catalog entry, package provenance (`libwrap0`/`tcpd`), persistence, UI and AI classification.
