@@ -74,9 +74,11 @@ MAX_GAPS = 64
 DRIVER_STATUSES = ('runs', 'no_hooks', 'unresolved')
 BLOCKING = frozenset({
     'stat_not_observed', 'mode_not_observed', 'type_not_observed', 'listing_not_observed', 'listing_unreadable',
-    'entries_over_limit', 'malformed_entry', 'duplicate_entry', 'hook_dir_relative', 'initialize_failed',
-    'gaps_truncated',
+    'entries_over_limit', 'malformed_entry', 'duplicate_entry', 'hook_dir_relative', 'hook_dir_malformed',
+    'listing_truncated', 'listing_unsupported', 'initialize_failed', 'gaps_truncated',
 })
+LISTING_KEYS = frozenset({'state', 'names', 'truncated'})
+LISTING_STATES = (None, 'listed', 'unreadable')
 NOT_OBSERVED = (
     'Whether libvirt is installed and which daemons run: the monolithic libvirtd or modular daemons such as '
     'virtqemud and virtnetworkd. Each daemon process runs the daemon hook for its own start, reload and shutdown.',
@@ -101,6 +103,44 @@ def _gap(gaps: list[dict[str, Any]], code: str, path: str | None = None, detail:
 
 def _key(path: str) -> bytes:
     return path.encode('utf-8', 'surrogateescape')
+
+
+def _encodable(value: str) -> bool:
+    """Whether ``value`` maps back to filename bytes.
+
+    Bytes that are not UTF-8 arrive as surrogateescape code points (U+DC80 to U+DCFF) and are valid. Any other
+    lone surrogate cannot come from a Linux filename, so the capture is malformed.
+    """
+    try:
+        _key(value)
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+def _listing_names(listing: Any) -> tuple[Any, str | None, str]:
+    """Return ``(names, gap_code, detail)`` for a captured directory listing.
+
+    A listing is a list of names, or a mapping with ``names`` and optional ``state`` (``listed`` or
+    ``unreadable``) and ``truncated`` keys. A truncated, unreadable or unsupported listing yields no names and
+    a gap code, because a partial listing can omit executable hooks.
+    """
+    if isinstance(listing, Mapping):
+        if not set(listing) <= LISTING_KEYS or listing.get('state') not in LISTING_STATES:
+            return None, 'listing_unsupported', 'The listing has an unsupported shape or state.'
+        if listing.get('state') == 'unreadable':
+            return None, 'listing_unreadable', 'The directory could not be listed; opendir would fail.'
+        truncated = listing.get('truncated', False)
+        if truncated is not False and truncated is not None:
+            return None, 'listing_truncated', 'The listing is marked truncated, so entries may be missing.'
+        names = listing.get('names')
+    else:
+        names = listing
+    if not isinstance(names, (list, tuple)):
+        return None, 'listing_not_observed', 'The listing has no list of names.'
+    if len(names) > MAX_ENTRIES:
+        return None, 'entries_over_limit', f'More than {MAX_ENTRIES} entries.'
+    return names, None, ''
 
 
 def _stat(stats: Mapping[str, Any], path: str, gaps: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -141,15 +181,9 @@ def _dropins(driver: str, dir_path: str, stats: Mapping[str, Any], listings: Map
     if listing is None:
         _gap(gaps, 'listing_not_observed', dir_path, f'{dir_path[:160]} is a directory, but it was not listed.')
         return {'resolved': False, 'scripts': [], 'skipped': []}
-    if isinstance(listing, Mapping) and listing.get('state') == 'unreadable':
-        _gap(gaps, 'listing_unreadable', dir_path, f'{dir_path[:160]} could not be listed; opendir would fail.')
-        return {'resolved': False, 'scripts': [], 'skipped': []}
-    names = listing.get('names') if isinstance(listing, Mapping) else listing
-    if not isinstance(names, (list, tuple)):
-        _gap(gaps, 'listing_not_observed', dir_path, 'The listing has no list of names.')
-        return {'resolved': False, 'scripts': [], 'skipped': []}
-    if len(names) > MAX_ENTRIES:
-        _gap(gaps, 'entries_over_limit', dir_path, f'More than {MAX_ENTRIES} entries.')
+    names, code, detail = _listing_names(listing)
+    if code is not None:
+        _gap(gaps, code, dir_path, f'{dir_path[:160]}: {detail}')
         return {'resolved': False, 'scripts': [], 'skipped': []}
     resolved = True
     seen: set[str] = set()
@@ -157,7 +191,7 @@ def _dropins(driver: str, dir_path: str, stats: Mapping[str, Any], listings: Map
     skipped: list[dict[str, Any]] = []
     for name in names:
         if (not isinstance(name, str) or not name or '/' in name or '\x00' in name
-                or len(_key(name)) > MAX_NAME):
+                or not _encodable(name) or len(_key(name)) > MAX_NAME):
             _gap(gaps, 'malformed_entry', dir_path, 'A directory entry has no usable name.')
             resolved = False
             continue
@@ -268,6 +302,10 @@ def evaluate(stats: Any, listings: Any = None, *, hook_dir: str = HOOK_DIR,
     if not isinstance(hook_dir, str) or not hook_dir.startswith('/'):
         _gap(gaps, 'hook_dir_relative', None, 'The hooks directory must be an absolute path.')
         return _finish(result)
+    if '\x00' in hook_dir or not _encodable(hook_dir):
+        result['hook_dir'] = None
+        _gap(gaps, 'hook_dir_malformed', None, 'The hooks directory is not a usable filename.')
+        return _finish(result)
     hook_dir = posixpath.normpath(hook_dir)
     result['hook_dir'] = hook_dir
     stats = stats if isinstance(stats, Mapping) else {}
@@ -290,17 +328,23 @@ def evaluate(stats: Any, listings: Any = None, *, hook_dir: str = HOOK_DIR,
         result['drivers'].append(record)
         result['scripts'].extend(record['scripts'])
     if hook_dir_listing is not None:
-        names = hook_dir_listing.get('names') if isinstance(hook_dir_listing, Mapping) else hook_dir_listing
-        if isinstance(names, (list, tuple)) and len(names) <= MAX_ENTRIES:
+        names, code, detail = _listing_names(hook_dir_listing)
+        if code is None:
             known = set(DRIVERS) | {f'{d}.d' for d in DRIVERS}
-            for name in sorted({n for n in names if isinstance(n, str)}, key=_key):
+            usable = {n for n in names if isinstance(n, str) and n and '/' not in n and '\x00' not in n
+                      and _encodable(n)}
+            if len(usable) != len({n for n in names if isinstance(n, str)}) or any(
+                    not isinstance(n, str) for n in names):
+                _gap(gaps, 'hook_dir_listing_unusable', hook_dir, 'Some hooks directory entries have no usable '
+                     'name, so they are not reported. Driver hooks are resolved from their own stat results.')
+            for name in sorted(usable, key=_key):
                 if name in ('.', '..') or name in known:
                     continue
                 result['not_run'].append({'path': posixpath.join(hook_dir, name), 'name': name,
                                           'reason': 'not_a_driver_hook'})
         else:
             _gap(gaps, 'hook_dir_listing_unusable', hook_dir, 'The hooks directory listing could not be used to '
-                 'report names that never run.')
+                 f'report names that never run: {detail}')
     return _finish(result)
 
 

@@ -194,3 +194,59 @@ def test_result_never_authorizes_or_classifies():
     assert result['origin'] == 'not_assessed'
     assert all(s['origin'] == 'not_assessed' and s['runs_as'] == 'daemon_user' for s in result['scripts'])
     assert 'authorized' not in str(result).lower()
+
+
+def _qemu_dir_stats():
+    stats = base()
+    stats[f'{H}/qemu.d'] = DIR
+    return stats
+
+
+def test_unencodable_captured_names_are_gaps_not_errors():
+    bad = chr(0xd800) + '.fixture'
+    stats = _qemu_dir_stats()
+    result = lh.evaluate(stats, {f'{H}/qemu.d': [bad]}, hook_dir_listing=[bad, 'qemu.d'])
+    assert result['complete'] is False
+    assert {'malformed_entry', 'hook_dir_listing_unusable'} <= codes(result)
+    assert driver(result, 'qemu')['status'] == 'unresolved'
+    assert result['not_run'] == []
+
+    # Optional hooks-directory listing alone: a named, non-blocking gap.
+    result = lh.evaluate(base(), {}, hook_dir_listing=[bad, 'README'])
+    assert result['complete'] is True
+    assert 'hook_dir_listing_unusable' in codes(result)
+    assert [n['name'] for n in result['not_run']] == ['README']
+
+    result = lh.evaluate(base(), {}, hook_dir=f'/etc/{bad}')
+    assert result['complete'] is False
+    assert 'hook_dir_malformed' in codes(result)
+
+
+def test_surrogateescape_filename_bytes_remain_valid():
+    name = b'\xff-hook'.decode('utf-8', 'surrogateescape')
+    stats = _qemu_dir_stats()
+    stats[f'{H}/qemu.d/{name}'] = exe()
+    result = lh.evaluate(stats, {f'{H}/qemu.d': [name]})
+    assert result['complete'] is True
+    assert paths(driver(result, 'qemu')) == [f'{H}/qemu.d/{name}']
+
+
+def test_truncated_or_unsupported_listings_are_never_definitive():
+    for listing, code in (
+        ({'state': 'listed', 'truncated': True, 'names': []}, 'listing_truncated'),
+        ({'state': 'listed', 'truncated': 1, 'names': []}, 'listing_truncated'),
+        ({'state': 'partial', 'names': []}, 'listing_unsupported'),
+        ({'names': [], 'more': True}, 'listing_unsupported'),
+    ):
+        result = lh.evaluate(_qemu_dir_stats(), {f'{H}/qemu.d': listing})
+        assert result['complete'] is False, listing
+        assert code in codes(result), listing
+        assert driver(result, 'qemu')['status'] == 'unresolved', listing
+        assert driver(result, 'qemu')['hooks_present'] is None, listing
+    for listing in ({'state': 'listed', 'truncated': False, 'names': []}, {'names': []}, []):
+        result = lh.evaluate(_qemu_dir_stats(), {f'{H}/qemu.d': listing})
+        assert result['complete'] is True, listing
+        assert driver(result, 'qemu')['status'] == 'no_hooks', listing
+    result = lh.evaluate(base(), {}, hook_dir_listing={'names': ['x'], 'truncated': True})
+    assert 'hook_dir_listing_unusable' in codes(result)
+    assert result['not_run'] == []
