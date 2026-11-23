@@ -6,7 +6,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, Numeric, and_, case, func, or_, select
+from sqlalchemy import String, Text, Double, LargeBinary, Numeric, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -187,11 +187,20 @@ def reconcile(identifier,values):
 
 def mark_uncertain(identifier,reason):
     if not identifier:return
+    ledger = BudgetEntry.__table__
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if row and row.status=='sent':
-                row.status='uncertain';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
+            state = ledger.c.status
+            # Only an exact sent state can transition, even on MySQL's default collation.
+            if session.get_bind().dialect.name in ('mysql', 'mariadb'):
+                sent = cast(state, LargeBinary) == b'sent'
+            else:
+                sent = state.collate('BINARY') == 'sent'
+            result = session.execute(ledger.update().where(ledger.c.id == identifier, sent).values(
+                status='uncertain', updated=time.time(), reason=str(reason)[:500],
+            ))
+            if result.rowcount == 1:
+                session.commit()
 
 
 def status(session,now=None):
