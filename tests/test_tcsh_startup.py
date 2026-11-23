@@ -228,3 +228,51 @@ def test_result_is_metadata_only():
     result = run()
     assert result['note'].startswith('File metadata only') and result['unobserved']
     assert set(result) >= {'contract_version', 'reference', 'sequence', 'runs', 'gaps', 'complete'}
+
+
+def test_missing_arguments_is_not_observed():
+    files = tree()
+    result = ts.evaluate({'family': 'debian', 'build_options': BUILD, 'invocation': {'argv0': 'tcsh'},
+                          'environment': {'HOME': HOME}, 'files': files})
+    assert 'invocation_not_observed' in codes(result)
+    assert result['complete'] is False and result['runs'] == []
+    empty = ts.evaluate({'family': 'debian', 'build_options': BUILD,
+                         'invocation': {'argv0': '-tcsh', 'arguments': []},
+                         'environment': {'HOME': HOME}, 'files': files})
+    assert empty['complete'] is True and empty['session'] == 'login'
+
+
+def test_path_limit_counts_encoded_bytes():
+    # 1,100 four-byte characters: 4,400 bytes but only 1,100 code points.
+    home = '/home/' + '/'.join(['\U0001f600' * 50] * 22)
+    assert len(home) < ts.PATH_MAX < len(home.encode())
+    result = run(home=home)
+    assert 'input_malformed' in codes(result) and result['complete'] is False and result['runs'] == []
+
+
+def test_user_path_over_path_max_in_encoded_bytes_is_unresolved():
+    # HOME itself fits; HOME + '/.tcshrc' crosses PATH_MAX only when counted in bytes.
+    home = '/h/' + '/'.join(['\u00e9' * 100] * 20)
+    home += '/' + 'a' * (4090 - len(home.encode()) - 1)  # 4,090 bytes, 2,090 code points
+    assert len((home + '/.tcshrc').encode()) >= ts.PATH_MAX > len(home.encode())
+    result = run(home=home)
+    assert result['complete'] is False and decision(result, home + '/.tcshrc') == 'unresolved'
+
+
+def test_component_over_name_max_is_unresolved():
+    home = '/home/' + '\u00e9' * 128  # 256 bytes in one component
+    result = run(home=home)
+    assert result['complete'] is False and 'input_malformed' in codes(result)
+
+
+@pytest.mark.parametrize('home', ['/home/\ud800x', '/home/\udfff'])
+def test_unencodable_home_is_malformed(home):
+    result = run(home=home)
+    assert 'input_malformed' in codes(result) and result['complete'] is False and result['runs'] == []
+
+
+def test_surrogateescaped_home_bytes_stay_usable():
+    home = b'/home/caf\xe9'.decode('utf-8', 'surrogateescape')
+    result = run(home=home)
+    assert result['complete'] is True
+    assert runs(result) == ['/etc/csh.cshrc', f'{home}/.tcshrc']

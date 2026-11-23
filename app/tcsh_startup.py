@@ -56,7 +56,8 @@ REFERENCE = {'shell': 'tcsh 6.24.10 (Ubuntu 24.04)'}
 FAMILIES = ('debian',)
 SYSTEM = {'cshrc': '/etc/csh.cshrc', 'login': '/etc/csh.login', 'logout': '/etc/csh.logout'}
 FILE_TYPES = ('absent', 'file', 'directory', 'other')
-PATH_MAX = 4096
+PATH_MAX = 4096  # bytes, including the terminating NUL
+NAME_MAX = 255  # bytes per path component
 MAX_ARGUMENTS = 64
 MAX_BUILD_OPTIONS = 64
 MAX_GAPS = 32
@@ -113,8 +114,30 @@ def _gap(gaps: list[dict[str, Any]], code: str, path: str | None = None, detail:
     gaps.append(gap)
 
 
+def _encoded(value: str) -> bytes | None:
+    """Return the Linux filename bytes for ``value``, or ``None`` when it has none.
+
+    Strings are decoded filename bytes (UTF-8 with surrogateescape), so an escaped
+    undecodable byte round-trips; any other lone surrogate has no byte form.
+    """
+    try:
+        return value.encode('utf-8', 'surrogateescape')
+    except UnicodeEncodeError:
+        return None
+
+
 def _text(value: Any) -> bool:
-    return isinstance(value, str) and len(value) < PATH_MAX and not _CONTROL.search(value)
+    if not isinstance(value, str) or _CONTROL.search(value):
+        return False
+    encoded = _encoded(value)
+    return encoded is not None and len(encoded) < PATH_MAX
+
+
+def _path_fits(path: str) -> bool:
+    """Whether open(2) can take ``path`` without ENAMETOOLONG (byte limits, not code points)."""
+    encoded = _encoded(path)
+    return encoded is not None and len(encoded) < PATH_MAX \
+        and all(len(part) <= NAME_MAX for part in encoded.split(b'/'))
 
 
 def parse_arguments(arguments: list[str]) -> dict[str, Any]:
@@ -156,7 +179,12 @@ def _invocation(item: Any, gaps: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         _gap(gaps, 'invocation_not_observed', detail='No invocation was supplied.')
         return None
-    argv0, arguments = item.get('argv0'), item.get('arguments', [])
+    argv0, arguments = item.get('argv0'), item.get('arguments')
+    if 'arguments' not in item:
+        _gap(gaps, 'invocation_not_observed', detail='The arguments after argv0 were not supplied; options such as '
+                                                     '-f, -l or -d change which files run. Supply [] when there are '
+                                                     'none.')
+        return None
     if not (_text(argv0) and argv0) or not isinstance(arguments, list) or len(arguments) > MAX_ARGUMENTS \
             or not all(_text(a) for a in arguments):
         _gap(gaps, 'input_malformed', detail='The invocation needs an argv0 and an arguments list.')
@@ -283,9 +311,9 @@ def _sequence(result: dict[str, Any], invocation: dict[str, Any], observed: bool
             entry['decision'] = 'unresolved'
         elif home is None and (phase == 'startup' or scope == 'user'):
             entry['decision'] = 'skipped_no_home'
-        elif scope == 'user' and len(path) >= PATH_MAX:
+        elif scope == 'user' and not _path_fits(path):
             entry['decision'] = 'unresolved'
-            _gap(gaps, 'input_malformed', path, 'The path reaches PATH_MAX.')
+            _gap(gaps, 'input_malformed', path, 'The encoded path exceeds PATH_MAX or NAME_MAX.')
         elif path.endswith('/.cshrc') and fallback not in ('absent', 'skipped_unreadable'):
             entry['decision'] = 'unresolved' if fallback in ('unresolved', 'special_file') else 'fallback_not_used'
         else:
