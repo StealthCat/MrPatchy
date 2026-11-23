@@ -12544,3 +12544,28 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### libvirt hook-script contract — worker checkpoint #1455 (roadmap F)
+
+libvirt runs `/etc/libvirt/hooks/<driver>` and every executable entry of `/etc/libvirt/hooks/<driver>.d/` synchronously, as the daemon's own user (root for system-mode `libvirtd`, `virtqemud`, `virtnetworkd` and the other modular daemons). It does so on daemon start, reload and shutdown, and on every guest or virtual-network lifecycle event, passing the object XML on stdin. The startup inventory did not model this persistence location.
+
+- **Change:** the pure `app/libvirt_hooks.py` takes captured followed-`stat` results and `<driver>.d` listings and returns, for each of the six drivers (`daemon`, `qemu`, `lxc`, `network`, `libxl`, `bhyve`):
+  - whether hooks are present and the driver's operation names;
+  - the scripts that run, in order, each with its path, kind (main or drop-in), symlink and hidden flags, argv shape, stdin and identity;
+  - the present files that never run, and why.
+  - Names in the hooks directory that are not driver hooks are reported as never running. It performs no I/O and never runs a script.
+- **Fidelity:** traced from `virhook.c` and `virfile.c` in libvirt 10.0.0.
+  - Executable means `stat` (following symlinks) shows a regular file with any `0111` bit.
+  - The main script runs first. The `.d` entries follow in `strcmp` full-path order, including hidden names and with no recursion, and every script runs even after a failure.
+  - A non-directory `<driver>.d` makes each call fail after the main script. An executable regular `<driver>.d` with no executable main script makes `virHookCheck` fail, and initialization stops before the later drivers; those drivers are `unresolved`.
+  - Hook presence is cached until daemon start, reload or shutdown. This is reported as an execution property.
+- **Fail closed:** an unobserved `stat` result, mode or listing, an unreadable `.d`, malformed, duplicate or over-limit entries, a relative hooks directory, and failed initialization mark the result incomplete. Affected drivers are `unresolved` and never reported as running nothing. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_libvirt_hooks.py` (11 tests).
+  - A differential harness compared the contract against a C transcription of `virHookCheck`, `virHookInitialize` and `virHookCall` discovery. The harness used real `stat`, `access`, `opendir`/`readdir` and `strcmp`. It ran on 6,000 random trees with regular files of varied modes, directories, FIFOs and live or dangling symlinks. There were 0 disagreements, and the trees covered 1,235 initialization failures and 882 post-main call errors.
+  - Mutations that required the owner execute bit, case-folded the sort order or dropped hidden entries were each caught.
+  - No live libvirt daemon was run: the sandbox refused the system package install.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:**
+  - agent collection of the stat results and listings;
+  - a catalog entry, package provenance, persistence, UI and AI classification;
+  - a live differential against a running libvirt daemon.
