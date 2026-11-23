@@ -11990,7 +11990,7 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 
 ### Bounded fleet automatic plan policy reads — Roadmap A checkpoint #1429
 
-Fleet automatic plan status reads policy rows in pages of at most 128, ordered
+Fleet automatic plan status reads policy rows in pages of at most 512, ordered
 by server name and ID. It stops once it sees the first opted-in server beyond
 the displayed limit. Sparse opt-ins can require more pages. Previous opt-in
 truthiness, server order, truncated counts and the admin-only API still apply.

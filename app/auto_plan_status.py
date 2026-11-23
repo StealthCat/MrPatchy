@@ -32,7 +32,7 @@ from .db import Host, Job, Setting, config
 
 AWAITING_LIMIT = 500
 FLEET_LIMIT = 100
-FLEET_POLICY_PAGE_SIZE = 128
+FLEET_POLICY_PAGE_SIZE = 512
 POLICY_PREFIX = 'security-policy:'
 PLAN_ACTIONS = ('security-plan', 'startup-plan')
 STATES = ('off', 'ai_disabled', 'not_configured', 'paused', 'held', 'inactive', 'ready')
