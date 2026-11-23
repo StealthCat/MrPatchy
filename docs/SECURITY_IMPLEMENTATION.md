@@ -12544,3 +12544,12 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### snmptrapd traphandle contract — worker checkpoint #1431 (roadmap F)
+
+A `traphandle OID|default COMMAND` line in `snmptrapd.conf` makes `snmptrapd` run `COMMAND` through `/bin/sh -c` for every matching SNMP trap. The packaged Debian/Ubuntu service runs as root, and the remote sender decides when a trap arrives. The startup inventory did not model this file.
+
+- **Change:** the pure `app/snmptrapd_handlers.py` takes captured configuration files in read order and the observed service user. It returns each handler with its source line, OID or `default`, subtree flags, `-F` format, the raw command and `runs_as`, plus the authorization state: `disabled`, `execute_granted` or `none`. Handlers run only with `execute` access or `disableAuthorization yes`. It performs no I/O, never runs snmptrapd, and sets `origin: not_assessed`.
+- **Fail-closed:** unchecked files, invalid UTF-8, NUL bytes, over-limit text or lines, `includeFile`/`includeDir`/`includeSearch`, `[section]` context switches, embedded `perl` handlers, symbolic OIDs, an unparseable `disableAuthorization` value and an unknown service user all make the result incomplete.
+- **Validation:** the focused tests pass, and a randomized differential against the real Ubuntu `snmptrapd` 5.9.4 daemon sent a v2c trap for 540 generated configurations. It found two contract bugs, both fixed: access types are case-sensitive, and a later `authCommunity` line for the same community does not change the earlier access. The final 200 runs had 0 mismatches.
+- **Remaining:** which trap OIDs select each handler, sender/view restrictions, command existence, agent collection of the files and `-c`/`SNMPCONFPATH` overrides, a startup catalog entry, provenance, persistence, UI and AI classification. Roadmap F stays incomplete.
