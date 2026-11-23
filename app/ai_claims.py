@@ -163,13 +163,20 @@ def _free_hit(s,model,election_filters):
     key=lambda row:(row.first_seen,row.id)
 
     def window(*bounds,limit):
-        rows=[]
+        ranges=[]
         for verdict in ('pending','error'):
-            rows.extend(s.scalars(select(Behavior).outerjoin(
+            ranked=select(Behavior.id,Behavior.first_seen).outerjoin(
                 ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
                 *election_filters,*bounds,Behavior.verdict==verdict).order_by(
-                Behavior.first_seen,Behavior.id).limit(limit)))
-        return sorted(rows,key=key)[:limit]
+                    Behavior.first_seen,Behavior.id).limit(limit).subquery()
+            ranges.append(select(ranked.c.id,ranked.c.first_seen))
+        # Rank the narrow ranges together before fetching any full evidence.
+        # Python keeps the existing cross-range tie break on both databases.
+        selected=sorted(s.execute(union_all(*ranges)),key=key)[:limit]
+        subjects=[row.id for row in selected]
+        if not subjects:return []
+        rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(subjects)))}
+        return [rows[subject] for subject in subjects if subject in rows]
 
     cursor=_free_hit_cursor
     if cursor is None or cursor[0] is None:
