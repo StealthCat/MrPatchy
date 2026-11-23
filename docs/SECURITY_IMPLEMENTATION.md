@@ -4158,6 +4158,17 @@ aging, provider-specific quotas, native complete-context collection, full suppor
 multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
 browser, full-suite and coordinator integration checks remain required.
 
+### Provider success clears eligible backoff with one locked write — worker checkpoint #1467
+
+A provider success checks for eligible shared backoff with its usual read-only
+probe. When there is a recovery to record, the distributed lock encloses one
+conditional update. The update applies the same predicates again, preserving
+a newer provider failure and a reset already committed by another worker.
+
+Acceptance covers the normal provider response path and both races on SQLite
+and MySQL. The reviewed administrator clear action and the shared admission
+checks continue to apply. Production throughput remains open in Roadmap A.
+
 ### Reviewed shared provider-backoff reset — worker checkpoint #552
 
 AI Settings exposes an active shared provider Retry-After/transient-failure floor with
