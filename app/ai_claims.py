@@ -100,6 +100,18 @@ def abandon_owner(owner):
         s.commit()
 
 
+def _legacy_allowance_reached(s,limit,now):
+    # The dashboard needs exact totals. Admission only needs a row at the limit.
+    threshold=ceil(limit)
+    if threshold<=0:return True
+    cutoff=now-3600
+    attempts=(select(Behavior.attempted).where(Behavior.attempted>cutoff)
+              .offset(threshold-1).limit(1).exists())
+    runs=(select(ai_runs.AIRun.started).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>cutoff)
+          .offset(threshold-1).limit(1).exists())
+    return s.scalar(select(or_(attempts,runs)))
+
+
 def record_turn(s,host_id):
     """Assign the next durable turn while the distributed admission lock is held."""
     turn=(s.scalar(select(func.max(HostTurn.last_turn))) or 0)+1
@@ -188,18 +200,6 @@ def _free_hit(s,model,election_filters):
             return row
     _free_hit_cursor=key(probe[-1]) if probe else None
     return None
-
-
-def _legacy_allowance_reached(s,limit,now):
-    # The dashboard needs exact totals. Admission only needs a row at the limit.
-    threshold=ceil(limit)
-    if threshold<=0:return True
-    cutoff=now-3600
-    attempts=(select(Behavior.attempted).where(Behavior.attempted>cutoff)
-              .offset(threshold-1).limit(1).exists())
-    runs=(select(ai_runs.AIRun.started).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>cutoff)
-          .offset(threshold-1).limit(1).exists())
-    return s.scalar(select(or_(attempts,runs)))
 
 
 def _needs_admission_lock(s, now):
