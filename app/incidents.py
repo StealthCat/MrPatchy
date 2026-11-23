@@ -319,6 +319,16 @@ def automatic_candidate_sql():
     return or_(engine.is_(None),engine!='YARA')
 
 
+def _active_plan_for_host(host_id):
+    from .db import Job
+
+    return select(Job.id).where(
+        Job.host_id == host_id,
+        Job.action.in_(('security-plan', 'startup-plan')),
+        Job.state.in_(('queued', 'running')),
+    ).exists()
+
+
 def auto_plan_tick(now=None):
     """Opt-in proposals only. One automatic attempt per incident evidence revision."""
     from .coordination import Lock
@@ -341,6 +351,9 @@ def auto_plan_tick(now=None):
             from .operations import host_quarantined
             enabled=[host for host in enabled if not host_quarantined(s,host)]
             if not enabled:return
+            # Older incidents on an occupied server must leave room for
+            # available servers in the bounded candidate window.
+            enabled = select(Host.id).where(Host.id.in_(enabled), ~_active_plan_for_host(Host.id))
             query=select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),*awaiting_auto_plan()).order_by(Incident.updated,Incident.id)
             # YARA incidents are never planned automatically, so page past them instead of letting them fill a fixed window.
             rows=[];offset=0
@@ -351,9 +364,7 @@ def auto_plan_tick(now=None):
                 offset+=100
             candidates=rows[:100]
             if not candidates:return
-            occupied=select(Job.id).where(
-                Job.host_id==Incident.host_id,Job.action.in_(['security-plan','startup-plan']),
-                Job.state.in_(['queued','running'])).exists()
+            occupied=_active_plan_for_host(Incident.host_id)
             eligibility={incident_host:(canonical_host,has_active_plan) for incident_host,canonical_host,has_active_plan in s.execute(
                 select(Incident.host_id,Host.id,occupied).join(Host,Host.id==Incident.host_id)
                 .where(Incident.id.in_([row.id for row in candidates])))}
