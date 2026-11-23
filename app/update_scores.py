@@ -4,7 +4,7 @@ import json
 import math
 import time
 from typing import NamedTuple
-from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_, update
+from sqlalchemy import String, Text, Integer, Double, Index, select, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
@@ -224,8 +224,12 @@ def run_one():
             if not cfg['ai_enabled'] or not cfg['ai_updates_enabled'] or not cfg['ai_model'] or not secret:return
             signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
             if cfg['ai_control_mode']=='legacy':
-                count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600))
-                if count>=cfg['ai_update_hourly_limit']:return
+                limit=math.ceil(cfg['ai_update_hourly_limit'])
+                if limit<=0:return
+                recent=(select(ai_runs.AIRun.started).where(
+                    ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600)
+                    .offset(limit-1).limit(1).exists())
+                if s.scalar(select(recent)):return
             batch=[]
             for package,host,key,row,deferred in scoring_candidates(s):
                 for stale in deferred:
