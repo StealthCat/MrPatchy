@@ -3894,7 +3894,8 @@ outbound provider check. A missing policy or a policy object with no
 Other stored field types and non-object policies are paused. Fleet counts,
 server backlog status and work selection use the same filter. A malformed
 server's work stays queued while other eligible servers can claim work.
-Administrators can still repair the saved policy through the audited control.
+Administrators can repair the saved policy through the audited control. The
+per-server backlog notice explains that the server stays paused until repair.
 
 ### Per-server process-triage queue breakdown — worker checkpoint #975
 

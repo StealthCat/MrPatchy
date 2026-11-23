@@ -138,8 +138,13 @@ def test_corrupt_policy_leaves_triage_queued_and_the_healthy_server_claims_first
         assert status['eligible_unclaimed'] == 0
     response = admin.get('/api/investigation-status/servers')
     assert response.status_code == 200
-    [server] = response.json()['servers']
+    queue = response.json()
+    [server] = queue['servers']
     assert server['host_id'] == 'host-0' and server['paused'] is True
+    assert (
+        'A server with an invalid saved AI policy stays paused until an administrator repairs it.'
+        in queue['limitations']
+    )
     saved = admin.put('/api/hosts/host-0/security/ai-policy', json={
         'paused': False, 'expected_revision': '', 'reason': 'Repair the malformed stored server AI policy',
     })
