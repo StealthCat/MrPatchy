@@ -12544,3 +12544,22 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### rsyncd.conf exec-command contract — worker checkpoint #1395 (roadmap F)
+
+`rsync --daemon` reads `/etc/rsyncd.conf` again for every connection. When a client opens a module, the daemon runs that module's `post-xfer exec`, `early exec`, `pre-xfer exec` and `name converter` values through `/bin/sh -c` (or `$RSYNC_SHELL -c`). They run as the daemon itself, which is root under the stock `rsync.service`, not as the module's `uid`/`gid` and outside the module chroot. The startup inventory did not model these commands.
+
+- **Change:** the pure `app/rsyncd_exec.py` takes captured file text and returns each command the daemon would run: module, kind, when it runs in the connection, the raw command and its SHA-256, the line and whether the value came from a global default, the run-as user and group (`daemon uid`/`daemon gid`, or the daemon's starting user), and the `daemon chroot` root. It performs no I/O and never runs a command.
+- **Fidelity:** it emulates rsync 3.2.7 `params.c` byte by byte: comments, the bogus-backslash skip, continuations, whitespace collapsing and `\r` removal. It also models these `loadparm.c` rules:
+  - labels match ignoring case and whitespace;
+  - names starting with `-`, and unknown names, are ignored;
+  - a module copies the global defaults current when it is created;
+  - a repeated section reuses the module, matched by its current name;
+  - an unset value falls back to the final global default, and an empty value disables a command;
+  - a global parameter inside a module is ignored, and `name` renames a module.
+  
+  A module whose exact name is reused later, or that has no `path`, runs nothing. A rejected configuration is reported as `config_rejected` with no commands: an empty or unterminated section, `/` in a module name, an empty parameter name or an unknown `&` directive.
+- **Fail closed:** an unobserved file, NUL bytes, over-limit input and `&include`/`&merge` directives make the result incomplete. A `%VAR%` reference is flagged because the daemon environment is not observed. Unknown module `uid`/`gid` names refuse the module before any command runs, and this is not modelled, so the result over-reports and says so. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_rsyncd_exec.py` (9 tests). A differential harness ran random configurations through the real rsync 3.2.7 daemon in single-use remote-shell mode and probed every module, with 0 disagreements. The configurations mixed label variants, `[global]` sections, repeated and renamed modules, empty values, continuations, comments, `\r`, missing paths and rejected section names.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection, a catalog entry, `&include`/`&merge` resolution, package provenance, persistence, UI and AI classification.
