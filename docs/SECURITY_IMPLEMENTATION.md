@@ -12056,6 +12056,13 @@ The notification center adds a **Status** filter (All statuses / Active / Resolv
 - **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
 ### Daily-cap window in the Investigations worker status — worker checkpoint #876
 
+Roadmap A checkpoint #1409 filters exact YARA incidents before the automatic
+plan tick's candidate limit. The worker reads incident, host and scan IDs in
+one oldest-first window. The shared SQL predicate compares the engine label
+byte-for-byte on SQLite and MySQL, keeping missing engine data and other labels
+consistent with the prior worker rule. An older excluded backlog regression
+verifies the narrower query and identical enqueue decisions.
+
 The admin-only **AI worker status** card on Investigations now shows the full daily-cap window from the existing `budget` object of `GET /api/investigation-status`. It previously showed only counted, remaining and uncertain spend.
 - **Amounts:** cap, counted, settled, reserved, uncertain and remaining. Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled.
 - **Reconciliation:** when transmitted calls await a usage receipt, the card shows their count and the oldest reservation time, and notes that their full ceiling stays counted until reconciliation. When the count is 0, nothing is added.
