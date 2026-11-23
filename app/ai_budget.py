@@ -6,7 +6,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, Numeric, and_, case, func, or_, select
+from sqlalchemy import String, Text, Double, LargeBinary, Numeric, and_, case, cast, func, or_, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -147,10 +147,26 @@ def mark_sent(identifier,call_id):
     if not identifier:return
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if not row or row.status!='reserved':raise RuntimeError('AI budget reservation changed before provider transmission')
-            row.status='sent';row.call_id=call_id or '';row.updated=time.time()
-            row.reason='Provider transmission began; the reserved ceiling remains counted until reconciliation.'
+            ledger = BudgetEntry.__table__
+            # Preserve the exact Python status check with MySQL's case-insensitive text collation.
+            status = ledger.c.status
+            if session.get_bind().dialect.name == 'mysql':
+                reserved = cast(status, LargeBinary) == b'reserved'
+            else:
+                reserved = status.collate('BINARY') == 'reserved'
+            changed = session.execute(
+                update(ledger).where(
+                    ledger.c.id == identifier,
+                    reserved,
+                ).values(
+                    status='sent',
+                    call_id=call_id or '',
+                    updated=time.time(),
+                    reason='Provider transmission began; the reserved ceiling remains counted until reconciliation.',
+                )
+            )
+            if changed.rowcount != 1:
+                raise RuntimeError('AI budget reservation changed before provider transmission')
             session.commit()
 
 
