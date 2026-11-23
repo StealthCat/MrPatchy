@@ -5,8 +5,8 @@ import math
 import time
 from typing import NamedTuple
 from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_, update
-from sqlalchemy import Boolean, column, literal
 from sqlalchemy.orm import Mapped, load_only, mapped_column
+from sqlalchemy import Boolean, column, literal
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy, ai_retry
