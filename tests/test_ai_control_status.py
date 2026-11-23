@@ -39,8 +39,9 @@ def test_ai_status_uses_one_saved_configuration_read(admin, endpoint):
     configure(model='gpt-6-luna', mode='rate_and_daily')
     config_reads = []
 
-    def capture(_connection, _cursor, statement, parameters, _context, _many):
-        if 'FROM settings' in statement and parameters == ('config',):
+    def capture(_connection, _cursor, statement, _parameters, context, _many):
+        if 'FROM settings' in statement and any(
+                tuple(bound.values()) == ('config',) for bound in context.compiled_parameters):
             config_reads.append(statement)
 
     with Session() as session:
