@@ -178,3 +178,18 @@ def test_a_too_long_comment_line_still_stops_the_file():
     result = tw.resolve(_obs(allow, 'ALL : ALL : spawn /tmp/d\n'))
     assert result['tables'][0]['error'] == {'code': 'missing_newline_or_line_too_long', 'line': 1}
     assert _cmds(result) == [('/etc/hosts.deny', 1, 'spawn', '/tmp/d', True)]
+
+
+def test_an_earlier_aclexec_keeps_hosts_deny_reachable():
+    allow = 'in.telnetd : 192.0.2.1 : aclexec /bin/false\nALL : ALL : spawn /bin/log\n'
+    result = tw.resolve(_obs(allow, 'ALL : ALL : spawn /bin/alert\n'))
+    assert [c['reachable'] for c in result['commands']] == [True, True, True]
+
+
+def test_line_length_is_counted_in_bytes():
+    allow = 'ALL : ALL : spawn echo ' + '\u00e9' * 1100 + '\n'
+    result = tw.resolve(_obs(allow, 'ALL : ALL : spawn /bin/alert\n'))
+    assert result['tables'][0]['error']['code'] == 'missing_newline_or_line_too_long'
+    assert _cmds(result) == [('/etc/hosts.deny', 1, 'spawn', '/bin/alert', True)]
+    with pytest.raises(tw.Invalid):
+        tw.resolve(_obs('ALL : ALL : spawn \ud800\n'))

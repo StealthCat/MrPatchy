@@ -52,7 +52,10 @@ Debian/Ubuntu ``7.6.q-33`` source package. That package builds with
 An entry is reported as shadowed only when an earlier entry in the same file
 has an unconditional daemon list and client list: each list contains ``ALL``
 and no ``EXCEPT``. An unconditional ``hosts.allow`` entry shadows all of
-``hosts.deny`` unless it names ``aclexec``. Weaker patterns, such as ``*``, are
+``hosts.deny`` unless it, or any earlier ``hosts.allow`` entry, names
+``aclexec`` (a failing ``aclexec`` unmatches the entry, and the process-wide
+``aclexec_matched`` flag persists until a later ``aclexec`` succeeds).
+Line lengths are counted in UTF-8 bytes, as ``fgets()`` does. Weaker patterns, such as ``*``, are
 never treated as shadowing, so shadowing is never overclaimed.
 
 It performs no I/O, never runs a command and never authorizes a response
@@ -124,6 +127,11 @@ def _gap(gaps: list[dict[str, Any]], code: str, **detail: Any) -> None:
         gaps.append({'code': code, **detail})
 
 
+def _bytes(value: str) -> int:
+    # fgets()/xgets() count bytes; text is the UTF-8 (surrogateescape) decoding of the file.
+    return len(value.encode('utf-8', 'surrogateescape'))
+
+
 def _logical_lines(text: str):
     """Yield ``(first_line, logical_line)``. ``logical_line`` is None on the xgets error."""
     physical: list[str] = []
@@ -143,7 +151,7 @@ def _logical_lines(text: str):
         while index < len(physical):
             line = physical[index]
             index += 1
-            if not line.endswith('\n') or len(kept) + len(line) > BUFLEN - 1:
+            if not line.endswith('\n') or _bytes(kept) + _bytes(line) > BUFLEN - 1:
                 yield first, None
                 return
             lineno += 1
@@ -293,6 +301,10 @@ def _file(value: Any, name: str) -> dict[str, Any]:
             raise Invalid(f'{name}.text must be a string for a regular file')
         if len(text) > MAX_TEXT:
             raise Invalid(f'{name}.text exceeds {MAX_TEXT} characters')
+        try:
+            text.encode('utf-8', 'surrogateescape')
+        except UnicodeEncodeError as error:
+            raise Invalid(f'{name}.text is not a surrogateescape decoding of file bytes') from error
     elif text is not None:
         raise Invalid(f'{name}.text is only allowed for a regular file')
     return {'state': state, 'text': text}
@@ -395,9 +407,13 @@ def resolve(observation: Any) -> dict[str, Any]:
     deny = _table(HOSTS_DENY, _file(observation.get('hosts_deny'), 'hosts_deny'), gaps)
     deny_shadow = None
     for entry in allow['entries']:
-        if entry['unconditional'] and entry['shadowed_by'] is None:
-            if not entry['names_aclexec']:
-                deny_shadow = {'path': HOSTS_ALLOW, 'line': entry['line']}
+        # A failing aclexec on any matched allow entry turns the match into "no match", and
+        # aclexec_matched is a process-wide flag only a successful aclexec clears. So any
+        # aclexec up to and including the first catch-all keeps hosts.deny reachable.
+        if entry['names_aclexec']:
+            break
+        if entry['unconditional']:
+            deny_shadow = {'path': HOSTS_ALLOW, 'line': entry['line']}
             break
     commands = _commands(allow, None) + _commands(deny, deny_shadow)
     if deny_shadow is not None:
