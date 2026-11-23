@@ -271,11 +271,15 @@ class _Session:
     def getenv(self, name: str) -> Any:
         if name in self.env:
             return self.env[name]
+        if name in self.env_forgotten:
+            return _UNKNOWN
         return None if self.initial_complete else _UNKNOWN
 
     def exists(self, name: str) -> Any:
         if name in self.env:
             return True
+        if name in self.env_forgotten:
+            return _UNKNOWN
         return False if self.initial_complete else _UNKNOWN
 
     def item(self, name: str) -> Any:
@@ -306,6 +310,7 @@ class _Session:
         name = name_value[:l2eq]
         if eq >= 0:
             self.env[name] = name_value[eq + 1:]
+            self.env_forgotten.discard(name)
             return 'success'
         state = self.exists(name)
         if state is _UNKNOWN:
@@ -316,6 +321,7 @@ class _Session:
         if not state:
             return 'bad_item'
         del self.env[name]
+        self.env_forgotten.discard(name)
         return 'success'
 
     env_forgotten: set[str]

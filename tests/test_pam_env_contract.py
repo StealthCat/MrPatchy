@@ -107,6 +107,20 @@ def test_unknown_expansions_and_start_environment_fail_closed():
     assert out['complete'] is False and out['module_result'] == 'unknown'
 
 
+def test_later_known_value_replaces_an_unresolved_one():
+    out = run('A DEFAULT=${UNSEEN}\nA DEFAULT=x\n', '', initial_env_complete=False)
+    assert pairs(out) == [('A', 'x')]
+    assert out['complete'] is True
+    out = run('A DEFAULT=${UNSEEN}\n', 'A=y\n', initial_env_complete=False)
+    assert pairs(out) == [('A', 'y')] and out['complete'] is True
+
+
+def test_unresolved_values_propagate_through_later_expansions():
+    out = run('A DEFAULT=@{PAM_RHOST}\nLD_PRELOAD DEFAULT=${A}/x.so\n', '', items={'PAM_USER': 'root'})
+    assert out['complete'] is False
+    assert {v['name'] for v in out['variables'] if v.get('unresolved')} == {'A', 'LD_PRELOAD'}
+
+
 def test_oversized_and_nul_input_are_gaps():
     out = run('A DEFAULT=' + 'x' * 9000 + '\n', 'Z=1\n')
     assert out['complete'] is False and out['gaps'][0]['reason'] == 'oversized_line'
