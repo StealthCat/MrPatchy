@@ -12544,3 +12544,19 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### OpenRC local.d contract — worker checkpoint #1447 (roadmap F)
+
+`app/openrc_local.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are entry metadata for `/etc/local.d`, the names in `/etc/conf.d`, the runlevels that enable `local`, the init system and the shell OpenRC runs services with. From these it reports which `*.start` and `*.stop` files the OpenRC `local` service runs as root, in which order, and which `conf.d` files `openrc-run` sources first.
+
+- **Why it matters:** on OpenRC systems, `local` starts after every other service in a runlevel that enables it (`depend: after *`). Every executable `*.start` file then runs as root at boot, and every executable `*.stop` file runs at shutdown. A file dropped into `/etc/local.d` is a boot-time root execution path that no existing contract reported.
+- **Source of the semantics:** OpenRC `init.d/local.in` and `sh/openrc-run.sh.in`, checked at tag `0.45` (Debian 12) and on `master`. The loop is identical in both: `for file in "${local_d_dir}"/*.start`, `[ -x "${file}" ]`, `eval "${file}" $redirect`, and the service always returns 0.
+  - The glob does not match a leading `.`, and the suffix is case-sensitive.
+  - `[ -x ]` follows symlinks. Directories, noexec files and non-regular files never run. Dangling symlinks and files without an execute bit are skipped.
+  - `eval` re-parses the path, so a shell-special name is reported as `runs_as_shell_text` with a blocking `shell_reinterpreted` gap.
+  - The order is byte order under dash and busybox ash. When the shell is not observed to be one of those and a locale-aware sort could reorder the names, a non-blocking `order_locale_dependent` gap is reported.
+  - `openrc-run` sources `/etc/conf.d/local.RUNLEVEL`, or otherwise `/etc/conf.d/local`, as root. Their deprecated `local_start`/`local_stop` functions run after the scripts. Those files are reported in `conf_d_sourced`.
+- **Fail closed:** blocking gaps cover an unobserved or unsupported family, an unobserved init system, unobserved runlevel enablement, unobserved, unreadable or truncated `local.d` and `conf.d` listings, malformed or duplicate entries, missing metadata, unobserved symlink targets, shell-reinterpreted names and over-limit input. Unobserved mount flags are non-blocking. Unresolved entries are never reported as running.
+- **Validation:** `tests/test_openrc_local.py` has 57 tests. Two differential tests run the upstream loop through real dash and bash over a temporary directory that holds runnable, hidden, non-executable, directory, symlinked, dangling, wrong-suffix and space-containing entries. They compare what ran and its order with the contract for both phases. Six mutations (hidden names, order, execute bit, suffix match, dangling symlinks and directories) are each caught.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the directories, runlevels, init system and shell; a catalog entry, provenance, persistence, UI and AI classification. `/etc/rc.conf`, script and `conf.d` contents, and a locally modified `/etc/init.d/local` are not modeled.
