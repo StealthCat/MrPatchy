@@ -56,7 +56,8 @@ MAX_TEXT_BYTES = 256 * 1024
 MAX_HANDLERS = 256
 # read_config() reads each line into a fixed STRINGMAX (1024) buffer; a longer
 # line is split by fgets() into pieces that are parsed as separate lines.
-MAX_LINE_CHARS = 1023
+# fgets() counts bytes, so the limit is measured on the UTF-8 encoding.
+MAX_LINE_BYTES = 1023
 DEFAULT_FILES = ('/etc/snmp/snmptrapd.conf', '/var/lib/snmp/snmptrapd.conf')
 AUTH_DIRECTIVES = ('authcommunity', 'authuser', 'authgroup', 'authaccess')
 INCLUDE_DIRECTIVES = ('includefile', 'includedir', 'includesearch')
@@ -184,8 +185,9 @@ def evaluate(*, files: Sequence[Mapping[str, Any]] | None, service_user: str | N
                      'sha256': hashlib.sha256(text.encode('utf-8')).hexdigest()})
         for number, raw in enumerate(text.split('\n'), 1):
             where = f'{path}:{number}'
-            if len(raw) > MAX_LINE_CHARS:
-                _gap(gaps, 'line_over_limit', where, f'{len(raw)} characters')
+            size = len(raw.encode('utf-8'))
+            if size > MAX_LINE_BYTES:
+                _gap(gaps, 'line_over_limit', where, f'{size} bytes')
                 continue
             line = raw.lstrip(_BLANKS).rstrip('\r')
             if not line or line.startswith('#'):

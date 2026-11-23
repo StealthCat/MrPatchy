@@ -86,6 +86,19 @@ def test_fail_closed_inputs_are_incomplete():
         assert code in [g['code'] for g in r['gaps']], code
 
 
+def test_line_limit_counts_utf8_bytes_like_fgets():
+    # 540 characters but 1051 bytes: fgets() splits it after the comment, so
+    # snmptrapd would register the trailing traphandle as a separate line.
+    line = '#' + '\u00e9' * 511 + 'traphandle default /tmp/evil'
+    assert len(line) <= st.MAX_LINE_BYTES < len(line.encode('utf-8'))
+    r = run('disableAuthorization yes\n' + line + '\n')
+    assert not r['complete'] and r['status'] != 'no_handlers'
+    gap = [g for g in r['gaps'] if g['code'] == 'line_over_limit']
+    assert gap and gap[0]['detail'] == '1051 bytes'
+    exact = run('#' + '\u00e9' * 511 + '\n')  # exactly 1023 bytes still fits
+    assert exact['complete'] and 'line_over_limit' not in [g['code'] for g in exact['gaps']]
+
+
 def test_authorized_handlers_stay_runs_even_when_other_input_is_incomplete():
     r = run('disableAuthorization yes\ntraphandle default echo hi\nincludeDir /etc/snmp/d\n')
     assert r['status'] == 'runs' and not r['complete']
