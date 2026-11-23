@@ -31,7 +31,9 @@ backslash. Anything else is a blocking gap, because sourcing it runs it as
 root. A config that sets ``IFPLUGD`` changes which root program starts, and
 ``IFS`` or ``PATH`` change how the script runs. Both are gaps. The same goes for
 an interface word or ``ARGS_*`` value that ``dash`` would glob, ``echo`` would
-reinterpret, or ``eval`` would parse as more than one parameter name.
+reinterpret, or ``eval`` would parse as more than one parameter name. A plain
+``ARGS`` fallback is a gap when it holds a glob character or a backslash,
+because ``$A`` is expanded unquoted on the daemon command line.
 
 Not modelled: positional ``start`` interfaces (boot passes none),
 ``/lib/lsb/init-functions`` and its hooks, an inherited environment, and
@@ -186,6 +188,23 @@ def _echo_words(value: str, gaps: list[dict[str, Any]], code: str, **detail: Any
     return ' '.join(words)
 
 
+def _fallback_args(value: str, gaps: list[dict[str, Any]], **detail: Any) -> str | None:
+    """``$ARGS`` as ``$A``, or None with a gap when the unquoted ``$A`` would change it.
+
+    ``$A`` is expanded unquoted on the daemon command line, so dash globs its
+    words against the working directory. A backslash in an unquoted expansion
+    also takes part in that pattern matching.
+    """
+    words = [word for word in _IFS.split(value) if word]
+    if any(_GLOB.search(word) for word in words):
+        _gap(gaps, 'args_not_modelled', reason='pathname_expansion', variable='ARGS', **detail)
+        return None
+    if '\\' in value:
+        _gap(gaps, 'args_not_modelled', reason='unquoted_backslash', variable='ARGS', **detail)
+        return None
+    return value
+
+
 def resolve(observation: Any) -> dict[str, Any]:
     """Resolve the daemon starts of ``/etc/init.d/ifplugd start`` at boot."""
     if not isinstance(observation, dict):
@@ -247,7 +266,10 @@ def resolve(observation: Any) -> dict[str, Any]:
         if printed is None:
             continue
         if not printed:
-            source, printed = 'ARGS', variables.get('ARGS', '')
+            source = 'ARGS'
+            printed = _fallback_args(variables.get('ARGS', ''), gaps, interface=word)
+            if printed is None:
+                continue
         starts.append({'interface': word, 'args': printed, 'args_source': source,
                        'daemon': daemon})
     return {

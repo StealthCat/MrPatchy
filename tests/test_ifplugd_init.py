@@ -121,6 +121,22 @@ def test_args_values_echo_or_glob_would_change_are_gaps(value):
     assert _codes(result) == ['args_not_modelled'] and not result['starts']
 
 
+@pytest.mark.parametrize('value, reason', [
+    ('"-f *"', 'pathname_expansion'), ("'-q -w?'", 'pathname_expansion'),
+    ("'-q [ab]'", 'pathname_expansion'), ("'-q \\x'", 'unquoted_backslash')])
+def test_plain_args_fallback_the_unquoted_daemon_line_would_change_is_a_gap(value, reason):
+    # $IFPLUGD -i $IF $A leaves $A unquoted, so dash globs the ARGS fallback too.
+    result = ii.resolve(_obs(f'INTERFACES=eth0\nARGS={value}\n', [_entry('eth0')]))
+    assert result['gaps'] == [{'code': 'args_not_modelled', 'reason': reason,
+                               'variable': 'ARGS', 'interface': 'eth0'}]
+    assert not result['complete'] and not result['starts']
+
+
+def test_glob_in_args_is_harmless_when_the_per_interface_args_win():
+    result = ii.resolve(_obs("INTERFACES=eth0\nARGS='-f *'\nARGS_eth0=-q\n", [_entry('eth0')]))
+    assert result['complete'] and result['starts'][0]['args'] == '-q'
+
+
 @pytest.mark.parametrize('observation', [
     None, {}, {'config': {'state': 'regular'}}, {'config': {'state': 'bogus'}},
     {'config': {'state': 'absent'}, 'interfaces': [{'name': 'a/b', 'device': True,
