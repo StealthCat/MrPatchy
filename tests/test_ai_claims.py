@@ -71,6 +71,38 @@ def ai_policy_scope():
     return scope.get()
 
 
+@pytest.mark.parametrize('error_seen,expected', [(1, 'subject-1'), (2, 'subject-0')])
+def test_claim_loads_candidate_evidence_only_after_the_queue_gate(admin, error_seen, expected):
+    seed(count=3,same_host=True)
+    with Session() as s:
+        pending=s.get(Behavior,'subject-0')
+        error=s.get(Behavior,'subject-1')
+        deferred=s.get(Behavior,'subject-2')
+        pending.first_seen=2
+        error.first_seen=error_seen;error.verdict='error'
+        deferred.first_seen=0;deferred.attempted=time.time()
+        for subject in (pending,error):
+            subject.evidence={**subject.evidence,'local_fixture':'x'*48_000}
+        expected_evidence=s.get(Behavior,expected).evidence
+        s.commit()
+
+    evidence_queries=[]
+    def capture(_connection,_cursor,statement,*_args):
+        projection=statement.lower().split('from',1)[0]
+        if projection.lstrip().startswith('select') and 'behaviors.evidence' in projection:
+            evidence_queries.append(statement)
+
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        lease=ai_claims.acquire()
+    finally:
+        event.remove(engine,'before_cursor_execute',capture)
+    assert lease
+    with lease:
+        assert lease.subject==expected and lease.work.evidence==expected_evidence
+        assert len(evidence_queries)==1
+
+
 def test_atomic_hourly_admission_and_no_duplicate_subject(admin,monkeypatch):
     seed(count=4,limit=2);sent=[]
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:sent.append(ai_runs.active.get()) or result())
@@ -125,38 +157,6 @@ def test_least_recent_host_turn_survives_claim_release(admin):
         assert s.get(ai_claims.HostTurn,'host-0').last_turn==3
         assert s.get(ai_claims.HostTurn,'host-1').last_turn==2
     with third:pass
-
-
-@pytest.mark.parametrize('error_seen,expected', [(1, 'subject-1'), (2, 'subject-0')])
-def test_claim_loads_candidate_evidence_only_after_the_queue_gate(admin, error_seen, expected):
-    seed(count=3,same_host=True)
-    with Session() as s:
-        pending=s.get(Behavior,'subject-0')
-        error=s.get(Behavior,'subject-1')
-        deferred=s.get(Behavior,'subject-2')
-        pending.first_seen=2
-        error.first_seen=error_seen;error.verdict='error'
-        deferred.first_seen=0;deferred.attempted=time.time()
-        for subject in (pending,error):
-            subject.evidence={**subject.evidence,'local_fixture':'x'*48_000}
-        expected_evidence=s.get(Behavior,expected).evidence
-        s.commit()
-
-    evidence_queries=[]
-    def capture(_connection,_cursor,statement,*_args):
-        projection=statement.lower().split('from',1)[0]
-        if projection.lstrip().startswith('select') and 'behaviors.evidence' in projection:
-            evidence_queries.append(statement)
-
-    event.listen(engine,'before_cursor_execute',capture)
-    try:
-        lease=ai_claims.acquire()
-    finally:
-        event.remove(engine,'before_cursor_execute',capture)
-    assert lease
-    with lease:
-        assert lease.subject==expected and lease.work.evidence==expected_evidence
-        assert len(evidence_queries)==1
 
 
 def test_successful_claim_retains_monotonic_lock_wait(admin,monkeypatch):
