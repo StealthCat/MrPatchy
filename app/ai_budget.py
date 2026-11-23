@@ -6,7 +6,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, Numeric, and_, case, func, or_, select
+from sqlalchemy import String, Text, Double, LargeBinary, Numeric, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -157,16 +157,24 @@ def mark_sent(identifier,call_id):
 def release_unsent(identifier,reason,*,pool_timeout_call_id=None):
     """Release before transmission, or after a matching pool acquisition failure."""
     if not identifier:return
+    ledger = BudgetEntry.__table__
+    expected = [(ledger.c.status, 'reserved')]
+    if pool_timeout_call_id is not None:
+        if not isinstance(pool_timeout_call_id, str):
+            return
+        expected = [(ledger.c.status, 'sent'), (ledger.c.call_id, pool_timeout_call_id)]
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if not row:return
-            if pool_timeout_call_id is None:
-                unsent=row.status=='reserved'
+            # Preserve Python's exact comparisons for both status and receipt.
+            if session.get_bind().dialect.name in ('mysql', 'mariadb'):
+                matches = [cast(column, LargeBinary) == value.encode('utf-8') for column, value in expected]
             else:
-                unsent=row.status=='sent' and row.call_id==pool_timeout_call_id
-            if unsent:
-                row.status='released';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
+                matches = [column.collate('BINARY') == value for column, value in expected]
+            result = session.execute(ledger.update().where(ledger.c.id == identifier, *matches).values(
+                status='released', updated=time.time(), reason=str(reason)[:500],
+            ))
+            if result.rowcount == 1:
+                session.commit()
 
 
 def reconcile(identifier,values):

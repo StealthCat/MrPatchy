@@ -5,9 +5,10 @@ import threading
 
 import httpx
 import pytest
+from sqlalchemy import event
 
-from app import ai, ai_admission, ai_budget, ai_pricing, ai_provider_backoff, notifications, operations
-from app.db import Session, Setting
+from app import ai, ai_admission, ai_budget, ai_pricing, ai_provider_backoff, ai_runs, notifications, operations
+from app.db import Session, Setting, engine
 from app.security import seal
 from tests.ai_settings_helpers import confirmed_put
 
@@ -331,12 +332,84 @@ def test_pool_timeout_release_requires_matching_sent_call(admin, monkeypatch, ca
     identifier = ai_budget.reserve(payload())
     ai_budget.mark_sent(identifier, call_id)
     ai_budget.release_unsent(identifier, 'Wrong receipt.', pool_timeout_call_id='call-two')
+    if call_id:
+        ai_budget.release_unsent(identifier, 'Wrong case.', pool_timeout_call_id=call_id.upper())
+        ai_budget.release_unsent(identifier, 'Trailing space.', pool_timeout_call_id=call_id + ' ')
     ai_budget.release_unsent(identifier, 'No receipt was supplied.')
     with Session() as session:
         assert session.get(ai_budget.BudgetEntry, identifier).status == 'sent'
     ai_budget.release_unsent(identifier, 'Pool timeout.', pool_timeout_call_id=call_id)
     with Session() as session:
         assert session.get(ai_budget.BudgetEntry, identifier).status == 'released'
+
+
+@pytest.mark.parametrize('pool_timeout', [False, True])
+def test_provider_unsent_release_uses_one_ledger_write(admin, monkeypatch, pool_timeout):
+    configure(cap=Decimal('1'))
+    release = ai_budget.release_unsent
+    statements = []
+    sends = []
+
+    def observe(connection, cursor, statement, parameters, context, executemany):
+        if 'ai_budget_entries' in statement.lower():
+            statements.append(statement.split(maxsplit=1)[0].upper())
+
+    def observe_release(*args, **kwargs):
+        event.listen(engine, 'before_cursor_execute', observe)
+        try:
+            release(*args, **kwargs)
+        finally:
+            event.remove(engine, 'before_cursor_execute', observe)
+
+    def reject_before_provider(model):
+        raise ai.AIError('Fixture rate wait.', policy_wait=True)
+
+    def wait_for_pool(*args, **kwargs):
+        sends.append(True)
+        raise httpx.PoolTimeout('Private fixture transport detail.')
+
+    monkeypatch.setattr(ai_budget, 'release_unsent', observe_release)
+    monkeypatch.setattr(ai.transport, 'post', wait_for_pool)
+    if not pool_timeout:
+        monkeypatch.setattr(ai_admission, 'admit', reject_before_provider)
+    expected_error = 'connection pool timed out' if pool_timeout else 'Fixture rate wait'
+    with pytest.raises(ai.AIError, match=expected_error), ai_runs.track('test', payload()['model']):
+        ai.request(payload(), 'fixture-key')
+
+    with Session() as session:
+        row = session.query(ai_budget.BudgetEntry).one()
+        assert row.status == 'released'
+        assert bool(row.call_id) is pool_timeout
+        assert 'Private fixture transport detail' not in row.reason
+        assert ('connection pool timed out' in row.reason) is pool_timeout
+        assert ai_budget.status(session)['counted_usd'] == '0'
+    assert len(sends) == int(pool_timeout)
+    # The outer exception cleanup also tries a reserved-only release after a
+    # pool timeout. That second attempt must leave the pool-timeout release intact.
+    assert statements == ['UPDATE'] * (2 if pool_timeout else 1)
+
+
+@pytest.mark.parametrize('stored_status,receipt', [
+    ('Reserved', None), ('reserved ', None), ('Sent', 'call-one'),
+    ('sent ', 'call-one'), ('uncertain', 'call-one'), ('settled', 'call-one'),
+])
+def test_unsent_release_keeps_ineligible_reservations(admin, stored_status, receipt):
+    configure(cap=Decimal('1'))
+    identifier = ai_budget.reserve(payload())
+    with Session() as session:
+        row = session.get(ai_budget.BudgetEntry, identifier)
+        row.status = stored_status
+        row.call_id = 'call-one'
+        row.updated = 123.0
+        row.reason = 'Original diagnosis.'
+        session.commit()
+
+    ai_budget.release_unsent(identifier, 'Incorrect cleanup.', pool_timeout_call_id=receipt)
+    with Session() as session:
+        row = session.get(ai_budget.BudgetEntry, identifier)
+        assert (row.status, row.call_id, row.updated, row.reason) == (
+            stored_status, 'call-one', 123.0, 'Original diagnosis.',
+        )
 
 
 def test_settings_expose_combined_cap_and_validate_timezone(admin):
