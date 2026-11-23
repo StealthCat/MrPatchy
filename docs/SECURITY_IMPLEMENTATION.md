@@ -12548,6 +12548,21 @@ There is no live differential against a built apcupsd: this session's classifier
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining for #1377:** the udev `HOTPLUG_INTERFACES` agent path, agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
 
+### ifplugd udev hotplug-agent contract — worker checkpoint #1377 increment 3 (roadmap F)
+
+- **What it covers:** `app/ifplugd_hotplug.py` is a pure, versioned contract for `/lib/udev/rules.d/60-ifplugd.rules` (`SUBSYSTEM=="net", RUN+="ifplugd.agent"`). udev runs `/lib/udev/ifplugd.agent` as root on every network-interface event. For each observed interface name, the contract reports whether the agent runs `exec $DAEMON -i $INTERFACE $A` on `add`/`register`, and with which `$A`. It also reports whether the agent runs `exec $DAEMON -k -i $INTERFACE` on `remove`/`unregister`. The `$A` strings are the `ARGS` input of `app/ifplugd_actions.py`. The contract reuses the config parser and `echo` model of `app/ifplugd_init.py`.
+- **Pinned source:** `/lib/udev/ifplugd.agent` and `/lib/udev/rules.d/60-ifplugd.rules` from `ifplugd_0.28-19.7_amd64.deb` (sha256 `bce99ac5…1136`), run by `dash`.
+  - The `-x /usr/sbin/ifplugd` check runs before the config is read. A config that is missing or not a regular file makes the agent exit.
+  - An interface named in `INTERFACES`, or any interface when that list contains `all`, is left to the init script. `auto` does not match here.
+  - Otherwise an interface named in `HOTPLUG_INTERFACES`, or any interface when that list contains `all`, gets a daemon. `HOTPLUG_INTERFACES=all` has no `eth*|wlan*` filter, so it starts a root daemon for `lo`, bridges and container `veth` pairs.
+- **Fail closed:** the same simple-assignment config model as increment 2 applies, and so do the shell-environment gaps.
+  - Assigning `DAEMON` (the agent's variable, not `IFPLUGD`) is `daemon_overridden`. Assigning `INTERFACE` or `ACTION` replaces udev's event values and is `config_overrides_udev_environment`.
+  - A list word or interface name with glob characters is a gap. So is an interface name that `echo` would reinterpret, an `IF1` that `eval` would parse as more than a name, and an `ARGS_*` value that `echo` or globbing would change. An unobserved daemon state, config or interface list is a gap. Names that Linux `dev_valid_name` would reject are refused.
+- **Validation:** `tests/test_ifplugd_hotplug.py` has 42 tests. 41 unit tests pass. A differential test compares 300 random configs against real `dash` running the shipped agent, with a recording daemon stub, for `add`, `remove` and `change` events. It is gated on `IFPLUGD_AGENT_SCRIPT` and root, and it has not yet been run (see PR).
+- **Not modelled (listed in each result):** udev environment the config leaves unset (a rule can set `ENV{HOTPLUG_INTERFACES}`), other rules that change `RUN` or the name, the `wait_for_interface lo` loop, the running-daemon check, and other event actions. Interface names are taken at collection time.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining for #1377:** agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
+
 ### supervisord program contract — worker checkpoint #1259 (roadmap F)
 
 supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x]` it loads from its main file and its `[include] files =` globs, at supervisord start when `autostart` is true (the default), as the section's `user` or as supervisord's own user, normally root. The startup inventory did not model `conf.d/*.conf` as a persistence location.
