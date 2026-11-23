@@ -211,15 +211,14 @@ def request_started(model):
         return receipt.id
 
 
-def record_usage(call_id, data, payload):
-    values = ai_pricing.estimate(data, payload)
-    if not call_id: return values
+def record_usage(call_id, values):
+    """Persist the computed usage estimate in the diagnostic receipt."""
+    if not call_id: return
     with Session() as s:
         row = s.get(AICall, call_id)
-        if not row: return values
+        if not row: return
         for key, value in values.items(): setattr(row, key, value)
         s.commit()
-    return values
 
 
 def call_receipts(s, run_ids):
