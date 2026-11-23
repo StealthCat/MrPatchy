@@ -194,8 +194,9 @@ def mark_uncertain(identifier,reason):
                 row.status='uncertain';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
 
 
-def status(session,now=None):
-    now=time.time() if now is None else now;cfg=config(session)
+def status(session, now=None, *, settings=None):
+    now = time.time() if now is None else now
+    cfg = config(session) if settings is None else settings
     enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
     unreconciled_count,oldest=reconciliation
     # A timezone change can leave a previously admitted window open beyond the

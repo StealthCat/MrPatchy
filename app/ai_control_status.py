@@ -110,8 +110,8 @@ def snapshot(session, now=None):
     """Return every observable global blocker without exposing request data."""
     now = time.time() if now is None else now
     settings = config(session)
-    admission = ai_admission.status(session)
-    budget = ai_budget.status(session, now)
+    admission = ai_admission.status(session, settings=settings)
+    budget = ai_budget.status(session, now, settings=settings)
     provider = ai_provider_backoff.status(session, now)
     blockers = []
 

@@ -1351,7 +1351,7 @@ def settings(user=Depends(admin_user)):
     with Session() as s:
         cfg=config(s)
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
-            'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
+            'ai_budget':ai_budget.status(s, settings=cfg),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
             'ai_control_migration':ai_control_preview.legacy_migration(cfg),
             'telemetry_lost_minutes':operations.telemetry_lost_minutes(cfg)}

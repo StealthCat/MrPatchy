@@ -45,8 +45,9 @@ class TriageRetry(Base):
     reason: Mapped[str]=mapped_column(Text,default='')
 
 
-def configuration(s):
-    cfg=config(s);key=s.get(Setting,'openai_key')
+def configuration(s, *, settings=None):
+    cfg = config(s) if settings is None else settings
+    key = s.get(Setting, 'openai_key')
     return configuration_signature(cfg['ai_model'],key.value if key else None)
 
 
