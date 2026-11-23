@@ -11994,6 +11994,8 @@ Fleet automatic plan status reads policy rows in pages of at most 512, ordered
 by server name and ID. It stops once it sees the first opted-in server beyond
 the displayed limit. Sparse opt-ins can require more pages. Previous opt-in
 truthiness, server order, truncated counts and the admin-only API still apply.
+If a concurrent rename moves a server past the cursor, its first listed
+identity and display name are used for the response.
 
 Controller initialization adds a server index on deletion state, name and ID
 to support the cursor query on fresh or existing databases. The tests cover

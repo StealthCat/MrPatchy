@@ -188,16 +188,17 @@ def _fleet_opted_in_hosts(session):
         .limit(FLEET_POLICY_PAGE_SIZE)
     )
     page = query
-    opted = []
+    opted = {}
     while True:
         rows = session.execute(page).all()
         for host_id, name, policy in rows:
             if isinstance(policy, dict) and policy.get('auto_ai_plan'):
-                opted.append((host_id, name))
+                # A rename between pages can move a listed host past the cursor.
+                opted.setdefault(host_id, name)
                 if len(opted) > FLEET_LIMIT:
-                    return opted
-        if len(rows) < FLEET_POLICY_PAGE_SIZE:
-            return opted
+                    break
+        if len(opted) > FLEET_LIMIT or len(rows) < FLEET_POLICY_PAGE_SIZE:
+            return list(opted.items())
         host_id, name, _ = rows[-1]
         page = query.where(
             Host.name >= name,

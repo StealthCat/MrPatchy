@@ -1,5 +1,6 @@
 """Read-only fleet-wide automatic AI plan status (#936)."""
 import json
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import event, func, inspect, select
@@ -278,6 +279,19 @@ def test_database_init_adds_fleet_listing_index_to_an_existing_host_table(admin)
     assert indexes[index_name] == ['deleted_at', 'name', 'id']
     with Session() as s:
         assert s.get(Host, 'web').name == 'web'
+
+
+def test_policy_pages_skip_a_previously_listed_host_after_a_rename(monkeypatch):
+    monkeypatch.setattr(auto_plan_status, 'FLEET_LIMIT', 2)
+    monkeypatch.setattr(auto_plan_status, 'FLEET_POLICY_PAGE_SIZE', 2)
+    enabled = {'auto_ai_plan': True}
+    pages = iter([
+        [('first', 'a', enabled), ('second', 'b', enabled)],
+        [('first', 'c', enabled)],
+    ])
+    session = SimpleNamespace(execute=lambda query: SimpleNamespace(all=lambda: next(pages)))
+
+    assert auto_plan_status._fleet_opted_in_hosts(session) == [('first', 'a'), ('second', 'b')]
 
 
 def test_awaiting_truncation_is_carried_into_the_totals(admin, monkeypatch):
