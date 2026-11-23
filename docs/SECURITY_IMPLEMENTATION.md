@@ -3847,6 +3847,13 @@ lifecycle, role and response authorization are unchanged.
 **Compatibility:** API clients that save expanding controls must preview first
 and resend the save with the returned confirmation.
 
+Roadmap A checkpoint #1409 filters exact YARA incidents before the automatic
+plan tick's candidate limit. The worker reads incident, host and scan IDs in
+one oldest-first window. The shared SQL predicate compares the engine label
+byte-for-byte on SQLite and MySQL, keeping missing engine data and other labels
+consistent with the prior worker rule. An older excluded backlog regression
+verifies the narrower query and identical enqueue decisions.
+
 ### Per-server automatic AI plan status — worker checkpoint #922
 
 The scan-policy toggle for automatic AI plans always said "at most ten plan
@@ -12055,13 +12062,6 @@ The notification center adds a **Status** filter (All statuses / Active / Resolv
 - **Unchanged:** this filters display only. It never acknowledges, resolves or reopens an event, changes response authorization or alters schema.
 - **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
 ### Daily-cap window in the Investigations worker status — worker checkpoint #876
-
-Roadmap A checkpoint #1409 filters exact YARA incidents before the automatic
-plan tick's candidate limit. The worker reads incident, host and scan IDs in
-one oldest-first window. The shared SQL predicate compares the engine label
-byte-for-byte on SQLite and MySQL, keeping missing engine data and other labels
-consistent with the prior worker rule. An older excluded backlog regression
-verifies the narrower query and identical enqueue decisions.
 
 The admin-only **AI worker status** card on Investigations now shows the full daily-cap window from the existing `budget` object of `GET /api/investigation-status`. It previously showed only counted, remaining and uncertain spend.
 - **Amounts:** cap, counted, settled, reserved, uncertain and remaining. Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled.
