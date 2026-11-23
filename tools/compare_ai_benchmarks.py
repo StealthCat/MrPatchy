@@ -318,10 +318,19 @@ def _delta(baseline, candidate):
     }
 
 
-def compare(baseline, candidate, baseline_name='baseline', candidate_name='candidate'):
+def compare(baseline, candidate, baseline_name='baseline', candidate_name='candidate', *, fixed_concurrency=False):
     base = _validate(baseline, 'baseline')
     current = _validate(candidate, 'candidate')
-    if (base['execution'], base['concurrency']) == (current['execution'], current['concurrency']):
+    if fixed_concurrency:
+        if base['concurrency'] != current['concurrency']:
+            raise ComparisonError('fixed-concurrency comparison requires identical concurrency')
+        if not base['database_version'] or not current['database_version']:
+            raise ComparisonError('fixed-concurrency comparison requires a recorded database_version for both reports')
+        if base['database_version'] != current['database_version']:
+            raise ComparisonError('capability mismatch: database_version differs')
+        if base['fixture_budget'] != current['fixture_budget']:
+            raise ComparisonError('capability mismatch: fixture_budget differs')
+    elif base['concurrency'] == current['concurrency']:
         raise ComparisonError('candidate must use a distinct execution configuration')
     if base['ai_control_mode'] != current['ai_control_mode']:
         raise ComparisonError('capability mismatch: ai_control_mode differs')
@@ -344,6 +353,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             raise ComparisonError(f'capability mismatch: stages.{stage}.count differs')
     return {
         'schema_version': SCHEMA_VERSION,
+        **({'comparison_mode': 'fixed_concurrency'} if fixed_concurrency else {}),
         'fixture_only': True,
         'capability_equivalent': True,
         'baseline': {
@@ -404,7 +414,9 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'latency': 'Negative elapsed/stage deltas indicate lower fixture latency.',
             'throughput': 'Positive throughput deltas indicate higher fixture throughput.',
             'scope': 'Disposable loopback fixture only; this comparison does not establish production performance.',
-            'database': 'Both reports measured the same database backend; server versions are informational and may differ.',
+            'database': ('Both reports measured the same database backend and recorded version.'
+                         if fixed_concurrency else
+                         'Both reports measured the same database backend; server versions are informational and may differ.'),
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
             'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
@@ -429,9 +441,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('baseline', type=Path)
     parser.add_argument('candidate', type=Path)
+    parser.add_argument('--fixed-concurrency', action='store_true',
+                        help='compare reports with the same concurrency and recorded database version')
     args = parser.parse_args(argv)
     try:
-        result = compare(_load(args.baseline), _load(args.candidate), args.baseline.name, args.candidate.name)
+        result = compare(_load(args.baseline), _load(args.candidate), args.baseline.name, args.candidate.name,
+                         fixed_concurrency=args.fixed_concurrency)
     except ComparisonError as error:
         print(f'comparison refused: {error}', file=sys.stderr)
         return 2

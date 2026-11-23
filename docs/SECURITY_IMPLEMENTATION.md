@@ -3992,6 +3992,15 @@ python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-d
 python tools/compare_ai_benchmarks.py serial.json parallel.json
 ```
 
+Roadmap A checkpoint #1397 supports matched implementation measurements at a
+fixed concurrency. Generate reports in the baseline and candidate checkouts
+with the same benchmark flags on the same database version, and keep the source
+commit identity with each report. Use
+`python tools/compare_ai_benchmarks.py --fixed-concurrency main.json candidate.json`
+to check equivalence and report fixture latency and throughput deltas. The
+default comparison still requires different concurrency. Production performance
+remains a separate acceptance step.
+
 The benchmark checks that every persisted run belongs to the expected subject
 and server, with a receipt for every provider call. Reports record the observed
 server count, the single-server slot limit, and peak simultaneous loopback
