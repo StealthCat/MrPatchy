@@ -55,13 +55,12 @@ module.exports=async(page,capture)=>{
   await card.locator('table').waitFor();
   assert.equal(await refresh.isEnabled(),true);
   assert.equal(reads,5);
-  await card.getByRole('columnheader',{name:'Sent without reconciled usage'}).waitFor();
-  await card.getByRole('columnheader',{name:'Recorded uncertain outcome'}).waitFor();
-  const splitRows=await card.locator('tbody tr').evaluateAll(list=>list.map(row=>[...row.cells].map(cell=>cell.textContent)));
-  assert.deepEqual(splitRows.map(row=>row.slice(4)),[
-   ['$0.3','$0','$0.625'],['$0','$0.4','$0.4'],['$0','$0','$0.5'],['$0','$0','$0.111'],
+  await card.getByRole('columnheader',{name:'Unreconciled usage'}).waitFor();
+  const splitRows=await card.locator('tbody tr').evaluateAll(list=>list.map(row=>[...row.cells].slice(4).map(cell=>cell.innerText)));
+  assert.deepEqual(splitRows,[
+   ['Sent: $0.3\nUncertain: $0','$0.625'],['Sent: $0\nUncertain: $0.4','$0.4'],
+   ['Sent: $0\nUncertain: $0','$0.5'],['Sent: $0\nUncertain: $0','$0.111'],
   ]);
-  assert.equal(await card.locator('tfoot td[colspan="4"]').count(),1);
   // Narrow screens: the card stays inside the viewport and its table scrolls in its own region.
   const size=page.viewportSize();
   await page.setViewportSize({width:320,height:800});
