@@ -270,7 +270,11 @@ def test_claim_recheck_reads_only_server_lifecycle(admin, host_present):
         event.remove(engine,'before_cursor_execute',capture)
     assert lease and lease.host_id=='host-0'
     with lease:
-        assert projections==['select hosts.enabled, hosts.deleted_at']
+        # MySQL may also lock the missing primary-key range using the
+        # activity guard's separate, narrow lifecycle projection.
+        assert projections[-1:]==['select hosts.enabled, hosts.deleted_at']
+        assert all(sql=='select hosts.id, hosts.enabled, hosts.deleted_at, hosts.lifecycle_revision'
+                   for sql in projections[:-1])
 
 
 def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeypatch):
