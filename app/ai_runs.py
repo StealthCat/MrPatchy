@@ -113,22 +113,34 @@ def triage_timing_summary(s, limit, purpose='triage'):
     """
     if purpose not in TIMING_SUMMARY_PURPOSES:
         raise ValueError('unsupported timing summary purpose')
-    run_ids = list(s.scalars(
+    sampled_runs = (
         select(AIRun.id)
         .where(AIRun.purpose == purpose, AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
         .order_by(AIRun.started.desc(), AIRun.id)
         .limit(limit)
-    ))
+        .cte('sampled_timing_runs')
+    )
     stage_names = {'timing_' + stage: stage for stage in sorted(TIMING_STAGES)}
+    sampled_events = (
+        select(AIEvent.id, AIEvent.run_id, AIEvent.stage, func.substr(AIEvent.message, 1, 96).label('message'))
+        .where(AIEvent.run_id.in_(select(sampled_runs.c.id)), AIEvent.stage.in_(tuple(stage_names)))
+        .order_by(AIEvent.id.desc())
+        .limit(TIMING_SUMMARY_EVENT_LIMIT + 1)
+        .subquery('sampled_timing_events')
+    )
+    # Keep the run and event selections on one snapshot during retention.
+    # The event limit applies before keeping runs without any sampled event.
+    result = s.execute(
+        select(sampled_runs.c.id, sampled_events.c.id, sampled_events.c.stage, sampled_events.c.message)
+        .select_from(sampled_runs.outerjoin(sampled_events, sampled_events.c.run_id == sampled_runs.c.id))
+        .order_by(sampled_events.c.id.desc())
+    )
+    run_ids = set()
     rows = []
-    if run_ids:
-        rows = s.execute(
-            select(AIEvent.run_id, AIEvent.stage, func.substr(AIEvent.message, 1, 96))
-            .where(AIEvent.run_id.in_(run_ids),
-                   AIEvent.stage.in_(tuple(stage_names)))
-            .order_by(AIEvent.id.desc())
-            .limit(TIMING_SUMMARY_EVENT_LIMIT + 1)
-        ).all()
+    for run_id, event_id, stage, message in result:
+        run_ids.add(run_id)
+        if event_id is not None:
+            rows.append((run_id, stage, message))
 
     timings = {stage: [] for stage in stage_names.values()}
     errors = dict.fromkeys(timings, 0)
