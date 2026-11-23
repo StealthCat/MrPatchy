@@ -5,8 +5,8 @@ import json
 import math
 import time
 import uuid
-from sqlalchemy import String, JSON, Double, Text, select, func, or_
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import String, JSON, Double, Text, select, func, literal, or_
+from sqlalchemy.orm import Mapped, aliased, mapped_column
 from .db import Base, Setting, audit
 
 class Scan(Base):
@@ -319,6 +319,26 @@ def automatic_candidate_sql():
     return or_(engine.is_(None),engine!='YARA')
 
 
+def _auto_plan_enabled_hosts(s):
+    from . import ai_policy
+
+    security_prefix = 'security-policy:'
+    pause_policy = aliased(Setting)
+    host_suffix = func.substr(Setting.key, len(security_prefix) + 1, type_=String)
+    # Match keys in the database so the pause check uses the same collation as
+    # the individual lookup. A joined key distinguishes missing from JSON null.
+    policies = (
+        select(Setting.key, Setting.value, pause_policy.key, pause_policy.value)
+        .outerjoin(pause_policy, pause_policy.key == literal(ai_policy.PREFIX) + host_suffix)
+        .where(Setting.key.like(security_prefix + '%'))
+    )
+    return [
+        key[len(security_prefix):]
+        for key, policy, pause_key, pause in s.execute(policies)
+        if policy.get('auto_ai_plan') and not ai_policy.stored_paused(pause, present=pause_key is not None)
+    ]
+
+
 def auto_plan_tick(now=None):
     """Opt-in proposals only. One automatic attempt per incident evidence revision."""
     from .coordination import Lock
@@ -334,9 +354,7 @@ def auto_plan_tick(now=None):
                 recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
                 remaining-=recent
             if remaining<=0:return
-            policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
-            from . import ai_policy
-            enabled=[host for host,p in policies.items() if p.get('auto_ai_plan') and not ai_policy.status(s,host)['paused']]
+            enabled=_auto_plan_enabled_hosts(s)
             if not enabled:return
             from .operations import host_quarantined
             enabled=[host for host in enabled if not host_quarantined(s,host)]

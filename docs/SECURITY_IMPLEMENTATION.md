@@ -3886,6 +3886,18 @@ unavailable and never implies a plan will start.
 - **Limitations:** this is a point-in-time read for one server. A fleet-wide
   plan queue view and startup-change plans (never automatic) are not covered.
 
+### Automatic incident plan pause lookup — Roadmap A checkpoint #1413
+
+The automatic incident plan tick reads security opt-ins and per-server AI pause
+settings in one query. The database matches setting keys using its configured
+collation. Missing pause settings allow planning, and malformed pause settings
+keep the server paused. The tick still checks response holds, active server
+lifecycle and plan occupancy, and the worker rechecks AI policy before sending
+a provider request.
+
+This increment measures policy reads in a six-server planning fixture. Fleet
+throughput and the remaining automatic planning admission costs are still open.
+
 ### Per-server process-triage queue breakdown — worker checkpoint #975
 
 `GET /api/investigation-status` reports fleet-wide totals only. When the queue
