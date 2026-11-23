@@ -4158,6 +4158,16 @@ aging, provider-specific quotas, native complete-context collection, full suppor
 multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
 browser, full-suite and coordinator integration checks remain required.
 
+### Bulk release of provider retry waits - Roadmap A checkpoint #1451
+
+After a reviewed provider-backoff clear, the existing triage lock protects one
+database update of all active provider wait markers. The update only advances
+a deferred retry time governed by that marker and preserves later local waits,
+other retry states, and attempt data. The reviewed action, audit and outbound
+admission checks use their existing paths. On a 1,200-row fixture, main reads and
+updates 900 affected rows individually through the ORM. The worker branch uses
+one update. Roadmap A remains incomplete.
+
 ### Reviewed shared provider-backoff reset — worker checkpoint #552
 
 AI Settings exposes an active shared provider Retry-After/transient-failure floor with
