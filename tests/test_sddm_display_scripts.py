@@ -223,6 +223,21 @@ def test_context_gaps_are_blocking(kw, code):
     assert not result['complete'] and code in _codes(result)
 
 
+@pytest.mark.parametrize('family', [[], ['debian'], {}, {'family': 'debian'}, 1, True])
+@pytest.mark.parametrize('installed', [True, None, False])
+def test_malformed_family_is_a_blocking_gap_not_an_error(family, installed):
+    result = _run({f'{ETC}/a.conf': '[X11]\nDisplayCommand=/a\n'}, family=family, sddm_installed=installed)
+    assert not result['complete'] and 'input_malformed' in _codes(result)
+    assert result['applicability'] != 'applicable'
+
+
+@pytest.mark.parametrize('family,code', [(None, 'family_not_observed'), ('rhel', 'family_unsupported')])
+def test_missing_or_unsupported_family_is_never_applicable(family, code):
+    result = _run({f'{ETC}/a.conf': '[X11]\nDisplayCommand=/a\n'}, family=family)
+    assert not result['complete'] and code in _codes(result)
+    assert result['applicability'] == 'unknown'
+
+
 def test_not_installed_is_not_applicable_and_inputs_untouched():
     files = {f'{ETC}/a.conf': '[X11]\nDisplayCommand=/a\n'}
     snapshot = json.dumps(files, sort_keys=True)

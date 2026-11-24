@@ -319,6 +319,9 @@ def assess(sources: Any = None, *, exec_start: Any = None, family: Any = None,
     }
     if family is None:
         _gap(gaps, 'family_not_observed')
+    elif not isinstance(family, str):
+        _gap(gaps, 'input_malformed', None, 'Malformed family.')
+        family = None
     elif family not in APPLICABLE_FAMILIES:
         _gap(gaps, 'family_unsupported')
     if sddm_installed is False:
