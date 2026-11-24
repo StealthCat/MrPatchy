@@ -24,9 +24,9 @@ STAGES = (
     'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
     'queue_age', 'receipt_persistence', 'usage_persistence',
 )
-# AI control modes the fixture can measure without pacing or pricing changing
-# the workload. Reports from before --control-mode ran in the implicit legacy mode.
-CONTROL_MODES = ('legacy', 'unthrottled')
+# Reports from before --control-mode ran in the implicit legacy mode.
+PACED_MODES = ('rate', 'rate_and_daily')
+CONTROL_MODES = ('legacy', 'unthrottled', 'daily_cap', *PACED_MODES)
 LEGACY_CONTROL_MODE = 'legacy'
 
 
@@ -154,6 +154,13 @@ def _validate(report, label):
     runs = _integer(report.get('runs'), f'{label}.runs', positive=True)
     if not 2 <= runs <= 20:
         raise ComparisonError(f'{label}.runs must be between 2 and 20')
+    peak_provider_requests = None
+    if 'peak_provider_requests' in report:
+        field = f'{label}.peak_provider_requests'
+        peak_provider_requests = _integer(report['peak_provider_requests'], field)
+        max_peak = min(concurrency, runs)
+        if not 1 <= peak_provider_requests <= max_peak:
+            raise ComparisonError(f'{field} must be between 1 and {max_peak}')
     # Historical reports always gave each subject its own server.
     fixture_hosts = _integer(report.get('fixture_hosts', runs), f'{label}.fixture_hosts')
     if fixture_hosts not in (1, runs):
@@ -222,6 +229,44 @@ def _validate(report, label):
     else:
         control_mode = LEGACY_CONTROL_MODE
         control_mode_source = 'legacy implicit default'
+    fixture_budget = report.get('fixture_budget')
+    if control_mode in ('daily_cap', 'rate_and_daily'):
+        key = f'{label}.fixture_budget'
+        if not isinstance(fixture_budget, dict):
+            raise ComparisonError(f'{key} is required for capped modes')
+        cap = _integer(fixture_budget.get('cap_usd'), f'{key}.cap_usd')
+        settled = _integer(fixture_budget.get('settled_calls'), f'{key}.settled_calls')
+        total = _integer(fixture_budget.get('settled_microusd'), f'{key}.settled_microusd')
+        # synthetic-v1 uses $0.10 input and $0.50 output per million tokens,
+        # with zero cached tokens. Compare the exact amount in millionths of a dollar.
+        if (fixture_budget.get('pricing_version') != 'synthetic-v1'
+                or fixture_budget.get('timezone') != 'UTC' or cap != 10
+                or settled != provider_calls or 10 * total != input_tokens + 5 * output_tokens
+                or total <= 0):
+            raise ComparisonError(f'{key} must record the fixed synthetic cap and complete settlement')
+        fixture_budget = {'pricing_version': 'synthetic-v1', 'timezone': 'UTC', 'cap_usd': cap,
+                          'settled_calls': settled, 'settled_microusd': total}
+    elif 'fixture_budget' in report:
+        raise ComparisonError(f'{label}.fixture_budget applies only to capped modes')
+    fixture_rate = report.get('fixture_rate')
+    if control_mode in PACED_MODES:
+        key = f'{label}.fixture_rate'
+        if not isinstance(fixture_rate, dict):
+            raise ComparisonError(f'{key} is required for paced modes')
+        rate = _integer(fixture_rate.get('starts_per_hour'), f'{key}.starts_per_hour')
+        admitted = _integer(fixture_rate.get('admitted_starts'), f'{key}.admitted_starts')
+        wait = _bounded(fixture_rate.get('dispatch_wait_seconds'), f'{key}.dispatch_wait_seconds', 0, elapsed)
+        if not 1 <= rate <= 1000:
+            raise ComparisonError(f'{key}.starts_per_hour must be between 1 and 1000')
+        if admitted != runs:
+            raise ComparisonError(f'{key} must record one durable start per investigation')
+        # Use the elapsed floor rather than a waiting floor. A slow admission
+        # query could use up part of its next slot before we observe it.
+        if elapsed + float(REPORT_ROUNDING_RADIUS) < (runs - 1) * 3600 / rate:
+            raise ComparisonError(f'{key} elapsed time cannot contain the recorded pacing')
+        fixture_rate = {'starts_per_hour': rate, 'admitted_starts': admitted, 'dispatch_wait_seconds': wait}
+    elif 'fixture_rate' in report:
+        raise ComparisonError(f'{label}.fixture_rate applies only to paced modes')
     # Reports created before the optional synthetic receipt/usage persistence
     # delay carried no field and ran with no added delay. Treat only that
     # documented legacy contract as zero; bound any reported value.
@@ -257,11 +302,13 @@ def _validate(report, label):
         'queue_age_seconds': queue_age, 'queue_age_source': queue_age_source,
         'retained_history_rows': retained_history_rows,
         'provider_calls': provider_calls, 'input_tokens': input_tokens,
+        'peak_provider_requests': peak_provider_requests,
         'output_tokens': output_tokens, 'errors': errors,
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
         'cost_status': cost_status, 'workload_fingerprint': workload_fingerprint,
         'stages': stages,
         'ai_control_mode': control_mode, 'ai_control_mode_source': control_mode_source,
+        'fixture_budget': fixture_budget, 'fixture_rate': fixture_rate,
     }
 
 
@@ -286,6 +333,9 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         raise ComparisonError('candidate must use a distinct execution configuration')
     if base['ai_control_mode'] != current['ai_control_mode']:
         raise ComparisonError('capability mismatch: ai_control_mode differs')
+    if base['fixture_rate'] is not None:
+        if base['fixture_rate']['starts_per_hour'] != current['fixture_rate']['starts_per_hour']:
+            raise ComparisonError('capability mismatch: fixture_rate.starts_per_hour differs')
     controls = (
         'database', 'runs', 'fixture_hosts', 'single_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
@@ -307,6 +357,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'baseline': {
             'name': baseline_name, 'execution': base['execution'],
             'concurrency': base['concurrency'], 'runs': base['runs'],
+            'peak_provider_requests': base['peak_provider_requests'],
             'fixture_hosts': base['fixture_hosts'], 'single_server_slots': base['single_server_slots'],
             'provider_delay_ms': base['provider_delay_ms'],
             'ssh_delay_ms': base['ssh_delay_ms'],
@@ -320,10 +371,12 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'cost_status': base['cost_status'],
             'ai_control_mode': base['ai_control_mode'],
             'ai_control_mode_source': base['ai_control_mode_source'],
+            **({'fixture_rate': base['fixture_rate']} if base['fixture_rate'] is not None else {}),
         },
         'candidate': {
             'name': candidate_name, 'execution': current['execution'],
             'concurrency': current['concurrency'], 'runs': current['runs'],
+            'peak_provider_requests': current['peak_provider_requests'],
             'fixture_hosts': current['fixture_hosts'], 'single_server_slots': current['single_server_slots'],
             'provider_delay_ms': current['provider_delay_ms'],
             'ssh_delay_ms': current['ssh_delay_ms'],
@@ -337,12 +390,14 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'cost_status': current['cost_status'],
             'ai_control_mode': current['ai_control_mode'],
             'ai_control_mode_source': current['ai_control_mode_source'],
+            **({'fixture_rate': current['fixture_rate']} if current['fixture_rate'] is not None else {}),
         },
         'capability': {
             'runs': base['runs'], 'provider_calls': base['provider_calls'],
             'input_tokens': base['input_tokens'], 'output_tokens': base['output_tokens'],
             'workload_fingerprint': base['workload_fingerprint'],
             'stage_samples': {stage: base['stages'][stage]['count'] for stage in STAGES},
+            **({'fixture_budget': base['fixture_budget']} if base['fixture_budget'] is not None else {}),
         },
         'deltas': {
             'elapsed_seconds': _delta(base['elapsed_seconds'], current['elapsed_seconds']),
@@ -358,6 +413,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'interpretation': {
             'latency': 'Negative elapsed/stage deltas indicate lower fixture latency.',
             'throughput': 'Positive throughput deltas indicate higher fixture throughput.',
+            'provider_overlap': 'Recorded peak simultaneous fixture provider requests. '
+                                'One means no overlap was observed; null means the input omitted the measurement.',
             'scope': 'Disposable loopback fixture only; this comparison does not establish production performance.',
             'database': 'Both reports measured the same database backend; server versions are informational and may differ.',
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
