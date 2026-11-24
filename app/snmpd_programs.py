@@ -58,9 +58,9 @@ Read order (``evaluate_snapshot``) follows ``read_config_files_of_type`` and
 - Without ``SNMPCONFPATH`` snmpd searches ``/etc/snmp``, ``/usr/share/snmp``,
   ``/usr/lib/<multiarch>/snmp`` and, only when ``HOME`` is set,
   ``$HOME/.snmp``, then the persistent directory (``SNMP_PERSISTENT_DIR`` or
-  ``/var/lib/snmp``). With ``SNMPCONFPATH`` it searches only that list. The
-  list stops at its first empty element, and missing or non-directory entries
-  are skipped.
+  ``/var/lib/snmp``). With ``SNMPCONFPATH`` it searches only that list. Empty
+  elements (``:<dir>``, ``a::<dir>``) are skipped, not treated as the end of
+  the list, and missing or non-directory entries are skipped.
 - In each directory it reads ``<type>.conf`` then ``<type>.local.conf``. A
   directory whose name starts with the persistent directory (or
   ``SNMP_PERSISTENT_FILE``) first gets ``<type>.0.conf`` to ``<type>.10.conf``,
@@ -721,8 +721,10 @@ class _Reader:
     def read_in_path(self, path: str, header: str, context: str, perspath: str, level: int) -> None:
         for directory in path.split(':'):
             if directory == '':
-                # The C loop stops at the first empty element.
-                break
+                # The C loop stops only when the remaining string is empty. An
+                # empty element before another one becomes stat(""), which
+                # fails, so it is skipped and the search goes on.
+                continue
             kind = self.kind(directory)
             if kind is None:
                 self.state.gap('path_not_observed', path=directory)

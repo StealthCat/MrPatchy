@@ -12569,7 +12569,7 @@ snmpd runs configured programs whenever an SNMP manager reads, or for writable e
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Increment 2 (read order):** `evaluate_snapshot` derives snmpd's read order from a captured filesystem snapshot, following `read_config_files_of_type`, `read_config_files_in_path` and `read_config` in net-snmp 5.9.4 `snmplib/read_config.c`. The snapshot lists files, directory entries and absent paths. It returns the order it read files in, and can be `complete`.
   - **Search path:** without `SNMPCONFPATH`, the path is `/etc/snmp:/usr/share/snmp:/usr/lib/x86_64-linux-gnu/snmp`. `$HOME/.snmp` is added only when `HOME` is set. The persistent directory (`SNMP_PERSISTENT_DIR`, default `/var/lib/snmp`) is read after it. With `SNMPCONFPATH`, snmpd reads only that list.
-  - **Files per directory:** `<type>.conf` is read, then `<type>.local.conf`. Missing and non-directory entries are skipped, and the list stops at its first empty element.
+  - **Files per directory:** `<type>.conf` is read, then `<type>.local.conf`. Missing and non-directory entries are skipped. Empty elements (`:<dir>`, `a::<dir>`) are skipped like snmpd's `stat("")`; only an empty remainder ends the list.
   - **Persistent backups:** a directory matching the persistent-directory or `SNMP_PERSISTENT_FILE` prefix first gets `<type>.0.conf` to `<type>.10.conf`, stopping at the first missing one.
   - **`includeFile`** resolves a relative name against the including file's directory.
   - **`includeSearch`** searches the path for the name, with one `.conf` suffix removed.

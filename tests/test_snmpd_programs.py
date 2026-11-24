@@ -277,15 +277,37 @@ def test_local_conf_home_and_persistent_backups_follow_read_config_files_in_path
     assert result['complete'] is True
 
 
-def test_snmpconfpath_replaces_the_search_and_stops_at_an_empty_element():
+def test_snmpconfpath_replaces_the_search_and_skips_empty_elements():
     files = {
         '/opt/a/snmpd.conf': 'extend a /bin/a\n',
         '/etc/snmp/snmpd.conf': 'extend etc /bin/etc\n',
         '/opt/b/snmpd.conf': 'extend b /bin/b\n',
     }
-    result = run_snapshot(files, {'/opt/a': None, '/opt/b': None}, environ={'SNMPCONFPATH': '/opt/a::/opt/b'})
-    assert order(result) == ['/opt/a/snmpd.conf']
-    assert [row['name'] for row in result['programs']] == ['a']
+    dirs = {'/opt/a': [], '/opt/b': []}
+    # read_config_files_in_path stops only when the remaining string is empty; a
+    # middle empty element is stat("") and is skipped, so /opt/b is still read.
+    result = run_snapshot(files, dirs, environ={'SNMPCONFPATH': '/opt/a::/opt/b'})
+    assert order(result) == ['/opt/a/snmpd.conf', '/opt/b/snmpd.conf']
+    assert [row['name'] for row in result['programs']] == ['a', 'b']
+    assert result['complete'] is True
+
+
+def test_snmpconfpath_leading_or_middle_empty_element_does_not_hide_programs():
+    # Regression: SNMPCONFPATH=":<dir>" or "/nonexistent::<dir>" made the contract
+    # read nothing and still report complete, while real snmpd reads <dir>.
+    files = {'/tmp/x/snmpd.conf': 'extend evilx /tmp/evil.sh\n'}
+    for confpath in (':/tmp/x', '/nonexistent::/tmp/x'):
+        result = run_snapshot(files, {'/tmp/x': []}, absent=('/nonexistent',),
+                              environ={'SNMPCONFPATH': confpath})
+        assert order(result) == ['/tmp/x/snmpd.conf'], confpath
+        assert [row['argv'] for row in programs(result, name='evilx')] == [['/tmp/evil.sh']], confpath
+        assert result['complete'] is True, confpath
+    # A trailing empty element still ends the list: nothing follows it.
+    result = run_snapshot(files, {'/tmp/x': []}, environ={'SNMPCONFPATH': '/tmp/x:'})
+    assert order(result) == ['/tmp/x/snmpd.conf']
+
+
+def test_snmpconfpath_persistent_directory_prefix_reads_backups():
     # The persistent directory is read only when it is in SNMPCONFPATH; prefix match gets backups.
     result = run_snapshot({'/var/lib/snmp/snmpd.0.conf': 'extend p0 /bin/p0\n', '/var/lib/snmp/snmpd.conf': ''},
                           environ={'SNMPCONFPATH': '/var/lib/snmp'})
