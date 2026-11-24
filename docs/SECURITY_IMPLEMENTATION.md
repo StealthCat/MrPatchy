@@ -6519,6 +6519,73 @@ exist, and performs no I/O.
 persistence, baselines and alerts, UI, provenance, AI classification and
 native acceptance. No schema, API, auth or response-authorization change.
 
+### openbsd-inetd configuration contract — worker checkpoint #1114
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/inetd_conf.py` is a pure, versioned contract for `/etc/inetd.conf`.
+inetd listens on each configured socket and, for every connection or datagram,
+starts the configured program as the configured user, or answers with a
+built-in service. A line such as `31337 stream tcp nowait root /bin/sh sh -i`
+is a root shell on a port. The contract takes the captured file text and
+performs no I/O, name lookup or response action.
+
+- **Source.** `inetd.c` in openbsd-inetd 0.20221205 with the Debian patches
+  applied (Ubuntu `openbsd-inetd_0.20221205-3build5`). The orig tarball's
+  sha256 is `2d53137f…8ab5a` and the debian tarball's is `4c34c5bc…7e5b`. The
+  packaged systemd unit runs `/usr/sbin/inetd` without arguments. The rules
+  come from reading that source; no compiled inetd was run.
+- **Lines.** `fgets` reads 1023-byte pieces. Only a piece whose *first* byte
+  is `#` is a comment; an indented `#` is parsed as fields. Fields split at
+  spaces and tabs only. When a line runs out, an indented next line continues
+  the entry, so a blank line followed by an indented line starts an entry.
+- **Fields.** `host:` prefixes (`[v6]:`, `:` for `*`, comma-separated host
+  lists), `host:` default-host lines, `stream`/`dgram` (other socket types
+  never listen), protocol with `,sndbuf=`/`,rcvbuf=` sizes, `wait`/`nowait`
+  with a `.max` rate (invalid values fall back to the `-R` default of 256 per
+  60 s), `user` with `.group` or `:group`, the program or `internal`, and at
+  most 20 arguments (extra arguments are dropped and counted). With no
+  arguments, argv[0] is the program's base name. Built-ins (`echo`, `discard`,
+  `time`, `daytime`, `chargen`) run inside inetd as root and never wait.
+- **IPv4 and IPv6.** Debian's `default_v4v6` patch loads a protocol without a
+  trailing `4` or `6` twice, as IPv4 and then as IPv6 with `6` appended. The
+  IPv6 pass re-parses only a saved copy of the entry's first physical line.
+  Arguments on continuation lines are therefore missing from the IPv6 copy,
+  and a field missing from that line rejects it. The copy is parsed in place,
+  so `skip()` and the host parser leave NUL bytes in it: when a re-parse fails
+  before the protocol, the next one reads the line cut at the first NUL and can
+  take a later continuation line as the rest of the entry (for example an IPv6
+  root shell after a malformed protocol). When a re-parse consumes no line and
+  leaves the copy unchanged, inetd repeats it forever; this is reported as a
+  blocking gap. A literal address of the wrong family drops that listener.
+- **Merging and spawn.** A later entry with the same service, host, protocol
+  and address replaces the earlier one's user, group, program, argv and rate.
+  It takes the wait mode only when the earlier entry was `wait` or the later
+  one is `nowait`, and never from a built-in. The first entry's socket type and
+  built-in stay. A root user's group is ignored, because inetd sets root's own
+  primary group. `execv` runs the program path as written, and relative paths
+  are flagged.
+- **Each service reports** its line(s), host and address, family, port or unix
+  socket path, socket type, protocol, RPC versions and program, wait mode, rate
+  limit, user and group, built-in or program and argv, a root flag and any
+  name lookup it needs. The root flag is `true` for `root` and built-ins and
+  `null` otherwise, because uid mapping is not observed. Rejected entries
+  record inetd's reason: `syntax_error`, `unknown_internal_service`,
+  `malformed_buffer_option`, `too_many_buffer_sizes`, `invalid_buffer_size`,
+  `no_rpc_version`, `bad_rpc_version` or `no_resolvable_address`.
+- **Fail closed.** An unobserved or unreadable file, NUL bytes, invalid UTF-8
+  and over-limit input mark the result incomplete. So does a buffer size inetd
+  parses by reading past the end of its string (a digits-only last size such
+  as `,rcvbuf=65536`); that service is `unresolved`. An absent file means the
+  packaged unit does not start inetd. Name lookups (`/etc/services`,
+  `/etc/rpc` and host names) are listed per service as non-blocking gaps.
+  Every result also names what it cannot observe: whether inetd runs and with
+  which options or file, uid mapping, kernel IPv6 support, socket binding, and
+  program contents and working directory. `origin` is always `not_assessed`.
+
+**Not covered:** xinetd, agent collection, catalog wiring, persistence,
+baselines and alerts, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
