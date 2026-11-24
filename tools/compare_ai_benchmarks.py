@@ -154,6 +154,13 @@ def _validate(report, label):
     runs = _integer(report.get('runs'), f'{label}.runs', positive=True)
     if not 2 <= runs <= 20:
         raise ComparisonError(f'{label}.runs must be between 2 and 20')
+    peak_provider_requests = None
+    if 'peak_provider_requests' in report:
+        field = f'{label}.peak_provider_requests'
+        peak_provider_requests = _integer(report['peak_provider_requests'], field)
+        max_peak = min(concurrency, runs)
+        if not 1 <= peak_provider_requests <= max_peak:
+            raise ComparisonError(f'{field} must be between 1 and {max_peak}')
     # Historical reports always gave each subject its own server.
     fixture_hosts = _integer(report.get('fixture_hosts', runs), f'{label}.fixture_hosts')
     if fixture_hosts not in (1, runs):
@@ -295,6 +302,7 @@ def _validate(report, label):
         'queue_age_seconds': queue_age, 'queue_age_source': queue_age_source,
         'retained_history_rows': retained_history_rows,
         'provider_calls': provider_calls, 'input_tokens': input_tokens,
+        'peak_provider_requests': peak_provider_requests,
         'output_tokens': output_tokens, 'errors': errors,
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
         'cost_status': cost_status, 'workload_fingerprint': workload_fingerprint,
@@ -349,6 +357,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'baseline': {
             'name': baseline_name, 'execution': base['execution'],
             'concurrency': base['concurrency'], 'runs': base['runs'],
+            'peak_provider_requests': base['peak_provider_requests'],
             'fixture_hosts': base['fixture_hosts'], 'single_server_slots': base['single_server_slots'],
             'provider_delay_ms': base['provider_delay_ms'],
             'ssh_delay_ms': base['ssh_delay_ms'],
@@ -367,6 +376,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'candidate': {
             'name': candidate_name, 'execution': current['execution'],
             'concurrency': current['concurrency'], 'runs': current['runs'],
+            'peak_provider_requests': current['peak_provider_requests'],
             'fixture_hosts': current['fixture_hosts'], 'single_server_slots': current['single_server_slots'],
             'provider_delay_ms': current['provider_delay_ms'],
             'ssh_delay_ms': current['ssh_delay_ms'],
@@ -403,6 +413,8 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'interpretation': {
             'latency': 'Negative elapsed/stage deltas indicate lower fixture latency.',
             'throughput': 'Positive throughput deltas indicate higher fixture throughput.',
+            'provider_overlap': 'Recorded peak simultaneous fixture provider requests. '
+                                'One means no overlap was observed; null means the input omitted the measurement.',
             'scope': 'Disposable loopback fixture only; this comparison does not establish production performance.',
             'database': 'Both reports measured the same database backend; server versions are informational and may differ.',
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
