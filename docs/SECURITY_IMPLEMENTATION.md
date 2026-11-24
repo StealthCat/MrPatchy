@@ -6661,6 +6661,61 @@ and the shared-local-volume deployment are prerequisites. Deliver deployment
 separation and supported remote-worker setup as one coherent feature, with
 incremental milestones where needed.
 
+### networkd-dispatcher script contract — worker checkpoint #1126
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/networkd_dispatcher.py` is a pure, versioned contract for
+networkd-dispatcher. Ubuntu Server installs it, and its root daemon runs the
+files in `<state>.d` directories whenever a systemd-networkd link enters that
+state. The Debian/Ubuntu package also runs them once at service start. It takes
+captured directory and file metadata and the text of
+`/etc/default/networkd-dispatcher`, and performs no I/O.
+
+- **Source.** `scripts_in_path`, `check_perms`, `handle_state`,
+  `run_hooks_for_state` and `parse_args` in networkd-dispatcher 2.2.4, the
+  shipped unit and the Debian patches (`2.2.4-1.2ubuntu1`) that move its
+  `EnvironmentFile` to `/etc/default/networkd-dispatcher` and set
+  `--run-startup-triggers`. The rules come from reading that source; the daemon
+  was not run.
+- **Directories.** The default directories are `/etc/networkd-dispatcher` and
+  then `/usr/lib/networkd-dispatcher`. `-S`/`--script-dir` (including unique
+  long-option prefixes and clustered short options) replaces them. Only the 16
+  known administrative and operational state names are dispatched; any other
+  `<name>.d` is reported as never run.
+- **Selection.** For each state, the entry names of every directory are unioned
+  and sorted by code point, with no name filter (hidden and backup names run).
+  Each name uses the first directory in which:
+  - the path is a regular file after following symlinks;
+  - the `<state>.d` directory itself is exactly `0755` and `root:root` (a
+    symlinked directory always fails);
+  - the resolved file is exactly `0755` and `root:root`.
+
+  A failing entry falls through to the next directory instead of masking it.
+- **Report.** Each script's order and its argv (`[path]`, executed directly,
+  with no shell) run as root. The environment variable names are listed, with
+  `ESSID` and `json` flagged because a nearby transmitter chooses the network
+  name. The report also says whether startup triggers run, and evaluates the
+  unit's `ConditionPathExistsGlob`.
+- **Fail closed.** These mark the result incomplete:
+  - an unobserved, unreadable or unparsable arguments file (backslashes, `$`,
+    mixed quoting, or unknown, `--help` or argument-less options);
+  - a relative or empty `--script-dir` component;
+  - unobserved directory listings, directory modes or file metadata;
+  - duplicate or malformed entries;
+  - over-limit input.
+
+  An entry whose name an unlisted (unobserved or unreadable) higher-priority
+  directory for the same state could hold is reported `unresolved`, not
+  `runs`, and is left out of the ordered script list.
+
+  `origin` is always `not_assessed`. Each result names what it cannot observe:
+  package and service state, unit overrides, link states, the daemon's
+  inherited environment and script contents.
+
+**Not covered:** agent collection, catalog `entries_parsed` wiring,
+persistence, baselines and alerts, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
+
 ### Fixed role Compose files — worker checkpoint #676
 
 `compose.controller.yaml` (app and Caddy, extending the `compose.yaml` services) and
