@@ -10,9 +10,13 @@ module.exports=async(page,capture)=>{
   const requests=[];
   const count=route=>route.fulfill({json:{unread:3}});
   const hosts=async route=>{const response=await route.fetch();const list=await response.json();route.fulfill({json:[...list,{id:hostId,name:'Deep link <b>server</b>',address:'192.0.2.90',enabled:true}]});};
-  const list=route=>{
+  let holdUnfilteredPage=null;
+  const list=async route=>{
     const url=new URL(route.request().url()),q=url.searchParams;requests.push(q);
-    const visible=items.filter(item=>(!q.get('severity')||item.severity===q.get('severity'))&&(!q.get('source')||item.source===q.get('source'))&&(!q.get('host_id')||item.host_id===q.get('host_id'))&&(!q.get('lifecycle')||item.lifecycle===q.get('lifecycle')));
+    if(holdUnfilteredPage&&q.get('limit')==='25'&&!q.has('source')){
+      const hold=holdUnfilteredPage;holdUnfilteredPage=null;hold.started();await hold.resume;
+    }
+    const visible=items.filter(item=>(!q.get('severity')||item.severity===q.get('severity'))&&(!q.get('source')||item.source===q.get('source'))&&(!q.get('host_id')||item.host_id===q.get('host_id'))&&(!q.get('lifecycle')||item.lifecycle===q.get('lifecycle'))&&(!q.has('unread_only')||!item.read));
     const limit=Number(q.get('limit')||8),offset=Number(q.get('offset')||0);
     return route.fulfill({json:{items:visible.slice(offset,offset+limit).map(item=>({...item})),offset,limit,total:visible.length,more:offset+limit<visible.length}});
   };
@@ -81,6 +85,44 @@ module.exports=async(page,capture)=>{
     // A page past the end opens the last page instead of an empty list.
     await page.evaluate(()=>{location.hash='#notifications?severity=high&page=9';});
     await page.waitForFunction(()=>location.hash==='#notifications?severity=high&page=2');await range('26–30 of 30');
+
+    // Reading the last result on a filtered page moves to the last valid page.
+    items.filter(item=>item.severity==='high').slice(0,4).forEach(item=>{item.read=true;});
+    const readRoute=/\/api\/notifications\/[0-9a-f]{64}\/read$/;
+    const markRead=route=>{
+      const id=new URL(route.request().url()).pathname.split('/').at(-2);
+      items.find(item=>item.id===id).read=true;
+      return route.fulfill({json:{read:true}});
+    };
+    await page.route(readRoute,markRead);
+    try{
+      await page.evaluate(()=>{location.hash='#notifications?severity=high&unread=1&page=2';});
+      await range('26–26 of 26');
+      await page.locator('#notification-center-list').getByRole('button',{name:'Mark read'}).click();
+      await page.waitForFunction(()=>location.hash==='#notifications?severity=high&unread=1');
+      await range('1–25 of 25');
+    }finally{await page.unroute(readRoute,markRead);}
+
+    // A background refresh must not supersede the full render during quiet Clear.
+    await page.evaluate(()=>{location.hash='#notifications?source=scanner';});
+    await page.waitForFunction(()=>document.querySelector('#notification-filters [name=source]')?.value==='scanner');
+    let signalStarted,release;
+    const started=new Promise(resolve=>{signalStarted=resolve;});
+    holdUnfilteredPage={started:signalStarted,resume:new Promise(resolve=>{release=resolve;})};
+    try{
+      await Promise.all([
+        page.waitForRequest(request=>{
+          const url=new URL(request.url());
+          return url.pathname==='/api/notifications'&&url.searchParams.get('limit')==='25'&&!url.searchParams.has('source');
+        }),
+        page.getByRole('button',{name:'Clear'}).click(),
+      ]);
+      await started;
+      await page.evaluate(()=>window.NotificationShell.refresh());
+    }finally{release();}
+    await page.waitForFunction(()=>document.querySelector('#notification-filters [name=source]')?.value==='');
+    assert.equal(await hash(),'#notifications');
+    await range('1–25 of 60');
 
     for(const viewport of [{width:320,height:700},{width:768,height:1024},{width:1440,height:1000}]){
       await page.setViewportSize(viewport);
