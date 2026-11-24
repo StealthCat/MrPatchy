@@ -52,4 +52,31 @@ module.exports=async(page,capture)=>{
  }finally{
   await page.unroute('**/api/investigation-status',status);await page.unroute('**/api/investigations?*',rows);
  }
+
+ let authoritative=true;
+ const settings=async route=>{
+  if(route.request().method()!=='GET')return route.fallback();
+  const response=await route.fetch(),data=await response.json();
+  await route.fulfill({response,json:{...data,ai_control_mode:'daily_cap',ai_budget:{...budget,next_reset_authoritative:authoritative}}});
+ };
+ await page.route('**/api/settings',settings);
+ try{
+  await page.goto(new URL('/#settings/ai',page.url()).href);await page.reload();
+  const card=page.locator('#ai-settings-form .notice').filter({hasText:'Current budget window'});
+  await card.waitFor();
+  assert.match(await card.innerText(),/remaining \$5\.750000 · resets /);
+  authoritative=false;await page.reload();await card.waitFor();
+  const recheck=await card.innerText();
+  assert.match(recheck,/remaining \$5\.750000 · recheck at /);
+  assert.match(recheck,/Spend from an earlier budget window may still count after this time\./);
+  assert.doesNotMatch(recheck,/ · resets /);
+  for(const width of [320,768,1440]){
+   await page.setViewportSize({width,height:1000});
+   assert(await card.evaluate(element=>element.scrollWidth<=element.clientWidth+1));
+   await capture('ai-settings-budget-recheck-'+width);
+  }
+ }finally{
+  await page.setViewportSize({width:1440,height:1000});
+  await page.unroute('**/api/settings',settings);
+ }
 };
