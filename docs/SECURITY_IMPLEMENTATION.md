@@ -12544,3 +12544,31 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### Repeated paired triage benchmarks — Roadmap A checkpoint #1483
+
+Use the existing disposable fixture to record at least three independent serial
+and parallel pairs under the same database version, AI controls, workload and
+concurrency settings. Keep the pairs in capture order and alternate which
+configuration runs first when possible.
+
+```bash
+python tools/compare_ai_benchmark_series.py \
+  --pair serial-1.json parallel-1.json \
+  --pair serial-2.json parallel-2.json \
+  --pair serial-3.json parallel-3.json
+```
+
+The command checks each pair with the existing comparator, requires stable
+controls and workloads across repeats, and refuses a reused report even if its
+JSON formatting changed. It records each elapsed and throughput difference and
+the median and range of the paired differences, along with the stage latency
+differences where samples exist. The existing one-pair tool remains available.
+
+A local check with three independent pairs per backend retained eight completed
+investigations, 12 simulated provider calls and four simulated SSH follow-ups
+per run. At four investigation slots, the median paired elapsed difference was
+−3.385 s on SQLite 3.50.4 (range −3.413 to −2.410 s) and −6.151 s on MySQL 8.4.13
+(range −6.349 to −5.913 s). These ranges describe the disposable fixture runs.
+Roadmap A still needs exact integrated-head reruns and production-equivalent
+benchmark evidence.
