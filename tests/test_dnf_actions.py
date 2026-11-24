@@ -216,3 +216,60 @@ def test_randomized_agreement_with_plugin_parser(tmp_path):
         got = resolve(*listing)
         assert sorted((a['path'].rsplit('/', 1)[1], a['package_filter'], a['state'], a['command']['value'])
                       for a in got['actions']) == expected, trial
+
+
+LEFTOVER_CONFS = [
+    pytest.param(present('[main]\nenabled = invalid\n'), id='invalid_enabled'),
+    pytest.param(present('enabled = 0\n'), id='parse_error'),
+    pytest.param({'present': True, 'content': None}, id='unreadable'),
+    pytest.param(None, id='not_collected'),
+    pytest.param('junk', id='malformed_observation'),
+]
+
+
+@pytest.mark.parametrize('conf', LEFTOVER_CONFS)
+@pytest.mark.parametrize('dnf,installed,state,reason', [
+    (present('[main]\nplugins=false\n'), True, 'disabled', 'dnf_conf_plugins_disabled'),
+    (present('[main]\nplugins=0\n'), None, 'disabled', 'dnf_conf_plugins_disabled'),
+    (present('[main]\nplugins=true\n'), False, 'not_installed', 'plugin_not_installed'),
+    (present('[main]\nplugins=false\n'), False, 'not_installed', 'plugin_not_installed'),
+])
+def test_known_inactive_plugin_ignores_local_configuration(conf, dnf, installed, state, reason):
+    result = da.resolve([entry('a.action', '*:in:/usr/bin/touch /tmp/pwn\n')], conf, dnf,
+                        plugin_installed=installed)
+    assert (result['plugin']['state'], result['plugin']['reason']) == (state, reason)
+    assert [a['runs'] for a in result['actions']] == [False]
+    assert not [c for c in codes(result) if c.startswith('plugin_conf') or c == 'invalid_observation']
+    assert result['complete'] is (installed is not None)
+
+
+def test_known_inactive_plugin_keeps_global_configuration_errors():
+    for dnf, reason in ((present('[main]\nplugins=sometimes\n'), 'dnf_conf_invalid_plugins'),
+                        (present('plugins=0\n'), 'dnf_conf_parse_error')):
+        result = da.resolve([entry('a.action', 'a:in:b\n')], present('[main]\nenabled=invalid\n'), dnf,
+                            plugin_installed=False)
+        assert (result['plugin']['state'], result['plugin']['reason']) == ('config_error', reason)
+
+
+def test_inactive_plugin_actiondir_override_is_evidence_not_a_gap():
+    result = da.resolve([entry('a.action', 'a:in:b\n')], present('[main]\nactiondir=/srv/hooks\n'),
+                        {'present': False}, plugin_installed=False)
+    assert result['plugin']['actiondir'] == '/srv/hooks' and result['actions'] == []
+    assert result['complete'] is True and 'actiondir_override' not in codes(result)
+
+
+def test_enabled_plugin_still_requires_local_configuration():
+    for conf, state in ((present('[main]\nenabled = invalid\n'), 'config_error'), (None, 'unknown')):
+        result = da.resolve([entry('a.action', 'a:in:b\n')], conf, present('[main]\nplugins=1\n'),
+                            plugin_installed=True)
+        assert result['plugin']['state'] == state and result['actions'][0]['runs'] is False
+
+
+def test_non_regular_action_entry_stops_every_action_but_keeps_evidence():
+    result = resolve(entry('bad.action', None, 'directory'), entry('ok.action', '*:in:/usr/bin/id\n'))
+    assert result['plugin']['state'] == 'enabled' and result['complete'] is False
+    [action] = result['actions']
+    assert action['path'] == DIR + 'ok.action' and action['command']['value'] == '/usr/bin/id'
+    assert action['runs'] is False and action['blocked_by'] == 'action_file_read_error'
+    clean = resolve(entry('ok.action', '*:in:/usr/bin/id\n'))
+    assert clean['actions'][0]['runs'] is True and 'blocked_by' not in clean['actions'][0]

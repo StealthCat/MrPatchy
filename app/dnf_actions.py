@@ -22,7 +22,9 @@ Behavior follows dnf-plugins-core ``plugins/post-transaction-actions.py`` (DNF 4
 - An unreadable, non-regular or undecodable ``*.action`` entry makes the
   plugin's ``open()``/``readlines()`` raise. Every action file is read before
   any command runs, so such a read error means the plugin runs no actions in
-  that transaction; the contract reports it as a blocking gap.
+  that transaction; the contract reports it as a blocking gap. When the entry
+  is known not to be a regular file, actions parsed from other files are kept
+  as evidence with ``runs`` false and ``blocked_by`` ``action_file_read_error``.
 
 Plugin enablement follows dnf ``Plugin.read_config`` and ``_check_enabled`` with
 the libdnf INI parser: ``/etc/dnf/plugins/post-transaction-actions.conf`` is
@@ -31,6 +33,11 @@ whose OptionBool value is false. Keys and sections are case-sensitive, a later
 value wins, matching outer quotes are trimmed and indented lines continue a
 value. A parse error or a non-boolean ``enabled`` is a configuration error.
 ``dnf.conf`` ``[main] plugins`` false disables every plugin.
+``Base.init_plugins`` skips loading entirely when plugins are globally off, and
+dnf reads plugin-local configuration only for plugin classes it discovered, so a
+plugin known to be absent or globally disabled is decided before its local
+configuration is read; that configuration cannot then make the result a
+configuration error or incomplete. Global ``dnf.conf`` errors stay decisive.
 
 It performs no I/O, never runs dnf or a configured command and never authorizes
 a response action. Fail-closed rules:
@@ -86,6 +93,9 @@ class _IniError(Exception):
         super().__init__(reason)
         self.line = line
         self.reason = reason
+
+
+INACTIVE_STATES = frozenset({'not_installed', 'disabled'})
 
 
 def _gap(code: str, detail: str, **extra: Any) -> dict[str, Any]:
@@ -249,6 +259,20 @@ def parse_action_file(text: str) -> tuple[list[dict[str, Any]], list[dict[str, A
     return actions, rejected
 
 
+def _inactive_actiondir(plugin_conf: Any) -> str:
+    """Best-effort action directory of a plugin dnf will not load; its local configuration cannot block."""
+    if isinstance(plugin_conf, dict) and plugin_conf.get('present') is True:
+        text, _ = _text(plugin_conf)
+        if text is not None:
+            try:
+                main = parse_ini(text).get('main') or {}
+            except _IniError:
+                return DEFAULT_ACTIONDIR
+            if 'actiondir' in main:
+                return main['actiondir']
+    return DEFAULT_ACTIONDIR
+
+
 def _plugin_state(plugin_conf: Any, dnf_conf: Any, installed: Any, add_gap: Any) -> tuple[str, str, str | None]:
     """Return (state, reason, actiondir)."""
     actiondir: str | None = DEFAULT_ACTIONDIR
@@ -285,6 +309,12 @@ def _plugin_state(plugin_conf: Any, dnf_conf: Any, installed: Any, add_gap: Any)
     elif not isinstance(installed, bool):
         add_gap('invalid_observation', 'The plugin installation observation is malformed.')
         installed = None
+    # dnf skips plugin loading entirely when plugins are globally off, and only reads the local configuration
+    # of plugin classes it discovered, so neither case depends on the plugin-local configuration.
+    if installed is False:
+        return 'not_installed', 'plugin_not_installed', _inactive_actiondir(plugin_conf)
+    if global_enabled is False:
+        return 'disabled', 'dnf_conf_plugins_disabled', _inactive_actiondir(plugin_conf)
     if plugin_conf is None:
         add_gap('plugin_conf_not_collected', f'{PLUGIN_CONF} was not collected.')
         return 'unknown', 'plugin_conf_not_collected', None
@@ -311,10 +341,6 @@ def _plugin_state(plugin_conf: Any, dnf_conf: Any, installed: Any, add_gap: Any)
             enabled = parsed
         if main is not None and 'actiondir' in main:
             actiondir = main['actiondir']
-    if installed is False:
-        return 'not_installed', 'plugin_not_installed', actiondir
-    if global_enabled is False:
-        return 'disabled', 'dnf_conf_plugins_disabled', actiondir
     if not enabled:
         return 'disabled', 'plugin_conf_disabled', actiondir
     if installed is None or global_enabled is None:
@@ -348,7 +374,9 @@ def resolve(actions_dir: Any, plugin_conf: Any = None, dnf_conf: Any = None, *,
     files: list[dict[str, Any]] = []
     actions: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
-    if actiondir is not None and actiondir != DEFAULT_ACTIONDIR:
+    if actiondir is not None and actiondir != DEFAULT_ACTIONDIR and state in INACTIVE_STATES:
+        pass  # Nothing runs from the other location, so the uncollected directory is not a coverage gap.
+    elif actiondir is not None and actiondir != DEFAULT_ACTIONDIR:
         add_gap('actiondir_override', 'The plugin reads action files from a different location, which was not '
                 'collected.', actiondir=actiondir[:MAX_VALUE],
                 glob=(actiondir + '*.action')[:MAX_VALUE])
@@ -405,6 +433,11 @@ def resolve(actions_dir: Any, plugin_conf: Any = None, dnf_conf: Any = None, *,
             for item in file_rejected:
                 if len(rejected) < MAX_REJECTED:
                     rejected.append({'path': path, **item})
+    if any(f['state'] == 'plugin_read_error' for f in files):
+        # _parse_actions() raises on this entry before any transaction command is selected, so no action runs.
+        for action in actions:
+            action['runs'] = False
+            action['blocked_by'] = 'action_file_read_error'
     return {
         'contract_version': CONTRACT_VERSION,
         'plugin': {'name': PLUGIN, 'state': state, 'reason': reason, 'installed': plugin_installed
