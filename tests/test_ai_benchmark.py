@@ -91,6 +91,10 @@ def test_configured_follow_up_runs_preserve_matched_workload(follow_up_runs):
         assert parallel['stages'][stage] == serial['stages'][stage]
     for report in (serial, parallel):
         assert report['provider_calls'] == 4 + follow_up_runs
+        assert report['persisted_assessments'] == {
+            'subjects': 4, 'input_stages': 4 + follow_up_runs,
+            'follow_up_subjects': follow_up_runs,
+        }
         assert report['stages']['ssh_evidence']['count'] == follow_up_runs
         assert report['stages']['two_stage']['count'] == follow_up_runs
         assert report['stages']['one_stage']['count'] == 4 - follow_up_runs
