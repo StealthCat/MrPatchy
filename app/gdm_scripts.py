@@ -164,8 +164,10 @@ def _parse(observation: Any) -> tuple[str, dict[str, dict[str, Any]], dict[str, 
         if names is None:
             listings[path] = None
             continue
-        if not isinstance(names, list) or len(set(names)) != len(names) or any(
-                not isinstance(n, str) or not n or '/' in n or '\0' in n or n in ('.', '..') for n in names):
+        # Validate every entry before detecting duplicates: set() raises TypeError on an object or array.
+        if not isinstance(names, list) or any(
+                not isinstance(n, str) or not n or '/' in n or '\0' in n or n in ('.', '..') for n in names) \
+                or len(set(names)) != len(names):
             raise Invalid('invalid directory listing')
         listings[path] = names
     return confdir, paths, listings

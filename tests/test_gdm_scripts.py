@@ -1,6 +1,7 @@
 """Tests for the pure GDM display-manager script contract (#1405)."""
 from __future__ import annotations
 
+import json
 import unittest
 
 from app import gdm_scripts as g
@@ -161,6 +162,46 @@ class EvaluateTests(unittest.TestCase):
         for names in (['a/b'], ['..'], ['x', 'x'], [''], 'Default'):
             r = g.evaluate(obs({}, {f'{CONF}/Init': names}))
             self.assertEqual(r['gaps'][0]['code'], 'invalid_observation', names)
+
+
+    def test_non_string_listing_entries_are_invalid_not_errors(self) -> None:
+        listings = ('{"confdir":"/etc/gdm","listings":{"/etc/gdm/Init":[{}]}}',
+                    '{"confdir":"/etc/gdm","listings":{"/etc/gdm/Init":[[]]}}',
+                    '{"confdir":"/etc/gdm","listings":{"/etc/gdm/Init":["Default",{"a":1}]}}',
+                    '{"confdir":"/etc/gdm","listings":{"/etc/gdm/Init":[1,1]}}',
+                    '{"confdir":"/etc/gdm","listings":{"/etc/gdm/Init":[null]}}')
+        for raw in listings:
+            o = json.loads(raw)
+            r = g.evaluate(o)
+            self.assertFalse(r['complete'], raw)
+            self.assertEqual([x['code'] for x in r['gaps']], ['invalid_observation'], raw)
+            for phase in g.PHASES:
+                r = g.select(o, phase, ':0', 'ws1')
+                self.assertFalse(r['complete'], raw)
+                self.assertEqual([x['code'] for x in r['gaps']], ['invalid_observation'], raw)
+
+    def test_malformed_json_values_never_raise(self) -> None:
+        bad = ({}, [], [{}], 1, True, None, 'x')
+        for value in bad:
+            cases = (
+                {'confdir': value},
+                {'confdir': CONF, 'paths': value},
+                {'confdir': CONF, 'listings': value},
+                {'confdir': CONF, 'paths': {f'{CONF}/Init/Default': value}},
+                {'confdir': CONF, 'paths': {f'{CONF}/Init/Default': {'state': value}}},
+                {'confdir': CONF, 'paths': {f'{CONF}/Init/Default': {'state': 'present', 'kind': value}}},
+                {'confdir': CONF, 'paths': {f'{CONF}/Init/Default': {'state': 'present', 'kind': 'regular',
+                                                                     'executable': value}}},
+                {'confdir': CONF, 'listings': {f'{CONF}/Init': [value]}},
+            )
+            for o in cases:
+                self.assertIn('complete', g.evaluate(o), o)
+                self.assertIn('complete', g.select(o, 'PostLogin', ':0', 'ws1'), o)
+            o = obs({f'{CONF}/PostLogin/Default': exe()})
+            for phase, display, host in ((value, ':0', None), ('PostLogin', value, None), ('PostLogin', ':0', value)):
+                r = g.select(o, phase, display, host)
+                if not isinstance(value, str) and value is not None:
+                    self.assertFalse(r['complete'], (phase, display, host))
 
 
 if __name__ == '__main__':
