@@ -3647,6 +3647,26 @@ and an allowance of three, the status read went from two statements to one.
 The time remained correct when entries tied at the boundary. Production latency
 and the broader shared-controls acceptance remain open.
 
+### Database connection loss during a capped reservation — milestone 4 acceptance #1293
+
+`tests/test_ai_budget_connection_loss.py` interrupts the native connection
+around the reservation commit with an earlier uncertain charge already counted.
+It checks both outcomes through the normal provider request path. A transaction
+that rolls back leaves headroom for one retry. A durable commit whose outcome
+the caller could not confirm leaves the reservation counted and defers a retry
+to the saved reset. The interrupted call sends no provider request in either case.
+
+When the driver reports a lost connection during budget admission, the worker
+keeps the investigation queued for a local recheck after 30 seconds. The
+deferral preserves its retry allowance and does not set a provider backoff.
+The next admission reads the retained ledger again. Other database errors and
+failures after provider transmission retain their existing classification.
+
+SQLite closes the connection and MySQL terminates the test's own database
+session. The test simulates a lost acknowledgement by committing before
+disconnecting. It uses fixture provider replies and leaves database writer
+promotion and multi-host recovery open.
+
 ### Two-call follow-up reservations under a daily cap — worker checkpoint #988
 
 `tests/test_ai_budget_followup_acceptance.py` covers the milestone 4 item
@@ -3901,6 +3921,17 @@ unavailable and never implies a plan will start.
 - **Limitations:** this is a point-in-time read for one server. A fleet-wide
   plan queue view and startup-change plans (never automatic) are not covered.
 
+### Fail-closed pause in shared AI queues — Roadmap A/C checkpoint #1309
+
+The shared SQLite/MySQL filter now agrees with the per-server status and the
+outbound provider check. A missing policy or a policy object with no
+`paused` field is resumed by default. An explicit JSON false resumes it.
+Other stored field types and non-object policies are paused. Fleet counts,
+server backlog status and work selection use the same filter. A malformed
+server's work stays queued while other eligible servers can claim work.
+Administrators can repair the saved policy through the audited control. The
+per-server backlog notice explains that the server stays paused until repair.
+
 ### Per-server process-triage queue breakdown — worker checkpoint #975
 
 `GET /api/investigation-status` reports fleet-wide totals only. When the queue
@@ -3939,10 +3970,8 @@ so an investigation on its last attempt is `active` here while the fleet
   claims, pause, budget, schema, roles and response authorization are unchanged.
 - **Limitations:** this is a point-in-time read, and "eligible" is not a promise
   to start: shared start gates, worker capacity, the per-server limit and pause
-  still apply. Pause is read as the fleet status reads it, so a manually
-  corrupted per-server AI policy is not shown as paused although provider calls
-  for that server are refused. Servers beyond the first 50 and matched
-  production acceptance remain open.
+  still apply. Servers beyond the first 50 and matched production acceptance
+  remain open.
 - **UI panel (worker follow-up):** the fleet AI activity page (`#ai-logs`) now
   has an administrator-only, on-demand **Servers holding the triage backlog**
   panel. It reads this endpoint and shows each server's pending, active,
