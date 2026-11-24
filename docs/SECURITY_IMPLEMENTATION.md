@@ -3809,6 +3809,42 @@ and that a sent call may still be billable. From code reading, not tested here: 
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
 
+### Lease loss across the daily-cap reset — milestone 4 acceptance #1277
+
+`tests/test_ai_budget_lease_reset_acceptance.py` combines the #992 lease-loss
+fixtures with the calendar-day reset. Each window's cap has room for exactly one
+conservative reservation. A capped call is reserved and sent in one window, the
+clock passes the reset, and the worker's lease then expires. The late outcome is
+either an answer (`answer`) or a lost connection (`failure`).
+
+- **Admission.** The successor for the same subject is admitted against the new
+  window. That is possible only because the lost call's still-`sent` ceiling is not
+  counted there. Each row keeps the `reset_at` it was admitted under.
+- **Late outcome.** The late outcome is reconciled into the lost call's own row
+  without moving it.
+  - An answer settles at its actual cost.
+  - A failure becomes `uncertain`. Its full ceiling stays counted in the old window
+    of `ai_budget.history()`, and the reset never releases it.
+- **New window unchanged.** The next window's cap is set to exactly one
+  reservation ceiling. In both cases the new window's counted spend and next
+  eligibility are identical before and after the late outcome. A distinct second
+  subject is not claimed, reserved or sent, either before or after it, so it
+  defers to the following reset.
+- **Stale run rejected.** Only the successor's assessment is accepted, and the lost
+  run stays `interrupted`.
+
+**Mutation evidence:**
+
+| Mutation | Result |
+|---|---|
+| Settlement or `mark_uncertain` rewrites `reset_at` to the current window | Both variants fail |
+| A late uncertain row past its reset is released | The `failure` variant fails |
+| Rows are counted regardless of their own window | Both variants fail: the successor is deferred |
+| Preflight and reserve ignore spend already counted in the window | Both variants fail: the second subject is sent |
+
+No defect was found and there is no runtime change. Failover and before/after
+production performance remain open.
+
 ### Non-expanding legacy migration proposal — worker checkpoint #879 (fixes #878)
 
 `ai_control_preview.legacy_migration()` derives the suggested move from legacy
