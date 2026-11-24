@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app import dotforward_commands as df
@@ -194,3 +196,18 @@ def test_gaps_are_bounded():
 def test_never_authorizes_actions():
     result = _run(_listed(_forward(content='"|/x"\n')))
     assert 'authorized' not in str(result).lower() and result['not_a_verdict']
+
+
+def test_lone_surrogate_text_is_a_blocking_gap_and_other_users_stay_usable():
+    bad = json.loads(r'"\ud800"')
+    result = _run(_listed(_forward(content=bad)), root=_listed(_forward(content='"|/x"\n', uid=0)))
+    assert 'content_malformed' in result['blocking'] and not result['complete']
+    alice = next(u for u in result['users'] if u['user'] == 'alice')
+    assert alice['selections'][0]['outcome'] == 'unresolved'
+    assert [c['user'] for c in result['commands']] == ['root']
+
+
+def test_surrogateescape_bytes_still_parse():
+    text = b'"|/bin/caf\xe9"\n'.decode('utf-8', 'surrogateescape')
+    result = _run(_listed(_forward(content=text)))
+    assert result['complete'] and result['commands'][0]['command'] == '/bin/caf\udce9'

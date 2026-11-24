@@ -68,7 +68,7 @@ BLOCKING = frozenset({
     'input_malformed', 'postfix_not_observed', 'config_not_observed', 'nondefault_forward_path',
     'nondefault_line_limit', 'nondefault_local_transport', 'unknown_command_class', 'default_privs_unresolved',
     'users_not_observed', 'too_many_users', 'home_not_observed', 'home_unreadable', 'too_many_entries',
-    'metadata_missing', 'content_not_observed', 'file_too_large', 'line_too_long', 'line_unparsed',
+    'metadata_missing', 'content_not_observed', 'content_malformed', 'file_too_large', 'line_too_long', 'line_unparsed',
     'include_not_resolved', 'gaps_truncated',
 })
 UNOBSERVED = (
@@ -242,7 +242,11 @@ def _destinations(entry: dict[str, Any], path: str, run_as: dict[str, Any] | Non
     if not isinstance(text, str):
         _gap(gaps, 'content_not_observed', path)
         return None
-    data = text.encode('utf-8', 'surrogateescape')
+    try:
+        data = text.encode('utf-8', 'surrogateescape')
+    except UnicodeEncodeError:  # A lone surrogate that is not a surrogateescape byte.
+        _gap(gaps, 'content_malformed', path, 'The captured text is not valid UTF-8 or surrogateescape bytes.')
+        return None
     if len(data) > MAX_FILE_BYTES:
         _gap(gaps, 'file_too_large', path)
         return None

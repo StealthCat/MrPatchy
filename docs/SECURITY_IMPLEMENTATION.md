@@ -12584,16 +12584,16 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - a non-default `forward_path`, `line_length_limit` or `local_transport`;
 - an unknown `allow_mail_to_commands` name;
 - an unresolved or privileged `default_privs`;
-- unobserved inputs or homes, unreadable homes, missing metadata or text, over-limit lines, files or listings;
+- unobserved inputs or homes, unreadable homes, missing metadata or text, malformed captured text, over-limit lines, files or listings;
 - `:include:` files when `include` would allow their commands.
 
-**Validation.** `tests/test_dotforward_commands.py` has 32 tests. They cover:
+**Validation.** `tests/test_dotforward_commands.py` has 34 tests. They cover:
 
 - quoted and bare commands, and root mapped to `default_privs`;
 - symlink, directory, foreign-owner and world-writable refusals, and root-owned acceptance;
 - the command-class gate, and an extension file chosen first that blocks fallback;
 - every unsupported-syntax form, include handling, column-one comments, long lines and non-default parameters;
-- malformed and missing inputs, duplicate passwd names and gap bounding.
+- malformed and missing inputs, captured text with a lone surrogate (a blocking `content_malformed` gap while other users stay usable), surrogateescape bytes, duplicate passwd names and gap bounding.
 
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** a differential harness against a real Postfix `local(8)` and agent collection of homes and `postconf`. Also a catalog entry, provenance, persistence, UI and AI classification.
