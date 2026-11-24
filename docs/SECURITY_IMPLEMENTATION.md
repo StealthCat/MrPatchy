@@ -4084,6 +4084,20 @@ Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
 At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
 one. Matched production measurements remain open.
 
+### Daily ledger timings in capped triage fixtures — Roadmap A checkpoint #1302
+
+Capped fixture reports include `stages.budget_reservation` and
+`stages.budget_reconciliation` with sample counts and p50/p95 durations.
+They measure the real daily ledger calls, including database lock wait. The
+receipt/usage delay option only simulates diagnostic persistence latency.
+The benchmark checks that each budget stage has one sample per settled
+provider call, including follow-ups. Uncapped reports omit these stages.
+
+SQLite and MySQL acceptance cover daily cap and combined rate-and-cap modes
+with both serial and parallel configurations. The stages are additive report
+fields. Existing comparator semantics and production measurement milestones
+are unchanged.
+
 ### Native MySQL mode for the triage benchmark — worker checkpoint #976
 
 `tools/benchmark_ai.py --database mysql` runs the same disposable fixture on a
@@ -4134,6 +4148,21 @@ Cleanup validation for #1095 covers a disconnected session, an absent lock
 and a lock assigned to another session. The native MySQL fixture verifies that
 stale cleanup leaves the subsequent holder's table intact. This is fixture
 cleanup acceptance. Production failover and throughput acceptance remain open.
+
+### Verify retained assessments in fixture throughput reports — Roadmap A checkpoint #1299
+
+After the timed serial or parallel workload, the benchmark checks that each
+fixture observation retained exactly one AI assessment linked to its run,
+host and model. It checks the fixture result, evidence snapshot and saved
+input trail against the captured provider inputs, including the collected
+evidence and second input for subjects that requested a follow-up. The
+assessment summary includes counts of verified subjects, input stages and
+follow-up subjects. If durable records are missing or differ, the benchmark
+exits before emitting throughput.
+
+These checks apply to the disposable SQLite and MySQL fixtures. They do not
+change runtime triage or the report comparator. Production measurements and
+the broader capability acceptance remain open.
 
 ### Advisory plan result-persistence timing — Roadmap A checkpoint #1176
 
@@ -6518,6 +6547,73 @@ exist, and performs no I/O.
 **Not covered:** `/etc/inittab.d` parsing, agent collection, catalog wiring,
 persistence, baselines and alerts, UI, provenance, AI classification and
 native acceptance. No schema, API, auth or response-authorization change.
+
+### openbsd-inetd configuration contract — worker checkpoint #1114
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/inetd_conf.py` is a pure, versioned contract for `/etc/inetd.conf`.
+inetd listens on each configured socket and, for every connection or datagram,
+starts the configured program as the configured user, or answers with a
+built-in service. A line such as `31337 stream tcp nowait root /bin/sh sh -i`
+is a root shell on a port. The contract takes the captured file text and
+performs no I/O, name lookup or response action.
+
+- **Source.** `inetd.c` in openbsd-inetd 0.20221205 with the Debian patches
+  applied (Ubuntu `openbsd-inetd_0.20221205-3build5`). The orig tarball's
+  sha256 is `2d53137f…8ab5a` and the debian tarball's is `4c34c5bc…7e5b`. The
+  packaged systemd unit runs `/usr/sbin/inetd` without arguments. The rules
+  come from reading that source; no compiled inetd was run.
+- **Lines.** `fgets` reads 1023-byte pieces. Only a piece whose *first* byte
+  is `#` is a comment; an indented `#` is parsed as fields. Fields split at
+  spaces and tabs only. When a line runs out, an indented next line continues
+  the entry, so a blank line followed by an indented line starts an entry.
+- **Fields.** `host:` prefixes (`[v6]:`, `:` for `*`, comma-separated host
+  lists), `host:` default-host lines, `stream`/`dgram` (other socket types
+  never listen), protocol with `,sndbuf=`/`,rcvbuf=` sizes, `wait`/`nowait`
+  with a `.max` rate (invalid values fall back to the `-R` default of 256 per
+  60 s), `user` with `.group` or `:group`, the program or `internal`, and at
+  most 20 arguments (extra arguments are dropped and counted). With no
+  arguments, argv[0] is the program's base name. Built-ins (`echo`, `discard`,
+  `time`, `daytime`, `chargen`) run inside inetd as root and never wait.
+- **IPv4 and IPv6.** Debian's `default_v4v6` patch loads a protocol without a
+  trailing `4` or `6` twice, as IPv4 and then as IPv6 with `6` appended. The
+  IPv6 pass re-parses only a saved copy of the entry's first physical line.
+  Arguments on continuation lines are therefore missing from the IPv6 copy,
+  and a field missing from that line rejects it. The copy is parsed in place,
+  so `skip()` and the host parser leave NUL bytes in it: when a re-parse fails
+  before the protocol, the next one reads the line cut at the first NUL and can
+  take a later continuation line as the rest of the entry (for example an IPv6
+  root shell after a malformed protocol). When a re-parse consumes no line and
+  leaves the copy unchanged, inetd repeats it forever; this is reported as a
+  blocking gap. A literal address of the wrong family drops that listener.
+- **Merging and spawn.** A later entry with the same service, host, protocol
+  and address replaces the earlier one's user, group, program, argv and rate.
+  It takes the wait mode only when the earlier entry was `wait` or the later
+  one is `nowait`, and never from a built-in. The first entry's socket type and
+  built-in stay. A root user's group is ignored, because inetd sets root's own
+  primary group. `execv` runs the program path as written, and relative paths
+  are flagged.
+- **Each service reports** its line(s), host and address, family, port or unix
+  socket path, socket type, protocol, RPC versions and program, wait mode, rate
+  limit, user and group, built-in or program and argv, a root flag and any
+  name lookup it needs. The root flag is `true` for `root` and built-ins and
+  `null` otherwise, because uid mapping is not observed. Rejected entries
+  record inetd's reason: `syntax_error`, `unknown_internal_service`,
+  `malformed_buffer_option`, `too_many_buffer_sizes`, `invalid_buffer_size`,
+  `no_rpc_version`, `bad_rpc_version` or `no_resolvable_address`.
+- **Fail closed.** An unobserved or unreadable file, NUL bytes, invalid UTF-8
+  and over-limit input mark the result incomplete. So does a buffer size inetd
+  parses by reading past the end of its string (a digits-only last size such
+  as `,rcvbuf=65536`); that service is `unresolved`. An absent file means the
+  packaged unit does not start inetd. Name lookups (`/etc/services`,
+  `/etc/rpc` and host names) are listed per service as non-blocking gaps.
+  Every result also names what it cannot observe: whether inetd runs and with
+  which options or file, uid mapping, kernel IPv6 support, socket binding, and
+  program contents and working directory. `origin` is always `not_assessed`.
+
+**Not covered:** xinetd, agent collection, catalog wiring, persistence,
+baselines and alerts, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -9161,6 +9257,13 @@ The faster-triage program remains unfinished. This batch selects a runtime
 concurrency increment independently of the larger authenticated-context/cache
 program; none of the v1.21.0 context gaps become cache eligibility.
 
+Worker checkpoint (#1108): the leader skips idle update-scoring submissions
+when scoring is disabled. A previously running score still receives recovery
+through its ordinary execution lock. Enabled scoring keeps alternating with
+triage. With one executor slot and scoring off, the deterministic scheduler
+fixture dispatches triage on all four five-second ticks instead of two. This
+measures dispatch cadence. It does not measure production throughput.
+
 `MRPATCHY_AI_CONCURRENCY` sizes the real shared AI executor from 1–8 tasks, default
 4. Independent servers can overlap full one/two-stage process investigations.
 Only one process investigation per host is admitted across supported workers,
@@ -11513,6 +11616,21 @@ This measures the loopback benchmark on a disposable database. A reported
 throughput figure is fixture-only. Representative live-provider and production
 failover measurements remain open.
 
+### Transport latency in triage fixture comparisons — Roadmap A checkpoint #1120
+
+Run `python tools/compare_ai_benchmarks.py serial.json parallel.json --provider-transport`
+to add a separate p50/p95 comparison for the persisted provider transport
+timing. The usual workload equivalence checks still run first. Both reports
+must contain one valid timing sample per provider call. This transport
+measurement excludes receipt and usage persistence, which contribute to the
+existing, wider provider-call measurement.
+
+The retained SQLite loopback records have 30 transport samples per report.
+Cross-server p95 was 26.738 ms serial and 58.657 ms parallel. Same-server p95
+was 27.447 ms serial and 59.814 ms parallel. These figures describe the
+retained fixture runs. Matched live-provider timings and production throughput
+remain open. The original comparison reports still reproduce without the flag.
+
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
@@ -11928,8 +12046,25 @@ because it carries endpoint text.
 - **Unchanged:** a rejected payload never blocks alert collection. The raw
   `integrity` alert, `host.integrity` and patching gates are unchanged. Nothing
   is acknowledged, remediated or authorized, and there is no schema change.
-- **Remaining:** a configurable threshold, and a native agent sweep-stall
-  acceptance test.
+- **Remaining:** ~~a configurable threshold~~ (addressed by the #1265 worker
+  checkpoint below), and a native agent sweep-stall acceptance test.
+
+### Configurable hash-sweep stall threshold — worker checkpoint #1265
+
+Closes the "configurable threshold" item from checkpoint #794: the admin-only `integrity-sweep`/`hash-sweep-stalled` notice no longer waits a fixed 30 minutes.
+
+- **Setting:** Settings → Patch policy adds **Hash-sweep stall notice after · minutes**, whole minutes from 10 to 1440, default 30. The minimum stays well above the 360-second ingest check so a slow sweep does not flap. The settings finder matches "hash sweep" and "integrity".
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `integrity_sweep_stalled_minutes`. Out-of-range or non-integer values return 422, and clients that omit the field keep the stored value.
+  - A change appends `hash-sweep stall notification threshold changed from A to B minutes` to the existing admin-only settings audit row. Saving the same value adds nothing.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 30 (`integrity_sweep_notifications.stalled_minutes`), so a bad value never silences the notice.
+  - The value lives in the existing `config` setting, so there is no schema change.
+- **Producer:** `operations.collect_alerts` passes its configuration to `integrity_sweep_notifications.publish`, and `classify` uses the configured threshold for `overdue`.
+  - The fixed reason text names the configured minutes. At 30 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of a still-qualifying active event once.
+  - Raising the threshold above a server's current stall resolves its event, and the same event reopens if the stall later passes the new threshold.
+- **Unchanged:** the `future` category, the 360-second `host.integrity` ingest check and the patching hold it causes, the raw `integrity` SMTP/webhook alert, roles, CSRF, the admin-only audience and response authorization. The notice stays advisory.
+- **Validation:** `tests/test_integrity_sweep_threshold.py` has 8 tests, all failing on main `7a165a60` and passing after (the `future` test is a behavioral control that fails on main only because the setting does not exist). `tests/ui_settings_hash_sweep.cjs` fails on main and passes after; it covers the finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px. The existing sweep, telemetry-loss, operational-notification, route-role and settings tests pass.
+- **Remaining:** a native agent sweep-stall acceptance test.
 
 
 ### External alert-delivery failure notifications — worker checkpoint #792
@@ -12327,6 +12462,21 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Safety:** malformed amounts, counts or times render as "Unavailable". Text is escaped. Nothing appears while no cap is enabled.
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
+
+### Disclose a capped triage reset as a recheck — Roadmap A checkpoint #1268
+
+At an exhausted daily cap, the admin Investigations worker status reports a
+timed retry only if the shared budget snapshot confirms the configured reset
+is authoritative. If reservations from an earlier budget window overlap the
+reset, the status explains that those reservations can still count and the cap
+card shows the configured reset as a recheck. The ledger, role checks, reservations
+and queue admission retain their existing behavior.
+
+The SQLite and MySQL acceptance uses persisted entries in a current or
+overlapping window and compares both admin status routes. At the configured
+reset the overlapping reservation remains counted until its original window
+closes. This checkpoint covers the current queue status. The proposed Settings
+change preview is tracked separately in #1267.
 
 ### Free exact known-good hits under an exhausted daily cap — worker checkpoint #1030
 
