@@ -12482,6 +12482,48 @@ provider overlap, historical inputs and invalid peaks. Both retained comparison
 records are regenerated from the original SQLite fixture inputs. Matched
 production throughput and the broader faster-triage acceptance remain open.
 
+### pppd hook contract — worker checkpoint #1091 (roadmap F)
+
+When a PPP link changes state, pppd runs `/etc/ppp` scripts as root. On Debian and Ubuntu, the packaged `ip-up`, `ip-down`, `ip-pre-up`, `ipv6-up` and `ipv6-down` wrappers then run their `.local` override or `run-parts` over their `.d` directory. No startup catalog entry or contract covered any of this.
+
+- **Change:** a new pure module, `app/ppp_hooks.py`. It takes the text of `/etc/ppp/options` and `/etc/ppp/peers/*`, `lstat`/`stat` metadata and package verification of each wrapper. For each of the ten events it reports the effective script path, which configurations select it (options alone, or `peer:<name>`), and whether pppd runs it as root and why. For a verified wrapper it also reports what the wrapper runs.
+- **Reference:** `ppp_2.5.2.orig.tar.gz` (sha256 `47da358d…33cb2`) and `ppp_2.5.2-1+2build1.debian.tar.xz` (sha256 `ef4ad7b7…0d873`), both re-downloaded and read this run.
+  - Default paths come from `pathnames.h`; Debian's `zzz_config` patch leaves them unchanged.
+  - The eight `*-script` options are `OPT_PRIV|OPT_STATIC` without `OPT_PRIO`, so `process_option` keeps the last privileged value. `/etc/ppp/options` is read before the command line, where `call <peer>` reads its peer file, so a peer file overrides `/etc/ppp/options`. `auth-up` and `auth-down` cannot be overridden.
+  - `run_program` runs a path only if `stat` shows a regular file with any execute bit, and skips a missing path silently. The child runs as uid 0 with a cleared environment.
+  - The package ships only the five IP wrappers. Any existing `auth-*` or `net-*` script is marked `not_shipped_by_package`.
+  - A wrapper `exec`s `<name>.local` when `[ -x ]` holds. As root that includes a directory, whose `exec` then fails, so nothing after it runs. Otherwise the wrapper runs `run-parts` without `--lsbsysinit`. The module reuses `run_parts_name` and byte ordering, because the cleared environment means the C locale applies.
+- **Gaps, never reported as covered:**
+  - The wrapper `.local`/`.d` expansion is applied only when the caller marks that wrapper `unchanged` by package verification. A `modified` or `unverified` wrapper is a blocking `wrapper_not_verified` gap, and its entries are listed as unresolved.
+  - Other blocking gaps:
+    - option text that is unobserved, over the limit or has a missing argument;
+    - quotes, escapes, `#` inside a word, over-long words or `option=value` forms;
+    - `file`/`call` includes;
+    - relative override paths;
+    - unobserved metadata, directories or symlink targets;
+    - unreadable directories;
+    - malformed or duplicate input;
+    - more than 1024 files or 256 peers;
+    - a ppp version outside the 2.5 series, or a family other than Debian.
+- **Unobserved, stated in every result:**
+  - script contents;
+  - the pppd command line, `~/.ppprc`, `/etc/ppp/options.<tty>` and included option files;
+  - other command-running options (`connect`, `pty`, `plugin` and so on);
+  - argument-position ambiguity;
+  - which peers and events actually occur.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_ppp_hooks.py` has 19 tests and cannot run on main, where the module does not exist. They cover:
+  - a group-execute-only file;
+  - a symlink to a directory;
+  - dangling and non-executable `.local` files;
+  - a `.local` directory;
+  - an override outside `/etc/ppp`;
+  - last-wins precedence and peer-over-options precedence;
+  - every gap class.
+
+  12 mutations were each caught, including execute-bit-owner-only, first-wins precedence, options-over-peer precedence, ignoring wrapper verification, case-insensitive ordering and dropping the `call` include gap. The wrapper was not executed in this environment, so the `.local`/`run-parts` rules come from reading the Debian wrapper source.
+- **Remaining:** collection wiring (option text, metadata and `dpkg --verify` wrapper state), a catalog entry, provenance of `.d` entries against package files, and UI.
+
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
 New disposable SQLite and MySQL benchmark reports require one successful
