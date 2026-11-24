@@ -177,3 +177,27 @@ def test_urls_not_ended_by_space_or_newline_are_blocking(url):
 def test_mail_field_words_without_colon_are_ordinary():
     result = run('check process message with pidfile /p\n  start program = "/bin/m"\n')
     assert [c['argv'] for c in result['commands']] == [['/bin/m']] and result['complete'] is True
+
+
+@pytest.mark.parametrize('option,key,gap', [
+    ('as uid', 'uid', 'user_option_malformed'),
+    ('and gid', 'gid', 'user_option_malformed'),
+    ('with timeout', 'timeout_seconds', 'timeout_option_malformed'),
+])
+@pytest.mark.parametrize('value', ['\N{SUPERSCRIPT TWO}', '\N{ARABIC-INDIC DIGIT TWO}', '2147483648'])
+def test_unmodelled_numeric_program_option_leaves_a_gap(option, key, gap, value):
+    result = run('check process web with pidfile /run/web.pid\n'
+                 f'  start "/bin/true" {option} {value}\n'
+                 '  stop "/bin/true"\n')
+    assert not result['complete']
+    assert gap in codes(result)
+    assert result['commands'][0].get(key) is None
+    assert [command['role'] for command in result['commands']] == ['start', 'stop']
+
+
+def test_numeric_program_options_accept_ascii_digits_with_leading_zeroes():
+    result = run('check process web with pidfile /run/web.pid\n'
+                 '  start "/bin/true" as uid 00100 and gid 00033 with timeout 00012 seconds\n')
+    assert result['complete']
+    command = result['commands'][0]
+    assert (command['uid'], command['gid'], command['timeout_seconds']) == (100, 33, 12)

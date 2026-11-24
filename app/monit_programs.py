@@ -42,11 +42,13 @@ MAX_INCLUDE_DEPTH = 16
 MAX_COMMANDS = 512
 MAX_GAPS = 32
 ARGMAX = 64  # p.y addargument: an error at ARGMAX arguments
+MONIT_INT_MAX = 2**31 - 1  # l.l converts ASCII NUMBER tokens with atoi on Linux.
 BLOCKING = frozenset({
     'input_malformed', 'text_too_large', 'carriage_return', 'unbalanced_quotes', 'unterminated_arguments',
     'escape_sequence', 'unquoted_arguments', 'extra_arguments', 'empty_arguments', 'too_many_arguments',
     'include_not_observed', 'include_too_deep', 'too_many_files', 'too_many_commands', 'user_option_malformed',
-    'command_outside_service', 'gaps_truncated', 'unmodelled_url', 'unmodelled_http_headers',
+    'timeout_option_malformed', 'command_outside_service', 'gaps_truncated',
+    'unmodelled_url', 'unmodelled_http_headers',
 })
 UNOBSERVED = (
     'User and group names are reported as written; monit resolves them with getpwnam/getgrnam when it parses.',
@@ -311,6 +313,16 @@ class _Lexer:
             self.lex(item['path'], item.get('text'))
 
 
+def _parse_monit_number(raw: str) -> int | None:
+    if not raw.isascii() or not raw.isdecimal():
+        return None
+    digits = raw.lstrip('0') or '0'
+    if len(digits) > 10:
+        return None
+    number = int(digits)
+    return number if number <= MONIT_INT_MAX else None
+
+
 def _user_options(tokens: list[dict[str, Any]], k: int, command: dict[str, Any],
                   gaps: list[dict[str, Any]]) -> int:
     while k < len(tokens):
@@ -325,12 +337,26 @@ def _user_options(tokens: list[dict[str, Any]], k: int, command: dict[str, Any],
                 _gap(gaps, 'user_option_malformed', {'file': tok['file'], 'line': tok['line']})
                 return k + 1
             raw = nxt['value'] if nxt['kind'] == 'word' else nxt['value'].strip(_STRIP)
-            command[value] = int(raw) if raw.isdigit() and nxt['kind'] == 'word' else raw
+            if nxt['kind'] == 'word' and raw.isdigit():
+                number = _parse_monit_number(raw)
+                if number is None:
+                    _gap(gaps, 'user_option_malformed', {'file': tok['file'], 'line': tok['line']},
+                         'Numeric UID and GID must fit a non-negative Monit integer.')
+                else:
+                    command[value] = number
+            else:
+                command[value] = raw
             k += 2
             continue
-        if tok['kind'] == 'word' and value == 'timeout' and k + 1 < len(tokens) \
-                and str(tokens[k + 1].get('value', '')).isdigit():
-            command['timeout_seconds'] = int(tokens[k + 1]['value'])
+        if tok['kind'] == 'word' and value == 'timeout':
+            nxt = tokens[k + 1] if k + 1 < len(tokens) else None
+            raw = nxt['value'] if nxt is not None and nxt['kind'] == 'word' else ''
+            number = _parse_monit_number(raw)
+            if number is None:
+                _gap(gaps, 'timeout_option_malformed', {'file': tok['file'], 'line': tok['line']},
+                     'The timeout must fit a non-negative Monit integer.')
+                return k + 1
+            command['timeout_seconds'] = number
             k += 2
             if k < len(tokens) and str(tokens[k].get('value', '')).lower() in ('s', 'second', 'seconds'):
                 k += 1
