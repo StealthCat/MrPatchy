@@ -64,6 +64,7 @@ EXPECTED_ROLES = {
     ('GET','/api/hosts/{host_id}/packages'):'viewer',
     ('POST','/api/hosts/{host_id}/patch'):'operator',
     ('GET','/api/hosts/{host_id}/patch-policy'):'viewer',
+    ('GET','/api/hosts/{host_id}/patch-preflight'):'operator',
     ('GET','/api/hosts/{host_id}/patching'):'viewer',
     ('POST','/api/hosts/{host_id}/preview'):'operator',
     ('PUT','/api/hosts/{host_id}/priority'):'admin',

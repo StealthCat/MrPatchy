@@ -6,7 +6,8 @@ module.exports=async(page,capture)=>{
   const originalViewport=page.viewportSize();
   let calls=0,release,requestStarted;
   const held=new Promise(resolve=>release=resolve),started=new Promise(resolve=>requestStarted=resolve);
-  const populated={generated_at:1700000000,servers_with_backlog:51,truncated:true,max_servers:50,limitations:['Point-in-time read <b>only</b>.'],servers:[
+  const policyNotice='A server with an invalid saved AI policy stays paused until an administrator repairs it.';
+  const populated={generated_at:1700000000,servers_with_backlog:51,truncated:true,max_servers:50,limitations:['Point-in-time read <b>only</b>.',policyNotice],servers:[
     {host_id:'host/<one>',name:'web-<01>',pending:7,active:1,eligible:3,blocked:2,retry_wait:1,paused:true,active_leases:2,investigation_limit:2,at_investigation_limit:true,oldest_pending_observation_at:1700000000,next_retry_at:null},
     {host_id:'host-two',name:'',pending:1,active:0,eligible:0,blocked:0,retry_wait:1,paused:false,active_leases:0,investigation_limit:3,at_investigation_limit:false,oldest_pending_observation_at:1700000000,next_retry_at:1700003600},
   ]};
@@ -46,6 +47,7 @@ module.exports=async(page,capture)=>{
     assert.equal(await panel.locator('b').count(),0);
     for(const width of [320,768,1440]){
       await page.setViewportSize({width,height:900});
+      assert.equal(await panel.getByText(policyNotice,{exact:true}).isVisible(),true);
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
       await capture('ai-triage-servers-'+width);
     }
