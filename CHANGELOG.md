@@ -1,3 +1,7 @@
+## 1.83.4 — 2026-11-24
+
+1. [PR #1294](https://github.com/StealthCat/MrPatchy/pull/1294): Fixed: a database connection lost during a capped AI budget reservation now becomes a controlled 30-second local wait instead of an uncontrolled failure. No provider request is sent, process triage shows a database reason and keeps its retry allowance, and the retry still passes normal eligibility and reserves from the retained ledger. Database errors without confirmed connection loss are raised as before. If the reservation commit landed but its acknowledgement was lost, that reservation stays counted at its full ceiling until its window resets, which errs toward over-counting. Compatibility: no schema, role or configuration change; manual callers receive the existing controlled AI error format. Fixes #1293.
+
 ## 1.83.3 — 2026-11-21
 
 1. [PR #1260](https://github.com/StealthCat/MrPatchy/pull/1260): Add a pure, no-I/O supervisord contract for resolving configured program, event-listener and FastCGI processes, expanded commands, users and start timing from captured files and include matches. Compatibility: additive internal module, tests and documentation only; nothing imports it, so runtime, schema, API, UI, roles, scheduling and response authorization are unchanged. Limits: missing observations fail closed; unmodeled supervisor checks can make results over-report; agent collection, provenance, persistence, UI and AI classification remain out of scope.
