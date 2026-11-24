@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = '1.83.5'
+APP_VERSION = '1.84.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -970,6 +970,15 @@ def patch_policy(host_id:str,user=Depends(viewer_user)):
     with Session() as s:
         host_or_404(s,host_id)
         return operations.recovery_policy(s,host_id)
+
+@app.get('/api/hosts/{host_id}/patch-preflight')
+def patch_preflight(host_id:str,user=Depends(operator_user)):
+    """Advisory resource/clock warnings for the patch review dialog (#342); never blocks or authorizes."""
+    from . import patch_preflight as preflight
+    with Session() as s:
+        h=host_or_404(s,host_id)
+        if h.deleted_at:raise HTTPException(404,'Server not found')
+        return preflight.assess(h.telemetry,time.time())
 
 @app.post('/api/hosts/{host_id}/patch')
 def patch(host_id:str,body:PatchInput,user=Depends(operator_user)):

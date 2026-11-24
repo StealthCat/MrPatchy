@@ -6182,6 +6182,78 @@ of bracketed control values, module binaries and the programs they run,
 collection from servers, catalog wiring, persistence, UI, provenance and AI
 classification. No schema, API, UI or authorization change, and nothing is
 labelled safe.
+### xinetd configuration contract — worker checkpoint #1122
+
+This is a contract increment only, and the startup-awareness requirement
+remains incomplete. `app/xinetd_conf.py` is a pure, versioned contract for
+`/etc/xinetd.conf` and the files it reaches through `include` and
+`includedir`. xinetd listens for each enabled service and, for every
+connection, starts its `server` with `server_args` as its `user`, or answers
+with a built-in. So one `/etc/xinetd.d` file with `server = /bin/sh` and
+`user = root` puts a root shell on a port. The contract takes captured file
+text and directory listings and performs no I/O, name lookup or response
+action.
+
+- **Source.** The rules come from reading the xinetd 2.3.15.4 source as
+  packaged by Ubuntu (`xinetd_2.3.15.4-6build1`); no compiled xinetd was run.
+  - orig tarball sha256: `cbb6d078…2129a`
+  - debian tarball sha256: `68b3e200…15832`
+- **Files.** Comments are lines whose first non-space character is `#`. A
+  `#` after other text is a value.
+  - `service`/`defaults` must be followed by a line holding only `{`.
+    Otherwise the entry is skipped up to the next line holding only `}`.
+  - `includedir` reads regular files in `strcmp` order and skips names
+    containing `.` or ending in `~`.
+  - An `include` cycle is reported as a blocking gap.
+- **Attributes.**
+  - An attribute needs a space before its operator, or the whole entry is
+    dropped.
+  - Unknown attributes, repeats of single-valued attributes (the first one
+    wins), `+=`/`-=` on single-valued attributes and wrong value counts are
+    each ignored.
+  - A failed attribute parser disables the service. A later `disable = no`
+    re-enables it.
+  - On any `disable` line, if the service is disabled at that point, the
+    entry is abandoned.
+- **Loading.**
+  - A defaults `enabled` list disables every unlisted id, and re-enables
+    listed ids even after a parser failure.
+  - A defaults `disabled` list removes listed ids.
+  - Any other defaults attribute that reaches its parser is a blocking
+    `defaults_attribute_not_evaluated` gap: a failing defaults parser makes
+    xinetd log a fatal error and exit, and those parsers are not evaluated.
+  - The lookup-independent `service_fill`/`check_entry`/`service_attr_check`
+    rules apply: required attributes, `dgram` services must `wait`, the
+    NAMEINARGS and redirect rules, TCPMUX must be UNLISTED, and an UNLISTED
+    service needs a port.
+- **Per-service report.** Each service reports:
+  - its file and line, and its id;
+  - a status: `loads_if_lookups_succeed`, `unresolved` (some other attribute
+    parser was not modelled) or `disabled` with its reasons;
+  - its server and argv (NAMEINARGS uses `server_args` as the full argv);
+    redirects and built-ins have no argv;
+  - its user and group, and a root flag (`root` or uid `0`; `null` for other
+    names);
+  - its socket type, protocol, port, types, flags and bind address;
+  - the lookups it needs: passwd and group, `server` executability,
+    `/etc/services`, `/etc/protocols` and `/etc/rpc`.
+- **Fail closed.** These inputs make the result incomplete:
+  - an unobserved, unreadable, binary or over-limit file;
+  - an unobserved `includedir` listing;
+  - an unparsable defaults line;
+  - defaults `-=`.
+
+  `origin` stays `not_assessed`. `not_observed` names:
+  - whether xinetd is installed or running, and its options;
+  - Debian `INETD_COMPAT`, which also loads `/etc/inetd.conf`;
+  - name, uid and executable lookups;
+  - bind resolution, duplicate port/protocol/bind conflicts and built-in
+    availability;
+  - program contents.
+- **Out of scope:** collection, catalog wiring, persistence and alerts, UI,
+  AI classification and any response action. There is no schema, API, auth
+  or response-authorization change.
+
 ### Per-user shell startup files contract — worker checkpoint #1057
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -6338,6 +6410,67 @@ crypttab text, root's view of the paths the options name and
 mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
 response-authorization change.
+
+### sysvinit inittab contract — worker checkpoint #1110
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/inittab.py` is a pure, versioned contract for sysvinit's `/etc/inittab`.
+On a host whose PID 1 is sysvinit `init`, each accepted entry runs as root at
+boot, on entering a runlevel, on respawn, or on a power or keyboard event. It
+takes captured inittab text and whether `/etc/inittab.d` and `/etc/initscript`
+exist, and performs no I/O.
+
+- **Source.** `read_inittab()` and `spawn()` in sysvinit 3.14 and 3.15
+  `src/init.c`, which are identical. The rules come from reading that source;
+  no compiled init was run.
+- **Lines.** `fgets` reads into a 256-byte buffer. A line that has no newline
+  within 255 bytes is skipped as "possibly too long", and so is a final line
+  without a newline. Comment and blank lines are skipped before that check.
+  Because of this, init's 256-byte process limit can never trigger.
+- **Fields.** `id:runlevels:action:process` are split with `strsep`, and the
+  process keeps any further colons. Rejections are recorded with init's own
+  message: a missing field, an id over 4 bytes, runlevels over 11, an action
+  over 32, an unknown action (matched case-insensitively), or a duplicate id
+  (`~~` excepted).
+- **Effective runlevels.** Empty runlevels become `0123456789`, or
+  `S0123456789` for power and ctrl-alt-del actions. `sysinit` gets `#`, and
+  `boot` and `bootwait` get `*`. A lowercase `s` is kept as written, so it
+  does not select single-user mode; this is noted on the entry.
+- **Implicit and default entries.** When no entry covers `S`, init appends
+  `~~:S:wait:/sbin/sulogin`, and the result reports that entry as `implicit`.
+  The default runlevel is the highest runlevel character of the first
+  `initdefault` entry, uppercased. A value outside `0-9S`, or no
+  `initdefault` entry, means init prompts on the console.
+- **Commands.** Each entry reports its trigger, whether init waits for it, and
+  how `spawn()` starts it:
+  - one leading `+` is dropped, which also stops utmp/wtmp records;
+  - a readable `/etc/initscript` wraps the command outside runlevel S;
+  - otherwise a process containing a shell metacharacter, and not starting
+    with `@`, runs as `/bin/sh -c`;
+  - any other process is split into at most 14 words and stops at `#`. A
+    word that starts with `#` still adds an empty argument, and dropped words
+    are counted.
+- **Fail closed.** The result is incomplete when any of these holds:
+  - the inittab text, the `/etc/inittab.d` listing or the `/etc/initscript`
+    state was not observed;
+  - `/etc/inittab.d` contains `*.tab` files, which this slice does not
+    resolve yet;
+  - the input has invalid UTF-8 or NUL bytes, or is over the limit;
+  - the `initdefault` runlevels contain non-ASCII bytes. `get_init_default()`
+    keeps the highest plain `char`, which is signed on x86_64 (those bytes
+    never win) and unsigned on arm (they do), so the default runlevel and
+    prompt are left unresolved.
+
+  Every result names what it cannot observe: whether PID 1 is sysvinit
+  (systemd ignores the file, and BusyBox init uses another format), the
+  runlevel in use, the programs an entry runs, respawn throttling, and how
+  much of a shell-mode process init copies (`spawn()` sizes that copy with
+  `strlen()` on an uninitialised buffer). `origin`
+  is always `not_assessed`, and no result is a safety verdict.
+
+**Not covered:** `/etc/inittab.d` parsing, agent collection, catalog wiring,
+persistence, baselines and alerts, UI, provenance, AI classification and
+native acceptance. No schema, API, auth or response-authorization change.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -6527,6 +6660,61 @@ standalone-worker workflow. Existing app/worker containers, MySQL job coordinati
 and the shared-local-volume deployment are prerequisites. Deliver deployment
 separation and supported remote-worker setup as one coherent feature, with
 incremental milestones where needed.
+
+### networkd-dispatcher script contract — worker checkpoint #1126
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/networkd_dispatcher.py` is a pure, versioned contract for
+networkd-dispatcher. Ubuntu Server installs it, and its root daemon runs the
+files in `<state>.d` directories whenever a systemd-networkd link enters that
+state. The Debian/Ubuntu package also runs them once at service start. It takes
+captured directory and file metadata and the text of
+`/etc/default/networkd-dispatcher`, and performs no I/O.
+
+- **Source.** `scripts_in_path`, `check_perms`, `handle_state`,
+  `run_hooks_for_state` and `parse_args` in networkd-dispatcher 2.2.4, the
+  shipped unit and the Debian patches (`2.2.4-1.2ubuntu1`) that move its
+  `EnvironmentFile` to `/etc/default/networkd-dispatcher` and set
+  `--run-startup-triggers`. The rules come from reading that source; the daemon
+  was not run.
+- **Directories.** The default directories are `/etc/networkd-dispatcher` and
+  then `/usr/lib/networkd-dispatcher`. `-S`/`--script-dir` (including unique
+  long-option prefixes and clustered short options) replaces them. Only the 16
+  known administrative and operational state names are dispatched; any other
+  `<name>.d` is reported as never run.
+- **Selection.** For each state, the entry names of every directory are unioned
+  and sorted by code point, with no name filter (hidden and backup names run).
+  Each name uses the first directory in which:
+  - the path is a regular file after following symlinks;
+  - the `<state>.d` directory itself is exactly `0755` and `root:root` (a
+    symlinked directory always fails);
+  - the resolved file is exactly `0755` and `root:root`.
+
+  A failing entry falls through to the next directory instead of masking it.
+- **Report.** Each script's order and its argv (`[path]`, executed directly,
+  with no shell) run as root. The environment variable names are listed, with
+  `ESSID` and `json` flagged because a nearby transmitter chooses the network
+  name. The report also says whether startup triggers run, and evaluates the
+  unit's `ConditionPathExistsGlob`.
+- **Fail closed.** These mark the result incomplete:
+  - an unobserved, unreadable or unparsable arguments file (backslashes, `$`,
+    mixed quoting, or unknown, `--help` or argument-less options);
+  - a relative or empty `--script-dir` component;
+  - unobserved directory listings, directory modes or file metadata;
+  - duplicate or malformed entries;
+  - over-limit input.
+
+  An entry whose name an unlisted (unobserved or unreadable) higher-priority
+  directory for the same state could hold is reported `unresolved`, not
+  `runs`, and is left out of the ordered script list.
+
+  `origin` is always `not_assessed`. Each result names what it cannot observe:
+  package and service state, unit overrides, link states, the daemon's
+  inherited environment and script contents.
+
+**Not covered:** agent collection, catalog `entries_parsed` wiring,
+persistence, baselines and alerts, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
 
 ### Fixed role Compose files — worker checkpoint #676
 
@@ -12280,6 +12468,20 @@ samples. Compatibility: admin-only as before, no schema, collection, admission,
 budget or response-authorization change. Matched serial/parallel production
 throughput remains open.
 
+### Observed provider overlap in fixture comparisons (#1092, roadmap A)
+
+Comparison reports show each input's peak simultaneous fixture provider requests
+alongside its configured concurrency. A peak of one means the run observed no
+provider overlap. Older inputs that omit the measurement report null. Explicit
+peaks must be positive integers within both the configured concurrency and the
+number of investigations. This metric is an observation, so it may differ across
+an otherwise capability-equivalent pair.
+
+The comparator regressions cover observed overlap, a parallel run without
+provider overlap, historical inputs and invalid peaks. Both retained comparison
+records are regenerated from the original SQLite fixture inputs. Matched
+production throughput and the broader faster-triage acceptance remain open.
+
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
 New disposable SQLite and MySQL benchmark reports require one successful
@@ -12420,6 +12622,25 @@ never reads a sourced file.
   - argument validation of non-mail directives (the contract over-reports, never under-reports);
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
+
+### mdadm alert-program contract — worker checkpoint #1213 (roadmap F)
+
+`app/mdadm_program.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/mdadm.conf`, `/etc/mdadm.conf.d`, `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. It reports which `PROGRAM` command `mdadm --monitor --scan` executes as root on RAID events, and which file and line it came from.
+
+- **Source of the semantics:** mdadm 4.3 `config.c`, `lib.c` and `Monitor.c` at tag `mdadm-4.3`, plus the Ubuntu 24.04 `mdadm_4.3-1ubuntu2.1` package. From the package I used its unit files, embedded default paths and a changelog entry removing Debian's `conffile-location.patch`.
+  - `/etc/mdadm.conf` is opened first. Only when that open fails does mdadm use `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. So a planted `/etc/mdadm.conf` hides Debian's file. The drop-in directory is still read when neither main file exists.
+  - Drop-ins must not start with `.`, must be at least six bytes and must end in `.conf`. They are read in `strcmp` byte order. A main path that is a directory is read the same way.
+  - The tokenizer is a direct port of `conf_word`/`conf_line`, covering quotes, `#` comments, whitespace continuation and comment lines that do not end a logical line. Keywords match any ASCII case-insensitive prefix of at least three characters.
+  - The first `PROGRAM` word wins across all lines and files. Later words are listed as ignored.
+  - `Monitor` runs only when a program or `MAILADDR` is set. It calls `execl(PROGRAM, PROGRAM, EVENT, MD_DEVICE[, COMPONENT])` as root, with no shell and no `PATH` search. Empty and relative names are explained.
+  - `mdmonitor.service` runs `--monitor --scan`. The daily `mdmonitor-oneshot.timer` runs it with `--oneshot` when `AUTOSCAN=true`.
+- **Fail closed:** blocking gaps cover malformed input, an unobserved path that mdadm would read, unreadable paths or drop-ins, FIFOs and devices, files over 256 KiB, more than 512 drop-ins, and gap truncation.
+- **Validation:** `tests/test_mdadm_program.py` has 23 tests built from vectors derived from the source.
+  - The sandbox did not allow running the downloaded `mdadm` binary, so there is no real-binary differential.
+  - Four mutations are each caught: a two-character keyword prefix, last-wins `PROGRAM`, case-folded drop-in order, and always using the Debian path.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the four paths, the service and timer state, any `--program`, `--config` or `--mail` override on the command line, a catalog entry, package provenance, UI and AI classification.
+
 
 
 ### D-Bus bus-activation contract — Roadmap F checkpoint #1211
