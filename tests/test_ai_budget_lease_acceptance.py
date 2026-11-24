@@ -7,9 +7,13 @@ that may have been incurred stay counted in the shared ledger, that a successor
 reserves its own spend or defers at the cap, and that no stale result is accepted.
 """
 import json
+import os
+import subprocess
+import sys
 import threading
 import time
 from decimal import Decimal
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
@@ -173,6 +177,96 @@ def test_hung_worker_charge_blocks_a_successor_at_the_cap_until_reset(admin,monk
     with Session() as s:
         rows=ledger(s);assert len(rows)==2 and rows[1].reset_at>reset
         assert s.get(Behavior,SUBJECT).verdict=='low'
+
+
+CRASH_WORKER = """
+import sys
+
+import pytest
+
+from app import ai, worker
+from tests.pricing_catalog import pin_fresh_pricing_catalog
+
+ai.URL = sys.argv[1]
+with pytest.MonkeyPatch.context() as patch:
+    pin_fresh_pricing_catalog(patch)
+    worker.investigate_one()
+"""
+
+
+def test_process_killed_after_provider_receives_request_preserves_the_cap(admin, monkeypatch, ssh):
+    cap = first_quote() * Decimal('1.5')
+    seed(cap=cap)
+    received = threading.Event()
+    release = threading.Event()
+
+    class ProviderRequest(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            received.set()
+            # Keep the request in flight until the parent has killed the worker.
+            release.wait(timeout=45)
+
+        def log_message(self, *args):
+            pass
+
+    environment = {name: value for name, value in os.environ.items()
+                   if not name.lower().endswith('_proxy')}
+    with ThreadingHTTPServer(('127.0.0.1', 0), ProviderRequest) as server:
+        listener = start(server.serve_forever)
+        url = f'http://127.0.0.1:{server.server_port}/v1/responses'
+        try:
+            with subprocess.Popen([sys.executable, '-c', CRASH_WORKER, url], env=environment,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True) as child:
+                arrived = received.wait(timeout=30)
+                running = child.poll() is None
+                if running:
+                    child.kill()
+                _, errors = child.communicate(timeout=WAIT)
+                assert arrived and running, errors
+                assert child.returncode != 0
+        finally:
+            release.set()
+            server.shutdown()
+            listener.join(timeout=WAIT)
+
+    with Session() as s:
+        receipt, = ledger(s)
+        assert receipt.status == 'sent' and receipt.call_id
+        assert s.get(ai_claims.Claim, SUBJECT).run_id == receipt.run_id
+        assert s.get(ai_runs.AIRun, receipt.run_id).state == 'running'
+        reset = ai_budget.status(s)['next_reset']
+    assert expire_lease() == receipt.run_id
+
+    # The successor has only the shared durable state after process death.
+    provider = Provider()
+    monkeypatch.setattr(ai.transport, 'post', provider)
+    worker.investigate_one()
+    assert provider.sent == []
+    with Session() as s:
+        state = ai_budget.status(s)
+        assert [row.id for row in ledger(s)] == [receipt.id]
+        assert Decimal(state['counted_usd']) == Decimal(state['uncertain_usd']) == receipt.reservation_usd
+        assert state['unreconciled_call_count'] == 1
+        assert s.get(ai_runs.AIRun, receipt.run_id).state == 'interrupted'
+        assert s.get(ai_claims.Claim, SUBJECT) is None
+        assert not list(s.scalars(select(ai_assessments.Assessment)))
+        behavior = s.get(Behavior, SUBJECT)
+        assert behavior.verdict == 'pending' and not behavior.approved
+
+    clock = time.time
+    shift = reset - clock() + 5
+    monkeypatch.setattr(time, 'time', lambda: clock() + shift)
+    worker.investigate_one()
+    successor, = [run_id for run_id, _ in provider.sent]
+    with Session() as s:
+        before, after = ledger(s)
+        assert (before.id, before.status) == (receipt.id, 'sent')
+        assert after.status == 'settled' and after.run_id == successor and after.reset_at > reset
+        assert s.scalars(select(ai_assessments.Assessment)).one().run_id == successor
+        assert s.get(ai_runs.AIRun, successor).state == 'complete'
+        behavior = s.get(Behavior, SUBJECT)
+        assert behavior.verdict == 'low' and not behavior.approved
 
 
 def test_lease_lost_during_followup_collection_never_sends_the_second_call(admin,monkeypatch):
