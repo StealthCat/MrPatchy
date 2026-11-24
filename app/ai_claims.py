@@ -13,7 +13,7 @@ from decimal import Decimal
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
-from sqlalchemy import String, Double, select, func, or_, union_all
+from sqlalchemy import String, Double, select, func, and_, or_, union_all
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
 from .coordination import Lock
@@ -108,6 +108,10 @@ def record_turn(s,host_id):
 
 
 FREE_HIT_SCAN=50
+# Where the previous closed-gate pass stopped without a hit, as (first_seen, id).
+# Per process; admission runs under the distributed ``ai-triage`` lock, so
+# passes in one process never overlap. ``None`` starts from the oldest subject.
+_free_hit_cursor=None
 
 
 def _elect_host(s,election_filters,live_counts,signature,now):
@@ -145,21 +149,43 @@ def _oldest(s,host_id,signature,now):
 
 
 def _free_hit(s,model,election_filters):
-    """Oldest eligible subject, among a bounded oldest window, with an exact known-good hit.
+    """Oldest eligible subject, within a bounded rotating window, with an exact known-good hit.
 
     Used while a shared provider start gate is closed. The same pause, lifecycle,
-    saturation, claim and retry filters as normal election apply.
+    saturation, claim and retry filters as normal election apply. Each pass probes
+    at most ``FREE_HIT_SCAN`` subjects. A pass without a hit records where it
+    stopped, and the next pass resumes after that subject and wraps to the oldest,
+    so a hit behind any number of older paid subjects is reached in a bounded
+    number of passes (#1241). A hit restarts the next pass from the oldest.
     """
+    global _free_hit_cursor
     from . import known_good
-    window=[]
-    for verdict in ('pending','error'):
-        window.extend(s.scalars(select(Behavior).outerjoin(
-            ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
-            *election_filters,Behavior.verdict==verdict).order_by(
-            Behavior.first_seen,Behavior.id).limit(FREE_HIT_SCAN)))
-    window.sort(key=lambda row:(row.first_seen,row.id))
-    for row in window[:FREE_HIT_SCAN]:
-        if known_good.exact_hit_available(s,row,model):return row
+    key=lambda row:(row.first_seen,row.id)
+
+    def window(*bounds,limit):
+        rows=[]
+        for verdict in ('pending','error'):
+            rows.extend(s.scalars(select(Behavior).outerjoin(
+                ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
+                *election_filters,*bounds,Behavior.verdict==verdict).order_by(
+                Behavior.first_seen,Behavior.id).limit(limit)))
+        return sorted(rows,key=key)[:limit]
+
+    cursor=_free_hit_cursor
+    if cursor is None or cursor[0] is None:
+        probe=window(limit=FREE_HIT_SCAN)
+    else:
+        seen,subject=cursor
+        after=or_(Behavior.first_seen>seen,and_(Behavior.first_seen==seen,Behavior.id>subject))
+        probe=window(after,limit=FREE_HIT_SCAN)
+        if len(probe)<FREE_HIT_SCAN:
+            # The queue end was reached: wrap to the oldest subjects not probed yet.
+            probe+=window(or_(Behavior.first_seen.is_(None),~after),limit=FREE_HIT_SCAN-len(probe))
+    for row in probe:
+        if known_good.exact_hit_available(s,row,model):
+            _free_hit_cursor=None
+            return row
+    _free_hit_cursor=key(probe[-1]) if probe else None
     return None
 
 
