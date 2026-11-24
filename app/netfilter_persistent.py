@@ -148,7 +148,12 @@ def flush_on_stop(value: str | None) -> bool | None:
     if not _INT.fullmatch(word):
         # dash's atomax10 rejects it ("Illegal number"): status 2.
         return False
-    number = int(word)
+    # Range-check the significant digits before int() so an over-long value cannot hit Python's
+    # integer-string conversion limit (which also counts leading zeros); leading zeros do not change dash's value.
+    digits = word.lstrip('+-').lstrip('0') or '0'
+    if len(digits) > len(str(INTMAX)):
+        return False
+    number = -int(digits) if word.startswith('-') else int(digits)
     if number > INTMAX or number < -INTMAX - 1:
         return False
     return number > 0
@@ -292,8 +297,8 @@ def evaluate(*, defaults: Any = None, directory: Any = None, entries: Any = None
     arguments: dict[str, str | None] = {'start': 'start', 'restart': 'start', 'reload': 'start', 'flush': 'flush',
                                         'save': 'save', 'stop': None if flush is None else ('flush' if flush else '')}
     if plugins is not None:
-        if len(plugins) > MAX_PATH:
-            _gap(gaps, 'plugins_over_limit', 'PLUGINS', 'PLUGINS is over the path limit.')
+        if len(plugins.encode('utf-8', 'surrogatepass')) > MAX_PATH:
+            _gap(gaps, 'plugins_over_limit', 'PLUGINS', f'PLUGINS is over the {MAX_PATH}-byte path limit.')
             plugins = None
         elif plugins.split() != [plugins] and plugins != '' or any(c in _GLOB for c in plugins):
             _gap(gaps, 'plugins_unresolved', 'PLUGINS', f'PLUGINS "{plugins[:120]}" is expanded unquoted, so it '

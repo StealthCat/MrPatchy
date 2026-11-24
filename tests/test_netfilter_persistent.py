@@ -106,6 +106,30 @@ def test_flush_on_stop_follows_dash_test_outcomes():
     assert result['actions']['stop']['argv'] is None
 
 
+def test_over_long_flush_on_stop_digits_fail_closed_without_raising():
+    # More digits than Python's default integer-string conversion limit (4300), yet under MAX_TEXT.
+    for value in ('1' * 5000, '-' + '9' * 5000, '+' + '1' * 5000):
+        assert nf.flush_on_stop(value) is False
+    # Leading zeros do not count towards the range check.
+    assert nf.flush_on_stop('0' * 5000 + '1') is True
+    assert nf.flush_on_stop('-' + '0' * 5000 + '1') is False
+    assert nf.flush_on_stop(str(nf.INTMAX)) is True and nf.flush_on_stop(str(nf.INTMAX + 1)) is False
+    result = run(text=f'FLUSH_ON_STOP={"1" * 5000}\n')
+    assert result['complete'] is True and result['flush_on_stop'] is False
+    assert result['actions']['stop']['argv'] == []
+
+
+def test_plugins_path_limit_counts_encoded_bytes():
+    under = '/' + 'é' * ((nf.MAX_PATH - 1) // 2)
+    over = '/' + 'é' * (nf.MAX_PATH // 2)
+    assert len(over) <= nf.MAX_PATH < len(over.encode('utf-8'))
+    result = run(text=f"PLUGINS='{over}'\n", directory={'path': over, 'state': 'absent'}, entries=None)
+    assert result['complete'] is False and 'plugins_over_limit' in codes(result)
+    assert result['actions']['start']['argv'] is None
+    ok = run(text=f"PLUGINS='{under}'\n", directory={'path': under, 'state': 'absent'}, entries=None)
+    assert ok['complete'] is True and ok['actions']['start']['argv'] == []
+
+
 def test_shell_code_or_path_and_ifs_assignments_are_blocking():
     for text, code in (('PLUGINS=$HOME/p\n', 'defaults_dynamic'), ('. /etc/other\n', 'defaults_dynamic'),
                        ('X=1 Y=2\n', 'defaults_dynamic'), ('PATH=/tmp:/usr/bin\n', 'path_assigned'),
