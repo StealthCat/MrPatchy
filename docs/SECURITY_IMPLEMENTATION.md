@@ -2522,11 +2522,14 @@ recorded call count. Avoided USD sums the run's priced receipts only when every
 call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
 partly priced, pruned, unlinked or still running is counted separately and
 never treated as free, so incomplete coverage makes the figures lower bounds.
-The estimate reads candidates in bounded batches without loading evidence or
-snapshots. It is not a provider invoice, does not measure misses and does not
-predict what a fresh investigation would cost today. Lookup, publication,
-revocation, pause, budget, role, approval and response boundaries are
-unchanged. Hit/miss reasons and matched production acceptance remain open.
+The estimate groups reuses by the exact originating run ID and reads distinct
+runs and receipts in bounded batches without loading evidence or snapshots
+([#1433](https://github.com/StealthCat/MrPatchy/issues/1433)). Missing source
+assessments count toward unavailable coverage. It is not a provider invoice,
+does not measure misses and does not predict what a fresh investigation would
+cost today. Lookup, publication, revocation, pause, budget, role, approval and
+response boundaries are unchanged. Hit/miss reasons and matched production
+acceptance remain open.
 
 Worker checkpoint #779 notifies the other administrators when an
 administrator revokes a fleet known-good candidate through
