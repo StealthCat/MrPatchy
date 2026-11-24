@@ -9161,6 +9161,13 @@ The faster-triage program remains unfinished. This batch selects a runtime
 concurrency increment independently of the larger authenticated-context/cache
 program; none of the v1.21.0 context gaps become cache eligibility.
 
+Worker checkpoint (#1108): the leader skips idle update-scoring submissions
+when scoring is disabled. A previously running score still receives recovery
+through its ordinary execution lock. Enabled scoring keeps alternating with
+triage. With one executor slot and scoring off, the deterministic scheduler
+fixture dispatches triage on all four five-second ticks instead of two. This
+measures dispatch cadence. It does not measure production throughput.
+
 `MRPATCHY_AI_CONCURRENCY` sizes the real shared AI executor from 1–8 tasks, default
 4. Independent servers can overlap full one/two-stage process investigations.
 Only one process investigation per host is admitted across supported workers,
