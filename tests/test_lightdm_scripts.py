@@ -160,7 +160,8 @@ def _glib_parse(lib, data: bytes):
 _PIECES = ['[Seat:*]', '[SeatDefaults]', '[Seat:seat0]', '[LightDM]', '[ A ]', '[a]b', '[]', '[x]  ', ' [y]\t',
            '[a[b]', '[c]]', 'session-setup-script', 'k', ' k', 'k ', 'k[de]', 'k[d e]', 'k[]', 'k[x]y', 'a b',
            'Encoding', '=', ' = ', '/bin/x', '\\s', '\\n', '\\t', '\\r', '\\\\', '\\q', '\\', '#', '# c', '\r',
-           ' ', '\t', '\v', 'UTF-8', 'latin1', ';', '"q"', 'é']
+           ' ', '\t', '\v', 'UTF-8', 'latin1', ';', '"q"', 'é', 'k[é]', 'k[٣]', 'k[²]', 'k[ß_x]', 'k[\u0301]',
+           'k[', '[', ']']
 
 
 def _random_file(rng):
@@ -186,6 +187,40 @@ def test_keyfile_parser_matches_glib():
         if got != expected:
             mismatches.append((text, expected, got))
     assert not mismatches, mismatches[:3]
+
+
+def test_unicode_locale_key_does_not_hide_a_drop_in_or_main_file():
+    text = '[Seat:*]\nsession-setup-script=/opt/evil\nName[é]=x\nName[٣]=y\n'
+    r = run('[LightDM]\n', files={D + '/50-x.conf': text}, listings={D: ['50-x.conf']})
+    assert r['gaps'] == [] and r['complete'] and scripts(r)['session-setup-script']['command'] == '/opt/evil'
+    main = run(text)
+    assert main['status'] == 'loads' and scripts(main)['session-setup-script']['command'] == '/opt/evil'
+
+
+@pytest.mark.parametrize('line', ['Name[\U00011f02]=x', 'Name[\U00011f02 ]=x'])
+def test_locale_outside_verified_unicode_range_is_blocking(line):
+    text = '[Seat:*]\nsession-setup-script=/opt/x\n' + line + '\n'
+    for result in (run('[LightDM]\n', files={D + '/a.conf': text}, listings={D: ['a.conf']}), run(text)):
+        assert result['status'] == 'loads' and result['complete'] is False
+        assert [g['code'] for g in result['gaps']] == ['locale_key_uncertain']
+
+
+def test_unicode_locale_characters_match_glib_below_verified_bound():
+    lib = _glib()
+    mismatches = []
+    for cp in range(0x80, ls._UNICODE_CERTAIN_BELOW):
+        if 0xD800 <= cp <= 0xDFFF:
+            continue
+        text = f'[A]\nk[{chr(cp)}]=v\n'
+        expected = _glib_parse(lib, text.encode()) is not None
+        try:
+            ls.parse_keyfile(text)
+            got = True
+        except ls.KeyFileError:
+            got = False
+        if got != expected:
+            mismatches.append(hex(cp))
+    assert not mismatches, mismatches[:10]
 
 
 @pytest.mark.parametrize('pattern,name,ok', [('*', '', True), ('seat?', 'seat1', True), ('seat?', 'seat', False),

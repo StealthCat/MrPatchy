@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import posixpath
+import unicodedata
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -64,7 +65,7 @@ MAX_GAPS = 64
 
 BLOCKING = frozenset({
     'file_not_observed', 'directory_not_observed', 'over_limit', 'invalid_utf8', 'binary', 'files_over_limit',
-    'gaps_truncated', 'relative_path',
+    'gaps_truncated', 'relative_path', 'locale_key_uncertain',
 })
 
 NOT_OBSERVED = (
@@ -78,6 +79,9 @@ NOT_OBSERVED = (
 )
 
 _SPACE = ' \t\n\f\r'  # g_ascii_isspace: no vertical tab
+# Python's Unicode letter/number categories match GLib 2.80's g_unichar_isalnum for every code point below
+# this one (checked exhaustively against libglib-2.0). Above it the two Unicode table versions can differ.
+_UNICODE_CERTAIN_BELOW = 0x11000
 
 
 class KeyFileError(ValueError):
@@ -96,7 +100,16 @@ def _is_group_name(name: str) -> bool:
     return bool(name) and not any(c in '[]' or ord(c) < 32 or ord(c) == 127 for c in name)
 
 
-def _is_key_name(key: str) -> bool:
+def _locale_char(c: str, uncertain: list[str] | None) -> bool:
+    """``g_unichar_isalnum`` or ``-_.@``. Records characters where the Unicode tables may disagree."""
+    if c.isascii():
+        return c.isalnum() or c in '-_.@'
+    if ord(c) >= _UNICODE_CERTAIN_BELOW and uncertain is not None:
+        uncertain.append(c)
+    return unicodedata.category(c)[0] in 'LN'
+
+
+def _is_key_name(key: str, uncertain: list[str] | None = None) -> bool:
     q = 0
     while q < len(key) and key[q] not in '=[]':
         q += 1
@@ -104,7 +117,7 @@ def _is_key_name(key: str) -> bool:
         return False
     if q < len(key) and key[q] == '[':
         q += 1
-        while q < len(key) and (key[q].isascii() and key[q].isalnum() or key[q] in '-_.@'):
+        while q < len(key) and _locale_char(key[q], uncertain):
             q += 1
         if q >= len(key) or key[q] != ']':
             return False
@@ -112,11 +125,13 @@ def _is_key_name(key: str) -> bool:
     return q == len(key)
 
 
-def parse_keyfile(text: str) -> list[tuple[str, dict[str, str]]]:
+def parse_keyfile(text: str, uncertain: list[str] | None = None) -> list[tuple[str, dict[str, str]]]:
     """Parse like ``g_key_file_load_from_data`` (GLib 2.80) and return groups in order with raw values.
 
     The caller has already refused NUL bytes and invalid UTF-8. Raises :class:`KeyFileError` where
-    GLib refuses the file. Translated ``key[locale]`` entries are validated and then left out.
+    GLib refuses the file. Translated ``key[locale]`` entries are validated and then left out. Locale
+    characters whose classification may differ between Python's and GLib's Unicode tables are appended
+    to ``uncertain``; the caller must then treat the file's acceptance as unverified.
     """
     groups: list[tuple[str, dict[str, str]]] = []
     index: dict[str, int] = {}
@@ -150,7 +165,7 @@ def parse_keyfile(text: str) -> list[tuple[str, dict[str, str]]]:
         if current is None:
             raise KeyFileError('key file does not start with a group')
         key = stripped[:equals].rstrip(_SPACE)
-        if not _is_key_name(key):
+        if not _is_key_name(key, uncertain):
             raise KeyFileError(f'line {number}: invalid key name')
         value = stripped[equals + 1:].lstrip(_SPACE)
         if current_name == first_group and key == 'Encoding' and value.lower() != 'utf-8':
@@ -285,13 +300,20 @@ def evaluate(*, files: Mapping[str, Any], listings: Mapping[str, Iterable[str] |
         text = _decode(path, files[path], gaps)
         if text is None:
             continue
+        uncertain: list[str] = []
         try:
-            groups = parse_keyfile(text)
+            groups = parse_keyfile(text, uncertain)
         except KeyFileError as exc:
+            if uncertain:
+                # GLib may accept a locale character this port refuses: never report a refusal it can't verify.
+                _gap(gaps, 'locale_key_uncertain', path, str(exc))
+                continue
             if is_main:
                 return _result('config_error', gaps, [], files_read + [path], f'{path}: {exc}')
             _gap(gaps, 'file_refused', path, str(exc))
             continue
+        if uncertain:
+            _gap(gaps, 'locale_key_uncertain', path, 'GLib may refuse this file over a locale character')
         files_read.append(path)
         for name, values in groups:
             group = 'Seat:*' if name == 'SeatDefaults' else name
