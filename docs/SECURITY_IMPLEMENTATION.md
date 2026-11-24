@@ -4135,6 +4135,21 @@ and a lock assigned to another session. The native MySQL fixture verifies that
 stale cleanup leaves the subsequent holder's table intact. This is fixture
 cleanup acceptance. Production failover and throughput acceptance remain open.
 
+### Verify retained assessments in fixture throughput reports — Roadmap A checkpoint #1299
+
+After the timed serial or parallel workload, the benchmark checks that each
+fixture observation retained exactly one AI assessment linked to its run,
+host and model. It checks the fixture result, evidence snapshot and saved
+input trail against the captured provider inputs, including the collected
+evidence and second input for subjects that requested a follow-up. The
+assessment summary includes counts of verified subjects, input stages and
+follow-up subjects. If durable records are missing or differ, the benchmark
+exits before emitting throughput.
+
+These checks apply to the disposable SQLite and MySQL fixtures. They do not
+change runtime triage or the report comparator. Production measurements and
+the broader capability acceptance remain open.
+
 ### Advisory plan result-persistence timing — Roadmap A checkpoint #1176
 
 Incident and startup plan runs record a retained `result_persistence` timing
