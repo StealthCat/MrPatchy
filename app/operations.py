@@ -371,7 +371,7 @@ def collect_alerts(now=None,observing_since=None):
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')
         # In-app only: the raw integrity alert carries endpoint text; publish fixed controller-classified wording.
         from . import integrity_sweep_notifications
-        try:integrity_sweep_notifications.publish(s,hosts,now)
+        try:integrity_sweep_notifications.publish(s,hosts,now,cfg)
         except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
         # In-app only: scheduled malware-scan coverage has no SMTP/webhook alert.
         from . import scan_coverage_notifications
