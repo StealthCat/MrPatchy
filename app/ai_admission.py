@@ -8,7 +8,7 @@ lifecycle, authorization, or finite-concurrency controls.
 import time
 from contextvars import ContextVar
 
-from sqlalchemy import String, Double, Integer, or_, select
+from sqlalchemy import String, Double, Integer, case, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -89,7 +89,7 @@ def shared_start_waiting(session, now, *, settings):
         paced = select(Admission.id).where(
             Admission.id == 'global', Admission.next_at > now,
         ).exists()
-        blocked = or_(blocked, paced)
+        blocked = case((paced, True), else_=blocked)
     return bool(session.scalar(select(blocked)))
 
 
