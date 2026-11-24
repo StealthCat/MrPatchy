@@ -271,10 +271,10 @@ def test_budget_reset_names_both_windows_when_the_timezone_changes():
                                   'next_reset': _ts(2026, 11, 21, 10)}
     assert result['resets_sooner'] is True and result['seconds_until_proposed_reset'] == 3 * 3600
     assert 'keeps counting while the budget window it was admitted under is still open' in result['carryover']
-    assert 'while it was made inside the active window' in result['carryover']
+    assert 'only if it was made inside the active budget window' in result['carryover']
     # An earlier proposed boundary is not a refill: retained spend can still count after it (#1269 review).
     assert 'fresh daily cap' not in result['carryover']
-    assert 'can still count after it' in result['carryover']
+    assert 'spend can still count if its original window is open' in result['carryover']
     assert result['starts_earlier'] is True and result['resets_later'] is False
     later = preview.budget_reset(CAPPED, {'ai_budget_timezone': 'America/Los_Angeles'}, now)
     # PST (UTC-8): local 2026-11-20 23:00, resets at 08:00 UTC, still sooner than UTC midnight.
@@ -359,7 +359,7 @@ def test_budget_reset_discloses_spend_counted_past_its_own_reset(admin):
     created = _ts(2026, 11, 24, 10)
     result = preview.budget_reset(CAPPED, {'ai_budget_timezone': 'America/Los_Angeles'}, created)
     assert result['resets_later'] is True and result['starts_earlier'] is False and not result['resets_sooner']
-    assert 'a proposed reset that is later keeps current spend counted until that reset' in result['carryover']
+    assert 'A later reset can keep spend made inside the proposed window counted' in result['carryover']
     before, after = _counted_after_timezone_change(created, 'UTC', 'America/Los_Angeles', _ts(2026, 11, 25, 1))
     assert before == 0 and after > 0
 
@@ -371,6 +371,38 @@ def test_budget_reset_discloses_recounted_spend_from_an_already_reset_window(adm
     stored = CAPPED | {'ai_budget_timezone': 'Asia/Tokyo'}
     result = preview.budget_reset(stored, {'ai_budget_timezone': 'America/Los_Angeles'}, now)
     assert result['starts_earlier'] is True and result['resets_sooner'] is True and not result['resets_later']
-    assert 'can count again spend from a window that has already reset' in result['carryover']
+    assert 'can bring already-reset spend back into the total' in result['carryover']
     before, after = _counted_after_timezone_change(_ts(2026, 11, 24, 14), 'Asia/Tokyo', 'America/Los_Angeles', now)
     assert before == 0 and after > 0
+
+
+def test_budget_reset_discloses_spend_excluded_by_a_second_timezone_change(admin, monkeypatch):
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from app import ai_budget, main
+
+    now = _ts(2026, 11, 24, 16)
+    created = _ts(2026, 11, 24, 14)
+    original, carried = _counted_after_timezone_change(created, 'Asia/Tokyo', 'America/Los_Angeles', now)
+    assert (original, carried) == (Decimal(0), Decimal('0.004'))
+
+    proposed = {'ai_budget_timezone': 'Asia/Tokyo'}
+    with monkeypatch.context() as patch:
+        patch.setattr(main, 'time', SimpleNamespace(time=lambda: now))
+        response = admin.post('/api/settings/ai/preview', json=proposed)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body['expands'] and body['expansion_confirmation']
+    reset = body['budget_reset']
+    assert reset['current']['timezone'] == 'America/Los_Angeles'
+    assert reset['proposed']['timezone'] == 'Asia/Tokyo'
+
+    saved = confirmed_put(admin, '/api/settings/ai', proposed)
+    assert saved.status_code == 200, saved.text
+    with Session() as session:
+        assert Decimal(ai_budget.status(session, now)['counted_usd']) == 0
+        row = session.get(ai_budget.BudgetEntry, '00000000-0000-0000-0000-000000001269')
+        assert row.created == created and row.reset_at == _ts(2026, 11, 24, 15)
+
+    assert 'exclude spend counted only in the current window' in reset['carryover']

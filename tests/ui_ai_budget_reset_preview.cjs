@@ -33,6 +33,7 @@ module.exports=async(page,capture)=>{
   const movingText=await moving.innerText();
   assert.match(movingText,/Current window · UTC · started .* · resets /);
   assert.match(movingText,/keeps counting while the budget window it was admitted under is still open/);
+  assert.match(movingText,/exclude spend counted only in the current window/);
   const server=await page.evaluate(async()=>(await api('/settings/ai/preview','POST',{ai_control_mode:'daily_cap',ai_budget_timezone:'Pacific/Kiritimati'})).budget_reset);
   assert.equal(await moving.getAttribute('data-resets-sooner'),String(server.resets_sooner));
   assert.equal(/resets before the current one/.test(movingText),server.resets_sooner);
@@ -50,7 +51,9 @@ module.exports=async(page,capture)=>{
   const dialog=page.locator('#modal');
   await dialog.getByRole('heading',{name:'Confirm expanded AI admission or spend'}).waitFor();
   assert.match(await page.locator('#ai-expansion-list').innerText(),/reset timezone changes from UTC to Pacific\/Kiritimati/);
-  assert.match(await dialog.locator('.ai-budget-reset').innerText(),/Proposed window · Pacific\/Kiritimati/);
+  const dialogReset=await dialog.locator('.ai-budget-reset').innerText();
+  assert.match(dialogReset,/Proposed window · Pacific\/Kiritimati/);
+  assert.match(dialogReset,/exclude spend counted only in the current window/);
   await capture('settings-ai-budget-reset-confirm',false);
   await page.locator('#ai-expansion-cancel').click();
   await page.locator('#ai-save-result').getByText('Save cancelled',{exact:false}).waitFor();

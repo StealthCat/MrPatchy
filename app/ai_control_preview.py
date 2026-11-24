@@ -182,12 +182,11 @@ def legacy_migration(values):
             'proposal_expands': preview['expands'], 'proposal_expansions': preview['expansions']}
 
 
-RESET_CARRYOVER = ('Spend keeps counting while the budget window it was admitted under is still open, and also '
-                   'while it was made inside the active window. Changing the reset timezone therefore never hands '
-                   'back spend already counted, but it can count more: a proposed window that starts earlier can '
-                   'count again spend from a window that has already reset, and a proposed reset that is later '
-                   'keeps current spend counted until that reset. An earlier proposed boundary does not by itself '
-                   'add headroom, because spend retained from the current window can still count after it.')
+RESET_CARRYOVER = ('Spend keeps counting while the budget window it was admitted under is still open. '
+                   'After its original window resets, spend counts only if it was made inside the active budget window. '
+                   'Changing the timezone can bring already-reset spend back into the total or exclude spend counted '
+                   'only in the current window. A later reset can keep spend made inside the proposed window counted '
+                   'for longer. At the proposed reset, spend can still count if its original window is open.')
 
 
 CAP_START = ('Calls made while uncapped are not recorded against a daily cap. The full cap, less any capped '
@@ -220,8 +219,8 @@ def budget_reset(stored, proposed, now):
     return {'generated_at': now, 'current': current, 'proposed': after,
             'resets_sooner': bool(current and after['next_reset'] < current['next_reset']),
             # ``ai_budget._state`` also counts every row created inside the active window, so an
-            # earlier start recounts already-reset spend at once and a later reset holds current
-            # spend past its own reset (#1269 review).
+            # earlier start can recount already-reset spend at once and a later reset can keep
+            # spend inside the proposed window counted past its original reset (#1269 review).
             'starts_earlier': bool(current and after['window_start'] < current['window_start']),
             'resets_later': bool(current and after['next_reset'] > current['next_reset']),
             'seconds_until_proposed_reset': max(0, int(after['next_reset'] - now)),
