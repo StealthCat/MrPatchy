@@ -3985,6 +3985,11 @@ enforces. The list holds at most 50 servers, largest backlog
 first, and states the number of servers with a backlog and whether it was
 truncated.
 
+[#1439](https://github.com/StealthCat/MrPatchy/issues/1439) derives that total
+from the grouped backlog statement before applying the page limit. The ranked
+rows and truncation metadata describe the same database read, and an empty
+backlog returns zero. SQLite and MySQL use the existing schema.
+
 The classes use the predicates of `ai_runs.status()` and the claim query, so
 per-server pending, paused, eligible-unclaimed and active counts add up to the
 fleet totals. One difference is deliberate: a running claim takes precedence,
