@@ -3241,6 +3241,22 @@ Mutations that remove the shared lock from `reserve()` or reuse a stale settings
 snapshot fail the suite. The suite runs on SQLite locally and on MySQL in the hosted
 shards. No runtime behaviour changes, and the rest of milestone 4 remains open.
 
+### Daily-cap recovery after a worker process exits (#1103, roadmap A)
+
+The lease acceptance suite starts triage in a separate process and uses a
+loopback provider that records a complete request and holds its response.
+The test kills the process before Python can reconcile the call. It verifies
+the durable lease and sent reservation, advances lease and retry eligibility,
+then checks that a successor interrupts the stale run without another
+provider request, ledger charge or accepted assessment in the spent window.
+At the next reset the successor completes with its own reservation and the
+original unreconciled row remains in the ledger.
+
+SQLite and MySQL use the same scenario. Lease expiry and reset are advanced
+in the fixture instead of waiting. The provider is synthetic, so this covers
+the application's recovery and accounting rather than provider billing,
+deployed multi-controller failover or production throughput.
+
 ### Finite implementation and acceptance milestones
 
 Initial triage preflight reuses the global settings and encrypted key already
