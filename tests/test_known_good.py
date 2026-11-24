@@ -907,17 +907,22 @@ def test_summary_estimates_avoided_calls_and_spend_with_honest_coverage(admin):
         _estimate_fixture(s, 6, '', 1)
         _estimate_fixture(s, 7, 'running', 1)
         _estimate_fixture(s, 8, 'priced', 0)
+        # A collation-equivalent ID alone cannot attribute reuse to a run.
+        _estimate_fixture(s, 9, 'PRICED', 1)
+        _estimate_fixture(s, 10, 'priced', 1)
+        s.flush()
+        s.delete(s.get(ai_assessments.Assessment, 'source-10'))
         s.commit()
     body = admin.get('/api/ai/known-good/summary').json()
-    assert body['retained_reuse_assessments'] == 9
+    assert body['retained_reuse_assessments'] == 11
     assert body['reuse_assessments_on_revoked_entries'] == 1
     assert body['avoided_estimate'] == {
         # Three reuses of a fully priced two-call source: 3 x 0.0175 USD.
         'reuse_with_priced_source': 3, 'estimated_usd': '0.0525',
         # Unpriced and partly priced sources are known calls but never free.
         'reuse_with_unpriced_source': 2,
-        # Pruned, unlinked or still-running sources cannot be attributed.
-        'reuse_with_unavailable_source': 4,
+        # Pruned, unlinked, missing or still-running sources cannot be attributed.
+        'reuse_with_unavailable_source': 6,
         'estimated_calls': 3 * 2 + 1 + 2, 'currency': 'USD',
     }
     total = sum(body['avoided_estimate'][key] for key in (
@@ -925,12 +930,16 @@ def test_summary_estimates_avoided_calls_and_spend_with_honest_coverage(admin):
     assert total == body['retained_reuse_assessments']
 
 
-def test_summary_estimate_reads_candidates_in_bounded_batches(admin):
-    count = known_good.LOOKUP_READ_BATCH * 2 + 5
+@pytest.mark.parametrize(('run_count', 'expected_selects'), [(1, 3), (5, 7)])
+def test_summary_estimate_reads_distinct_sources_in_bounded_batches(
+        admin, monkeypatch, run_count, expected_selects):
+    monkeypatch.setattr(known_good, 'LOOKUP_READ_BATCH', 2)
+    count = 205 if run_count == 1 else 15
     with Session() as s:
-        _run(s, 'priced', ['0.0010'])
+        for number in range(run_count):
+            _run(s, f'priced-{number}', ['0.0010'])
         for index in range(count):
-            _estimate_fixture(s, index + 1, 'priced', 1)
+            _estimate_fixture(s, index + 1, f'priced-{index % run_count}', 1)
         s.commit()
     with Session() as s:
         statements = []
@@ -943,8 +952,8 @@ def test_summary_estimate_reads_candidates_in_bounded_batches(admin):
     assert estimate['reuse_with_priced_source'] == count
     assert estimate['estimated_calls'] == count
     assert estimate['estimated_usd'] == format(count * known_good_decimal('0.0010'), 'f')
-    # One grouping read, then candidate, run and receipt reads per batch of 100.
-    assert len(statements) == 1 + 3 * 3
+    # One grouping read, then one run read and one receipt read per distinct batch.
+    assert len(statements) == expected_selects
     assert not any('snapshot' in statement for statement in statements)
 
 
