@@ -12576,6 +12576,7 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **File selection.** `forward_path` defaults to `$home/.forward${recipient_delimiter}${extension}, $home/.forward`. An entry with an undefined macro is skipped: without an extension, only `$home/.forward` applies. The first entry that `lstat`s as the recipient is chosen, and no other entry is tried, even when the chosen file is then refused.
 - **Refusals.** The chosen file is used only if it is a regular file (by `lstat`, so a symlink is refused), owned by root or the recipient, and not world-writable.
 - **Parsing.** Lines that start with `#` in column one are skipped. Each address token is parsed. A destination that starts with `|` is a command, and it is refused unless `allow_mail_to_commands` contains `forward`. Commands in `:include:` files need `include`.
+- **Case folding.** `deliver_recipient` (`recipient.c`) case-folds the recipient before `split_addr` separates the user and extension at the first `recipient_delimiter` character. A passwd name with ASCII upper case, or one containing a delimiter character, is never looked up and is listed in `unreachable_users`. An extension file with ASCII upper case is never chosen. Non-ASCII names and extensions (SMTPUTF8 folding) and upper-case delimiters are blocking `casefold_not_modeled` gaps.
 - **Rights.** Commands run with the recipient's uid/gid. A uid or gid of 0 is replaced by `default_privs`, so a root `.forward` command runs as `nobody` by default. A non-empty `local_command_shell` is reported as the shell.
 
 **Fail closed.** The tokenizer is deliberately conservative. It accepts only comma-separated destinations, each either one bare atom or one whole quoted string. The following are blocking gaps:
@@ -12587,11 +12588,12 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - unobserved inputs or homes, unreadable homes, missing metadata or text, malformed captured text, over-limit lines, files or listings;
 - `:include:` files when `include` would allow their commands.
 
-**Validation.** `tests/test_dotforward_commands.py` has 34 tests. They cover:
+**Validation.** `tests/test_dotforward_commands.py` has 37 tests. They cover:
 
 - quoted and bare commands, and root mapped to `default_privs`;
 - symlink, directory, foreign-owner and world-writable refusals, and root-owned acceptance;
 - the command-class gate, and an extension file chosen first that blocks fallback;
+- case folding: upper-case and delimiter-containing usernames, upper-case extensions and non-ASCII names;
 - every unsupported-syntax form, include handling, column-one comments, long lines and non-default parameters;
 - malformed and missing inputs, captured text with a lone surrogate (a blocking `content_malformed` gap while other users stay usable), surrogateescape bytes, duplicate passwd names and gap bounding.
 

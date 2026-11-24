@@ -31,6 +31,13 @@ Semantics come from the Postfix source (``src/local/dotforward.c``,
   replaces uid 0 or gid 0 with ``default_privs`` (default ``nobody``), so a
   root ``.forward`` command runs unprivileged. ``local_command_shell``, when
   set, is the shell used to run the command.
+* ``deliver_recipient`` (``recipient.c``) case-folds the recipient before
+  ``split_addr`` separates the user from the extension at the first
+  ``recipient_delimiter`` character. A passwd name with ASCII upper case is
+  never looked up, a username containing a delimiter character is always
+  split, and an extension file name with ASCII upper case is never chosen.
+  Non-ASCII names and extensions (SMTPUTF8 Unicode folding) and delimiters
+  with upper case are blocking gaps.
 
 A conservative tokenizer handles quoted strings, bare atoms, dots and commas.
 Comments, route addresses, group syntax, backslashes and unbalanced quotes are
@@ -69,7 +76,7 @@ BLOCKING = frozenset({
     'nondefault_line_limit', 'nondefault_local_transport', 'unknown_command_class', 'default_privs_unresolved',
     'users_not_observed', 'too_many_users', 'home_not_observed', 'home_unreadable', 'too_many_entries',
     'metadata_missing', 'content_not_observed', 'content_malformed', 'file_too_large', 'line_too_long', 'line_unparsed',
-    'include_not_resolved', 'gaps_truncated',
+    'include_not_resolved', 'casefold_not_modeled', 'gaps_truncated',
 })
 UNOBSERVED = (
     'Command programs and scripts are not read, so what a command does is not assessed.',
@@ -289,7 +296,7 @@ def assess(postfix_installed: Any = None, postconf: Any = None, users: Any = Non
     result: dict[str, Any] = {
         'contract_version': CONTRACT_VERSION, 'reference': REFERENCE, 'postfix': 'not_observed',
         'commands_allowed': None, 'include_commands_allowed': None, 'default_privs': None,
-        'command_shell': None, 'recipient_delimiter': None, 'users': [], 'commands': [],
+        'command_shell': None, 'recipient_delimiter': None, 'users': [], 'unreachable_users': [], 'commands': [],
         'gaps': gaps, 'unobserved': list(UNOBSERVED), 'not_a_verdict': NOT_A_VERDICT,
     }
     if postfix_installed is False:
@@ -316,6 +323,8 @@ def assess(postfix_installed: Any = None, postconf: Any = None, users: Any = Non
     delimiter = postconf['recipient_delimiter'].strip()
     shell = postconf['local_command_shell'].strip()
     result.update(recipient_delimiter=delimiter, command_shell=shell or None)
+    if not delimiter.isascii() or delimiter != delimiter.lower():
+        _gap(gaps, 'casefold_not_modeled', detail='recipient_delimiter has upper-case or non-ASCII characters')
     if classes is not None:
         result.update(commands_allowed='forward' in classes, include_commands_allowed='include' in classes)
     passwd = _users(users, gaps)
@@ -350,6 +359,18 @@ def _user(user: dict[str, Any], listing: Any, forward_path: tuple[str, ...], del
           privs: dict[str, Any] | None, classes: set[str], gaps: list[dict[str, Any]],
           result: dict[str, Any]) -> None:
     home = user['home']
+    name = user['name']
+    if not name.isascii():
+        _gap(gaps, 'casefold_not_modeled', home, 'Non-ASCII username; SMTPUTF8 case folding is not modelled.')
+        return
+    if name != name.lower():
+        result['unreachable_users'].append({'user': name, 'reason': 'local(8) case-folds the recipient, so this '
+                                            'upper-case passwd name is never looked up and its .forward is unused.'})
+        return
+    if delimiter and any(c in delimiter for c in name):
+        result['unreachable_users'].append({'user': name, 'reason': 'local(8) splits the recipient at the first '
+                                            'recipient_delimiter character, so this username is never looked up.'})
+        return
     if listing is None:
         _gap(gaps, 'home_not_observed', home, f'No .forward listing for {user["name"]}.')
         return
@@ -382,10 +403,15 @@ def _user(user: dict[str, Any], listing: Any, forward_path: tuple[str, ...], del
         selections.append(_select(user, 'user', by_name[FILE_PREFIX], run_as, classes, gaps))
     # Recipient "user<d>ext": with the default path, .forward<d>ext is chosen first when it exists.
     if len(forward_path) == 2 and delimiter:
-        for name in sorted(by_name):
-            suffix = name[len(FILE_PREFIX):]
-            if len(suffix) >= 2 and suffix[0] in delimiter:
-                selections.append(_select(user, 'extension', by_name[name], run_as, classes, gaps,
+        for entry_name in sorted(by_name):
+            suffix = entry_name[len(FILE_PREFIX):]
+            if len(suffix) < 2 or suffix[0] not in delimiter:
+                continue
+            if not suffix.isascii():
+                _gap(gaps, 'casefold_not_modeled', _home_join(home, entry_name),
+                     'Non-ASCII extension; SMTPUTF8 case folding is not modelled.')
+            elif suffix == suffix.lower():
+                selections.append(_select(user, 'extension', by_name[entry_name], run_as, classes, gaps,
                                           extension=suffix[1:], delim=suffix[0]))
     if selections:
         result['users'].append({'user': user['name'], 'uid': user['uid'], 'home': home,

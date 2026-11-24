@@ -211,3 +211,35 @@ def test_surrogateescape_bytes_still_parse():
     text = b'"|/bin/caf\xe9"\n'.decode('utf-8', 'surrogateescape')
     result = _run(_listed(_forward(content=text)))
     assert result['complete'] and result['commands'][0]['command'] == '/bin/caf\udce9'
+
+
+def test_case_folding_makes_upper_case_users_and_extensions_unreachable():
+    users = USERS + [{'name': 'Alice', 'uid': 1001, 'gid': 1001, 'home': '/home/Alice'},
+                     {'name': 'bob', 'uid': 1002, 'gid': 1002, 'home': '/home/bob'}]
+    homes = {u['name']: {'state': 'absent'} for u in USERS}
+    homes['Alice'] = _listed(_forward(content='"|/bin/a"\n', uid=1001))
+    homes['bob'] = _listed(_forward('.forward+Work', content='"|/bin/w"\n', uid=1002),
+                           _forward('.forward+home', content='"|/bin/h"\n', uid=1002))
+    result = df.assess(True, dict(POSTCONF, recipient_delimiter='+'), users, homes)
+    assert result['complete']
+    assert [(c['user'], c['recipient'], c['command']) for c in result['commands']] == [('bob', 'bob+home', '/bin/h')]
+    assert [u['user'] for u in result['unreachable_users']] == ['Alice']
+
+
+def test_username_with_delimiter_is_unreachable():
+    users = USERS + [{'name': 'mail-admin', 'uid': 1003, 'gid': 1003, 'home': '/home/ma'}]
+    homes = {u['name']: {'state': 'absent'} for u in USERS}
+    homes['mail-admin'] = _listed(_forward(content='"|/bin/x"\n', uid=1003))
+    result = df.assess(True, dict(POSTCONF, recipient_delimiter='-'), users, homes)
+    assert result['commands'] == [] and result['unreachable_users'][0]['user'] == 'mail-admin'
+    plain = df.assess(True, POSTCONF, users, homes)
+    assert [c['user'] for c in plain['commands']] == ['mail-admin']
+
+
+def test_non_ascii_names_and_upper_case_delimiters_are_blocking():
+    users = USERS + [{'name': 'jos\u00e9', 'uid': 1004, 'gid': 1004, 'home': '/home/jose'}]
+    homes = {u['name']: {'state': 'absent'} for u in users}
+    assert 'casefold_not_modeled' in df.assess(True, POSTCONF, users, homes)['blocking']
+    ext = _run(_listed(_forward('.forward+caf\u00e9', content='"|/x"\n')), recipient_delimiter='+')
+    assert 'casefold_not_modeled' in ext['blocking']
+    assert 'casefold_not_modeled' in _run(recipient_delimiter='X')['blocking']
