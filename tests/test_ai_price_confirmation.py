@@ -8,11 +8,13 @@ confirmed catalog can never add models or change rate structure.
 from decimal import Decimal
 import time
 
+import httpx
 import pytest
 from sqlalchemy import select
 
-from app import ai_pricing, main
+from app import ai, ai_budget, ai_pricing, main
 from app.db import Audit, Session, Setting
+from app.security import seal
 
 URL = '/api/settings/ai-price-catalog'
 PAYLOAD = {'model': 'gpt-6-astra', 'max_output_tokens': 100_000, 'input': 'fixture'}
@@ -88,6 +90,71 @@ def test_confirmed_rates_start_a_new_window_and_price_reservations_and_estimates
     assert 'admin confirmed AI price catalog ' + after['version'] in detail
     assert 'replacing ' + before['version'] in detail and '(7 days)' in detail
     assert 'gpt-6-astra input 10 -> 20' in detail and 'gpt-4.1 cache_write' not in detail
+
+
+def scaled(catalog, factor):
+    return {model: [None if value is None else format(Decimal(value) * factor, 'f') for value in
+                    (values[field] for field in ai_pricing.RATE_FIELDS)]
+            for model, values in catalog['rates'].items()}
+
+
+@pytest.mark.parametrize('bundled_expires_in_flight', [False, True], ids=['increase', 'old-catalog-expires'])
+def test_in_flight_confirmation_settles_at_the_admission_catalog(admin, monkeypatch, bundled_expires_in_flight):
+    """A capped call settles with the rates its reservation was quoted from (#1488 review).
+
+    Confirming 100x rates while the request is in flight must not settle the
+    reply at the new rates (5x the cap in this fixture) or label the charge
+    with the admission version; the next call uses the confirmed catalog.
+    """
+    monkeypatch.setattr(ai_pricing, 'EXPIRES_AT', int(time.time()) + 86400)
+    with Session() as session:
+        session.merge(Setting(key='config', value={
+            'ai_enabled': True, 'ai_model': 'gpt-6-luna', 'ai_control_mode': 'daily_cap', 'ai_rate_per_hour': 20,
+            'ai_daily_cap_usd': 0.001, 'ai_budget_timezone': 'UTC'}))
+        session.merge(Setting(key='openai_key', value={'encrypted': seal('fixture')}))
+        session.commit()
+    request = {'model': 'gpt-6-luna', 'input': 'bounded evidence', 'max_output_tokens': 100,
+               'store': False, 'service_tier': 'default'}
+    admitted = ai_pricing.reservation(request)
+    assert admitted['ok'] and admitted['pricing_version'] == ai_pricing.VERSION
+    confirmed = {}
+
+    def respond(*args, **kwargs):
+        catalog = current(admin)
+        response = admin.post(URL, json=confirm_body(catalog, rates=scaled(catalog, 100), days=7))
+        assert response.status_code == 200, response.text
+        confirmed.update(response.json())
+        if bundled_expires_in_flight:
+            monkeypatch.setattr(ai_pricing, 'EXPIRES_AT', int(time.time()) - 1)
+        return httpx.Response(200, request=httpx.Request('POST', ai.URL), json={
+            'status': 'completed', 'model': 'gpt-6-luna', 'service_tier': 'default',
+            'usage': {'input_tokens': 100, 'output_tokens': 80, 'total_tokens': 180,
+                      'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}},
+            'output': [{'content': [{'type': 'output_text', 'text': '{"accepted":true}'}]}],
+        })
+
+    monkeypatch.setattr(ai.transport, 'post', respond)
+    ai.request(request, 'fixture-key')
+    assert confirmed['version'].startswith('admin-')
+    with Session() as session:
+        entry = session.query(ai_budget.BudgetEntry).one()
+        assert entry.status == 'settled'
+        assert entry.reservation_usd == admitted['amount_usd']
+        # 100 input tokens at $0.1/M plus 80 output tokens at $0.5/M, from the admission catalog.
+        assert entry.actual_usd == Decimal('0.00005')
+        assert entry.pricing_version == ai_pricing.VERSION
+        assert entry.actual_usd <= Decimal('0.001')
+
+    # Calls admitted after the confirmation use the confirmed catalog.
+    later = ai_pricing.reservation(request)
+    assert later['ok'] and later['pricing_version'] == confirmed['version']
+    assert later['amount_usd'] >= 99 * admitted['amount_usd']
+    with ai_pricing.call_snapshot():
+        estimate = ai_pricing.estimate({'model': 'gpt-6-luna', 'service_tier': 'default', 'usage': {
+            'input_tokens': 100, 'output_tokens': 80, 'total_tokens': 180,
+            'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}}, request)
+    assert estimate['pricing']['version'] == confirmed['version']
+    assert Decimal(estimate['pricing']['estimated_usd']) == Decimal('0.005')
 
 
 def test_unchanged_reconfirmation_is_audited_as_unchanged(admin):

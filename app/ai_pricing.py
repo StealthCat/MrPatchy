@@ -4,6 +4,8 @@ Rates checked 2026-11-16 against https://developers.openai.com/api/docs/pricing
 and the individual /api/docs/models/{model} pages for the older models below.
 Only exact catalogued IDs are priced: never guess a fine-tune/snapshot's rate.
 """
+from contextlib import contextmanager
+from contextvars import ContextVar
 from decimal import Decimal
 from decimal import ROUND_CEILING
 import hashlib
@@ -128,6 +130,32 @@ def active_catalog(stored=None):
     return confirmed if confirmed is not None and confirmed['verified_at'] > bundled['verified_at'] else bundled
 
 
+_call_catalog = ContextVar('ai_price_call_catalog', default=None)
+
+
+@contextmanager
+def call_snapshot():
+    """Price one provider call with a single catalog snapshot.
+
+    The reservation ceiling is quoted when the call is admitted, but usage is
+    estimated only after the reply arrives. An administrator can confirm new
+    rates in between, so both must read the same snapshot: the settled charge
+    then matches the pricing version recorded on its reservation, and a
+    confirmation (or expiry) only affects calls admitted after it.
+    """
+    token = _call_catalog.set(active_catalog())
+    try:
+        yield
+    finally:
+        _call_catalog.reset(token)
+
+
+def call_catalog():
+    """The current call's pinned snapshot, or the effective catalog outside a call."""
+    pinned = _call_catalog.get()
+    return pinned if pinned is not None else active_catalog()
+
+
 def revision(catalog):
     """Opaque revision of a catalog's content, for optimistic confirmation."""
     body = [catalog['version'], catalog['verified_at'], catalog['expires_at'],
@@ -234,7 +262,7 @@ def estimate(data, payload):
         result['service_tier'] = tier
     usage = result['usage']
     if not usage: return result
-    catalog = active_catalog()
+    catalog = call_catalog()
     model = ALIASES.get(result['response_model'], result['response_model'])
     if model not in catalog['rates']:
         result['reason'] = 'The returned model has no verified price in the current price catalog.'
@@ -323,7 +351,7 @@ def reservation(payload, now=None):
     requests Mr Patchy sends. Unknown models, tiers, output bounds, tool fees or
     long-context prices fail closed instead of becoming a zero-dollar estimate.
     """
-    effective = active_catalog()
+    effective = call_catalog()
     catalog = catalog_status(now, effective)
     if not catalog['fresh']:
         return {'ok': False, 'reason': catalog['reason'], 'catalog': catalog}

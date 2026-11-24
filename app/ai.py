@@ -7,7 +7,7 @@ import re
 import time
 import httpx
 from sqlalchemy.exc import DBAPIError
-from . import ai_runs, ai_transport as transport
+from . import ai_pricing, ai_runs, ai_transport as transport
 
 URL='https://api.openai.com/v1/responses'
 MODELS_URL='https://api.openai.com/v1/models'
@@ -225,6 +225,8 @@ def request(payload,key,timeout=60):
     encoded_body=_encode_request_body(provider_payload)
     with ExitStack() as stack:
         reservation=None
+        # One price snapshot from reservation through usage settlement (#1488).
+        stack.enter_context(ai_pricing.call_snapshot())
         try:
             with ai_runs.measure('provider_admission'):
                 stack.enter_context(ai_policy.provider())
