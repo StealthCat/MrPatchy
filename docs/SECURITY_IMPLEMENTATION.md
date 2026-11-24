@@ -12565,8 +12565,11 @@ JSON formatting changed. It records each elapsed and throughput difference and
 the median and range of the paired differences, along with the stage latency
 differences where samples exist. When the pair comparator reports observed
 provider overlap, the series keeps that measurement per pair. Differences in
-observed overlap do not invalidate otherwise matching runs. The existing
-one-pair tool remains available.
+observed overlap do not invalidate otherwise matching runs. The series also
+includes executor wait, claim-lock wait and claim-lock hold when the pair
+comparator supplies timings for both reports. Each optional stage states how
+many pairs contributed, and one-sided observations contribute no delta. The
+existing one-pair tool remains available.
 
 A local check with three independent pairs per backend retained eight completed
 investigations, 12 simulated provider calls and four simulated SSH follow-ups

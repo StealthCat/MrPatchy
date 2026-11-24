@@ -180,3 +180,30 @@ def test_series_preserves_observed_provider_overlap_without_requiring_it_to_matc
     assert 'peak_provider_requests' not in output['parallel']
     assert [pair['serial_peak_provider_requests'] for pair in output['pairs']] == [1, 1, 1]
     assert [pair['parallel_peak_provider_requests'] for pair in output['pairs']] == [2, 4, 3]
+
+
+def test_series_summarizes_measured_queue_timing_pairs(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(TOOL.parent))
+    import compare_ai_benchmark_series as series
+
+    compare_pair = series.compare
+
+    def compare_with_queue_timing(serial, parallel, serial_name, parallel_name):
+        comparison = compare_pair(serial, parallel, serial_name, parallel_name)
+        comparison['queue_timing'] = serial['fixture_queue_timing']
+        return comparison
+
+    def observed(index, serial, _parallel):
+        serial['fixture_queue_timing'] = {
+            'executor_wait': {'p50_ms': {'absolute': [-10, 0, 30][index - 1]} if index != 2 else None},
+            'claim_lock': {'p50_ms': {'absolute': 2 * index}},
+            'claim_lock_hold': {'p50_ms': None},
+        }
+
+    monkeypatch.setattr(series, 'compare', compare_with_queue_timing)
+    output = series.compare_series(make_pairs(tmp_path, observed))
+    stages = output['stage_p50_ms_differences']
+    assert stages['executor_wait'] == {'pair_count': 2, 'median': 10, 'min': -10, 'max': 30}
+    assert stages['claim_lock'] == {'pair_count': 3, 'median': 4, 'min': 2, 'max': 6}
+    assert 'claim_lock_hold' not in stages
+    assert stages['provider'] == {'median': -6, 'min': -8, 'max': -4}

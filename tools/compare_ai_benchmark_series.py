@@ -67,6 +67,22 @@ def compare_series(pairs):
         comparisons.append(result)
 
     baseline, candidate, capability = first_signature
+    stage_summaries = {
+        stage: _summary([
+            result['deltas']['stages'][stage]['p50_ms']['absolute'] for result in comparisons
+        ])
+        for stage, count in capability['stage_samples'].items() if count
+    }
+    queue_differences = {}
+    for result in comparisons:
+        for stage, timing in result.get('queue_timing', {}).items():
+            delta = timing['p50_ms']
+            if delta is not None:
+                queue_differences.setdefault(stage, []).append(delta['absolute'])
+    stage_summaries.update({
+        stage: {'pair_count': len(differences), **_summary(differences)}
+        for stage, differences in queue_differences.items()
+    })
     return {
         'schema_version': 1,
         'fixture_only': True,
@@ -95,12 +111,7 @@ def compare_series(pairs):
             }
             for metric in ('elapsed_seconds', 'runs_per_second')
         },
-        'stage_p50_ms_differences': {
-            stage: _summary([
-                result['deltas']['stages'][stage]['p50_ms']['absolute'] for result in comparisons
-            ])
-            for stage, count in capability['stage_samples'].items() if count
-        },
+        'stage_p50_ms_differences': stage_summaries,
         'interpretation': (
             'Each difference is parallel minus serial within one pair. Median and range '
             'describe the spread in these disposable, synthetic fixture runs.'
