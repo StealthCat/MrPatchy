@@ -12567,6 +12567,24 @@ When a PPP link changes state, pppd runs `/etc/ppp` scripts as root. On Debian a
   12 mutations were each caught, including execute-bit-owner-only, first-wins precedence, options-over-peer precedence, ignoring wrapper verification, case-insensitive ordering and dropping the `call` include gap. The wrapper was not executed in this environment, so the `.local`/`run-parts` rules come from reading the Debian wrapper source.
 - **Remaining:** collection wiring (option text, metadata and `dpkg --verify` wrapper state), a catalog entry, provenance of `.d` entries against package files, and UI.
 
+### DNF post-transaction-actions contract — worker checkpoint #1101 (roadmap F)
+
+The dnf-plugins-core `post-transaction-actions` plugin makes root run shell commands after every RPM transaction. Each `*.action` line, `package_filter:in|out|any:command`, runs through `/bin/sh -c`, and package metadata (`$name`, `$repoid`, `$state`, …) is substituted into it without shell escaping. The startup catalog listed `/etc/dnf/plugins` as metadata only. Debian's APT (#950) and dpkg (#970) hooks were resolved, but the RPM side was not.
+
+- **Change:** a new pure module, `app/dnf_actions.py`. From captured `dnf.conf`, `post-transaction-actions.conf`, the default action-directory listing and the plugin installation state, it reports:
+  - the plugin's state: `enabled`, `disabled`, `not_installed`, `config_error` or `unknown`, with the reason;
+  - every action the plugin would run: source file and line, filter, state, the bounded command with its SHA-256, the metadata variables it substitutes, and whether it runs;
+  - every line the plugin rejects.
+- **Reference:**
+  - The action rules follow dnf-plugins-core `plugins/post-transaction-actions.py`. Files come from `glob(actiondir + "*.action")`, which skips hidden names and returns the unspecified directory order. Lines come from `readlines()` with universal newlines, then `strip()`. Only `#` starts a comment. A line must split three ways with `split(':', 2)`, and the state must be exactly `in`, `out` or `any`.
+  - The enablement rules follow dnf `Plugin.read_config` and `_check_enabled`, read with the libdnf `IniParser`: case-sensitive keys and sections, the last value wins, matching outer quotes are trimmed, indented lines continue a value, and OptionBool words are used. A parse error or a non-boolean `enabled` or `plugins` value is reported as `config_error`.
+  - Review repair (2026-11-24, `magical-goodall`): as in DNF 4.21.1 `Base.init_plugins`, which skips loading when plugins are globally off and reads local configuration only for discovered plugin classes, a plugin known to be absent (`not_installed`) or globally disabled (`dnf_conf_plugins_disabled`) is decided before its local configuration is read. A malformed, unreadable, uncollected or overriding local file then adds no gap and cannot turn the result into `config_error` or `unknown`; global `dnf.conf` errors stay decisive. A non-regular `*.action` entry aborts `_parse_actions()` before any command is selected, so actions from other files are kept as evidence with `runs: false` and `blocked_by: action_file_read_error`.
+- **Gaps that make the result incomplete:** any uncollected input; unknown plugin installation; a `pluginconfpath` or `pluginpath` override, or an `actiondir` override for a plugin that is not known to be inactive; a non-regular, unreadable, NUL-containing or over-limit `*.action` entry (the plugin's `open()` raises on these); and malformed observations.
+- **Disclosed in every result:** command-line `--enableplugin`, `--disableplugin` and `--setopt`; DNF 5's separate `libdnf5-plugins/actions.d` plugin; and the transaction-dependent order of execution.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_dnf_actions.py` has 30 tests. The module does not exist on main, so they cannot run there. A randomized test runs the plugin's own `_parse_actions` logic with the real `glob` on 300 fixture directories, built with comment, colon, case, whitespace, `\r`, `\f` and U+2028 edge cases, and requires identical actions. Ten mutations are each caught: per-part stripping, hidden-file eligibility, `splitlines()` instead of `readlines()`, `;` comments, case-insensitive keys, no quote trimming, a case-insensitive state, a normalized `actiondir` glob, missing NUL handling, and installation precedence.
+- **Remaining:** agent collection, a DNF 5 actions contract, a catalog parse-level update after collection, and UI.
+
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
 New disposable SQLite and MySQL benchmark reports require one successful
