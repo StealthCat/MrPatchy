@@ -452,17 +452,22 @@ def main():
             try:return original(*a,**kw)
             finally:samples['provider'].append((time.perf_counter()-started)*1000)
         ai._request = measured
-        def wrap_stage(name,fn):
+        def wrap_stage(name,fn,*,delay_ms=0):
             def wrapped(*a,**kw):
                 started=time.perf_counter()
                 try:
-                    if args.persistence_delay_ms:time.sleep(args.persistence_delay_ms/1000)
+                    if delay_ms:time.sleep(delay_ms/1000)
                     return fn(*a,**kw)
                 finally:samples[name].append((time.perf_counter()-started)*1000)
             return wrapped
         for name in ('request_started','record_usage'):
             stage='receipt_persistence' if name=='request_started' else 'usage_persistence'
-            setattr(ai_runs,name,wrap_stage(stage,getattr(ai_runs,name)))
+            setattr(ai_runs,name,wrap_stage(stage,getattr(ai_runs,name),delay_ms=args.persistence_delay_ms))
+        budget_stages = {'reserve': 'budget_reservation', 'reconcile': 'budget_reconciliation'}
+        if capped:
+            for name, stage in budget_stages.items():
+                samples[stage] = []
+                cleanup.enter_context(patch.object(ai_budget, name, wrap_stage(stage, getattr(ai_budget, name))))
         def ssh_fixture(*a, **kw):
             started=time.perf_counter(); time.sleep(args.ssh_delay_ms / 1000)
             samples['ssh_evidence'].append((time.perf_counter()-started)*1000)
@@ -544,6 +549,10 @@ def main():
                 control_mode = settings['ai_control_mode']
                 assert control_mode == args.control_mode, control_mode
                 fixture_budget = capped_fixture_summary(s, ai_budget.BudgetEntry, receipts, settings) if capped else None
+                if capped:
+                    for stage in budget_stages.values():
+                        if len(samples[stage]) != len(requests):
+                            raise BenchmarkTimingError(f'{stage}: expected one timing sample per settled provider call.')
                 fixture_rate = None
                 if paced:
                     if settings['ai_rate_per_hour'] != rate:

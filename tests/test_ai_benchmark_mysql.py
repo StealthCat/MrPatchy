@@ -167,6 +167,10 @@ def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(em
         if mode == 'daily_cap':
             assert report['fixture_budget']['settled_calls'] == 6
             assert report['fixture_budget']['settled_microusd'] == 120
+            for stage in ('budget_reservation', 'budget_reconciliation'):
+                assert report['stages'][stage]['count'] == 6
+        else:
+            assert not {'budget_reservation', 'budget_reconciliation'} & report['stages'].keys()
     assert serial['peak_provider_requests'] == 1
     if mode == 'legacy':
         assert parallel['peak_provider_requests'] > 1
@@ -297,5 +301,10 @@ def test_mysql_paced_serial_and_parallel_keep_followups_and_leave_no_tables(empt
         assert sample['fixture_rate']['starts_per_hour'] == custom_rate
         assert sample['elapsed_seconds'] >= round(3600 / custom_rate, 3)
         assert sample['provider_calls'] == 3 and sample['stages']['ssh_evidence']['count'] == 1
+        if mode == 'rate_and_daily':
+            for stage in ('budget_reservation', 'budget_reconciliation'):
+                assert sample['stages'][stage]['count'] == sample['fixture_budget']['settled_calls'] == 3
+        else:
+            assert not {'budget_reservation', 'budget_reconciliation'} & sample['stages'].keys()
         reports.append(sample)
     assert compare(*reports)['capability_equivalent'] is True
