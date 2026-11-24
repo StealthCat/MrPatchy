@@ -3,7 +3,7 @@ import json
 import time
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from test_operations import login_as
 
 from app import ai, ai_claims, ai_retry, ai_runs, triage_queue_servers
@@ -170,11 +170,24 @@ def test_a_non_object_policy_is_reported_as_the_admission_minimum(admin, value):
     assert quiet['host_id'] == 'quiet' and quiet['investigation_limit'] == 1
 
 
-def test_list_is_bounded_and_reports_truncation(admin):
+def test_limited_page_and_exact_total_share_one_backlog_read(admin):
     now = seed()
-    result = breakdown(now, limit=2)
+    backlog_reads = []
+
+    def capture(_connection, _cursor, statement, _parameters, _context, _many):
+        if 'FROM behaviors' in statement:
+            backlog_reads.append(statement)
+
+    with Session() as s:
+        engine = s.get_bind()
+        event.listen(engine, 'before_cursor_execute', capture)
+        try:
+            result = triage_queue_servers.status(s, now, limit=2)
+        finally:
+            event.remove(engine, 'before_cursor_execute', capture)
     assert [row['host_id'] for row in result['servers']] == ['busy', 'paused']
     assert result['servers_with_backlog'] == 3 and result['truncated'] is True and result['max_servers'] == 2
+    assert len(backlog_reads) == 1
     assert breakdown(now, limit=10_000)['max_servers'] == triage_queue_servers.MAX_SERVERS
 
 
