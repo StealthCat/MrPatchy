@@ -57,11 +57,11 @@ def _reserve_start(model):
         with Session() as session:
             # Read fresh settings and the rate deadline together after waiting for the lock.
             # A singleton outer source retains the default case when both rows are absent.
-            singleton = select(literal(1)).subquery()
+            keys = select(literal('config').label('settings_key'), literal('global').label('admission_id')).subquery()
             saved, row = session.execute(
-                select(Setting, Admission).select_from(singleton)
-                .outerjoin(Setting, Setting.key == 'config')
-                .outerjoin(Admission, Admission.id == 'global')
+                select(Setting, Admission).select_from(keys)
+                .outerjoin(Setting, Setting.key == keys.c.settings_key)
+                .outerjoin(Admission, Admission.id == keys.c.admission_id)
             ).one()
             settings = config_from_setting(saved)
             mode = settings['ai_control_mode']
