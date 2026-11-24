@@ -2716,6 +2716,13 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
 - **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
 
+#### Model refusal and token-budget wording in the Settings model test — worker checkpoint #1219
+
+- **Problem:** after #1158, process triage, advisory plans and release configuration reviews name a refusal and `max_output_tokens` exhaustion (update scoring follows in #1162). The Settings **Test model** action (`POST /api/settings/ai-test`) still returned and recorded the triage diagnostic, for example "Review this observation manually; no safety assessment was accepted". The test supplies no observation, and the text never said the request reached the provider and may be billed.
+- **Change:** `main._ai_test_investigate()` maps cause `model_refusal` and cause `token_budget` to test-specific text: the model declined (or exhausted its budget on) the compatibility test, the request was sent and may be billed, changing the API key does not help, and a different model (or one that completes within the task budget) should be selected. The rewritten `AIError` keeps the cause, so the `connection_test` run history stores the same text. Transient and policy-wait errors and every other cause are re-raised unchanged; provider refusal text is never returned or stored.
+- **Unchanged:** the 502 status, the `Test failed for model … Your saved model was not changed.` framing, the one-minute test interval, the connection-test lock, run tracking and cost receipts, admission, roles/CSRF, the saved model and response authorization.
+- **Validation:** `tests/test_ai_test_block_causes.py` drives the real route with only the provider transport as a fixture. Restoring main's call site fails both cause tests and leaves the four invariant guards passing: invalid output, other incomplete responses, rejected key, and rate limit/lock release after a refusal.
+
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
 Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
@@ -2729,6 +2736,19 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
+#### Fleet-wide release of failed automatic plans — worker checkpoint #1251
+
+- **Problem:** after fixing a fleet-wide cause (a rejected key, unsupported model or exhausted quota), an administrator had to open each opted-in server's Security tab to release its failed automatic attempts (#1036).
+- **Change:** `auto_plan_retry` applies the #1036 predicate to every **active** (enabled, not deleted) server. Disabled and deleted servers are neither counted nor released, so the count matches what a release can act on.
+  - Admin-only `GET /api/security/auto-plan-failed` returns `{failed}`.
+  - Admin-only, CSRF-protected `POST /api/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and releases up to 200 incidents across active servers, oldest first, with the same `retry_released` marking (who and when). It returns `{released, remaining}` and writes one audit row naming the fleet scope, the incident count and the server count when anything was released.
+  - A failed job is marked only when it was filed under the incident's own server.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The ordinary `auto_plan_tick` still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. Exclusions match the per-server action: planned, resolved, YARA, older-scan, stale-evidence, manual and still-attempted incidents are never counted.
+- **UI:** Security coverage → **Automatic AI plans across the fleet** shows **Retry failed automatic plans** to administrators only when the fleet count is above 0, with the same fix-the-cause-first and no-request-now wording. It says disabled servers are not included, reports partial batches, and refreshes the count and the automatic plan status afterwards. Failed, zero or malformed counts hide the action; operators and viewers never request it.
+- **Unchanged:** the per-server routes and their counts (a disabled server's own count still reports its failures), schema, admission, reservations, plan approval, notifications and response authorization.
+- **Validation:** `tests/test_auto_plan_retry_fleet.py` (8 tests) fails on main `1ae31e1b` and passes after, with the existing #1036 tests unchanged. `tests/ui_fleet_auto_plan_retry.cjs` fails on main and covers the action, partial and empty batches, the refresh of both reads, zero/malformed/failed counts, escaping, the operator role, no per-server route use and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered.
 
 ### Throttling, daily cap and unthrottled operation
 
@@ -3584,6 +3604,21 @@ to one purpose each and do not change the global `blockers`, `can_start_now` or
 counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
+
+### Use the real legacy triage reopening time — Roadmap A checkpoint #1255
+
+Investigations and the shared AI controls report the same legacy reopening time.
+Each overfull one-hour window clears when the entry ranked at its allowance
+leaves the window. If both recent behavior attempts and triage runs hold
+admission closed, the later opening applies. A window with no scheduled
+opening reports no time. The query retains the existing historical count and
+uses the indexed attempt and run timestamps without adding query round trips.
+
+The SQLite and MySQL acceptance fixtures exercise each counter independently
+and both together, compare the admin endpoints and verify actual claim
+eligibility immediately before and at the reported boundary. Explicit AI
+control modes retain their own gate timing. This checkpoint changes queue
+visibility. Admission, reservations and provider calls follow the existing path.
 
 ### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
 
@@ -6219,6 +6254,62 @@ catalog `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
 response-authorization change.
 
+### crypttab keyscript contract — worker checkpoint #1225
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/crypttab_keyscripts.py` is a pure, versioned contract for the programs
+Debian and Ubuntu cryptsetup run as root while unlocking `/etc/crypttab`
+mappings at boot. A `keyscript=` program is `exec`'d with the third crypttab
+field as its argument and its output becomes the key; on the cryptdisks init
+path a `check=` program also runs on every unlocked device. It takes captured
+crypttab text, root's view of the paths the options name and
+`$CRYPTDISKS_CHECK`, and performs no I/O.
+
+- **Source.** `debian/functions`, `debian/cryptdisks-functions` and
+  `debian/initramfs/scripts/local-top/cryptroot` in Ubuntu `cryptsetup`
+  2.7.0-1ubuntu4 and 2.8.4-1ubuntu4. The only differences between them
+  (`tcrypt-system`, `x-initrd.attach`) cannot change a keyscript or check
+  outcome. An opt-in differential test sources the real `debian/functions`
+  under dash for 600 random crypttabs per version. It gave 0 mismatches for
+  both versions, and three deliberate model mutations each made it fail.
+- **Lines.** Fields are split as `IFS=" \t" read -r name source key options`:
+  the fourth field keeps inner spaces, so `luks, keyscript=x` has an ignored
+  unknown option ` keyscript` and runs no keyscript. A name starting with `#`
+  is a comment. An entry missing its source or key is skipped. A final line
+  without a newline is never processed.
+- **Options.** Comma-split words are validated as `crypttab_validate_option`
+  does, including aliases, required values, `grep -Ex` numeric checks and the
+  `[ -x ] && [ -f ]` test on `keyscript` (relative names resolve under
+  `/lib/cryptsetup/scripts`) and `check` (under `/lib/cryptsetup/checks`).
+  `header` must exist because both boot paths pass `--missing-path=fail`. A
+  bare `check` uses `$CRYPTDISKS_CHECK` and is dropped when that is empty.
+  Unknown options are ignored. A later option replaces an earlier one, and any
+  invalid value rejects the whole entry.
+- **Programs.** An accepted entry reports its unlock method: `keyscript`
+  (argv `[program, key field]`, with `CRYPTTAB_KEY` and the other `CRYPTTAB_*`
+  variables exported), `askpass` (key field `none`: `/lib/cryptsetup/askpass`
+  with a prompt), `keyfile` (nothing runs) or `exec_fails` (a keyscript of
+  `/lib/cryptsetup/askpass` with a real key reaches `exec ""`). On the
+  cryptdisks path it also reports the `check` argv and whether `noauto` or
+  `noearly` keep the entry out of automatic boot. The initramfs path never
+  runs `check`.
+- **Fail closed.** Unobserved crypttab text, path facts or
+  `$CRYPTDISKS_CHECK`, a relative `header`, a backslash (`printf '%b'`
+  decoding is not modelled), a glob character in the unquoted options
+  expansion, NUL bytes, invalid UTF-8 and over-limit input are blocking gaps
+  and leave entries `unresolved`. Every result names what it cannot observe:
+  which boot path handles each entry (the initramfs only unlocks entries its
+  hook copied, and systemd-cryptsetup-generator, which does not support
+  `keyscript=`, may handle the rest), whether the source device exists, the
+  programs' contents and the number of unlock attempts. `origin` is always
+  `not_assessed`, `authorizes_response` is False and no result is a safety
+  verdict.
+
+**Not covered:** agent collection of `/etc/crypttab` and path facts, catalog
+mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
+provenance and AI classification. No schema, API, auth or
+response-authorization change.
+
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -7254,6 +7345,29 @@ the same transaction that records the job state.
 - Notifications never retry, reconcile, acknowledge or authorize anything.
 
 Milestones 2–4 remain open.
+
+Worker checkpoint (issue #1257, #342 alert-producer slice): the advisory resource
+attention codes in the endpoint-agent view now reach the notification center. Each
+30-second `collect_alerts()` tick publishes one admin-only `operations`/`resource-attention`
+event (medium, linking to `#servers/<id>/agent`) per enabled, enrolled server whose
+**fresh** telemetry reports `disk-space-low`, `disk-inodes-low` or `memory-low`
+(10% or less available) or `clock-unsynchronized`.
+
+- The reason text is fixed and names only the affected categories. Changing
+  percentages add no revision; a changed category set adds one.
+- Hysteresis: a capacity category already in the active event stays until it is
+  above 15% available, so values hovering around 10% do not flap.
+- Unknown is not recovery. Stale, missing, future-dated or malformed telemetry, or a
+  metric that is now unknown, leaves the active event unchanged. Telemetry loss is
+  reported by its own producer.
+- Disabled and deleted servers resolve through the shared operational path.
+  Enrolling servers publish nothing.
+- Notification-only: no SMTP/webhook outbox alert. It never changes agent health
+  classification, makes an AI call, frees space, adjusts clocks or authorizes any
+  response. No schema, route or UI change.
+
+Remaining in #342: certificate expiry, metric history, configurable thresholds,
+preflight blockers and SMART/NVMe or kernel-error signals.
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -11170,12 +11284,71 @@ they measured, and the comparator could not detect a mixed pair.
   | legacy | 7.04/s | 11.02/s |
   | unthrottled | 7.21/s | 10.41/s |
 
-- **Still open:** `rate`, `daily_cap` and `rate_and_daily` benchmark modes. Rate
-  pacing deliberately spaces starts, and a capped mode needs a priced fixture
-  model. MySQL records (#976) and production measurements are also open.
+- **Follow-up:** #1231 covers the daily-cap fixture. #1245 covers the
+  shared-rate fixture, alone and with the daily cap. Production measurements
+  remain open.
 - **Unchanged:** no runtime, admission, provider, schema or
   response-authorization behavior.
 
+
+### Daily-cap triage benchmarks — Roadmap A checkpoint #1231
+
+Run the serial and parallel loopback fixtures with
+`--control-mode daily_cap` to include the real reservation, transmission and
+settlement operations. The tool applies a fixture-only price and a fixed USD 10
+daily cap in UTC inside the disposable process. The price and the reported
+settlements are synthetic. No charges are incurred.
+
+The benchmark requires one settled ledger row per call receipt, including
+follow-up calls. It checks the receipt, run, model, pricing version, estimated
+amount and reservation ceiling before reporting complete settlement. The
+comparator requires capped-mode settlement evidence and a matched workload.
+Existing legacy and unthrottled reports keep their format.
+
+SQLite and disposable MySQL tests exercise both cross-server and same-server
+workloads. This covers the ordinary capped path with available headroom. Tests
+for exhausted caps, deferral and restart remain separate. Production latency
+remains unmeasured. #1245 extends the same fixture to rate-paced modes.
+
+
+### Rate-paced triage benchmarks — Roadmap A checkpoint #1245
+
+Use `--control-mode rate` or `--control-mode rate_and_daily` with the disposable
+loopback benchmark. Both fixtures use the recorded shared gate at 1,000
+starts/hour. Each investigation consumes one start and its follow-up can
+continue under that start. The dispatcher observes the persisted next start
+time and waits while earlier work can finish. It refuses to emit a complete
+report if the ledger lacks a start for any investigation.
+
+Reports include the fixture rate, durable starts and dispatch waiting time.
+The waiting interval can overlap earlier investigations, so it is already
+included in total elapsed time. The comparator requires consistent evidence
+and refuses an elapsed time too short for the claimed starts. The combined
+mode checks the synthetic spend ledger as well. Legacy and unthrottled
+reports and retained comparisons are still accepted with their existing
+format.
+
+SQLite and disposable MySQL exercise serial and parallel workloads with
+follow-up calls. These are loopback measurements with deliberate pacing
+and cap headroom. Production speeds and exhausted-cap throughput are outside
+this checkpoint.
+
+
+### Choose the rate for paced triage benchmarks — Roadmap A checkpoint #1253
+
+In `rate` and `rate_and_daily` fixture modes, pass the same `--rate-per-hour` to
+each serial and parallel run to compare a specific shared throttle. The default
+remains 1,000 starts/hour. The benchmark validates the rate against the
+application's 1–1,000 range and rejects combinations requiring more than five
+minutes of minimum spacing between starts before opening the disposable
+database. For example, a two-investigation sample at 20 starts/hour includes
+one three-minute interval.
+
+The comparison requires both reports to record the same rate and one durable
+start per investigation. Existing reports retain their format. SQLite and
+disposable MySQL fixtures check actual pacing with follow-up evidence. These
+runs use local fixtures and do not measure production throughput or an
+exhausted spend cap.
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
@@ -11826,6 +11999,52 @@ times both selections sort by descending job ID. The fleet still lists at most
 to one while preserving the result for each server. Incident counts and server
 readiness still make per-server reads. Production load time remains unmeasured.
 
+### Batch fleet automatic AI plan readiness — Roadmap A checkpoint #1223
+
+The automatic AI plan status batches credential presence, server pause, holds
+and lifecycle reads for the listed fleet page. The same classification feeds
+the individual-server view. It reports malformed stored pause policies as
+paused, matching the provider gate. The precedence remains policy opt-in,
+global configuration, server pause, holds, then lifecycle.
+
+With 100 ready servers the disposable SQLite fixture reduced readiness queries
+from 1,000 to eight. Incident-count reads remain per server and production
+latency is unmeasured. This status work leaves scheduling, provider admission
+and response authorization intact.
+
+
+### Batch awaiting-incident summaries — Roadmap A checkpoint #1238
+
+The fleet automatic AI plan status now reads per-server counts and oldest
+timestamps in one database statement. Each listed host's subquery applies
+the same automatic-candidate exclusions and its existing limit before
+aggregating. An extra qualifying row still signals truncation. The
+single-server status uses the same summary and the fleet totals still
+describe the listed servers only. SQLite and newer MySQL versions correlate
+the bounded read. MySQL releases before 8.0.14 use one UNION statement
+with an independent bounded read per server.
+
+The SQLite fleet fixture used one incident-summary statement with both 12
+and 100 hosts, down from 12 and 100. Both layouts now use 12 total status
+reads. The measured improvement is in database round trips. Production load
+time remains unmeasured. Scheduling, provider admission and response
+authorization remain outside this status change.
+
+### Shared holds on automatic plan status — Roadmap A checkpoint #1249
+
+Security Coverage and Server → Security show the recorded shared AI start gates alongside
+automatic plan status in explicit control modes. Both surfaces read the existing admin-only
+control snapshot once per load, independently of the plan-status response. They distinguish
+the latest shared eligibility time, a reset recheck, and holds without a scheduled release.
+Worker slots, server readiness and call-specific checks can still defer a request after the
+shared gates open. If the snapshot fails or its mode differs from the plan status, the plan
+counts, job history and readiness remain visible with an unavailable timing state.
+
+Acceptance covers timed and indefinite holds, open and unavailable snapshots, legacy pacing,
+escaped text and fleet and server layouts at 320, 768 and 1440 pixels. Queue admission, provider
+accounting and response authorization retain their existing behavior. Deferred work and
+per-call admission across all AI purposes remain tracked under the wider Roadmap A milestones.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
@@ -11852,7 +12071,17 @@ Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit
 - **Change:** with the global cap gate closed, admission elects only from a bounded, oldest-first window (`FREE_HIT_SCAN = 50` per verdict range) of subjects that pass the normal pause, lifecycle, saturation, claim and retry filters, and claims the oldest one whose read-only probe `known_good.exact_hit_available()` hits. The probe derives evidence as the worker does (`file_status.before_ai(..., persist=False)`), honours an administrator Refresh and an authenticated `changed` artifact, and runs the strict `known_good.lookup`. It is re-checked under the host queue gate. With the global gate open, a subject whose own quote exceeds the headroom is also claimed when it probes as a hit. The election and oldest-subject queries moved unchanged into `_elect_host()` and `_oldest()`.
 - **Unchanged:** every subject that would call the provider keeps today's deferral, with no claim, run or reservation. The rate gate, provider backoff, pause, lifecycle, data-sharing and Refresh behavior are unchanged. If evidence changes between the probe and the worker's own lookup, the atomic `ai_budget.reserve()` still refuses the provider call, so nothing is sent or charged and the existing policy-wait deferral applies. No schema, API, UI, roles or response authorization change.
 - **Validation:** `tests/test_known_good_daily_cap_hit.py` has 8 tests. Five fail on main `c5c1504`: the exhausted cap, a quote below one reservation (the issue's reproduction), an older paid subject in front of a newer hit, pause then resume, and the probe itself. The other three pass both before and after: a paid subject, a Re-triage and a revoked candidate all stay held. The related SQLite admission, budget, claims, file-status, known-good, triage, retry, pause and worker-control selection passes (419 passed).
-- **Remaining:** while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
+- **Remaining:** ~~while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear.~~ Addressed by the #1241 worker checkpoint below. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
+
+### Rotating free known-good hit probe window — worker checkpoint #1241 (roadmap A/B)
+
+The #1030 checkpoint bounded closed-gate admission to the 50 oldest eligible subjects (`FREE_HIT_SCAN`). A free exact hit behind 50 or more older paid subjects was therefore never probed while the daily cap, rate admission or provider backoff stayed closed, which under an exhausted cap meant waiting for the reset.
+
+- **Change:** `ai_claims._free_hit()` now rotates its window. A pass without a hit records the `(first_seen, id)` of the last subject it probed. The next pass resumes after it and, at the queue end, wraps to the oldest subjects it has not reached, so a hit behind N older non-hit subjects is claimed within `ceil((N+1)/FREE_HIT_SCAN)` closed-gate admissions. A found hit clears the cursor, so the next pass starts from the oldest again and consecutive hits stay oldest-first. A cursor beyond every eligible subject wraps within the same pass.
+- **Scope of the cursor:** it is per process and in memory. Admission runs under the distributed `ai-triage` lock, so passes in one process never overlap. Several processes each rotate independently. A restart starts again from the oldest subject. No schema change.
+- **Unchanged:** at most `FREE_HIT_SCAN` probes per admission; the pause, lifecycle, saturation, claim, retry, Refresh and revocation filters; the re-check under the host queue gate; and every paid subject's deferral with no claim, run, reservation or provider call. While the gate is open, election is unchanged. No API, UI, role or response-authorization change.
+- **Validation:** three tests in `tests/test_known_good_daily_cap_hit.py`. Two fail on main `9f972053`: a hit behind a full window of 50 older paid subjects, and a wrap that reaches a new hit older than the cursor. The third, a stale cursor, is a control.
+- **Remaining:** after a pass without a hit, a hit that appears before the cursor waits for the wrap, so it may be claimed after a newer hit. MySQL was not run locally.
 ### dhclient hook contract — worker checkpoint #1063 (roadmap F)
 
 ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
@@ -12187,3 +12416,149 @@ never reads a sourced file.
 `app/dbus_activation.py` is a pure, versioned contract for captured, ordered D-Bus service-directory entries and `.service` text. It reports parsed files, bus-name precedence/winners and declared `Exec`, `User` and `SystemdService` values. When the caller supplies bus type and systemd-activation state, it also reports whether a name starts, is refused, remains unresolved or cannot yet be determined, including system-bus `User` checks and the launch helper's independent `<Name>.service` lookup. Parsing and start behavior were differentially observed against dbus-daemon 1.14.10 on session and system buses.
 
 The contract performs no file or bus I/O, starts no helper or command, does not assess origin and does not authorize a response. Unobserved inputs fail closed. User-database lookups and AppArmor/SELinux mediation are not modeled; the caller supplies directories in bus order. Collection, inventory, UI and AI wiring remain outside this checkpoint. The system-bus helper differential is opt-in and requires root because it uses the installed setuid helper and writes uniquely named fixtures under system service directories, then removes them.
+
+### certbot renewal-hooks contract — worker checkpoint #1229 (roadmap F)
+
+`app/certbot_hooks.py` is a pure, versioned, I/O-free roadmap F contract. From entry metadata for `/etc/letsencrypt/renewal-hooks/{pre,deploy,post}`, it reports which scripts certbot runs as root through `/bin/sh -c`, in what order, on which renewal events and with which environment.
+
+- **Why it matters:** distribution packages run `certbot -q renew` as root from `certbot.timer` or `/etc/cron.d/certbot`, normally twice a day. Every executable in these directories is then run as root, so a script dropped there is a recurring root execution path that no existing contract reported.
+- **Source of the semantics:** certbot 2.9.0 (`_internal/hooks.py`, `main.py`, `renewal.py`, `compat/filesystem.py`, `compat/misc.py`), the version Ubuntu 24.04 ships.
+  - Listing is `os.listdir` plus `isfile` (symlinks followed) plus `os.access(X_OK)`, excluding only names ending `~`. Unlike run-parts there is no name filter: dotfiles, `.dpkg-dist` copies and `.sh` names run. Order is Python `sorted()` of the full paths.
+  - Each path is passed to `subprocess.run(path, shell=True)`. A name with shell-special characters is parsed by `/bin/sh` as command text, so it is reported as `runs_as_shell_text` with a blocking `shell_reinterpreted` gap.
+  - `pre` runs once per `renew`, before the first due certificate. `post` runs once after `renew` when at least one renewal was attempted, with `RENEWED_DOMAINS` and `FAILED_DOMAINS`. Both include dry runs. `deploy` runs after every successful renewal of an existing lineage, for any verb, with `RENEWED_DOMAINS` and `RENEWED_LINEAGE`. It is skipped on `--dry-run` unless `--run-deploy-hooks` is given, and does not run for new issuance.
+  - A failing hook does not stop later hooks. A hook path that is not a directory makes certbot raise, failing the renewal in progress (a non-blocking `directory_breaks_renewal` gap).
+- **Fail closed:** blocking gaps cover an unobserved or unsupported family, unknown installation state, unobserved/unreadable/truncated listings, malformed or duplicate entries, missing metadata, unobserved symlink targets, shell-reinterpreted names and over-limit input. Unobserved mount flags are non-blocking. Unresolved entries are never reported as running.
+- **Validation:** `tests/test_certbot_hooks.py` has 58 tests. Four differential tests load certbot's real `hooks.py` and `compat` modules (only logging/display and unused helpers are stubbed) and execute real hooks through `/bin/sh` from temporary directories. They compare what ran, its order, deduplication, environment, the `renew`/other-verb split, dry-run and `--no-directory-hooks` behavior, a name with a space, and a non-directory hook path with the contract. They run when `MRPATCHY_CERTBOT_SOURCE` points at an unpacked certbot wheel or certbot is installed, and are skipped otherwise. Seven mutations are each caught.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the directories and the certbot installation state, a catalog entry, provenance, persistence, UI and AI classification. Hook commands in `/etc/letsencrypt/renewal/*.conf` and `cli.ini`, and `--config-dir` overrides, are not modeled.
+
+### apcupsd event-script contract — worker checkpoint #1243 (roadmap F)
+
+`app/apcupsd_events.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are `/etc/apcupsd/apcupsd.conf` text, the effective `apcupsd.service` `ExecStart` and entry metadata for `/etc/apcupsd`. From these it reports which programs apcupsd runs as root on UPS power events:
+
+- the `apccontrol` program the daemon execs from the effective `SCRIPTDIR`;
+- the `/etc/apcupsd/config` file the packaged `apccontrol` sources as shell;
+- which `/etc/apcupsd/<event>` scripts run, for each of the 19 daemon events and for `killpower` at final shutdown.
+
+**Why it matters.** Every executable named after a UPS event in `/etc/apcupsd` runs as root whenever that event fires. A `SCRIPTDIR` line makes the daemon run a different `apccontrol` entirely. Both are event-triggered root execution paths that no existing contract reported.
+
+**Source of the semantics.** apcupsd 3.14.14 (`src/lib/apcconfig.c`, `src/lib/apcexec.c`, `src/action.c`, `src/apcupsd.c`) and the Ubuntu 24.04 package `3.14.14-3.1build2` (`apccontrol`, `apcupsd.service`, `apcupsd_shutdown`):
+
+- **Config parsing.** The config is read with `fgets` into 256 bytes, so the tail of an overlong line, including the tail of a comment, is parsed as its own line. Keywords are upper-cased up to the first whitespace. The value is cut at the first `#` anywhere, trailing whitespace is removed, and the last `SCRIPTDIR` wins.
+- **Program path.** `SCRIPTDIR` + `/apccontrol` is formatted into a 256-byte buffer and exec'd with `EVENT UPSNAME CONNECTED POWERED` after `chdir("/")`. An empty or relative `SCRIPTDIR` therefore resolves from `/`.
+- **Packaged `apccontrol`.** It hardcodes `SCRIPTDIR=/etc/apcupsd` and sources `/etc/apcupsd/config` when `[ -f ]` holds. It runs `/etc/apcupsd/EVENT` when `[ -f p -a -x p ]` holds: symlinks are followed and, for root, any execute bit passes. Exit status 99 skips the built-in action (`/sbin/shutdown` for `doshutdown`/`doreboot`).
+- **Shutdown hook.** `/lib/systemd/system-shutdown/apcupsd_shutdown` runs `apccontrol killpower` when the powerfail flag exists.
+- **Missing config.** apcupsd aborts at startup without its config file, so the daemon runs no events.
+
+**Fail closed.** Each of the following is a blocking gap:
+
+- an unobserved or non-Debian family, or unknown installation state;
+- an unobserved or non-default `ExecStart`;
+- an unobserved, unreadable or over-limit config;
+- a non-default, relative or path-truncated `SCRIPTDIR`;
+- an `apccontrol` not authenticated as the unchanged packaged file;
+- a sourced `/etc/apcupsd/config`;
+- unobserved, unreadable or truncated listings, malformed entries, missing metadata or unobserved symlink targets;
+- unobserved mount flags on an executable event script, which leave that event `unresolved` because `[ -x ]` fails on a noexec mount.
+
+Unresolved entries are never reported as running. Scripts are reported as they would run if apcupsd starts; the contract does not check whether an unknown keyword or bad value aborts startup, which over-reports rather than under-reports.
+
+**Validation.** `tests/test_apcupsd_events.py` has 22 tests, covering:
+
+- `fgets` chunk splitting, `#` truncation, case folding, last-wins, empty and relative values, and the 245/255-byte path boundary;
+- the sourced config file, symlinks, noexec mounts, unobserved mount flags as the only gap, directories and special files;
+- truncated listings, malformed input and the gap bound.
+
+A root-only differential runs the packaged `[ -f p -a -x p ]` test through `/bin/sh` on temporary files and compares it with the contract. Six mutations are each caught.
+
+There is no live differential against a built apcupsd: this session's classifier refused building the downloaded source. The config-parsing rules come from reading the source.
+
+**Unchanged.** There is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+
+**Remaining:**
+
+- agent collection of the config, `ExecStart`, directory metadata and package authentication of `apccontrol`;
+- a catalog entry, provenance, persistence, UI and AI classification;
+- RPM/EPEL layouts, `multimon.conf`/CGI and the contents of the sourced `config` are not modeled.
+
+### NUT upsmon command contract — Roadmap F checkpoint #1247
+
+- **Outcome:** `app/nut_upsmon.py` is a pure contract with no I/O. It takes the text of `upsmon.conf`, the observed `upsmon` argv and the daemon's `NUT_CONFPATH`, and reports which commands Network UPS Tools' `upsmon` runs through `/bin/sh`, as which user and on which events:
+  - `SHUTDOWNCMD` runs as root. In the default split mode it runs in the privileged parent, and under `-p` in the single root process.
+  - `NOTIFYCMD "<message>"` runs for each notify event whose effective flags include `EXEC` and not `IGNORE`. It runs as `RUN_AS_USER` in split mode, or as root under `-p`.
+- **Semantics:** taken from NUT v2.8.1 `clients/upsmon.c` and `common/parseconf.c`:
+  - The parseconf state machine is modeled byte for byte: `#` comments, `\` literals and continuation, quoted words that span lines, a bare `=` word, discarded control and non-ASCII bytes, and the 512-byte word and 32-word line limits.
+  - A `#` inside quotes is a parse error. The rest of that line is then read as a new line, so a directive hidden behind it still applies.
+  - Directive names are exact-case, apart from `DEBUG_MIN`, and the last value wins.
+  - `NOTIFYFLAG` matches the event name case-insensitively and takes exact-case flags joined by `+`. Each line replaces the earlier flags. The default flags are `SYSLOG+WALL`.
+  - A `RUN_AS_USER` in the file overrides `-u`.
+  - getopt stops at the first operand.
+- **Fails closed:** each of these is a blocking gap:
+  - an unobserved config, argv or environment;
+  - NUL bytes, text that is not UTF-8, and over-limit input;
+  - an argv that makes upsmon exit instead of monitoring (`-c`, `-h`, `-V`, `-K`, `-i`, an unknown option or a missing argument);
+  - a captured config path different from the one upsmon reads.
+
+  Notify message templates are reported as a hash with flags for shell-active characters, a UPS-name substitution and possible truncation. A template whose `printf` conversions are not modeled leaves its event `unresolved`.
+- **Redaction:** `MONITOR` and `CERTIDENT` passwords, notify message text and the text of unknown or other directives are never copied into the result.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Startup-fatal `MONITOR` and `MINSUPPLIES` conditions are not modeled. The contract can over-report commands for a daemon that exits, but it does not under-report.
+  - Reload behavior is not modeled: split-mode parents ignore a changed `SHUTDOWNCMD`, and the account is not re-applied.
+  - Not yet done: account resolution, agent collection, a catalog entry, package provenance, UI and AI classification.
+- **Differential:** the tokenizer and directive handling were compared with the real NUT v2.8.1 `parseconf.c` and the `upsmon.c` `parse_conf_arg`, `set_notifyflag` and `set_notifymsg` handlers, compiled into a harness. There were 0 mismatches in 13,000 random configs; the 60 configs that hit the fatal 5-word `MONITOR` exit were excluded, as documented. `parse_argv` matched glibc `getopt` with the upsmon optstring on 3,000 random argv lists.
+
+### TuneD profile script contract — worker checkpoint #1237 (roadmap F)
+
+`app/tuned_profiles.py` is a pure, versioned, I/O-free roadmap F contract. Its input is captured TuneD state: `active_profile`, `profile_mode`, `post_loaded_profile`, the `/usr/lib/tuned` and `/etc/tuned` listings, and the candidate `tuned.conf` texts. From that it reports which executables the TuneD daemon starts as root for the active profile, with which arguments, in which order and under which conditions.
+
+- **Why it matters:** TuneD is installed and enabled by default on RHEL-family servers. On every boot and profile switch it runs:
+  - each `[script]` unit's `script=` executable with `start`, and with `stop` on unload;
+  - any unit's `script_pre`/`script_post` once per device;
+  - `${f:exec:...}` calls.
+
+  A custom `/etc/tuned/<name>/tuned.conf` shadows the stock profile of the same name. A custom profile can also add scripts through `include=`. No existing contract reported any of this.
+- **Source of the semantics:** TuneD 2.21.0 as packaged in Ubuntu 24.04. The files read were `profiles/{locator,loader,merger,profile,unit,variables}.py`, `plugins/{base,plugin_script}.py`, `units/manager.py`, `daemon/daemon.py` and `utils/commands.py`. The contract models:
+  - the profile-mode rules: an empty mode means manual when an active profile is set, auto mode is a blocking gap, and an invalid mode refuses the load;
+  - the single post-loaded profile;
+  - the known-name check before `safe_name` filtering;
+  - `/etc/tuned` taking precedence over `/usr/lib/tuned`, with processed files skipped and the search falling through to the next directory;
+  - optional `-name` includes and depth-first `include=` loading;
+  - parsing with the same `configparser` settings TuneD uses;
+  - `${i:PROFILE_DIR}` expansion and `script=` normalization;
+  - TuneD's merge rules: `replace`, `drop`, `enabled`, overwritten regexes and device scripts, and `script` concatenation, which repeats the earlier scripts when a later `[script]` unit sets none;
+  - integer priority ordering;
+  - the `units/manager.py` check order for each enabled unit (`cpuinfo_regex`, then `uname_regex`, then `int(priority)`), where an uncompilable regex or a non-integer priority aborts the whole apply;
+  - relative `script_pre`/`script_post` paths, which never run.
+- **Fail closed:** blocking gaps cover:
+  - an unobserved family or installation state;
+  - an unobserved or unreadable state file, listing or path;
+  - malformed or over-limit input;
+  - auto mode, because the recommended profile is not modeled;
+  - variables in `include=`;
+  - a `[variables] include=` file;
+  - any `exec` function call, including one whose name is assembled from a variable or a nested function result, which is found by substituting `[variables]` values textually before reading each `{f:` name;
+  - a function name that is not a literal word after that substitution, or a `${` that is neither a plain `${NAME}` reference nor a literal `${f:<name>` call, since TuneD re-splits that outer call after a nested function result is spliced in (`${${f:strip:f\:exec\:cmd}}` runs `cmd`) (`function_expansion_not_modeled`);
+  - a reference to a variable the loaded profile does not define, because the daemon's variable store outlives a single load (`variable_undefined`);
+  - `${i:PROFILE_DIR}` in a profile whose directory name contains a backslash, which `re.sub` treats as a template escape (`profile_dir_escape_not_modeled`);
+  - an invalid regex or priority that is only reached when an earlier regex of the same unit matches the host (`apply_refusal_conditional`).
+
+  A parse error, an unknown or missing profile, an invalid priority or regex reached unconditionally, an invalid mode or a multi-word post-loaded profile is reported as `load_refused` with no invocations, because the daemon then loads nothing. CPU/uname regexes and per-device scripts are reported as conditions, not as definite runs.
+- **Validation:** `tests/test_tuned_profiles.py` has 19 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in two worker sessions, so there is no live differential. A second source review of `units/manager.py` found that the check order makes some invalid priorities host-dependent; that is now modeled. A third review of `profiles/variables.py` and `profiles/functions/functions.py` found that `exec` could be assembled from a variable or a nested function result and that `${i:PROFILE_DIR}` is a `re.sub` template; both now fail closed. Run as text over all 38 stock profiles in the 2.21.0 package, the contract resolves 30 completely. The other 8 are blocked by their `[variables] include=` file or a function in `include=`, as before.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change.
+- **Remaining:**
+  - a differential against the real loader;
+  - agent collection of the TuneD files and installation state;
+  - a catalog entry, provenance, persistence, UI and AI classification;
+  - recommended-profile (`recommend.d`) resolution, variable expansion and `tuned-main.conf` `default_instance_priority` collection.
+
+### supervisord program contract — worker checkpoint #1259 (roadmap F)
+
+supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x]` it loads from its main file and its `[include] files =` globs, at supervisord start when `autostart` is true (the default), as the section's `user` or as supervisord's own user, normally root. The startup inventory did not model `conf.d/*.conf` as a persistence location.
+
+- **Change:** the pure `app/supervisor_programs.py` takes captured file text and captured include-glob matches and returns each process supervisord would start: section, kind, program and group name, process name and number, the expanded command and its SHA-256, the configured user, and whether it starts at supervisord start or only on demand. It performs no I/O and never runs a command.
+- **Fidelity:** it parses with the same standard-library `RawConfigParser` settings supervisor 4.2.5 uses, reads includes in its order with per-file `%(here)s` replacement, honours `[DEFAULT]`, `[group:x]` membership and supervisord's per-process expansion and option converters, and reports `config_error`, with no processes, only for the refusals it models exactly.
+- **Fail closed:** an unobserved file or glob result, an include pattern that needs the unobserved host name or process environment, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. A command that needs an unobserved `%(ENV_*)s` or `%(host_node_name)s` is reported as starting with an unresolved command. Validations it does not model (users, log directories, `[supervisord]` server options, rpcinterface plugins, fcgi sockets) can only stop supervisord, so the result over-reports and says so. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
