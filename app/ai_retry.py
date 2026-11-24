@@ -95,7 +95,7 @@ def begin(s,row,signature,now):
 
 
 def failed(s,row,error,now):
-    from .ai import AIError
+    from .ai import AIError, BUDGET_CONNECTION_LOST, defer_until
     retry=s.get(TriageRetry,row.id)
     retry.state='blocked';retry.next_at=0
     retry.reason=PROVIDER_BLOCKED_REASON
@@ -111,7 +111,10 @@ def failed(s,row,error,now):
         provider_wait=(provider_wait if type(provider_wait) in (int,float)
             and math.isfinite(provider_wait) and provider_wait>0 else 0)
         budget_reset=getattr(error,'budget_wait_until',None)
-        if provider_wait:
+        if cause==BUDGET_CONNECTION_LOST:
+            retry.next_at=defer_until(error,now)
+            retry.reason=error.diagnostic
+        elif provider_wait:
             retry.provider_until=provider_wait
             retry.next_at=max(now,provider_wait)
             retry.reason='Waiting for shared provider backoff; no provider request was sent.'
