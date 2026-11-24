@@ -174,7 +174,7 @@ def add_history(*, attempts=(), triage=(), scoring=(), plans=(), other_jobs=()):
         for purpose, times in (('triage', triage), ('update_scoring', scoring)):
             for index, at in enumerate(times):
                 session.add(AIRun(id=f'private-{purpose}-{index}', purpose=purpose, host_id='private-host',
-                                  model='private-model', subject='private-subject', started=at))
+                                  model='private-model', subject='private-subject', started=at, state='complete'))
         for index, (action, at) in enumerate([*plans, *other_jobs]):
             session.add(Job(id=f'private-job-{index}', host_id='private-host', action=action,
                             payload={'private': True}, created=at))
@@ -237,6 +237,57 @@ def test_legacy_triage_allowance_waits_for_both_admission_counters(admin):
     _, limits = limits_by_purpose(now)
     assert limits['triage'] == {'purpose': 'triage', 'limit': 2, 'used': 3, 'state': 'exhausted',
                                 'next_at': now - 2900 + 3600}
+
+
+@pytest.mark.parametrize('attempt_offsets, run_offsets, expected_offset', [
+    ((3000, 2900, 100), (), 700),
+    ((), (2000, 1000, 50, 40), 3550),
+    ((3000, 2900, 100), (2000, 1000, 50, 40), 3550),
+    ((3000, 50, 20), (3300, 1200, 90), 3550),
+])
+def test_investigations_report_when_both_legacy_counters_reopen(admin, monkeypatch, attempt_offsets,
+                                                            run_offsets, expected_offset):
+    from app import ai_claims, ai_runs
+    from app.db import Behavior, Host
+
+    now = 2_000_000_000.0
+    clock = now
+    for module in (ai_claims, ai_runs, ai_control_status):
+        monkeypatch.setattr(module, 'time', SimpleNamespace(time=lambda: clock))
+    legacy_config(ai_hourly_limit=2)
+    add_history(attempts=tuple(now - offset for offset in attempt_offsets),
+                triage=tuple(now - offset for offset in run_offsets))
+    with Session() as session:
+        session.query(Behavior).update({Behavior.verdict: 'low'})
+        session.add(Host(id='eligible-host', name='Fixture', address='192.0.2.10', fingerprint=''))
+        session.add(Behavior(id='eligible', host_id='eligible-host', evidence={}))
+        session.commit()
+
+    def investigation():
+        with Session() as session:
+            session.merge(Setting(key='worker:heartbeat', value={'seen': clock}))
+            session.commit()
+        response = admin.get('/api/investigation-status')
+        assert response.status_code == 200
+        return response.json()
+
+    status = investigation()
+    expected = now + expected_offset
+    assert status['reason'] == 'rate_limited'
+    assert status['recent_attempts'] == max(len(attempt_offsets), len(run_offsets))
+    assert status['retry_at'] == expected
+    shared = admin.get('/api/settings/ai-control-status')
+    assert shared.status_code == 200
+    triage, *_ = shared.json()['purpose_limits']
+    assert triage['next_at'] == expected
+
+    clock = expected - 1
+    assert ai_claims.acquire() is None
+    assert investigation()['retry_at'] == expected
+    clock = expected
+    assert investigation()['reason'] == 'ready'
+    claim = ai_claims.acquire()
+    assert claim is not None and claim.subject == 'eligible'
 
 
 def test_disabled_update_scoring_is_not_reported_as_exhausted(admin):

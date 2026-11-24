@@ -85,7 +85,9 @@ def status(session, now=None, limit=MAX_SERVERS):
     servers = []
     for host_id, count, active, eligible, held, retry_wait, oldest, next_retry, paused in rows:
         policy = policies.get(host_id)
-        allowed = ai_policy.investigation_limit_value(policy if isinstance(policy, dict) else {})
+        # Match admission (ai_claims.acquire): a stored non-object policy is the
+        # fail-closed minimum, and only a missing policy uses the default.
+        allowed = ai_policy.investigation_limit_value(policy if host_id in policies else {})
         servers.append({
             'host_id': host_id, 'name': names.get(host_id, ''), 'pending': count, 'active': active,
             'eligible': eligible, 'blocked': held, 'retry_wait': retry_wait, 'paused': bool(paused),
