@@ -3643,6 +3643,17 @@ Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one U
 - **tz database revisions:** the zones that change at local midnight revise their rules often. Those cases locate their days from the installed tz database and skip when it has none; the long-standing zones must always produce both.
 - **Remaining in milestone 4:** multi-process and multi-worker admission races at the reset, failover, lease loss and drain, settings changes during admission, and before/after production performance.
 
+### Daily-cap admission races at the reset — worker checkpoint #1275
+
+Milestone 4 acceptance for **multi-process and multi-worker admission races at the reset**. #984 crossed the reset with one caller at a time, and #1012 raced callers inside one window. `tests/test_ai_budget_reset_race_acceptance.py` races the authoritative `ai_budget.reserve()` admission across the boundary itself. It adds evidence only; no runtime behavior changes.
+
+- **Threads at the reset instant:** the old window is exhausted and still holds a sent-but-unanswered call, an uncertain call and an unsent reservation. Ten threads reserve at the reset in UTC, Asia/Kolkata and America/New_York. Exactly K calls are admitted into the new window (the cap is K calls plus half a call). Every refused caller gets a policy wait ending at the following reset. The old window's rows keep their `reset_at` and statuses and use none of the new headroom.
+- **Callers straddling the reset:** threads 1 ms or 0.75 s before the reset (or workers whose clocks lag by that much) race interleaved threads the same distance after it. The old window admits only its one remaining call, and a refused pre-reset caller waits only until the reset it observed. The new window admits exactly K. A further test fills the new window first and then admits a lagging caller into the old window's remaining headroom.
+- **Late receipt during the race:** an old-window call that settles cheaply, or turns uncertain, while new-window callers race stays in its own window. A cheap settlement frees only old-window headroom, and new-window admission is still exactly K.
+- **Fresh processes:** four child processes with three threads each, at and shortly after the reset, share the database and admit exactly K distinct calls in total.
+- **Evidence:** 13 tests, run on SQLite locally and on MySQL by the CI shards. Removing the shared budget lock fails all 13. Counting only rows whose `reset_at` is still ahead fails 12. Treating a row whose `reset_at` equals the current time as still open fails 3. Counting a row created exactly at the reset in the old window fails 3. Reporting a refused caller's wait from the wrong reset fails 11. Dropping the `reset_at` clause (counting by creation time alone) passes, as expected: that clause keeps spend counted across a timezone change, not across this boundary.
+- **Unchanged:** no defect was found. Failover, lease loss during the reset and before/after production performance remain open in milestone 4.
+
 ### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
 
 Installations still on `legacy` control mode now see their hidden hourly
