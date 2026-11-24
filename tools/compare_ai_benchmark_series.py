@@ -26,7 +26,10 @@ def _report(path, seen):
 
 
 def _configuration(side):
-    controls = {key: value for key, value in side.items() if key not in ('name', 'fixture_rate')}
+    controls = {
+        key: value for key, value in side.items()
+        if key not in ('name', 'fixture_rate', 'peak_provider_requests')
+    }
     if 'fixture_rate' in side:
         controls['fixture_rate'] = {
             key: value for key, value in side['fixture_rate'].items() if key != 'dispatch_wait_seconds'
@@ -78,6 +81,10 @@ def compare_series(pairs):
                 'parallel_report': result['candidate']['name'],
                 'elapsed_seconds': result['deltas']['elapsed_seconds'],
                 'runs_per_second': result['deltas']['runs_per_second'],
+                **({
+                    'serial_peak_provider_requests': result['baseline']['peak_provider_requests'],
+                    'parallel_peak_provider_requests': result['candidate']['peak_provider_requests'],
+                } if 'peak_provider_requests' in result['baseline'] else {}),
             }
             for result in comparisons
         ],

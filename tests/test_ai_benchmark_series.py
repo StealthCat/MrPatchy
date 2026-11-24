@@ -50,6 +50,8 @@ def test_series_reports_paired_medians_and_ranges(tmp_path):
     assert output['paired_differences']['runs_per_second']['absolute'] == {'median': 4, 'min': 2, 'max': 7}
     assert output['stage_p50_ms_differences']['provider'] == {'median': -6, 'min': -8, 'max': -4}
     assert [pair['elapsed_seconds']['absolute'] for pair in output['pairs']] == [-1, -2, -7]
+    if 'serial_peak_provider_requests' in output['pairs'][0]:
+        assert all(pair['serial_peak_provider_requests'] is None for pair in output['pairs'])
 
 
 @pytest.mark.parametrize('count', [2, 21])
@@ -155,3 +157,26 @@ def test_series_omits_stages_without_samples(tmp_path):
     assert result.returncode == 0, result.stderr
     stages = json.loads(result.stdout)['stage_p50_ms_differences']
     assert 'two_stage' not in stages and 'ssh_evidence' not in stages
+
+
+def test_series_preserves_observed_provider_overlap_without_requiring_it_to_match(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(TOOL.parent))
+    import compare_ai_benchmark_series as series
+
+    compare_pair = series.compare
+
+    def compare_with_overlap(serial, parallel, serial_name, parallel_name):
+        comparison = compare_pair(serial, parallel, serial_name, parallel_name)
+        comparison['baseline']['peak_provider_requests'] = serial['peak_provider_requests']
+        comparison['candidate']['peak_provider_requests'] = parallel['peak_provider_requests']
+        return comparison
+
+    def observed(index, serial, parallel):
+        serial['peak_provider_requests'] = 1
+        parallel['peak_provider_requests'] = (2, 4, 3)[index - 1]
+
+    monkeypatch.setattr(series, 'compare', compare_with_overlap)
+    output = series.compare_series(make_pairs(tmp_path, observed))
+    assert 'peak_provider_requests' not in output['parallel']
+    assert [pair['serial_peak_provider_requests'] for pair in output['pairs']] == [1, 1, 1]
+    assert [pair['parallel_peak_provider_requests'] for pair in output['pairs']] == [2, 4, 3]
