@@ -12623,6 +12623,25 @@ never reads a sourced file.
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
 
+### mdadm alert-program contract — worker checkpoint #1213 (roadmap F)
+
+`app/mdadm_program.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/mdadm.conf`, `/etc/mdadm.conf.d`, `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. It reports which `PROGRAM` command `mdadm --monitor --scan` executes as root on RAID events, and which file and line it came from.
+
+- **Source of the semantics:** mdadm 4.3 `config.c`, `lib.c` and `Monitor.c` at tag `mdadm-4.3`, plus the Ubuntu 24.04 `mdadm_4.3-1ubuntu2.1` package. From the package I used its unit files, embedded default paths and a changelog entry removing Debian's `conffile-location.patch`.
+  - `/etc/mdadm.conf` is opened first. Only when that open fails does mdadm use `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. So a planted `/etc/mdadm.conf` hides Debian's file. The drop-in directory is still read when neither main file exists.
+  - Drop-ins must not start with `.`, must be at least six bytes and must end in `.conf`. They are read in `strcmp` byte order. A main path that is a directory is read the same way.
+  - The tokenizer is a direct port of `conf_word`/`conf_line`, covering quotes, `#` comments, whitespace continuation and comment lines that do not end a logical line. Keywords match any ASCII case-insensitive prefix of at least three characters.
+  - The first `PROGRAM` word wins across all lines and files. Later words are listed as ignored.
+  - `Monitor` runs only when a program or `MAILADDR` is set. It calls `execl(PROGRAM, PROGRAM, EVENT, MD_DEVICE[, COMPONENT])` as root, with no shell and no `PATH` search. Empty and relative names are explained.
+  - `mdmonitor.service` runs `--monitor --scan`. The daily `mdmonitor-oneshot.timer` runs it with `--oneshot` when `AUTOSCAN=true`.
+- **Fail closed:** blocking gaps cover malformed input, an unobserved path that mdadm would read, unreadable paths or drop-ins, FIFOs and devices, files over 256 KiB, more than 512 drop-ins, and gap truncation.
+- **Validation:** `tests/test_mdadm_program.py` has 23 tests built from vectors derived from the source.
+  - The sandbox did not allow running the downloaded `mdadm` binary, so there is no real-binary differential.
+  - Four mutations are each caught: a two-character keyword prefix, last-wins `PROGRAM`, case-folded drop-in order, and always using the Debian path.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the four paths, the service and timer state, any `--program`, `--config` or `--mail` override on the command line, a catalog entry, package provenance, UI and AI classification.
+
+
 
 ### D-Bus bus-activation contract — Roadmap F checkpoint #1211
 
