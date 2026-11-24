@@ -201,6 +201,19 @@ def test_malformed_payload_never_complete(bad):
     assert fs.evaluate(bad)['complete'] is False
 
 
+@pytest.mark.parametrize('name', [chr(0xD800) + '.fish', chr(0xDC7F) + '.fish', chr(0xDFFF) + '.fish', 'a' + chr(0xDBFF) + chr(0xDC00)])
+def test_unencodable_listing_name_is_a_malformed_gap(name):
+    # JSON can decode lone surrogates that no filesystem name can contain; they are malformed input, not a crash.
+    result = fs.evaluate(payload(conf=[entry(name)]))
+    assert 'input_malformed' in codes(result) and result['complete'] is False
+
+
+@pytest.mark.parametrize('name', [chr(0xDC80) + '.fish', chr(0xDCFF) + '.fish'])
+def test_surrogateescape_byte_names_keep_their_treatment(name):
+    result = fs.evaluate(payload(conf=[entry(name)]))
+    assert 'input_malformed' not in codes(result) and result['complete'] is True
+
+
 def test_comparator_is_a_total_order_on_random_names():
     rng = random.Random(1415)
     names = list({''.join(rng.choice('aAbZ019 _-') for _ in range(rng.randint(1, 6))) + '.fish'

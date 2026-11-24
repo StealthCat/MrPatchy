@@ -275,6 +275,19 @@ def _observed(item: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _encoded_length(name: str) -> int:
+    """Return the filesystem byte length of ``name``, or 0 if it has no byte form.
+
+    Only lone surrogates U+DC80-U+DCFF are ``surrogateescape`` byte escapes. JSON
+    can still decode other lone surrogates (e.g. ``"\\ud800"``), which no
+    filename can contain, so they are reported as malformed instead of raising.
+    """
+    try:
+        return len(name.encode('utf-8', 'surrogateescape'))
+    except UnicodeEncodeError:
+        return 0
+
+
 def _listing(directory: str, listings: dict[str, Any], gaps: list[dict[str, Any]]) -> list[dict[str, Any]] | None:
     item = listings.get(directory)
     if item is None:
@@ -296,7 +309,7 @@ def _listing(directory: str, listings: dict[str, Any], gaps: list[dict[str, Any]
     names = set()
     for entry in entries:
         if not isinstance(entry, dict) or not isinstance(entry.get('name'), str) \
-                or not 0 < len(entry['name'].encode('utf-8', 'surrogateescape')) <= NAME_MAX \
+                or not 0 < _encoded_length(entry['name']) <= NAME_MAX \
                 or '/' in entry['name'] or _CONTROL.search(entry['name']) or entry['name'] in names \
                 or entry.get('type') not in ENTRY_TYPES \
                 or (entry['type'] == 'file' and not isinstance(entry.get('readable'), bool)):
