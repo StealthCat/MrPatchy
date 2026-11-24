@@ -3290,6 +3290,16 @@ Existing deferred records keep their saved dates until their next evaluation.
 Focused cases cover both capped modes, recording on either side of reset and
 rate spacing alongside cap and provider waiters.
 
+### Read the paced rate deadline and settings together — Roadmap A checkpoint #1477
+
+Paced provider admission reloads the saved settings and rate deadline with one
+read under the existing fleet admission lock. The read uses both primary keys and
+preserves the default settings and first admission when there are no saved rows.
+It still applies settings edits made while the caller waits for the lock. Pace
+refusals preserve the saved deadline and consume no provider call. SQLite and
+MySQL tests cover grants, refusals and the adjacent configuration and contention
+cases. Fleet throughput remains open.
+
 ### Rate throttle paces smoothly and defers without a charged attempt — worker checkpoint #1021
 
 `tests/test_ai_rate_throttle_acceptance.py` covers the milestone-4 checks for the
