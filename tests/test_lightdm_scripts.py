@@ -197,30 +197,34 @@ def test_unicode_locale_key_does_not_hide_a_drop_in_or_main_file():
     assert main['status'] == 'loads' and scripts(main)['session-setup-script']['command'] == '/opt/evil'
 
 
-@pytest.mark.parametrize('line', ['Name[\U00011f02]=x', 'Name[\U00011f02 ]=x'])
-def test_locale_outside_verified_unicode_range_is_blocking(line):
+@pytest.mark.parametrize('line', ['Name[\U00011f02]=x', 'Name[\U00011f02 ]=x', 'Name[͸]=x', 'Name[ࢡ]=x'])
+def test_locale_whose_class_depends_on_the_unicode_version_is_blocking(line):
+    # U+11F02 (Kawi, Unicode 15), U+0378 (unassigned) and U+08A1 (Unicode 7): GLib's answer depends on its build.
     text = '[Seat:*]\nsession-setup-script=/opt/x\n' + line + '\n'
     for result in (run('[LightDM]\n', files={D + '/a.conf': text}, listings={D: ['a.conf']}), run(text)):
         assert result['status'] == 'loads' and result['complete'] is False
         assert [g['code'] for g in result['gaps']] == ['locale_key_uncertain']
 
 
-def test_unicode_locale_characters_match_glib_below_verified_bound():
+def test_certain_unicode_locale_characters_match_glib():
     lib = _glib()
-    mismatches = []
-    for cp in range(0x80, ls._UNICODE_CERTAIN_BELOW):
+    mismatches, certain = [], 0
+    for cp in range(0x80, 0x30000):
         if 0xD800 <= cp <= 0xDFFF:
             continue
+        uncertain: list[str] = []
         text = f'[A]\nk[{chr(cp)}]=v\n'
-        expected = _glib_parse(lib, text.encode()) is not None
         try:
-            ls.parse_keyfile(text)
+            ls.parse_keyfile(text, uncertain)
             got = True
         except ls.KeyFileError:
             got = False
-        if got != expected:
+        if uncertain:
+            continue
+        certain += 1
+        if got != (_glib_parse(lib, text.encode()) is not None):
             mismatches.append(hex(cp))
-    assert not mismatches, mismatches[:10]
+    assert certain > 40000 and not mismatches, mismatches[:10]
 
 
 @pytest.mark.parametrize('pattern,name,ok', [('*', '', True), ('seat?', 'seat1', True), ('seat?', 'seat', False),

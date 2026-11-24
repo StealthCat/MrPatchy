@@ -79,9 +79,7 @@ NOT_OBSERVED = (
 )
 
 _SPACE = ' \t\n\f\r'  # g_ascii_isspace: no vertical tab
-# Python's Unicode letter/number categories match GLib 2.80's g_unichar_isalnum for every code point below
-# this one (checked exhaustively against libglib-2.0). Above it the two Unicode table versions can differ.
-_UNICODE_CERTAIN_BELOW = 0x11000
+_UCD_BASELINE = unicodedata.ucd_3_2_0  # older than any GLib a LightDM host can run
 
 
 class KeyFileError(ValueError):
@@ -101,12 +99,19 @@ def _is_group_name(name: str) -> bool:
 
 
 def _locale_char(c: str, uncertain: list[str] | None) -> bool:
-    """``g_unichar_isalnum`` or ``-_.@``. Records characters where the Unicode tables may disagree."""
+    """``g_unichar_isalnum`` or ``-_.@``, recording characters whose answer depends on the Unicode version.
+
+    GLib classifies with the Unicode tables it was built with, which the host's GLib version decides and
+    nothing here observes. A character is certain only where Unicode 3.2 and Python's current tables
+    agree that it is assigned and on whether it is a letter or number; anything else is recorded.
+    """
     if c.isascii():
         return c.isalnum() or c in '-_.@'
-    if ord(c) >= _UNICODE_CERTAIN_BELOW and uncertain is not None:
+    current, baseline = unicodedata.category(c), _UCD_BASELINE.category(c)
+    accepted = current[0] in 'LN'
+    if uncertain is not None and (baseline == 'Cn' or (baseline[0] in 'LN') != accepted):
         uncertain.append(c)
-    return unicodedata.category(c)[0] in 'LN'
+    return accepted
 
 
 def _is_key_name(key: str, uncertain: list[str] | None = None) -> bool:
