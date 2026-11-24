@@ -2522,11 +2522,14 @@ recorded call count. Avoided USD sums the run's priced receipts only when every
 call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
 partly priced, pruned, unlinked or still running is counted separately and
 never treated as free, so incomplete coverage makes the figures lower bounds.
-The estimate reads candidates in bounded batches without loading evidence or
-snapshots. It is not a provider invoice, does not measure misses and does not
-predict what a fresh investigation would cost today. Lookup, publication,
-revocation, pause, budget, role, approval and response boundaries are
-unchanged. Hit/miss reasons and matched production acceptance remain open.
+The estimate groups reuses by the exact originating run ID and reads distinct
+runs and receipts in bounded batches without loading evidence or snapshots
+([#1433](https://github.com/StealthCat/MrPatchy/issues/1433)). Missing source
+assessments count toward unavailable coverage. It is not a provider invoice,
+does not measure misses and does not predict what a fresh investigation would
+cost today. Lookup, publication, revocation, pause, budget, role, approval and
+response boundaries are unchanged. Hit/miss reasons and matched production
+acceptance remain open.
 
 Worker checkpoint #779 notifies the other administrators when an
 administrator revokes a fleet known-good candidate through
@@ -3295,6 +3298,17 @@ unfinished related work first and use the existing cycle budget, source/PR versi
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
 
+### Shared rate-slot contention between triage and scoring (#1105, roadmap A)
+
+The rate acceptance suite brings real process triage and package scoring to the
+same authoritative admission gate, letting each path arrive first in turn.
+Both Rate throttle and Rate with daily cap grant one provider start. The
+deferred path retains its evidence and next eligibility, and a capped attempt
+that lost the rate slot releases the unused reservation. At refill the waiting
+path completes under its own admission. SQLite and MySQL use the same scenarios.
+The fixture controls arrival order and provider responses, so sustained
+cross-purpose fairness and production throughput remain separate acceptance.
+
 ### Daily-cap deferral reason — bug fix checkpoint #1015 (P3)
 
 A triage subject refused by the authoritative `ai_budget.reserve()` because the
@@ -3970,6 +3984,11 @@ approved while it runs, so the limit flag matches what `ai_claims.acquire`
 enforces. The list holds at most 50 servers, largest backlog
 first, and states the number of servers with a backlog and whether it was
 truncated.
+
+[#1439](https://github.com/StealthCat/MrPatchy/issues/1439) derives that total
+from the grouped backlog statement before applying the page limit. The ranked
+rows and truncation metadata describe the same database read, and an empty
+backlog returns zero. SQLite and MySQL use the existing schema.
 
 The classes use the predicates of `ai_runs.status()` and the claim query, so
 per-server pending, paused, eligible-unclaimed and active counts add up to the
@@ -12567,6 +12586,24 @@ When a PPP link changes state, pppd runs `/etc/ppp` scripts as root. On Debian a
   12 mutations were each caught, including execute-bit-owner-only, first-wins precedence, options-over-peer precedence, ignoring wrapper verification, case-insensitive ordering and dropping the `call` include gap. The wrapper was not executed in this environment, so the `.local`/`run-parts` rules come from reading the Debian wrapper source.
 - **Remaining:** collection wiring (option text, metadata and `dpkg --verify` wrapper state), a catalog entry, provenance of `.d` entries against package files, and UI.
 
+### DNF post-transaction-actions contract — worker checkpoint #1101 (roadmap F)
+
+The dnf-plugins-core `post-transaction-actions` plugin makes root run shell commands after every RPM transaction. Each `*.action` line, `package_filter:in|out|any:command`, runs through `/bin/sh -c`, and package metadata (`$name`, `$repoid`, `$state`, …) is substituted into it without shell escaping. The startup catalog listed `/etc/dnf/plugins` as metadata only. Debian's APT (#950) and dpkg (#970) hooks were resolved, but the RPM side was not.
+
+- **Change:** a new pure module, `app/dnf_actions.py`. From captured `dnf.conf`, `post-transaction-actions.conf`, the default action-directory listing and the plugin installation state, it reports:
+  - the plugin's state: `enabled`, `disabled`, `not_installed`, `config_error` or `unknown`, with the reason;
+  - every action the plugin would run: source file and line, filter, state, the bounded command with its SHA-256, the metadata variables it substitutes, and whether it runs;
+  - every line the plugin rejects.
+- **Reference:**
+  - The action rules follow dnf-plugins-core `plugins/post-transaction-actions.py`. Files come from `glob(actiondir + "*.action")`, which skips hidden names and returns the unspecified directory order. Lines come from `readlines()` with universal newlines, then `strip()`. Only `#` starts a comment. A line must split three ways with `split(':', 2)`, and the state must be exactly `in`, `out` or `any`.
+  - The enablement rules follow dnf `Plugin.read_config` and `_check_enabled`, read with the libdnf `IniParser`: case-sensitive keys and sections, the last value wins, matching outer quotes are trimmed, indented lines continue a value, and OptionBool words are used. A parse error or a non-boolean `enabled` or `plugins` value is reported as `config_error`.
+  - Review repair (2026-11-24, `magical-goodall`): as in DNF 4.21.1 `Base.init_plugins`, which skips loading when plugins are globally off and reads local configuration only for discovered plugin classes, a plugin known to be absent (`not_installed`) or globally disabled (`dnf_conf_plugins_disabled`) is decided before its local configuration is read. A malformed, unreadable, uncollected or overriding local file then adds no gap and cannot turn the result into `config_error` or `unknown`; global `dnf.conf` errors stay decisive. A non-regular `*.action` entry aborts `_parse_actions()` before any command is selected, so actions from other files are kept as evidence with `runs: false` and `blocked_by: action_file_read_error`.
+- **Gaps that make the result incomplete:** any uncollected input; unknown plugin installation; a `pluginconfpath` or `pluginpath` override, or an `actiondir` override for a plugin that is not known to be inactive; a non-regular, unreadable, NUL-containing or over-limit `*.action` entry (the plugin's `open()` raises on these); and malformed observations.
+- **Disclosed in every result:** command-line `--enableplugin`, `--disableplugin` and `--setopt`; DNF 5's separate `libdnf5-plugins/actions.d` plugin; and the transaction-dependent order of execution.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_dnf_actions.py` has 30 tests. The module does not exist on main, so they cannot run there. A randomized test runs the plugin's own `_parse_actions` logic with the real `glob` on 300 fixture directories, built with comment, colon, case, whitespace, `\r`, `\f` and U+2028 edge cases, and requires identical actions. Ten mutations are each caught: per-part stripping, hidden-file eligibility, `splitlines()` instead of `readlines()`, `;` comments, case-insensitive keys, no quote trimming, a case-insensitive state, a normalized `actiondir` glob, missing NUL handling, and installation precedence.
+- **Remaining:** agent collection, a DNF 5 actions contract, a catalog parse-level update after collection, and UI.
+
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
 New disposable SQLite and MySQL benchmark reports require one successful
@@ -12878,6 +12915,35 @@ There is no live differential against a built apcupsd: this session's classifier
   - agent collection of the TuneD files and installation state;
   - a catalog entry, provenance, persistence, UI and AI classification;
   - recommended-profile (`recommend.d`) resolution, variable expansion and `tuned-main.conf` `default_instance_priority` collection.
+
+### ifplugd init-script start contract — worker checkpoint #1377 increment 2 (roadmap F)
+
+- **What it covers:** `app/ifplugd_init.py` is a pure, versioned contract for `/etc/init.d/ifplugd start` at boot. It reports that `/etc/default/ifplugd` is sourced as root shell code. It also reports which `ifplugd -i $IF $A` daemon starts follow, with each `$A` string and whether it came from `ARGS_<IF>` or `ARGS`. Those strings are the `ARGS` input of `app/ifplugd_actions.py`, which is increment 1.
+- **Pinned source:** `/etc/init.d/ifplugd` from `ifplugd_0.28-19.7_amd64.deb` (sha256 `bce99ac5…1136`), run by `dash`.
+  - `INTERFACES` is split on the default IFS. Only the exact values `auto` and `all` select `all_interfaces`. That walks `/sys/class/net/*` in byte order without dot names, and keeps an entry that has `device` and either no regular `type` file or a `type` line that is exactly `1`, and whose name starts with `eth` or `wlan`.
+  - An interface that is not present is skipped. `IF1` replaces only the first `-` with `_`. A non-empty `echo ${ARGS_<IF1>}` (word-split and re-joined) wins; otherwise `$ARGS` is used unchanged.
+- **Fail closed:** the config is understood only as blank lines, comments and simple `NAME=value` assignments, using plain characters, single quotes, or double quotes without `$`, a backquote or a backslash. Any other line, including `export`, a function, a command substitution, a tilde, CR or a continuation, is `config_not_simple_assignment`.
+  - Assigning `IFPLUGD` is `daemon_overridden`, and the replacement is reported as the root program. Assigning `IFS`, `PATH`, `ENV` or `CDPATH` is `config_changes_shell_environment`.
+  - Interface words with glob characters, `/`, `.`/`..`, a backslash or `-n` are gaps. So is an `IF1` that is not a plain name, because `eval` would parse it as a parameter operator or a bad substitution. So is an `ARGS_*` value that `echo` or globbing would change. A plain `ARGS` fallback with a glob character or a backslash is also `args_not_modelled`, because `$IFPLUGD -i $IF $A` expands `$A` unquoted. Unobserved config or interfaces are gaps, and malformed or over-cap input is refused.
+- **Validation:** `tests/test_ifplugd_init.py` has 44 tests. A differential ran 400 random configs and `/sys/class/net` trees against real `dash` running the shipped init script, with a recording `ifplugd` stub. Every complete result matched, more than 200 of them. Three injected model mutations were each caught: replacing every `-`, a strict `type` match, and dropping the `ARGS` fallback.
+- **Not modelled (listed in each result):** positional `start` interfaces, `/lib/lsb/init-functions` and its hooks, the inherited environment, the `ifplugd -c` running-daemon skip, and boot-time interface presence. The `/sys/class/net` observation is taken at collection time.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining for #1377:** the udev `HOTPLUG_INTERFACES` agent path, agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### ifplugd udev hotplug-agent contract — worker checkpoint #1377 increment 3 (roadmap F)
+
+- **What it covers:** `app/ifplugd_hotplug.py` is a pure, versioned contract for `/lib/udev/rules.d/60-ifplugd.rules` (`SUBSYSTEM=="net", RUN+="ifplugd.agent"`). udev runs `/lib/udev/ifplugd.agent` as root on every network-interface event. For each observed interface name, the contract reports whether the agent runs `exec $DAEMON -i $INTERFACE $A` on `add`/`register`, and with which `$A`. It also reports whether the agent runs `exec $DAEMON -k -i $INTERFACE` on `remove`/`unregister`. The `$A` strings are the `ARGS` input of `app/ifplugd_actions.py`. The contract reuses the config parser and `echo` model of `app/ifplugd_init.py`.
+- **Pinned source:** `/lib/udev/ifplugd.agent` and `/lib/udev/rules.d/60-ifplugd.rules` from `ifplugd_0.28-19.7_amd64.deb` (sha256 `bce99ac5…1136`), run by `dash`.
+  - The `-x /usr/sbin/ifplugd` check runs before the config is read. A config that is missing or not a regular file makes the agent exit.
+  - An interface named in `INTERFACES`, or any interface when that list contains `all`, is left to the init script. `auto` does not match here.
+  - Otherwise an interface named in `HOTPLUG_INTERFACES`, or any interface when that list contains `all`, gets a daemon. `HOTPLUG_INTERFACES=all` has no `eth*|wlan*` filter, so it starts a root daemon for `lo`, bridges and container `veth` pairs.
+- **Fail closed:** the same simple-assignment config model as increment 2 applies, and so do the shell-environment gaps.
+  - Assigning `DAEMON` (the agent's variable, not `IFPLUGD`) is `daemon_overridden`. Assigning `INTERFACE` or `ACTION` replaces udev's event values and is `config_overrides_udev_environment`.
+  - A list word or interface name with glob characters is a gap. So is an interface name that `echo` would reinterpret, an `IF1` that `eval` would parse as more than a name, and an `ARGS_*` value that `echo` or globbing would change. A plain `ARGS` fallback with a glob character or a backslash is `args_not_modelled`, because `exec $DAEMON -i $INTERFACE $A` expands `$A` unquoted. An unobserved daemon state, config or interface list is a gap. Names that Linux `dev_valid_name` would reject are refused.
+- **Validation:** `tests/test_ifplugd_hotplug.py` has 45 tests. 44 unit tests pass. A differential test compares 300 random configs against real `dash` running the shipped agent, with a recording daemon stub, for `add`, `remove` and `change` events. It is gated on `IFPLUGD_AGENT_SCRIPT` and root, and it has not yet been run (see PR). The contract was instead checked line by line against the pinned agent source.
+- **Not modelled (listed in each result):** udev environment the config leaves unset (a rule can set `ENV{HOTPLUG_INTERFACES}`), other rules that change `RUN` or the name, the `wait_for_interface lo` loop, the running-daemon check, and other event actions. Interface names are taken at collection time.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining for #1377:** agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
 
 ### supervisord program contract — worker checkpoint #1259 (roadmap F)
 
