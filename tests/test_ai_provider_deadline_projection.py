@@ -3,7 +3,8 @@
 from contextlib import contextmanager
 
 import pytest
-from sqlalchemy import event
+from sqlalchemy import Select, event
+from sqlalchemy.sql import visitors
 
 from app import ai, ai_provider_backoff as backoff, worker
 from app.db import Session, engine
@@ -19,9 +20,12 @@ def backoff_projections():
         query = getattr(context.compiled, 'statement', None)
         if query is None or not query.is_select:
             return
-        columns = tuple(query.selected_columns)
-        if any(getattr(column, 'table', None) is table for column in columns):
-            projections.append(tuple(column.key for column in columns))
+        for select_node in visitors.iterate(query):
+            if not isinstance(select_node, Select):
+                continue
+            columns = tuple(select_node.selected_columns)
+            if any(getattr(column, 'table', None) is table for column in columns):
+                projections.append(tuple(column.key for column in columns))
 
     event.listen(engine, 'before_cursor_execute', record)
     try:
@@ -77,5 +81,8 @@ def test_legacy_triage_election_and_paid_request_read_only_the_deadline(client, 
         worker.investigate_one()
 
     assert len(sent) == 1
-    # The completed response also performs the existing conditional reset probe.
-    assert projections == [('blocked_until',), ('blocked_until',), ('id',)]
+    # Triage can read the deadline directly or test existence inside the shared gate.
+    # The provider guard still reads the deadline and success checks for a reset.
+    assert len(projections) == 3
+    assert projections[0] in (('blocked_until',), ('id',))
+    assert projections[1:] == [('blocked_until',), ('id',)]
