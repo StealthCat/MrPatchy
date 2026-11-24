@@ -182,10 +182,12 @@ def legacy_migration(values):
             'proposal_expands': preview['expands'], 'proposal_expansions': preview['expansions']}
 
 
-RESET_CARRYOVER = ('Spend admitted before the change keeps counting until the reset of the budget window '
-                   'it was admitted under, so changing the reset timezone does not hand back spend already '
-                   'counted. A proposed window with an earlier boundary does not by itself add headroom: '
-                   'spend retained from the current window can still count after that boundary.')
+RESET_CARRYOVER = ('Spend keeps counting while the budget window it was admitted under is still open, and also '
+                   'while it was made inside the active window. Changing the reset timezone therefore never hands '
+                   'back spend already counted, but it can count more: a proposed window that starts earlier can '
+                   'count again spend from a window that has already reset, and a proposed reset that is later '
+                   'keeps current spend counted until that reset. An earlier proposed boundary does not by itself '
+                   'add headroom, because spend retained from the current window can still count after it.')
 
 
 CAP_START = ('Calls made while uncapped are not recorded against a daily cap. The full cap, less any capped '
@@ -217,6 +219,11 @@ def budget_reset(stored, proposed, now):
     after = window(after_values['ai_budget_timezone'])
     return {'generated_at': now, 'current': current, 'proposed': after,
             'resets_sooner': bool(current and after['next_reset'] < current['next_reset']),
+            # ``ai_budget._state`` also counts every row created inside the active window, so an
+            # earlier start recounts already-reset spend at once and a later reset holds current
+            # spend past its own reset (#1269 review).
+            'starts_earlier': bool(current and after['window_start'] < current['window_start']),
+            'resets_later': bool(current and after['next_reset'] > current['next_reset']),
             'seconds_until_proposed_reset': max(0, int(after['next_reset'] - now)),
             'carryover': RESET_CARRYOVER if current else
             CAP_START}

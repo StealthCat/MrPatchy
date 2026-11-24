@@ -32,13 +32,18 @@ module.exports=async(page,capture)=>{
   await panel.getByText('Proposed window · Pacific/Kiritimati',{exact:false}).waitFor();
   const movingText=await moving.innerText();
   assert.match(movingText,/Current window · UTC · started .* · resets /);
-  assert.match(movingText,/keeps counting until the reset of the budget window it was admitted under/);
+  assert.match(movingText,/keeps counting while the budget window it was admitted under is still open/);
   const server=await page.evaluate(async()=>(await api('/settings/ai/preview','POST',{ai_control_mode:'daily_cap',ai_budget_timezone:'Pacific/Kiritimati'})).budget_reset);
   assert.equal(await moving.getAttribute('data-resets-sooner'),String(server.resets_sooner));
   assert.equal(/resets before the current one/.test(movingText),server.resets_sooner);
   // An earlier proposed boundary is a recheck: retained spend may still count, so no refill is promised (#1269 review).
   assert.doesNotMatch(movingText,/fresh daily cap becomes available sooner/);
   if(server.resets_sooner)assert.match(movingText,/can still count after the proposed reset/);
+  // The active window also counts spend made inside it: an earlier start can recount already-reset spend at once (#1269 review).
+  assert.equal(await moving.getAttribute('data-starts-earlier'),String(server.starts_earlier));
+  assert.equal(/starts before the current one/.test(movingText),server.starts_earlier);
+  assert.equal(await moving.getAttribute('data-resets-later'),String(server.resets_later));
+  assert.equal(/resets after the current one/.test(movingText),server.resets_later);
   await capture('settings-ai-budget-reset');
   // The expansion dialog repeats the disclosure; cancelling saves nothing.
   await form.getByRole('button',{name:'Save AI settings'}).click();
