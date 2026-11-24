@@ -3,8 +3,8 @@ from contextlib import contextmanager,ExitStack
 from contextvars import ContextVar
 import time
 import uuid
-from sqlalchemy import select
-from .db import Session,Setting,Host,config,audit
+from sqlalchemy import and_,case,func,or_,select
+from .db import Session,Setting,Host,config,audit,engine
 from .coordination import Lock
 
 scope=ContextVar('ai_server_scope',default=())
@@ -31,15 +31,32 @@ def investigation_limit_value(value):
 
 
 def paused_ids():
-    return select(Host.id).join(Setting,Setting.key==PREFIX+Host.id).where(Setting.value['paused'].as_boolean()==True)
+    """Return stored policies that are not explicitly resumed or at the default."""
+    value = Setting.value
+    if engine.dialect.name == 'sqlite':
+        field_type = func.json_type(value, '$.paused')
+        # Short-circuit before JSON inspection if a retained SQLite row is invalid.
+        valid_resume = and_(
+            func.json_type(value) == 'object',
+            or_(field_type.is_(None), field_type == 'false'),
+        )
+        resumed = case((func.json_valid(value) == 1, valid_resume), else_=False)
+    else:
+        field = func.json_extract(value, '$.paused')
+        field_type = func.json_type(field)
+        explicit_resume = and_(field_type == 'BOOLEAN', func.json_unquote(field) == 'false')
+        resumed = and_(func.json_type(value) == 'OBJECT', or_(field_type.is_(None), explicit_resume))
+    # A missing row is excluded by the join. SQL NULL in an existing row
+    # does not establish a valid resumed policy.
+    return (select(Host.id).join(Setting, Setting.key == PREFIX + Host.id)
+            .where(func.coalesce(resumed, False).is_(False)))
 
 
 def stored_paused(value,present=True):
     """Return whether a stored policy value would make the provider gate refuse.
 
-    Mirrors `require`: a missing policy is resumed, while a non-dict value or a
+    A missing policy is resumed, while a non-dict value or a
     `paused` field that is not exactly False is treated as paused (fail closed).
-    Display only, never admission.
     """
     if not present:return False
     return not isinstance(value,dict) or value.get('paused',False) is not False
@@ -70,7 +87,7 @@ def require(host_ids):
             batch = keys[start:start + POLICY_READ_BATCH]
             values = s.scalars(select(Setting.value).where(Setting.key.in_(batch)))
             # Keep corrupt stored policy closed without an unhandled exception.
-            if any(not isinstance(value, dict) or value.get('paused', False) is not False for value in values):
+            if any(stored_paused(value) for value in values):
                 raise AIError('AI integration is paused for this server; no new provider call was sent.', policy_wait=True)
         if not config(s)['ai_enabled']:
             raise AIError('AI integration is globally disabled; no new provider call was sent.', policy_wait=True)
