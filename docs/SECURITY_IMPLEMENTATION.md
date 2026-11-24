@@ -12280,6 +12280,20 @@ samples. Compatibility: admin-only as before, no schema, collection, admission,
 budget or response-authorization change. Matched serial/parallel production
 throughput remains open.
 
+### Observed provider overlap in fixture comparisons (#1092, roadmap A)
+
+Comparison reports show each input's peak simultaneous fixture provider requests
+alongside its configured concurrency. A peak of one means the run observed no
+provider overlap. Older inputs that omit the measurement report null. Explicit
+peaks must be positive integers within both the configured concurrency and the
+number of investigations. This metric is an observation, so it may differ across
+an otherwise capability-equivalent pair.
+
+The comparator regressions cover observed overlap, a parallel run without
+provider overlap, historical inputs and invalid peaks. Both retained comparison
+records are regenerated from the original SQLite fixture inputs. Matched
+production throughput and the broader faster-triage acceptance remain open.
+
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
 New disposable SQLite and MySQL benchmark reports require one successful
