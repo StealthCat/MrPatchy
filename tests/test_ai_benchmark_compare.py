@@ -509,3 +509,49 @@ def test_malformed_database_fields_are_refused(field, value, reason):
     candidate[field] = value
     with pytest.raises(compare_ai_benchmarks.ComparisonError, match=reason):
         compare_ai_benchmarks.compare(report(), candidate)
+
+
+@pytest.mark.parametrize('workload', ['cross-server', 'same-server'])
+def test_cli_compares_persisted_provider_transport(workload, capsys):
+    records = ROOT / 'docs' / 'benchmarks' / 'ai-equivalence-c86141a'
+    paths = [records / f'{workload}-{run}.json' for run in ('serial', 'parallel')]
+    assert compare_ai_benchmarks.main([*map(str, paths), '--provider-transport']) == 0
+    result = json.loads(capsys.readouterr().out)
+    transport = result['provider_transport']
+    base, candidate = [json.loads(path.read_text())['persisted_stages']['provider'] for path in paths]
+    assert transport['samples_per_report'] == result['capability']['provider_calls']
+    for field in ('p50_ms', 'p95_ms'):
+        assert transport[field]['baseline'] == base[field]
+        assert transport[field]['candidate'] == candidate[field]
+        assert transport[field]['absolute'] == pytest.approx(candidate[field] - base[field])
+        assert transport[field] != result['deltas']['stages']['provider'][field]
+
+
+@pytest.mark.parametrize(('persisted', 'expected'), [
+    (None, 'baseline.persisted_stages must be an object'),
+    ({}, 'baseline.persisted_stages.provider must be an object'),
+    ({'provider': {'count': 11, 'p50_ms': 10, 'p95_ms': 20}}, 'sample count does not match provider calls'),
+    ({'provider': {'count': 12, 'p50_ms': 20, 'p95_ms': 10}}, 'must not be less than p50_ms'),
+])
+def test_cli_refuses_unusable_provider_transport(persisted, expected, tmp_path, capsys):
+    baseline = tmp_path / 'baseline.json'
+    candidate = tmp_path / 'candidate.json'
+    baseline.write_text(json.dumps({**report(), 'persisted_stages': persisted}))
+    candidate.write_text(json.dumps(report('parallel', 4)))
+    assert compare_ai_benchmarks.main([str(baseline), str(candidate), '--provider-transport']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert expected in captured.err
+
+
+def test_cli_checks_workload_equivalence_before_transport(tmp_path, capsys):
+    baseline = tmp_path / 'baseline.json'
+    candidate = tmp_path / 'candidate.json'
+    baseline.write_text(json.dumps(report()))
+    parallel = report('parallel', 4)
+    parallel['workload_fingerprint']['sha256'] = 'b' * 64
+    candidate.write_text(json.dumps(parallel))
+    assert compare_ai_benchmarks.main([str(baseline), str(candidate), '--provider-transport']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert 'capability mismatch: workload_fingerprint differs' in captured.err
