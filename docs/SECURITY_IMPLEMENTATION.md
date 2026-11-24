@@ -12544,3 +12544,15 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### Provider deadline projection — Roadmap A checkpoint #1485
+
+Provider admission and the triage preflight read the active global provider
+deadline through a single-column query. The database filters expired deadlines,
+including the exact expiry boundary, before handing a result to the worker.
+
+The five projection regressions cover missing, expired, boundary and active
+holds, plus a normal triage investigation and its provider admission check.
+They measure five projected columns on current main and one on the revised
+paths. The admin status still includes the reason and review revision. Fleet
+throughput and exact integrated-head measurements remain open.
