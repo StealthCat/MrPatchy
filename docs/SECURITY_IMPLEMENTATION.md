@@ -12754,6 +12754,18 @@ The dnf-plugins-core `post-transaction-actions` plugin makes root run shell comm
 - **Validation:** `tests/test_dnf_actions.py` has 30 tests. The module does not exist on main, so they cannot run there. A randomized test runs the plugin's own `_parse_actions` logic with the real `glob` on 300 fixture directories, built with comment, colon, case, whitespace, `\r`, `\f` and U+2028 edge cases, and requires identical actions. Ten mutations are each caught: per-part stripping, hidden-file eligibility, `splitlines()` instead of `readlines()`, `;` comments, case-insensitive keys, no quote trimming, a case-insensitive state, a normalized `actiondir` glob, missing NUL handling, and installation precedence.
 - **Remaining:** agent collection, a DNF 5 actions contract, a catalog parse-level update after collection, and UI.
 
+### Interrupted package scoring in AI Activity — Roadmap A checkpoint #1115
+
+The scoring queue summary shows an exact current package attempt as waiting to
+retry when worker recovery has recorded its linked scoring run as interrupted.
+It reports the existing one-hour eligibility boundary. A live, missing or older
+run link cannot supply evidence of interruption for the current attempt.
+
+The regression compares counts before and after the retry boundary and verifies
+that reading the summary leaves the score intact. If the worker stops before
+linking its run, the summary has no run state for that attempt. Independent
+scoring admission and native fleet throughput acceptance remain open.
+
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
 New disposable SQLite and MySQL benchmark reports require one successful
