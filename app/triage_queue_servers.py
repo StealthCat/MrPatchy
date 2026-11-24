@@ -39,8 +39,7 @@ LIMITATIONS = (
      'decide when an investigation starts, and nothing starts on a paused server until it is resumed.'),
     ('"Active leases" counts every unexpired claim on the server, as admission does. It can exceed "active" '
      'while an investigation that was approved or resolved in the meantime is still finishing.'),
-    ('Pause is read as the fleet status reads it. A manually corrupted per-server AI policy is not shown as '
-     'paused here although provider calls for that server are refused.'),
+    'A server with an invalid saved AI policy stays paused until an administrator repairs it.',
     ('The breakdown is a point-in-time read. The AI worker or a collector running at the same time can change '
      'the counts immediately afterwards.'),
 )
@@ -85,7 +84,9 @@ def status(session, now=None, limit=MAX_SERVERS):
     servers = []
     for host_id, count, active, eligible, held, retry_wait, oldest, next_retry, paused in rows:
         policy = policies.get(host_id)
-        allowed = ai_policy.investigation_limit_value(policy if isinstance(policy, dict) else {})
+        # Match admission (ai_claims.acquire): a stored non-object policy is the
+        # fail-closed minimum, and only a missing policy uses the default.
+        allowed = ai_policy.investigation_limit_value(policy if host_id in policies else {})
         servers.append({
             'host_id': host_id, 'name': names.get(host_id, ''), 'pending': count, 'active': active,
             'eligible': eligible, 'blocked': held, 'retry_wait': retry_wait, 'paused': bool(paused),

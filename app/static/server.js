@@ -317,7 +317,9 @@ async function serverSecurity(revision,context){
   if(q.latest_automatic)parts.push(`Latest automatic attempt: ${esc(q.latest_automatic.state)} at ${esc(date(q.latest_automatic.created))}`);
   const pacing=p.mode==='legacy'?`Legacy fleet allowance: ${esc(p.used)} of ${esc(p.limit)} plan requests used this hour${p.next_at?' · next free '+esc(date(p.next_at)):''}.`
    :'No plan-specific hourly limit; the shared AI start gates (rate throttle, daily cap, provider backoff) pace each plan.';
-  target.innerHTML=`<strong>Automatic AI plans</strong> · ${esc(autoPlanStates[q.state])}<br>${parts.join(' · ')}.<br><span class="help">${pacing} Plans are proposals for review and never execute automatically.</span>`;};
+  target.innerHTML=`<strong>Automatic AI plans</strong> · ${esc(autoPlanStates[q.state])}<br>${parts.join(' · ')}.<br><span class="help">${pacing} Plans are proposals for review and never execute automatically.</span>${automaticPlanGateSlot(p.mode)}`;
+  loadAutomaticPlanGates(target,p.mode,()=>policyCurrent()&&request===policyTicket);
+ };
  // Failed automatic attempts (#1036): admin-only count and release. Releasing sends no provider request; the
  // automatic schedule retries each incident once more through the same pause, hold and shared start gates.
  const loadAutoPlanRetry=async request=>{const box=root.querySelector('#auto-plan-retry');if(!box)return;let q;

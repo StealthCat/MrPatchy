@@ -1,3 +1,100 @@
+## 1.84.0 — 2026-11-24
+
+1. [PR #1093](https://github.com/StealthCat/MrPatchy/pull/1093): AI fixture benchmark comparisons now report the observed peak provider concurrency of both runs, as an additive per-input field with an explanation in the comparison JSON; the retained comparison examples are regenerated. Compatibility: tooling only, with no runtime, database, settings or installation change. Closes #1092.
+2. [PR #1111](https://github.com/StealthCat/MrPatchy/pull/1111): Startup awareness: a pure sysvinit `/etc/inittab` contract reports which entries init runs as root, when each runs (boot, runlevel, respawn, power or keyboard events) and how each starts (shell, direct exec or `/etc/initscript`), plus rejected lines, the implicit sulogin entry and the default runlevel. Unobserved inputs, `/etc/inittab.d` files and non-ASCII default runlevels fail closed. Compatibility: additive module and tests only; nothing collects or displays it yet. Closes #1110.
+3. [PR #1123](https://github.com/StealthCat/MrPatchy/pull/1123): Startup awareness: a pure xinetd contract resolves which `/etc/xinetd.conf` and `/etc/xinetd.d` services xinetd loads and the program, arguments and user each runs, following the xinetd 2.3.15.4 rules for entry structure, `includedir` ordering, attribute handling and the defaults enabled/disabled lists. Unobserved input and defaults attributes it does not evaluate fail closed. Compatibility: additive module and tests only. Closes #1122.
+4. [PR #1127](https://github.com/StealthCat/MrPatchy/pull/1127): Startup awareness: a pure networkd-dispatcher 2.2.4 contract resolves which `<state>.d` scripts the root daemon runs, for which systemd-networkd link states and in what order, including ownership and mode checks, directory fall-through, `--script-dir` overrides and startup triggers; a defaults file without `networkd_dispatcher_args` resolves like an empty expansion. Unobserved directories, metadata or arguments fail closed, and script contents are never read. Compatibility: additive module and tests only. Closes #1126.
+5. [PR #1214](https://github.com/StealthCat/MrPatchy/pull/1214): Startup awareness: a fail-closed contract resolves which `PROGRAM` command `mdadm --monitor` runs as root on RAID events from the effective mdadm configuration: a planted `/etc/mdadm.conf` hides `/etc/mdadm/mdadm.conf`, drop-ins are read in order, and the first `PROGRAM` word wins. Unobserved, unreadable, malformed or over-limit input is a blocking gap. Compatibility: additive module and tests only. Closes #1213.
+6. [PR #1216](https://github.com/StealthCat/MrPatchy/pull/1216): Startup awareness: a Postfix aliases contract resolves which `/etc/aliases` entries deliver mail to commands or files and as which user, whether `allow_mail_to_commands` and `allow_mail_to_files` permit each delivery, and which file targets `local(8)` bounces; it is checked against real Postfix 3.8.6 output. Unmodelled tokens, `:include:` files and unobserved input fail closed. Compatibility: additive module and tests only. Closes #1215.
+7. [PR #1236](https://github.com/StealthCat/MrPatchy/pull/1236): Startup awareness: a pure ZFS Event Daemon contract resolves which zedlets `zed` registers and runs as root, for which event classes, in which order and with which argv and environment, following OpenZFS 2.1.5, 2.2.2 and 2.3.4 (including backup-named files that still run and `-f` ownership waivers). Unobserved or unsupported inputs fail closed. Compatibility: additive module and tests only. Closes #1235.
+8. [PR #1262](https://github.com/StealthCat/MrPatchy/pull/1262): The patch review dialog (Packages → Install selected updates) now shows advisory low disk, inode, memory and unsynchronized-clock warnings from fresh agent telemetry, with evidence and guidance. Stale or missing telemetry is shown as unknown, never clear, and a failed or slow read (over 2 seconds) shows an "unavailable" note while the review still opens. Adds the read-only, operator-gated `GET /api/hosts/{host_id}/patch-preflight`. Compatibility: advisory only; warnings never block, change or authorize installation; no schema, settings or authorization change. Closes #1261.
+
+Integrated together through batch [PR #1492](https://github.com/StealthCat/MrPatchy/pull/1492). This source update does not publish a Docker image.
+
+## 1.83.5 — 2026-11-24
+
+1. [PR #1310](https://github.com/StealthCat/MrPatchy/pull/1310): Fixed: a server whose saved AI policy is malformed now stays paused consistently in shared AI queue selection and in queue status, matching the strict policy reader and the outbound provider guard, so a healthy server can claim and dispatch work on the same tick instead of losing the turn to the malformed one. No stored row, an object without a pause field, and JSON `false` still resume; a malformed field or a non-object value pauses, and an audited repair through Settings resumes the server immediately. The per-server backlog notice now explains that invalid saved policies stay paused until an administrator repairs them. Compatibility: no schema, migration, route, response-field or authorization change; the predicate runs inside the existing SQLite/MySQL SQL filter, and provider and lease authorization still run. Fixes #1309.
+
+## 1.83.4 — 2026-11-24
+
+1. [PR #1294](https://github.com/StealthCat/MrPatchy/pull/1294): Fixed: a database connection lost during a capped AI budget reservation now becomes a controlled 30-second local wait instead of an uncontrolled failure. No provider request is sent, process triage shows a database reason and keeps its retry allowance, and the retry still passes normal eligibility and reserves from the retained ledger. Database errors without confirmed connection loss are raised as before. If the reservation commit landed but its acknowledgement was lost, that reservation stays counted at its full ceiling until its window resets, which errs toward over-counting. Compatibility: no schema, role or configuration change; manual callers receive the existing controlled AI error format. Fixes #1293.
+
+## 1.83.3 — 2026-11-21
+
+1. [PR #1260](https://github.com/StealthCat/MrPatchy/pull/1260): Add a pure, no-I/O supervisord contract for resolving configured program, event-listener and FastCGI processes, expanded commands, users and start timing from captured files and include matches. Compatibility: additive internal module, tests and documentation only; nothing imports it, so runtime, schema, API, UI, roles, scheduling and response authorization are unchanged. Limits: missing observations fail closed; unmodeled supervisor checks can make results over-report; agent collection, provenance, persistence, UI and AI classification remain out of scope.
+
+## 1.83.2 — 2026-11-21
+
+1. [PR #1254](https://github.com/StealthCat/MrPatchy/pull/1254): Allow paced AI benchmark comparisons to use a selected shared rate (1–1,000 starts/hour), and reject mismatched rates or workloads requiring more than five minutes of scheduled pacing before database setup. Compatibility: existing invocations keep the 1,000/hour default and report format; production runtime, settings, schema, provider and authorization behavior are unchanged. Limit: loopback fixture measurements do not establish production throughput, failover or exhausted-cap performance.
+
+## 1.83.1 — 2026-11-21
+
+1. [PR #1256](https://github.com/StealthCat/MrPatchy/pull/1256): Correct the displayed legacy triage reopening time by applying the hourly allowance to both recent attempts and triage runs and showing the later active opening across Investigations and shared AI controls. Compatibility: status visibility only; admission, claims, spend accounting and provider calls are unchanged, with no schema migration. Limit: the reopening time is a snapshot; workers and other gates can still delay a claim.
+
+## 1.83.0 — 2026-11-21
+
+1. [PR #1258](https://github.com/StealthCat/MrPatchy/pull/1258): Add fixed-text, admin-only operational notifications for fresh agent reports of low free disk, inodes, memory or an unsynchronized kernel clock; preserve active notifications through unknown or stale telemetry and apply 15% capacity-clear hysteresis. Compatibility: notification-only, with no schema, route, UI, auth, scheduling or agent-health classification change; no SMTP/webhook alert and no AI call. Limits: thresholds remain fixed at 10% alert and 15% clear; other #342 resource signals, including certificate expiry, history, configurable thresholds, preflight blockers and SMART/NVMe or kernel-error signals, remain out of scope. No remediation or response authorization.
+
+## 1.82.0 — 2026-11-21
+
+1. [PR #1252](https://github.com/StealthCat/MrPatchy/pull/1252): Add an administrator-only fleet view and bounded release for failed automatic AI plan attempts across enabled servers; use the existing eligibility predicate, audit marking and worker gates. Compatibility: new endpoints and display/action only; no schema, admission, reservation, approval, notification or response-authorization change, and per-server counts remain unchanged. Limits: release sends no provider request and enqueues no work; startup-change plans are not automatic and are not covered.
+
+## 1.81.2 — 2026-11-21
+
+1. [PR #1244](https://github.com/StealthCat/MrPatchy/pull/1244): Add a pure apcupsd event-script contract for root-run `apccontrol` and UPS event scripts, following the effective `SCRIPTDIR`, daemon event list, shutdown hook and file execution checks. Compatibility: additive module, tests and documentation only; no runtime, schema, collection, API, UI, role, scheduling or response-authorization change. Limits: no live differential against a built apcupsd; startup validity is not modeled, so the contract may over-report; collection, catalog, provenance, persistence, UI and AI wiring remain out of scope.
+
+## 1.81.1 — 2026-11-21
+
+1. [PR #1250](https://github.com/StealthCat/MrPatchy/pull/1250): Show recorded shared AI holds, eligibility times, reset rechecks and indefinite holds on automatic-plan status in fleet and server Security views; label the verified-pricing blocker consistently. Compatibility: display-only; no API, schema, admission, provider-call, scheduling or response-authorization change. Limits: timing is a page-load/refresh snapshot, not a promised start; worker capacity, server readiness and call-specific budget checks still apply.
+
+## 1.81.0 — 2026-11-21
+
+1. [PR #1239](https://github.com/StealthCat/MrPatchy/pull/1239): Add a pure TuneD profile contract for root-run `[script]`, `script_pre` and `script_post` executables, including profile shadowing, include/merge behavior, ordering and host conditions. Compatibility: additive module, tests and documentation only; no runtime, schema, API, collection, UI, role, scheduling or response-authorization change. Limits: no live TuneD differential; `recommend.d`/auto mode, function results, default-priority configuration and several unsupported inputs remain fail-closed or unmodeled; collection, catalog, provenance, persistence, UI and AI wiring are out of scope.
+
+## 1.80.0 — 2026-11-21
+
+1. [PR #1248](https://github.com/StealthCat/MrPatchy/pull/1248): Add a pure NUT `upsmon` contract for configured `SHUTDOWNCMD` and `NOTIFYCMD` commands, execution account/process mode, and notify-event flags, with source-derived parsing, secret redaction and fail-closed handling of missing inputs. Compatibility: additive module, tests and documentation only; no runtime, schema, collection, API, UI, role, scheduling or response-authorization change. Limits: startup-fatal `MONITOR`/`MINSUPPLIES`, empty `RUN_AS_USER`, `-P` outcomes and reload behavior can still over-report; account resolution, package provenance, collection, catalog, UI and AI wiring remain out of scope; this is not a safety verdict.
+
+## 1.79.4 — 2026-11-20
+
+1. [PR #1246](https://github.com/StealthCat/MrPatchy/pull/1246): Extend disposable AI triage benchmarks to measure shared-rate pacing alone and with the synthetic daily cap, validating durable starts, dispatcher wait time and elapsed feasibility. Compatibility: benchmark tools and tests only; no application runtime, schema, API, provider, authorization or scheduling change; earlier report formats remain accepted. Limits: loopback fixtures only; production throughput, exhausted-cap behavior and distributed worker timing remain unmeasured.
+
+## 1.79.3 — 2026-11-20
+
+1. [PR #1240](https://github.com/StealthCat/MrPatchy/pull/1240): Batch fleet automatic AI plan awaiting-incident counts and oldest timestamps into one database statement while preserving per-server caps, truncation, candidate exclusions and fleet totals. Compatibility: no schema, endpoint, permission, provider, scheduling or response-authorization change; per-server and fleet status remain consistent. Older MySQL releases before 8.0.14 use a single bounded UNION statement. Limits: SQLite's JSON aggregation may round the returned `oldest_awaiting_since` float by a few microseconds (the UI displays whole seconds); production response latency is unmeasured.
+
+## 1.79.2 — 2026-11-20
+
+1. [PR #1242](https://github.com/StealthCat/MrPatchy/pull/1242): Rotate the bounded 50-subject exact known-good hit probe while daily-cap, rate-admission or provider-backoff gates are closed, so cached free hits behind older paid subjects are found without waiting for a gate reset. Compatibility: no schema, API, UI, role or response-authorization changes; paid subjects remain deferred without provider calls or reservations. Limits: the cursor is in-memory and per-process; a hit appearing before the cursor waits for wrap, and oversized evidence behavior is unchanged.
+
+## 1.79.1 — 2026-11-20
+
+1. [PR #1234](https://github.com/StealthCat/MrPatchy/pull/1234): Treat a non-object stored per-server AI policy as paused at minimum capacity, so malformed values no longer crash automatic fleet planning, policy reads or the repair endpoint. Compatibility: valid policy objects behave as before; no schema, API-shape, auth or response-authorization change. Limits: the SQL `paused_ids()` summary still does not classify non-objects as paused (the provider gate remains fail-closed), and malformed `security-policy:<host>` values are separate work.
+
+## 1.79.0 — 2026-11-20
+
+1. [PR #1232](https://github.com/StealthCat/MrPatchy/pull/1232): Add a daily-cap mode to the serial and parallel triage benchmark. The disposable loopback fixture uses synthetic pricing and verifies one settled reservation per provider call, including follow-ups; the comparator requires matching workloads and complete settlement evidence while retaining legacy and unthrottled report compatibility. Compatibility: benchmark tooling and tests only; no application runtime, provider, schema, published pricing, or response-authorization change. Limits: synthetic cap reports do not measure production performance; exhausted-cap, deferral, restart, and rate-paced scenarios remain separate work.
+
+## 1.78.0 — 2026-11-20
+
+1. [PR #1230](https://github.com/StealthCat/MrPatchy/pull/1230): Add a fail-closed, pure contract for which certbot renewal-hook scripts run as root, their ordering, renewal events and environment (Roadmap F slice). Compatibility: additive module, tests and documentation only; no collection, schema, route, UI, AI, role or response-authorization change. Limits: renewal `.conf`/ `cli.ini` hook commands and `--config-dir` overrides are not modeled; collection, catalog, provenance, persistence, UI and AI wiring remain out of scope; hook contents and safety are not assessed.
+
+## 1.77.1 — 2026-11-20
+
+1. [PR #1224](https://github.com/StealthCat/MrPatchy/pull/1224): Batch fleet automatic AI plan readiness reads and classify malformed stored pause policy as paused. In the 100-server SQLite fixture, readiness queries fell from 1,000 to eight; the 12-server fixture remained at eight. Compatibility: per-server state precedence, API fields, roles, redaction, scheduling, provider admission and response authorization are preserved; no schema change. Limits: incident counts remain per server, these are database-read measurements only, production latency is unmeasured, and broader Roadmap A acceptance remains open.
+
+## 1.77.0 — 2026-11-20
+
+1. [PR #1226](https://github.com/StealthCat/MrPatchy/pull/1226): Add a pure contract for the keyscript, askpass and check programs cryptsetup runs while processing captured `/etc/crypttab`, including option validation, arguments and fail-closed gaps; differentially checked against cryptsetup 2.7.0 and 2.8.4. Compatibility: additive contract, tests and security checkpoint only; no runtime, schema, API, authentication, scheduling or response-authorization change. Limits: not wired to agent collection, catalog, persistence, baselines or alerts, UI, provenance or AI; path facts are caller-supplied, boot-path selection and source-device presence are not determined, and program contents and retry counts are not assessed.
+
+## 1.76.2 — 2026-11-20
+
+1. [PR #1222](https://github.com/StealthCat/MrPatchy/pull/1222): Make the Settings unsaved-changes browser test deterministic by dropping guard-driven history moves during the Discard case and waiting for the guard's full retry budget instead of a fixed delay. Compatibility: test-only; no runtime, schema, API or response-authorization change. Limit: the natural timer race did not reproduce in the sandbox; validation used an injected stale retry. Reopen #1221 with the hosted job link if the browser assertion recurs.
+
+## 1.76.1 — 2026-11-20
+
+1. [PR #1220](https://github.com/StealthCat/MrPatchy/pull/1220): Give the Settings **Test model** action cause-specific diagnostics when the model refuses the compatibility test or exhausts its response-token budget. The message says the request was sent and may be billed, a key change will not help, and what model change is appropriate; the same safe text is recorded in connection-test history. Compatibility: only the `detail` and run-history message for these two causes change; status, response shape, provider-text redaction, retry, rate limit, lock, saved settings, roles and response authorization remain unchanged. Other failures retain their existing text.
+
 ## 1.76.0 — 2026-11-20
 
 1. [PR #1212](https://github.com/StealthCat/MrPatchy/pull/1212): Add a standalone, versioned D-Bus activation contract that resolves captured service files, bus-name precedence and start paths, including system-bus `User` checks, launch-helper filename lookup and systemd handoff; parsing and start behavior were differentially checked against dbus-daemon 1.14.10. Compatibility: additive module, tests and documentation only; no collection, schema, route, UI, AI, scheduling or response-authorization change. Limits: the caller supplies captured directories; user-database resolution and AppArmor/SELinux mediation are not modeled, and collection, inventory/UI and AI wiring remain out of scope.
