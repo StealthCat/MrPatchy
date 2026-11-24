@@ -11,6 +11,7 @@ import time
 import httpx
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from app import ai, ai_budget, ai_pricing, main
 from app.db import Audit, Session, Setting
@@ -155,6 +156,89 @@ def test_in_flight_confirmation_settles_at_the_admission_catalog(admin, monkeypa
             'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}}, request)
     assert estimate['pricing']['version'] == confirmed['version']
     assert Decimal(estimate['pricing']['estimated_usd']) == Decimal('0.005')
+
+
+def capped_luna(monkeypatch):
+    monkeypatch.setattr(ai_pricing, 'EXPIRES_AT', int(time.time()) + 86400)
+    with Session() as session:
+        session.merge(Setting(key='config', value={
+            'ai_enabled': True, 'ai_model': 'gpt-6-luna', 'ai_control_mode': 'daily_cap', 'ai_rate_per_hour': 20,
+            'ai_daily_cap_usd': 0.001, 'ai_budget_timezone': 'UTC'}))
+        session.merge(Setting(key='openai_key', value={'encrypted': seal('fixture')}))
+        session.commit()
+    return {'model': 'gpt-6-luna', 'input': 'bounded evidence', 'max_output_tokens': 100,
+            'store': False, 'service_tier': 'default'}
+
+
+def ledger_rows():
+    with Session() as session:
+        return session.query(ai_budget.BudgetEntry).count()
+
+
+def test_confirmation_completed_while_waiting_for_the_budget_lock_prices_admission(admin, monkeypatch):
+    """A call snapshotted before a confirmation is re-priced when admitted under the lock (#1488 review).
+
+    The 100x catalog quotes above the $0.001 cap, so the provider must see no
+    request and the ledger must stay empty.
+    """
+    request = capped_luna(monkeypatch)
+    real_lock, sent, confirmed = ai_budget.Lock, [], {}
+
+    def lock(name):
+        if name == 'ai-shared-budget' and not confirmed:
+            catalog = current(admin)
+            response = admin.post(URL, json=confirm_body(catalog, rates=scaled(catalog, 100), days=7))
+            assert response.status_code == 200, response.text
+            confirmed.update(response.json())
+        return real_lock(name)
+
+    monkeypatch.setattr(ai_budget, 'Lock', lock)
+    monkeypatch.setattr(ai.transport, 'post', lambda *args, **kwargs: sent.append(args) or pytest.fail('sent'))
+    with pytest.raises(ai.AIError):
+        ai.request(request, 'fixture-key')
+    assert confirmed['version'].startswith('admin-')
+    assert sent == [] and ledger_rows() == 0
+
+
+def test_unreadable_stored_catalog_holds_capped_admission_without_bundled_fallback(admin, monkeypatch):
+    """A failed catalog read is not "no confirmation": it must not fall back to lower bundled rates."""
+    request = capped_luna(monkeypatch)
+    catalog = current(admin)
+    assert admin.post(URL, json=confirm_body(catalog, rates=scaled(catalog, 100), days=7)).status_code == 200
+    real_read, sent = ai_pricing._stored_value, []
+
+    def unreadable():
+        raise OperationalError('SELECT settings', {}, Exception('connection lost'), connection_invalidated=True)
+
+    monkeypatch.setattr(ai_pricing, '_stored_value', unreadable)
+    status = ai_pricing.catalog_status()
+    assert status['state'] == 'unavailable' and not status['fresh']
+    assert not ai_pricing.reservation(request)['ok']
+    assert ai_pricing.model_status('gpt-6-luna')['code'] == 'catalog'
+    monkeypatch.setattr(ai.transport, 'post', lambda *args, **kwargs: sent.append(args) or pytest.fail('sent'))
+    with pytest.raises(ai.AIError):
+        ai.request(request, 'fixture-key')
+    assert sent == [] and ledger_rows() == 0
+    # Settings refuses to confirm over a catalog it could not read.
+    response = admin.post(URL, json=confirm_body(catalog))
+    assert response.status_code == 503
+    monkeypatch.setattr(ai_pricing, '_stored_value', real_read)
+    assert stored()['version'].startswith('admin-')
+
+
+def test_failed_read_at_admission_replaces_a_good_start_snapshot(client, monkeypatch):
+    monkeypatch.setattr(ai_pricing, 'EXPIRES_AT', int(time.time()) + 86400)
+    with ai_pricing.call_snapshot():
+        assert ai_pricing.call_catalog()['origin'] == 'bundled'
+
+        def unreadable():
+            raise OperationalError('SELECT settings', {}, Exception('database is locked'))
+
+        monkeypatch.setattr(ai_pricing, '_stored_value', unreadable)
+        ai_pricing.pin_call_catalog()
+        assert ai_pricing.call_catalog()['origin'] == 'unavailable'
+        quote = ai_pricing.reservation({'model': 'gpt-6-luna', 'input': 'x', 'max_output_tokens': 10})
+        assert not quote['ok'] and quote['reason'] == ai_pricing.UNAVAILABLE_REASON
 
 
 def test_unchanged_reconfirmation_is_audited_as_unchanged(admin):

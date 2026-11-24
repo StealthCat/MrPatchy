@@ -107,26 +107,40 @@ def stored_catalog(value):
 
 
 def _stored_value():
-    """Read the confirmed catalog row in its own short read-only session."""
+    """Read the confirmed catalog row in its own short read-only session.
+
+    A failed read raises: it must not be mistaken for "no confirmation saved",
+    because older bundled rates could then under-price a capped reservation.
+    """
     from .db import Session, Setting
-    try:
-        with Session() as session:
-            row = session.get(Setting, STORED_KEY)
-            return row.value if row is not None else None
-    except Exception:  # noqa: BLE001 - an unreadable row cannot extend a window
-        # Falling back can never extend validity: the bundled catalog keeps its
-        # own reviewed window and fails closed after it.
-        return None
+    with Session() as session:
+        row = session.get(Setting, STORED_KEY)
+        return row.value if row is not None else None
+
+
+UNAVAILABLE_REASON = ('The stored public-price catalog could not be read, so no safe reservation can be priced. '
+                      'Capped AI admission is held until the database read succeeds.')
+
+
+def unavailable_catalog():
+    """Fail-closed catalog used when the confirmation row cannot be read (#1488 review)."""
+    return {'version': 'unavailable', 'source': SOURCE, 'verified_at': 0, 'expires_at': 0,
+            'origin': 'unavailable', 'confirmed_by': '', 'rates': {}}
 
 
 def active_catalog(stored=None):
     """Return whichever of the bundled and confirmed catalogs was verified last.
 
     A newer release supersedes an older confirmation, and an expired
-    confirmation is never replaced by older bundled rates.
+    confirmation is never replaced by older bundled rates. An unreadable
+    confirmation row yields an unavailable catalog that prices nothing.
     """
     bundled = bundled_catalog()
-    confirmed = stored_catalog(_stored_value() if stored is None else stored)
+    if stored is None:
+        try:stored = _stored_value()
+        except Exception:  # noqa: BLE001 - an unreadable row must fail closed, not fall back
+            return unavailable_catalog()
+    confirmed = stored_catalog(stored)
     return confirmed if confirmed is not None and confirmed['verified_at'] > bundled['verified_at'] else bundled
 
 
@@ -141,19 +155,34 @@ def call_snapshot():
     estimated only after the reply arrives. An administrator can confirm new
     rates in between, so both must read the same snapshot: the settled charge
     then matches the pricing version recorded on its reservation, and a
-    confirmation (or expiry) only affects calls admitted after it.
+    confirmation (or expiry) only affects calls admitted after it. Capped
+    admission re-pins the snapshot under the shared budget lock with
+    ``pin_call_catalog()``, so a confirmation completed before admission is
+    never missed.
     """
-    token = _call_catalog.set(active_catalog())
+    holder = [active_catalog()]
+    token = _call_catalog.set(holder)
     try:
         yield
     finally:
         _call_catalog.reset(token)
 
 
+def pin_call_catalog():
+    """Re-read the effective catalog at admission and pin it for the current call.
+
+    Outside ``call_snapshot()`` this only returns the effective catalog.
+    """
+    catalog = active_catalog()
+    holder = _call_catalog.get()
+    if holder is not None:holder[0] = catalog
+    return catalog
+
+
 def call_catalog():
     """The current call's pinned snapshot, or the effective catalog outside a call."""
-    pinned = _call_catalog.get()
-    return pinned if pinned is not None else active_catalog()
+    holder = _call_catalog.get()
+    return holder[0] if holder is not None else active_catalog()
 
 
 def revision(catalog):
@@ -200,7 +229,10 @@ def catalog_status(now=None, catalog=None):
     catalog = active_catalog() if catalog is None else catalog
     administrator = catalog['origin'] == 'administrator'
     name = 'administrator-confirmed' if administrator else 'bundled'
-    if now < catalog['verified_at']:
+    if catalog['origin'] == 'unavailable':
+        state = 'unavailable'
+        reason = UNAVAILABLE_REASON
+    elif now < catalog['verified_at']:
         state = 'not_yet_valid'
         reason = 'The controller clock predates this price catalog verification.'
     elif now >= catalog['expires_at']:

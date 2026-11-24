@@ -1639,6 +1639,9 @@ def confirm_ai_price_catalog(body:PriceCatalogConfirmInput,user=Depends(admin_us
         raise HTTPException(400,"Confirm that you checked these rates against OpenAI's pricing page.")
     with worker.Lock('ai-price-catalog'):
         current=ai_pricing.active_catalog()
+        if current['origin']=='unavailable':
+            # Never confirm over a catalog whose stored state could not be read (#1488 review).
+            raise HTTPException(503,'The stored price catalog could not be read. Nothing was changed; try again.')
         if ai_pricing.revision(current)!=body.expected_revision:
             raise HTTPException(409,'The price catalog changed after you opened it. Review the current rates and confirm again.')
         try:value,changes=ai_pricing.confirmation(body.rates,body.days,user['username'],time.time(),current)

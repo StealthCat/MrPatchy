@@ -125,6 +125,9 @@ def reserve(payload):
         with Session() as session:
             cfg=config(session)
             if cfg['ai_control_mode'] not in ai_pricing.CAP_MODES:return None
+            # Bind this call's price snapshot at admission, under the budget lock:
+            # a confirmation that completed while this call waited is used (#1488 review).
+            ai_pricing.pin_call_catalog()
             quote=ai_pricing.reservation(payload)
             if not quote['ok']:
                 raise AIError(quote['reason']+' Capped AI admission was blocked; no provider request was sent.')
