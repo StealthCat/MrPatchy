@@ -213,8 +213,8 @@ def status(session,now=None):
         'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
         'unreconciled_call_count':unreconciled_count,'oldest_unreconciled_reservation_at':oldest,
         'next_reset':reset if enabled else None,'next_reset_authoritative':enabled and not overlapping,
-        'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
-        'pricing_catalog':ai_pricing.catalog_status(now)}
+        'pricing_catalog':(catalog:=ai_pricing.catalog_status(now)),
+        'pricing_version':catalog['version'],'pricing_source':catalog['source']}
 
 
 DAILY_CAP_NOTIFICATION=dict(source='ai-budget',kind='daily-cap',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
@@ -343,12 +343,12 @@ def publish_unpriced_model_notification(session,cfg,now):
         if not result['ok'] and result['code']=='catalog':return False
         if not result['ok']:
             name=('model '+result['model']) if result['model'] else 'model ID'
-            message=('Capped AI admission cannot price the saved '+name+': it is not in the bundled public-price catalog '+
-                ai_pricing.VERSION+'. Every paid AI call, including triage, scoring and plans, is refused before sending '
+            message=('Capped AI admission cannot price the saved '+name+': it is not in the current public-price catalog '+
+                result['version']+'. Every paid AI call, including triage, scoring and plans, is refused before sending '
                 'while a daily spend cap applies. Choose a catalogued model or change the AI control mode in Settings. '
                 'No provider request is sent and no spend is reserved.')
             notifications.publish(session,**UNPRICED_MODEL_NOTIFICATION,
-                subject_revision='unpriced:'+ai_pricing.VERSION+':model-sha256:'+hashlib.sha256(model.encode('utf-8')).hexdigest(),
+                subject_revision='unpriced:'+result['version']+':model-sha256:'+hashlib.sha256(model.encode('utf-8')).hexdigest(),
                 severity='high',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
             return True
     event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value

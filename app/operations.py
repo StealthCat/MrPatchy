@@ -131,10 +131,10 @@ def _pricing_catalog_alert(s,cfg,record,now):
         expiry=datetime.datetime.fromtimestamp(status['expires_at'],datetime.timezone.utc).isoformat().replace('+00:00','Z')
         if warning:
             severity='medium'
-            message='AI public-price catalog '+status['version']+' expires at '+expiry+'. Review and deploy a verified catalog update before capped AI admission stops.'
+            message='AI public-price catalog '+status['version']+' expires at '+expiry+'. Re-confirm current prices in Settings or deploy a verified catalog update before capped AI admission stops.'
         else:
             severity='high'
-            message='AI public-price catalog '+status['version']+' is '+status['state'].replace('_',' ')+'. Capped AI admission is blocked until a verified catalog update or controller clock correction is deployed.'
+            message='AI public-price catalog '+status['version']+' is '+status['state'].replace('_',' ')+'. Capped AI admission is blocked until current prices are re-confirmed in Settings, a verified catalog update is deployed or the controller clock is corrected.'
         record('controller','AI pricing catalog',message,reopen_on_change=True)
         notifications.publish(s,source='ai-budget',kind='pricing-catalog',subject_type='pricing-catalog',
             subject_id=AI_PRICING_CATALOG_SUBJECT,subject_revision=status['version']+':'+status['state']+':'+str(status['expires_at']),

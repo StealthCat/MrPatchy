@@ -3091,6 +3091,51 @@ worker. This is acceptance coverage only, with no runtime change. CI runs it on
 SQLite and the MySQL shards. Startup plans share the same worker deferral branch
 as security plans, so they are covered through that branch, not separately.
 
+### Administrator-confirmed price catalog — worker checkpoint #1487
+
+The bundled public-price catalog expires about 30 days after review. Before
+this change, each refresh needed a source release and a rebuild (#966). An
+administrator can now re-verify the catalogued rates in **Settings → AI →
+Review and confirm prices**. That starts a new validity window of 1 to 30
+days inside the installation.
+
+- **Storage:** one `settings` row (`ai_price_catalog`), with no schema
+  migration. `ai_pricing.active_catalog()` uses whichever of the bundled and
+  confirmed catalogs has the later verification time:
+  - A newer release supersedes an older confirmation.
+  - An expired confirmation fails closed rather than falling back to older
+    bundled rates.
+  - An unreadable or malformed row is ignored, which cannot extend any window.
+- **Scope:** a confirmation covers exactly the bundled model set and rate
+  structure, so tier multipliers and the legacy/modern split stay in reviewed
+  source. A model that a later release adds stays unpriced until it is
+  confirmed again. Rates are positive decimals of at most 10000 USD per
+  million tokens, with at most 6 decimal places.
+- **Endpoint:** `POST /api/settings/ai-price-catalog` is admin-only and
+  CSRF-protected. It requires all of the following:
+  - the expected catalog revision; a stale revision gets 409
+  - `checked_source: true`
+  - the typed confirmation `CONFIRM PRICES`
+  - a controller clock later than the bundled verification
+- **Audit:** each confirmation writes an audit entry with the administrator,
+  the window, the replaced version and every changed rate.
+- **Effective version everywhere:** reservations, settled estimates, receipts
+  (`admin-YYYYMMDDTHHMMSSZ`, within the 30-character `pricing_version`
+  column), budget status, the unpriced-model notification, the headroom
+  notification and the expiry warning/alert all use the effective catalog.
+  The expiry messages now point to Settings.
+- **Not covered:**
+  - adding models or tiers from the UI
+  - automatic price retrieval; OpenAI publishes no pricing API
+  - comparison against the organization Costs API
+- **Mid-call confirmation:** a confirmation made while a call is in flight
+  may settle that call's estimate at the new rates. Its reservation keeps the
+  version it was quoted with.
+- **Tests:**
+  - `tests/test_ai_price_confirmation.py`
+  - the route-role table in `tests/test_route_roles.py`
+  - the browser flow in `tests/ui_settings_price_catalog.cjs`
+
 ### Unpriced saved model under a daily cap — worker checkpoint #735
 
 In `daily_cap` and `rate_and_daily` modes, capped admission must quote every

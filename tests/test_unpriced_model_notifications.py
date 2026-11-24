@@ -40,7 +40,8 @@ def current():
 # The clock is explicit and the bundled window is the subject under test, so opt out of the #742 fresh-catalog pin.
 @pytest.mark.bundled_pricing_catalog
 def test_model_status_is_alias_aware_and_fails_closed():
-    assert ai_pricing.model_status('gpt-6-luna', NOW) == {'ok': True, 'code': '', 'model': 'gpt-6-luna', 'reason': ''}
+    assert ai_pricing.model_status('gpt-6-luna', NOW) == {'ok': True, 'code': '', 'model': 'gpt-6-luna', 'reason': '',
+                                                         'version': ai_pricing.VERSION}
     assert ai_pricing.model_status('gpt-5-mini-2025-08-07', NOW)['model'] == 'gpt-5-mini'
     unpriced = ai_pricing.model_status('gpt-5', NOW)
     assert not unpriced['ok'] and unpriced['code'] == 'model' and unpriced['model'] == 'gpt-5'

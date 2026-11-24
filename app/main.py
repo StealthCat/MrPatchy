@@ -1594,6 +1594,46 @@ def clear_provider_backoff(body:ProviderBackoffClearInput,user=Depends(admin_use
         audit(s,'clear AI provider backoff',user['username']+' cleared reviewed active floor: '+body.reason.strip());s.commit()
     return {'cleared':active}
 
+class PriceCatalogConfirmInput(BaseModel):
+    model_config={'extra':'forbid'}
+    expected_revision:str=Field(min_length=64,max_length=64,pattern=r'^[0-9a-f]{64}$')
+    rates:dict[str,list[str|None]]=Field(max_length=64)
+    days:int=Field(ge=1,le=30,strict=True)
+    checked_source:bool=Field(strict=True)
+    confirmation:str=Field(pattern=r'^CONFIRM PRICES$')
+
+@app.get('/api/settings/ai-price-catalog')
+def ai_price_catalog(user=Depends(admin_user)):
+    """Effective and bundled public token rates for review (#1487). Read-only."""
+    from . import ai_pricing
+    return ai_pricing.public_catalog()
+
+@app.post('/api/settings/ai-price-catalog')
+def confirm_ai_price_catalog(body:PriceCatalogConfirmInput,user=Depends(admin_user)):
+    """Store administrator-confirmed public token rates for a bounded window (#1487).
+
+    This starts a new reviewed validity window without a release. It never
+    widens the catalogued model set or tier multipliers, sends no provider
+    request and changes no cap, mode or reservation already recorded.
+    """
+    from . import ai_pricing
+    if body.checked_source is not True:
+        raise HTTPException(400,"Confirm that you checked these rates against OpenAI's pricing page.")
+    with worker.Lock('ai-price-catalog'):
+        current=ai_pricing.active_catalog()
+        if ai_pricing.revision(current)!=body.expected_revision:
+            raise HTTPException(409,'The price catalog changed after you opened it. Review the current rates and confirm again.')
+        try:value,changes=ai_pricing.confirmation(body.rates,body.days,user['username'],time.time(),current)
+        except ValueError as error:raise HTTPException(400,str(error)) from None
+        expiry=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime(value['expires_at']))
+        detail=(user['username']+' confirmed AI price catalog '+value['version']+' against '+ai_pricing.SOURCE+
+            ', valid until '+expiry+' ('+str(body.days)+' days), replacing '+current['version']+'; '+
+            ('changed rates (USD per million tokens): '+'; '.join(changes) if changes else 'rates unchanged'))
+        with Session() as s:
+            s.merge(Setting(key=ai_pricing.STORED_KEY,value=value))
+            audit(s,'confirm AI price catalog',detail);s.commit()
+    return ai_pricing.public_catalog()
+
 @app.get('/api/update-scores/blocked')
 def blocked_update_scores(user=Depends(admin_user)):
     """Count update scores blocked under the current AI configuration (#815).

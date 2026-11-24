@@ -199,6 +199,9 @@ function renderAISettings(data,revision,container){
   budgetNotice.append(reconciliation);
  }
  budgetNotice.insertAdjacentHTML('beforeend',`<br><strong>Price catalog ${catalog.fresh?'current':catalog.state==='expired'?'expired':'unavailable'}</strong> · ${esc(catalog.version||'unknown version')}${catalog.expires_at?' · expires '+date(catalog.expires_at):''}${!catalog.fresh&&catalog.reason?' · '+esc(catalog.reason):''}`);
+ // Administrators reverify public token rates here instead of waiting for a release (#1487).
+ budgetNotice.insertAdjacentHTML('beforeend',` · ${catalog.origin==='administrator'?'confirmed by '+esc(catalog.confirmed_by||'an administrator'):'bundled with this release'} <button type="button" id="price-catalog-review">Review and confirm prices</button>`);
+ $('#price-catalog-review').onclick=()=>priceCatalogDialog(revision);
  const keyForm=$('#ai-key-form'),form=$('#ai-settings-form'),select=$('#ai-model'),manual=$('#ai-model-manual');
  const keyResult=$('#ai-key-result'),saveResult=$('#ai-save-result'),testResult=$('#ai-test-result'),status=$('#ai-model-status'),refresh=$('#ai-model-refresh');
  const alive=()=>currentView(revision,'settings')&&container.isConnected;
@@ -528,4 +531,35 @@ async function malwarePolicySettings(revision){
    finally{if(fieldset.isConnected)fieldset.disabled=false;}
   };
  }catch(error){if(alive())container.innerHTML=PatchyUI.error('Could not load the malware response policy',esc(error.message));}
+}
+
+const PRICE_FIELDS=[['input','Input'],['cached_input','Cached input'],['output','Output'],['cache_write','Cache write (30 min)']];
+async function priceCatalogDialog(revision){
+ let catalog;try{catalog=await api('/settings/ai-price-catalog');}catch(error){toast(error.message);return;}
+ if(!currentView(revision,'settings'))return;
+ const models=Object.keys(catalog.bundled_rates).sort();
+ const cell=(model,[field,label])=>{
+  const bundled=catalog.bundled_rates[model][field],value=(catalog.rates[model]||catalog.bundled_rates[model])[field];
+  if(bundled===null)return '<td class="muted">—</td>';
+  const hint=value!==bundled?`<small>Release: ${esc(bundled)}</small>`:'';
+  return `<td><input name="${esc(model)}:${field}" value="${esc(value)}" inputmode="decimal" pattern="(0|[1-9][0-9]{0,4})(\\.[0-9]{1,6})?" required aria-label="${esc(model)} ${esc(label)} USD per million tokens" size="8">${hint}</td>`;
+ };
+ const rows=models.map(model=>`<tr><td><code>${esc(model)}</code>${catalog.rates[model]?'':' <small>new in this release</small>'}</td>${PRICE_FIELDS.map(field=>cell(model,field)).join('')}</tr>`).join('');
+ const state=catalog.fresh?'current':catalog.state==='expired'?'expired':'not valid';
+ modal('Review AI token prices',`<p>Capped AI admission reserves spend from these public rates. The ${catalog.origin==='administrator'?'administrator-confirmed':'bundled'} catalog <strong>${esc(catalog.version)}</strong> is ${state}${catalog.expires_at?' and expires '+date(catalog.expires_at):''}.</p>
+ <p class="help">Compare every rate with <a href="${esc(catalog.source)}" target="_blank" rel="noopener noreferrer">OpenAI's pricing page</a> (USD per million tokens, standard tier), then confirm to start a new validity window. When it ends, capped AI calls are refused until prices are confirmed again. Unthrottled and rate-only modes do not use these rates. Confirming sends no provider request and does not change the cap, mode or recorded spend.</p>
+ <form id="price-catalog-form"><div class="table-wrap"><table><thead><tr><th scope="col">Model</th>${PRICE_FIELDS.map(([,label])=>`<th scope="col">${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>
+ <label>Valid for (days)<input name="days" type="number" min="1" max="${esc(catalog.max_confirmation_days)}" value="${esc(catalog.max_confirmation_days)}" required></label>
+ <label class="check"><input type="checkbox" name="checked_source" required> I checked these rates against OpenAI's pricing page today</label>
+ <label>Type CONFIRM PRICES<input name="confirmation" pattern="CONFIRM PRICES" autocomplete="off" required></label>
+ <button class="primary">Confirm prices</button></form>`);
+ const dialogRevision=modalRevision,priceForm=$('#price-catalog-form');
+ priceForm.onsubmit=async event=>{event.preventDefault();const button=priceForm.querySelector('button');button.disabled=true;
+  const rates=Object.fromEntries(models.map(model=>[model,PRICE_FIELDS.map(([field])=>{const input=priceForm.elements[model+':'+field];return input?input.value.trim():null;})]));
+  try{const saved=await api('/settings/ai-price-catalog','POST',{expected_revision:catalog.revision,rates,days:Number(priceForm.elements.days.value),checked_source:priceForm.elements.checked_source.checked,confirmation:priceForm.elements.confirmation.value});
+   if(dialogRevision===modalRevision){$('#modal').close();toast(`Prices confirmed until ${date(saved.expires_at)}.`);}
+   if(currentView(revision,'settings'))await settings(revision);}
+  catch(error){if(dialogRevision===modalRevision)toast(error.message);}
+  finally{if(button.isConnected)button.disabled=false;}
+ };
 }
