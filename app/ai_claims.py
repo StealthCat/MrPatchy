@@ -218,11 +218,11 @@ def acquire(owner=None):
                 recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
-            from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing,known_good
+            from . import ai_admission,ai_budget,ai_pricing,known_good
             # A local exact cache hit needs no provider admission. Keep paid
             # work queued while any shared provider start gate is closed.
-            free_only=bool(ai_admission.waiting(s,now,settings=cfg)
-                or ai_provider_backoff.waiting(s,now) or ai_budget.waiting(s,now,settings=cfg))
+            free_only=bool(ai_admission.shared_start_waiting(s,now,settings=cfg)
+                or ai_budget.waiting(s,now,settings=cfg))
             if free_only and s.scalar(select(known_good.Entry.fingerprint).where(
                     known_good.Entry.active.is_(True),known_good.Entry.model==cfg['ai_model'].strip()).limit(1)) is None:
                 return None

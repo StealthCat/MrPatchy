@@ -8,7 +8,7 @@ lifecycle, authorization, or finite-concurrency controls.
 import time
 from contextvars import ContextVar
 
-from sqlalchemy import String, Double, Integer
+from sqlalchemy import String, Double, Integer, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -77,6 +77,21 @@ def waiting(session,now,*,settings=None):
     if settings['ai_control_mode'] not in ('rate','rate_and_daily'):return 0
     row=session.get(Admission,'global')
     return row.next_at if row and row.next_at>now else 0
+
+def shared_start_waiting(session, now, *, settings):
+    """Whether provider backoff or the configured pacing gate is closed."""
+    from .ai_provider_backoff import ProviderBackoff
+
+    blocked = select(ProviderBackoff.id).where(
+        ProviderBackoff.id == 'global', ProviderBackoff.blocked_until > now,
+    ).exists()
+    if settings['ai_control_mode'] in _PACED_MODES:
+        paced = select(Admission.id).where(
+            Admission.id == 'global', Admission.next_at > now,
+        ).exists()
+        blocked = or_(blocked, paced)
+    return bool(session.scalar(select(blocked)))
+
 
 def status(session):
     settings=config(session);row=session.get(Admission,'global')
