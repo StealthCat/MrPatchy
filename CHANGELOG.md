@@ -1,3 +1,7 @@
+## 1.83.3 — 2026-11-21
+
+1. [PR #1260](https://github.com/StealthCat/MrPatchy/pull/1260): Add a pure, no-I/O supervisord contract for resolving configured program, event-listener and FastCGI processes, expanded commands, users and start timing from captured files and include matches. Compatibility: additive internal module, tests and documentation only; nothing imports it, so runtime, schema, API, UI, roles, scheduling and response authorization are unchanged. Limits: missing observations fail closed; unmodeled supervisor checks can make results over-report; agent collection, provenance, persistence, UI and AI classification remain out of scope.
+
 ## 1.83.2 — 2026-11-21
 
 1. [PR #1254](https://github.com/StealthCat/MrPatchy/pull/1254): Allow paced AI benchmark comparisons to use a selected shared rate (1–1,000 starts/hour), and reject mismatched rates or workloads requiring more than five minutes of scheduled pacing before database setup. Compatibility: existing invocations keep the 1,000/hour default and report format; production runtime, settings, schema, provider and authorization behavior are unchanged. Limit: loopback fixture measurements do not establish production throughput, failover or exhausted-cap performance.
