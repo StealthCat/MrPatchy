@@ -331,8 +331,10 @@ def auto_plan_tick(now=None):
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not s.get(Setting,'openai_key'):return
             remaining=10
             if cfg['ai_control_mode']=='legacy':
-                recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
-                remaining-=recent
+                # Exact below the allowance, saturated once the tick cannot queue more.
+                recent=(select(Job.created).where(Job.action.in_(('security-plan','startup-plan')),
+                    Job.created>now-3600).limit(remaining).subquery())
+                remaining-=s.scalar(select(func.count()).select_from(recent))
             if remaining<=0:return
             policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
             from . import ai_policy
