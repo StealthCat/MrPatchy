@@ -2837,6 +2837,16 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
   without a notification, because no call payload is available here. Other
   blocker producers (missing key, unknown pricing, provider backoff) remain open.
 
+Worker checkpoint #1281 updates the exhausted-cap notification. The configured
+budget boundary is a time to recheck. Spend from an earlier window can still
+count after that time, so queued paid work waits for available budget. The
+notification remains active while counted spend exhausts the cap. Its existing
+window and cap revision keys still prevent repeated collection from reopening a
+read notice within that window. An active notice can get one updated revision
+when the new wording first reaches it. The persisted-ledger regression covers
+the notification across a timezone overlap and its resolution after the
+retained window ends.
+
 Worker checkpoint #733 adds an AI configuration-blocker notification producer.
 A non-transient provider failure (rejected key, unavailable quota, unsupported
 model) leaves each affected process investigation `blocked`, with no automatic
@@ -4146,6 +4156,21 @@ Check that both reports retain the same provider call count and one-stage and
 two-stage workload before comparing their stage percentiles and throughput.
 These are loopback and stubbed SSH measurements. Production comparison remains
 open.
+
+### Measure executor queue wait in triage fixtures — Roadmap A checkpoint #1315
+
+The benchmark's `stages.executor_wait` records a count and p50/p95 in
+milliseconds from submitting each investigation to the point its executor
+thread starts work. It is a measured fixture wait distinct from seeded
+observation age and the worker's admission time. In paced fixtures, the
+dispatcher waits for the durable rate slot before submission. Read that
+time separately in `fixture_rate.dispatch_wait_seconds`.
+
+Compare the raw stage in matched serial and parallel reports. Use the
+existing comparator to check capability equivalence. Acceptance covers a
+busy serial executor, sample counts, and paced SQLite and MySQL workloads.
+Historical reports omit this measurement. It does not establish production
+queue latency or throughput.
 
 ### Retained behavior history in the triage benchmark — worker checkpoint #641
 
@@ -10369,6 +10394,18 @@ followed by safe crash/restart investigation #104. Issue #103 remains a policy q
 resumes only after these higher-priority actionable fixes.
 
 
+### Advisory-plan eligibility during server pause — Roadmap A checkpoint #1355
+
+Investigations now reports the earliest future retry on an active server with
+AI resumed. Paused plans retain their recorded dates in the by-purpose
+details. The combined next-eligibility time uses the eligible date; a queue
+with only paused plans directs the administrator to resume server AI. The
+admin status derives both dates from the existing grouped query.
+
+The window describes queue timing. Shared admission and worker capacity still
+govern the actual start. Older controllers expose their date as a recorded
+retry. Queue and provider behavior retain the existing execution controls.
+
 ## v1.35.3 — Deferred advisory-plan contract and status corrections
 
 Delivery record: version **v1.35.3**, implementation commit
@@ -12782,6 +12819,34 @@ samples. Compatibility: admin-only as before, no schema, collection, admission,
 budget or response-authorization change. Matched serial/parallel production
 throughput remains open.
 
+### incron table contract — worker checkpoint #1132 (roadmap F)
+
+incrond runs a command whenever an inotify event fires on a path named in an incron table. System tables in `/etc/incron.d` run as root. Per-user tables in `/var/spool/incron/<user>` run as that user, subject to `/etc/incron.allow` and `/etc/incron.deny`. Neither the startup catalog nor any contract covered them, so these event-triggered commands were invisible.
+
+- **Change:** a new pure module, `app/incron_tables.py`. It takes captured `incron.conf` text, table-directory listings, table text, allow/deny state and the account names. It reports which tables load, and for each entry the watched path, event names, flags, command, user and shell.
+- **Reference:** the rules follow incron 0.5.12 source (`incrontab.cpp`, `strtok.cpp`, `incroncfg.cpp`, `icd-main.cpp`, `usertable.cpp` and `usertable.h`):
+  - **Configuration:** `incron.conf` keeps the *first* value of a repeated key. A `#` starts a comment only at the start of a line, after optional blanks. A line over 1022 bytes stops reading.
+  - **Table discovery:** tables load only when `d_type` is `DT_REG`, or when `stat` reports a regular file for `DT_UNKNOWN`. Symlinks are skipped where `d_type` is reported. Dot-named system tables are skipped. An unopenable system directory is ignored. An unopenable user directory stops incrond.
+  - **User access:** a user table needs a `getpwnam` account and `IncronTab::CheckUser` approval. If the allow file exists, only listed users run. Otherwise, a deny file refuses the users it lists. Any other open failure refuses.
+  - **Table parsing:** tables have no comment syntax and are read in 999-byte `fgets` pieces. The two-delimiter tokenizer toggles its escape state twice per character, so `\ ` does not keep a space in the path.
+  - **Mask field:** a mask that starts with a decimal number (`%lu`) is used raw, with default flags. Unknown mask words contribute nothing.
+  - **Execution:** system commands run through `system()` (`/bin/sh -c`) as root. User commands run through `/bin/bash -c` after `setgid`/`initgroups`/`setuid`. For a non-root user the environment is reset first.
+  - **Loop suppression:** it needs the `LOOPER` build flag, which 0.5.12 does not define. `loopable` is therefore recorded but has no runtime effect.
+- **Gaps, never reported as covered:** each of these marks the affected table `unresolved`:
+  - unobserved configuration, listing, entry type, table text, account list or allow/deny state;
+  - malformed or duplicate listing names;
+  - invalid UTF-8 and NUL bytes;
+  - the 64 KiB text, 1024-entry listing and 512-entry table caps.
+- **Unobserved, stated in every result:**
+  - whether incrond runs, and a `-f` alternative configuration;
+  - which events occur;
+  - wildcard and recursive-watch expansion;
+  - per-user path access, which silently discards events;
+  - the contents of the programs the commands run.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_incron_tables.py` has 14 tests and cannot run on main, where the module does not exist. Three mutations are each caught: loading dot-named system tables, a single-toggle (working) escape in the tokenizer, and last-value-wins configuration. The tokenizer and parsing rules were ported by reading the source. Compiling the upstream source against the tests was not possible in the worker environment.
+- **Remaining:** collection wiring into the startup inventory, a startup catalog entry, provenance against the incron package's shipped files, and UI.
+
 ### Observed provider overlap in fixture comparisons (#1092, roadmap A)
 
 Comparison reports show each input's peak simultaneous fixture provider requests
@@ -13009,6 +13074,29 @@ never reads a sourced file.
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
 
+### auditd dispatcher-plugin contract — worker checkpoint #1217
+
+`app/auditd_plugins.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/audit/auditd.conf`, the effective plugin directory and stat metadata for the plugin programs. It reports which programs auditd's built-in dispatcher forks and `execve`s as root on every auditd start and reconfigure, with which arguments, and why every other plugin file starts nothing.
+
+- **Source of the semantics:** audit-userspace `v3.1.2`, the version Ubuntu 24.04 ships: `audisp/audispd.c`, `audisp/audispd-pconfig.c`, `src/auditd-config.c`, `src/auditd.c` and `common/strsplit.c`.
+  - **Plugin directory:** the last `plugin_dir` line wins over `/etc/audit/plugins.d`. Names starting with `.` or containing more than one `.` are skipped. No `.conf` suffix is required.
+  - **Plugin files:** each must be root-owned, not world-writable and regular after following symlinks.
+  - **Line reading:** the 160-byte `fgets` buffer means lines of 159 bytes or more are skipped. An unterminated last line is skipped, and so are NUL-hidden newlines together with the line after them.
+  - **Tokenizing:** words are split on spaces only. Words after the option are dropped. A missing `=`, an unknown keyword, an option on a keyword other than `args`, or an invalid value rejects the whole file.
+  - **Values:** `builtin_*` paths map to `/sbin/audisp-af_unix`. For other paths, glibc `dirname` must be at least four bytes. For every keyword the last line wins.
+  - **Start check:** an active plugin starts only if `stat` of its path finds a root-owned regular file with every `0750` bit set. It then runs with `execve(path, [path, args≤2], NULL)`: no shell, no `PATH` search and an empty environment.
+- **Fail closed:** blocking gaps cover an unobserved or unreadable `auditd.conf`, plugin directory, entry or program; entries that are FIFOs or devices; malformed input; and over-limit input.
+- **Validation:** `tests/test_auditd_plugins.py` has 61 tests.
+  - Its 21 parse vectors were checked against the real `load_pconfig`, compiled from the v3.1.2 source with a logging stub.
+  - A random differential against that build gave 0 mismatches over 10,000 cases, with real program files covering each permission and ownership case.
+  - The differential catches four mutations: wrong mode bits, wrong buffer size, wrong `dirname`, and treating tab as a separator.
+  - `glibc_dirname` matches libc `dirname` on all 5,461 exhaustive short paths.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Agent collection of `auditd.conf`, the plugin directory and program stats.
+  - A catalog entry, package provenance, UI and AI classification.
+  - Validation of the auditd.conf keywords other than `plugin_dir`. An invalid file can only stop auditd, so the contract may over-report but never under-report.
+
 ### mdadm alert-program contract — worker checkpoint #1213 (roadmap F)
 
 `app/mdadm_program.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/mdadm.conf`, `/etc/mdadm.conf.d`, `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. It reports which `PROGRAM` command `mdadm --monitor --scan` executes as root on RAID events, and which file and line it came from.
@@ -13220,6 +13308,19 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
 
+### Startup catalog entries for contract-modelled hooks — worker checkpoint #1273 (roadmap F)
+
+The dhclient (#1063), needrestart (#1148), smartd (#1207), resolvconf (#1199), certbot (#1229), apcupsd (#1243), NUT upsmon (#1247) and supervisord (#1259) checkpoints, and the acpid event contract, each left "a catalog entry" as remaining work. `app/startup_catalog.py` did not list their locations, so `coverage()` never reported them, not even as `not_collected`.
+
+- **Change:** nine mechanism IDs: `dhclient_hooks`, `needrestart_hooks`, `resolvconf_hooks`, `certbot_hooks`, `acpid_events`, `apcupsd_events`, `nut_upsmon`, `smartd_warnings` and `supervisord`. Each lists the locations its contract reads. The trigger is `event`, except `schedule` for certbot's renewal run and `boot` for supervisord.
+- **Families:** dhclient, needrestart and resolvconf are Debian only. NUT uses `/etc/nut` on Debian and `/etc/ups` on RPM. smartd uses `/etc/smartd.conf` and the `smartmontools` run and warning directories on Debian, and `/etc/smartmontools/smartd.conf` on RPM. supervisord uses `/etc/supervisord.conf` on both, plus `/etc/supervisor` on Debian and `/etc/supervisord.d` on RPM. certbot, acpid and apcupsd use the same paths on both.
+- **Fail closed:** every new mechanism is `parse: metadata`, because no collector feeds its contract yet. Under today's agent scope each one is `not_collected` with a `locations_not_collected` gap, never `covered` or `absent_reported`. A narrower collected root is `partial`.
+- **Additional scope:** `validate_additional_scope` now rejects administrator paths that overlap these locations with `overlaps_catalog_location`, as for every other catalog location. The module is not called from the running application, and the agent's own `validate_custom_paths` is unchanged, so no stored or running scope changes.
+- **Unchanged:** existing mechanism IDs, locations and states, `CONTRACT_VERSION`, the agent, schema, scheduling, AI, roles and response authorization.
+- **Validation:** five new tests in `tests/test_startup_catalog.py`, 11 cases in all with the parametrized ones. All 11 fail on main `c3ce48da` and pass after the change, and the 55 existing tests still pass (66 passed).
+- **Remaining:** agent collection of these locations, wiring their contracts into the startup inventory, package provenance, persistence, UI and AI classification.
+
+
 ### cloud-init script-directory contract — worker checkpoint #1271 (roadmap F)
 
 cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` final-stage modules run every executable entry of `/var/lib/cloud/scripts/per-boot`, `per-instance` and `per-once` as root: at every boot, once per instance ID (again after it changes, for example on a cloned image), and once. The startup inventory and catalog did not model these directories.
@@ -13231,3 +13332,15 @@ cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` f
 - **Not modeled:** whether cloud-init is installed or enabled, `cloud_final_modules` membership, a non-default `cloud_dir`, semaphore state, user-data `scripts_user` and `scripts_vendor`, and script contents.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.
+
+
+### LightDM seat-script contract — worker checkpoint #1301 (roadmap F)
+
+LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-script`, `session-setup-script` and `session-cleanup-script` as root at every display start and stop, greeter start, user login and logout. They are set in `lightdm.conf`, in `lightdm.conf.d` drop-ins under the XDG data and config directories, and in per-seat `[Seat:<glob>]` sections. The startup inventory did not model them.
+
+- **Change:** the pure `app/lightdm_scripts.py` takes captured file text and captured `lightdm.conf.d` listings. For each assumed seat name (default `seat0`) it returns the effective command for each script, its source file and section, its SHA-256 and whether the value reads as unset. It performs no I/O and never runs a command.
+- **Fidelity:** it follows LightDM 1.30.0 `config_load_from_standard_locations`. XDG data directories load first, then XDG config directories, each in reverse order. `/etc/lightdm/lightdm.conf.d` loads next and `/etc/lightdm/lightdm.conf` last. Only `.conf` names are read, in `strcmp` order. It also follows LightDM's `[SeatDefaults]` alias, the `[Seat:*]` then matching `[Seat:<glob>]` order (`g_pattern_match_simple`), and `g_key_file_get_string` unescaping, where an invalid value unsets the script. A drop-in that GKeyFile refuses is skipped whole. A main file that GKeyFile refuses is `config_error` with no scripts, because LightDM exits.
+- **Fail closed:** an unobserved file or directory listing, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. The GLib default XDG directories are assumed unless others are passed. Real seat names, the service environment and how `g_shell_parse_argv` splits the command are listed as not observed. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.

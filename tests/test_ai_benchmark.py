@@ -67,6 +67,25 @@ def test_queue_age_is_bounded_before_starting_the_fixture():
         assert '--queue-age-seconds must be between 0 and 86400' in result.stderr
 
 
+def test_executor_wait_captures_time_behind_a_busy_serial_worker(tmp_path):
+    reports = []
+    for concurrency in ('1', '2'):
+        result = subprocess.run(
+            [sys.executable, str(BENCHMARK), '--runs', '2', '--concurrency', concurrency,
+             '--provider-delay-ms', '200', '--queue-age-seconds', '5'],
+            cwd=tmp_path, capture_output=True, text=True, timeout=60, check=True,
+        )
+        report = json.loads(result.stdout)
+        wait = report['stages']['executor_wait']
+        assert wait['count'] == report['completed_subjects'] == 2
+        assert 0 <= wait['p50_ms'] <= wait['p95_ms'] <= report['elapsed_seconds'] * 1000 + 0.5
+        reports.append(report)
+
+    serial, parallel = reports
+    assert serial['stages']['executor_wait']['p95_ms'] >= 200
+    assert compare(serial, parallel)['capability_equivalent'] is True
+
+
 def run_benchmark(concurrency, retained_history_rows=0, *, same_server=False, follow_up_runs=None):
     layout = ['--same-server'] if same_server else []
     stage_mix = [] if follow_up_runs is None else ['--follow-up-runs', str(follow_up_runs)]

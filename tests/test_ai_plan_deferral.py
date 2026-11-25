@@ -189,6 +189,53 @@ def test_ready_plan_precedes_future_plan_backoff(admin):
     assert set(viewer.json())=={'pending','oldest','enabled'}
 
 
+@pytest.mark.parametrize('include_resumed_server', (False, True))
+def test_paused_plan_retry_is_recorded_without_becoming_next_eligible(admin,include_resumed_server):
+    now=time.time()
+    with Session() as session:
+        for host_id in ('paused-plan-host','resumed-plan-host'):
+            session.add(Host(id=host_id,name=host_id,address='192.0.2.10',fingerprint='',state='online'))
+        session.add(Job(id='paused-plan',host_id='paused-plan-host',action='security-plan',
+            payload={'_ai_deferred':True},next_at=now+120))
+        if include_resumed_server:
+            session.add(Job(id='resumed-plan',host_id='resumed-plan-host',action='startup-plan',
+                payload={'_ai_deferred':True},next_at=now+300))
+        session.add(Setting(key='server-ai:paused-plan-host',value={'paused':True}))
+        session.add(Setting(key='worker:heartbeat',value={'seen':now}))
+        session.merge(Setting(key='config',value={'ai_enabled':True,'ai_model':'fixture-model'}))
+        session.merge(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
+        session.commit()
+
+    response=admin.get('/api/investigation-status')
+    assert response.status_code==200
+    status=response.json()
+    assert status['plan_next_at']==pytest.approx(now+120)
+    assert status['plan_deferred_by_action']['security-plan']['next_at']==pytest.approx(now+120)
+    if include_resumed_server:
+        assert status['reason']=='backoff'
+        assert status['retry_at']==pytest.approx(now+300)
+        assert status['plan_next_eligible_at']==pytest.approx(now+300)
+    else:
+        assert status['reason']=='blocked' and 'resumed' in status['message']
+        assert status['retry_at'] is None and status['plan_next_eligible_at'] is None
+    assert 'paused-plan-host' not in response.text
+
+    with Session() as session:
+        session.get(Setting,'server-ai:paused-plan-host').value={'paused':False}
+        session.commit()
+    status=admin.get('/api/investigation-status').json()
+    assert status['plan_next_eligible_at']==pytest.approx(now+120)
+    assert status['retry_at']==pytest.approx(now+120)
+
+    with Session() as session:
+        session.get(Setting,'config').value={'ai_enabled':False,'ai_model':'fixture-model'}
+        session.commit()
+    status=admin.get('/api/investigation-status').json()
+    assert status['reason']=='disabled'
+    assert status['plan_next_eligible_at'] is None and status['retry_at'] is None
+    assert status['plan_next_at']==pytest.approx(now+120)
+
+
 def test_indefinite_policy_wait_records_deferred_run(admin, monkeypatch):
     job_id,_=seed_security_plan()
     monkeypatch.setattr(ai,'request',lambda *a,**k: (_ for _ in ()).throw(

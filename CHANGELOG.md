@@ -1,3 +1,16 @@
+## 1.89.0 — 2026-11-25
+
+1. [PR #1133](https://github.com/StealthCat/MrPatchy/pull/1133): A pure Roadmap F contract resolves which incron table entries run which commands, as which user, on which inotify events, following incron 0.5.12 rules. Compatibility: new module, not yet wired into collection or the UI. Closes #1132.
+2. [PR #1218](https://github.com/StealthCat/MrPatchy/pull/1218): A pure auditd dispatcher-plugin contract resolves which `/etc/audit/plugins.d` programs auditd starts as root, with which arguments, and why other plugin files start nothing. It is validated against the audit-userspace 3.1.2 parser. Compatibility: new module, nothing calls it yet. Closes #1217.
+3. [PR #1274](https://github.com/StealthCat/MrPatchy/pull/1274): The startup catalog lists nine boot and event hook mechanisms that already have contracts (dhclient, needrestart, resolvconf, certbot, acpid, apcupsd, NUT upsmon, smartd and supervisord), and startup coverage reports each as an explicit uncollected gap. Compatibility: no change to running behavior. Closes #1273.
+4. [PR #1282](https://github.com/StealthCat/MrPatchy/pull/1282): The exhausted AI budget notification states when to recheck and why earlier spend can still count. Compatibility: the topic, destination, administrator visibility, ledger accounting and admission behavior are unchanged; an already-active notice may gain one updated revision. Fixes #1281.
+5. [PR #1303](https://github.com/StealthCat/MrPatchy/pull/1303): A pure resolver identifies the display, greeter and session scripts LightDM runs as root, following LightDM 1.30.0's configuration load order and seat-section merging, and fails closed on unobserved, invalid or over-limit input. Compatibility: new files only; it performs no I/O and authorizes nothing. Fixes #1301.
+6. [PR #1316](https://github.com/StealthCat/MrPatchy/pull/1316): AI triage fixture benchmark reports include `stages.executor_wait`, measuring the time from submitting an investigation to its executor thread starting it, separately from admission and rate pacing. Compatibility: additive, optional report field; fixture evidence only. Closes #1315.
+7. [PR #1349](https://github.com/StealthCat/MrPatchy/pull/1349): The lint dependency `ruff` is updated from 0.17.4 to 0.17.5 in `requirements-lint.txt`. Compatibility: static-check tooling only.
+8. [PR #1356](https://github.com/StealthCat/MrPatchy/pull/1356): Investigations show an advisory plan's next timed eligibility separately from retry times saved for paused servers, so a paused server's saved time no longer appears as the next eligibility. Compatibility: read-only status; existing API fields and recorded dates are kept, and older controllers' dates show as a recorded retry. Closes #1355.
+
+Integrated together through batch [PR #1504](https://github.com/StealthCat/MrPatchy/pull/1504). This source update does not publish a Docker image.
+
 ## 1.88.0 — 2026-11-24
 
 1. [PR #1116](https://github.com/StealthCat/MrPatchy/pull/1116): AI Activity now shows package scoring interrupted by worker loss as waiting to retry and reports its next eligibility. Compatibility: status display only. Fixes #1115.
