@@ -2411,6 +2411,15 @@ The regression covers overdue and future scores, paused and inactive servers,
 and disabled scoring without adding another aggregate query. Exact scoring
 identity and provider eligibility remain checked by the scheduler.
 
+### Consistent scoring queue status during key changes - Roadmap A checkpoint #1453
+
+The read-only scoring queue derives its scheduler state and its blocked update
+counts from the same saved key read. When an administrator adds or removes a
+key during a SQLite refresh, the current response keeps the original view and
+the next refresh observes the saved change. A configured model takes one key
+read during the summary. Runtime scoring continues to check the live settings
+separately before provider admission. Roadmap A remains incomplete.
+
 ### Update-scoring schedule-state reads
 
 The scheduler reads only identity, state and eligibility fields from retained
