@@ -1,3 +1,15 @@
+## 1.98.2 — 2026-11-25
+
+1. [PR #1515](https://github.com/StealthCat/MrPatchy/pull/1515): CI: when a newer head is pushed to a pull request, its superseded CodeQL runs are now cancelled, matching Validate Mr Patchy. Scheduled and main analyses are unchanged. Compatibility: CI only. Fixes #1514.
+2. [PR #1427](https://github.com/StealthCat/MrPatchy/pull/1427): A dispatch scan now reuses a server's queued AI plan wait across that server's waiting plan jobs, instead of re-reading pause policy for each one. Provider-time policy checks are unchanged. Compatibility: no migration, configuration, UI or deployment change. Fixes #1426.
+3. [PR #1484](https://github.com/StealthCat/MrPatchy/pull/1484): A new developer command (`tools/compare_ai_benchmark_series.py`) compares repeated paired AI triage benchmark reports. It checks that the workloads are equivalent and shows the measured spread in timings. Compatibility: developer tooling only. Fixes #1483.
+4. [PR #1398](https://github.com/StealthCat/MrPatchy/pull/1398): The AI triage benchmark comparison can now compare equivalent reports while holding concurrency fixed. Compatibility: developer tooling only. Fixes #1397.
+5. [PR #1446](https://github.com/StealthCat/MrPatchy/pull/1446): Update scoring reads exact scores and deferred history together for each package page, in one statement, with fewer database round trips. Results are unchanged. Compatibility: no schema or API change. Fixes #1445.
+6. [PR #1468](https://github.com/StealthCat/MrPatchy/pull/1468): After a successful response, an eligible shared AI provider backoff is cleared with one locked conditional write, using the same predicate as before. Compatibility: no schema or configuration change. Refs #1467.
+7. [PR #1474](https://github.com/StealthCat/MrPatchy/pull/1474): A capped AI provider receipt is settled with one locked ledger write. A non-finite estimate now keeps the full reservation instead of raising an error. Compatibility: no schema or configuration change. Refs #1473.
+
+Integrated together through batch [PR #1534](https://github.com/StealthCat/MrPatchy/pull/1534). This source update does not publish a Docker image.
+
 ## 1.98.1 — 2026-11-25
 
 1. [PR #1496](https://github.com/StealthCat/MrPatchy/pull/1496): Fix: exact known-good cache hits are no longer held behind a paid triage item whose own quote cannot fit the remaining (still positive) daily cap balance. Admission tries the normal election once. If the elected paid subject is unfundable and has no exact hit, it makes at most one bounded exact-hit probe. The paid item stays queued and unchanged, and no extra provider calls or spend are made. Compatibility: no schema, API, configuration or response-authorization change. Fixes #1490.
