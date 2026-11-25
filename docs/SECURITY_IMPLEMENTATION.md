@@ -6581,6 +6581,17 @@ action.
   AI classification and any response action. There is no schema, API, auth
   or response-authorization change.
 
+### Docker daemon.json program contract — worker checkpoint #1521 (roadmap F)
+
+- **Outcome:** `app/docker_daemon.py` is a pure, I/O-free contract. From captured `/etc/docker/daemon.json` text it reports which programs `dockerd` runs as root because of that file: each `runtimes` entry (its `path` and `runtimeArgs`, or its containerd `runtimeType` shim) and which one is the `default-runtime` used for every container that names none; the init binary (`init-path`, default `docker-init`) and whether `"init": true` starts it in every container; the userland proxy (`userland-proxy-path`, default `docker-proxy`) and whether it is enabled; and the `authorization-plugins` names. A planted default runtime or init path runs as root on every container start, so this is a startup/persistence point no earlier contract covered.
+- **Semantics, checked against a real dockerd 29.9.3** started with each case and read back through `docker info` and its generated runtime wrappers:
+  - a UTF-8 BOM and an empty file are accepted, and a repeated key keeps its last value; comments, trailing commas and non-JSON constants stop dockerd;
+  - a runtime with non-empty `runtimeArgs` runs through a generated wrapper, `#!/bin/sh` then `<path> <args joined by spaces> $@`, with nothing quoted, so `/bin/sh` re-parses the line; with no arguments the path is the runtime binary itself;
+  - dockerd refuses to start when a runtime is named `runc`, sets both or neither of `path` and `runtimeType`, combines `runtimeArgs` with `runtimeType`, or when `default-runtime` names an undefined runtime that is not a containerd shim name (`io.containerd.kata.v2` is accepted and runs `containerd-shim-kata-v2`). A refused file reports no programs, because none run.
+- **Fail closed:** blocking gaps cover wrong value types, unknown runtime keys (including case variants such as `Path`), a runtime named `io.containerd.runc.v2`, shell metacharacters, spaces or empty arguments in a wrapper line (the argv is then not guessed), and over-limit input. `complete` is false whenever one is present, and no result is a safety verdict or authorizes a response.
+- **Validation:** `tests/test_docker_daemon.py` (14 tests); the cases marked native were each run through dockerd 29.9.3. Mutating the shell-metacharacter check makes its test fail.
+- **Remaining (#1521):** native collection of `daemon.json` and of the dockerd flags in its service unit (a flag that repeats a file directive stops dockerd), rootless `~/.config/docker/daemon.json`, PATH resolution, startup-inventory wiring, provenance, UI and AI classification.
+
 ### Per-user shell startup files contract — worker checkpoint #1057
 
 Contract increment only; the startup-awareness requirement remains incomplete.
