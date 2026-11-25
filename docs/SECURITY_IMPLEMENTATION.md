@@ -27,6 +27,10 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+From 2026-11-25, new roadmap and delivery checkpoints are recorded one file per issue
+in [docs/checkpoints/](checkpoints/README.md) rather than appended here (issue #1523).
+The sections below remain the history up to that date.
+
 ### Retry eligibility after a saved AI configuration change — Roadmap A checkpoint #1124
 
 Fleet AI Activity and the per-server triage queue now show a timed provider
