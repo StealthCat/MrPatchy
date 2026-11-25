@@ -14,6 +14,7 @@ window.NotificationShell=(()=>{
  const liveLabels={connecting:'Connecting',live:'Live',reconnecting:'Reconnecting',unavailable:'Unavailable, polling only',polling:'Polling only'};
  let centerFocus=null;
  const centerContext={offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:'',lifecycle:''};
+ let centerDrawnRevision=null,pendingCenterRefresh=null;
  const node=id=>document.getElementById(id);
  const button=()=>node('notification-button'),panel=()=>node('notification-panel');
  const status=message=>{const target=node('notification-status');if(target.textContent!==message)target.textContent=message;};
@@ -252,7 +253,7 @@ window.NotificationShell=(()=>{
    // Bounded retry of a refused stream, only after an authoritative refresh succeeds.
    if(!stream&&liveState==='unavailable'&&Date.now()>=streamRetryAt)connect(run);
    if(!keepStatus)status(page.more?'Showing the 8 most recent notifications. More remain available through the API.':`${page.total||0} recent notification${page.total===1?'':'s'}.`);
-   if(location.hash==='#notifications')await refreshCenterList(renderRevision);
+   if(isCenterHash())await refreshCenterList(renderRevision);
   }catch(error){
    if(run!==generation||request!==requestRevision)return;
    setCount(null);syncDelayed=true;renderSync();status('Notification updates are temporarily delayed. '+error.message);
@@ -271,7 +272,7 @@ window.NotificationShell=(()=>{
    const count=await api('/notifications/unread-count');
    if(run!==generation||!started)return;
    setCount(count.unread,items);
-   if(location.hash==='#notifications')await refreshCenterList(renderRevision);
+   if(isCenterHash())await refreshCenterList(renderRevision);
   }catch(error){if(run===generation&&started){status(error.message);if(control.isConnected)control.disabled=false;}}
  }
  function close({focus=false}={}){open=false;panel().hidden=true;button().setAttribute('aria-expanded','false');if(focus)button().focus();}
@@ -280,7 +281,7 @@ window.NotificationShell=(()=>{
   open=true;panel().hidden=false;button().setAttribute('aria-expanded','true');refresh();
  }
  function reset(){
-  generation++;requestRevision++;centerRequestRevision++;started=false;clearTimeout(timer);timer=0;items=[];open=false;toastSeen=null;clearToasts();clearToastClaims();
+  generation++;requestRevision++;centerRequestRevision++;centerDrawnRevision=null;pendingCenterRefresh=null;started=false;clearTimeout(timer);timer=0;items=[];open=false;toastSeen=null;clearToasts();clearToastClaims();
   if(stream){stream.close();stream=null;}
   panel().hidden=true;button().setAttribute('aria-expanded','false');setCount(null,[]);
   liveState='';lastSync=0;syncDelayed=false;streamRetryAt=0;streamRetryDelay=0;renderSync();
@@ -292,7 +293,7 @@ window.NotificationShell=(()=>{
  document.addEventListener('keydown',event=>{if(open&&event.key==='Escape'){close({focus:true});event.preventDefault();}});
  document.addEventListener('visibilitychange',()=>{if(document.hidden)clearTimeout(timer);else if(started)refresh();});
  function query(){
-  const params=new URLSearchParams({limit:'25',offset:String(centerContext.offset)});
+  const params=new URLSearchParams({limit:String(CENTER_PAGE),offset:String(centerContext.offset)});
   if(centerContext.unreadOnly)params.set('unread_only','true');
   if(centerContext.includeDismissed)params.set('include_dismissed','true');
   for(const [key,value] of [['severity',centerContext.severity],['source',centerContext.source],['host_id',centerContext.hostId],['lifecycle',centerContext.lifecycle]])if(value)params.set(key,value);
@@ -328,7 +329,7 @@ window.NotificationShell=(()=>{
   list.replaceChildren();centerItems=page.items.slice();syncReadShown(node('notification-center-read-shown'),centerItems);
   if(page.items.length)for(const item of page.items)list.append(centerItem(item));else{const empty=element('div','card notification-empty');empty.append(element('strong','','No matching notifications.'),element('p','help','Adjust the filters or wait for a new event visible to your account.'));list.append(empty);}
   const range=node('notification-center-range'),previous=node('notification-center-prev'),next=node('notification-center-next');
-  if(range)range.textContent=page.total?`${page.offset+1}–${Math.min(page.offset+page.items.length,page.total)} of ${page.total}`:'0 notifications';
+  if(range)range.textContent=page.items.length?`${page.offset+1}–${Math.min(page.offset+page.items.length,page.total)} of ${page.total}`:`${page.total||0} notifications`;
   if(previous)previous.disabled=!page.offset;if(next)next.disabled=!page.more;
   if(focus){const card=[...list.querySelectorAll('[data-event-id]')].find(candidate=>candidate.dataset.eventId===focus.id);const controls=card?[...card.querySelectorAll('[data-notification-action]')]:[],counterpart={dismiss:'restore',restore:'dismiss'}[focus.action];const target=controls.find(candidate=>candidate.dataset.notificationAction===focus.action)||controls.find(candidate=>candidate.dataset.notificationAction===counterpart);if(target)target.focus();}
  }
@@ -336,23 +337,82 @@ window.NotificationShell=(()=>{
  const STATUS_FILTERS=[['active','Active'],['resolved','Resolved']];
  function lifecycleFilter(value){return STATUS_FILTERS.some(([key])=>key===value)?value:'';}
  function statusFilterField(){return `<label>Status<select name="lifecycle"><option value="">All statuses</option>${STATUS_FILTERS.map(([value,label])=>`<option value="${value}" ${centerContext.lifecycle===value?'selected':''}>${label}</option>`).join('')}</select></label>`;}
+ // The center's filters and page live in its hash, so a reload, a copied link
+ // and Back/Forward reopen the same view (issue #1168). Every value read from the
+ // hash is checked before use and the hash is then rewritten in canonical form.
+ const CENTER_PAGE=25,MAX_CENTER_PAGE=10000,SEVERITIES=['critical','high','medium','low','info'],SOURCE_PATTERN=/^[a-z0-9][a-z0-9_.-]{0,39}$/;
+ function isCenterHash(hash=location.hash){return hash==='#notifications'||hash.startsWith('#notifications?');}
+ function centerAddress(context=centerContext){
+  const params=new URLSearchParams();
+  for(const [key,value] of [['severity',context.severity],['source',context.source],['host',context.hostId],['status',context.lifecycle]])if(value)params.set(key,value);
+  if(context.unreadOnly)params.set('unread','1');
+  if(context.includeDismissed)params.set('dismissed','1');
+  if(context.offset>0)params.set('page',String(Math.floor(context.offset/CENTER_PAGE)+1));
+  const text=params.toString();
+  return '#notifications'+(text?'?'+text:'');
+ }
+ function readCenterHash(){
+  const params=new URLSearchParams(isCenterHash()?location.hash.slice('#notifications?'.length):'');
+  const severity=params.get('severity')||'',source=params.get('source')||'',host=params.get('host')||'',number=params.get('page')||'';
+  const visibleHosts=typeof hosts!=='undefined'&&Array.isArray(hosts)?hosts:[];
+  const pageNumber=/^[1-9]\d{0,4}$/.test(number)?Math.min(Number(number),MAX_CENTER_PAGE):1;
+  Object.assign(centerContext,{severity:SEVERITIES.includes(severity)?severity:'',source:SOURCE_PATTERN.test(source)?source:'',hostId:visibleHosts.some(item=>item.id===host)?host:'',lifecycle:lifecycleFilter(params.get('status')||''),unreadOnly:params.get('unread')==='1',includeDismissed:params.get('dismissed')==='1',offset:(pageNumber-1)*CENTER_PAGE});
+  canonicalCenterHash();
+ }
+ function canonicalCenterHash(){const address=centerAddress();if(isCenterHash()&&location.hash!==address)history.replaceState(null,'',address);}
+ // A changed view becomes a history entry and renders quietly through hashchange,
+ // keeping the current list until the new page arrives; an unchanged one (Apply
+ // with the same filters) simply queries again.
+ function navigateCenter(changes,revision){
+  const address=centerAddress({...centerContext,...changes});
+  if(location.hash===address){Object.assign(centerContext,changes);center(revision).catch(error=>toast(error.message));}
+  else{if(typeof quietRender!=='undefined')quietRender=true;location.hash=address;}
+ }
+ async function fetchCenterPage(revision,request){
+  const active=()=>request===centerRequestRevision&&currentView(revision,'notifications')&&location.hash===centerAddress();
+  if(!active())return null;
+  let page=await api('/notifications?'+query());
+  if(!active())return null;
+  // Apply the same fallback after a live update or account action empties the final page.
+  if(!page.items.length&&centerContext.offset>0&&Number.isInteger(page.total)&&page.total>=0){
+   centerContext.offset=page.total?Math.min(Math.floor((page.total-1)/CENTER_PAGE),MAX_CENTER_PAGE-1)*CENTER_PAGE:0;
+   canonicalCenterHash();
+   page=await api('/notifications?'+query());
+  }
+  return active()?page:null;
+ }
  async function refreshCenterList(revision=renderRevision){
-  const request=++centerRequestRevision,page=await api('/notifications?'+query());
-  if(request!==centerRequestRevision||!currentView(revision,'notifications'))return;
-  applyCenterPage(page);
+  if(!currentView(revision,'notifications'))return;
+  // Quiet navigation keeps the old list until the new view is drawn.
+  if(centerDrawnRevision!==revision){
+   pendingCenterRefresh=revision;
+   return;
+  }
+  const request=++centerRequestRevision,page=await fetchCenterPage(revision,request);
+  if(page)applyCenterPage(page);
  }
  async function center(revision=renderRevision){
-  const request=++centerRequestRevision,root=node('content'),page=await api('/notifications?'+query());
-  if(request!==centerRequestRevision||!currentView(revision,'notifications')||!root.isConnected)return;
+  if(!currentView(revision,'notifications'))return;
+  centerDrawnRevision=null;
+  readCenterHash();
+  const request=++centerRequestRevision,root=node('content'),page=await fetchCenterPage(revision,request);
+  if(!page||!root.isConnected)return;
   const hostOptions=hosts.map(host=>`<option value="${esc(host.id)}" ${centerContext.hostId===host.id?'selected':''}>${esc(host.name)}</option>`).join('');
   root.innerHTML=PatchyUI.heading('notifications','Your notification history.','Permission-filtered attention and recovery notes, kept separate from operational acknowledgement.')+`<section class="card notification-center-controls"><form id="notification-filters"><div class="form-grid"><label>Severity<select name="severity"><option value="">All severities</option>${['critical','high','medium','low','info'].map(value=>`<option value="${value}" ${centerContext.severity===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Source<input name="source" value="${esc(centerContext.source)}" maxlength="40" pattern="[a-z0-9][a-z0-9_.-]*" placeholder="All sources"></label><label>Server<select name="host_id"><option value="">All servers</option>${hostOptions}</select></label></div><div class="actions"><label class="check"><input name="unread_only" type="checkbox" ${centerContext.unreadOnly?'checked':''}>Unread only</label><label class="check"><input name="include_dismissed" type="checkbox" ${centerContext.includeDismissed?'checked':''}>Include dismissed</label><button type="submit">Apply filters</button><button type="button" class="quiet" id="notification-filters-clear">Clear</button><button type="button" class="quiet" id="notification-center-read-shown" disabled>Mark shown read</button></div></form><p class="help">Read, Mark shown read, Dismiss and Restore affect only your account. Include dismissed shows what you dismissed; Restore returns it to your default history without marking it unread. Mark shown read covers only this page; anything that changes after it loaded stays unread. They never acknowledge an alert, resolve an incident, approve AI work or run remediation.</p></section><section id="notification-center-list" aria-label="Notification history"></section><div class="actions notification-center-pages"><button id="notification-center-prev">Previous</button><span class="help" id="notification-center-range"></span><button id="notification-center-next">Next</button></div><p class="help notification-center-coverage">Authenticated server push refreshes this page from durable, permission-filtered history. A 30-second polling fallback remains active. New high and critical notifications also appear briefly as toasts; hiding a toast leaves the notification unread. Complete failover acceptance remains planned.</p>`;
   applyCenterPage(page,false);
   node('notification-filters').querySelector('.form-grid').insertAdjacentHTML('beforeend',statusFilterField());
-  node('notification-filters').onsubmit=event=>{event.preventDefault();const form=new FormData(event.currentTarget);Object.assign(centerContext,{offset:0,severity:String(form.get('severity')||''),source:String(form.get('source')||'').trim(),hostId:String(form.get('host_id')||''),lifecycle:lifecycleFilter(form.get('lifecycle')),unreadOnly:form.has('unread_only'),includeDismissed:form.has('include_dismissed')});center(revision).catch(error=>toast(error.message));};
+  node('notification-filters').onsubmit=event=>{event.preventDefault();const form=new FormData(event.currentTarget);navigateCenter({offset:0,severity:String(form.get('severity')||''),source:String(form.get('source')||'').trim(),hostId:String(form.get('host_id')||''),lifecycle:lifecycleFilter(form.get('lifecycle')),unreadOnly:form.has('unread_only'),includeDismissed:form.has('include_dismissed')},revision);};
   node('notification-center-read-shown').onclick=event=>readShown(centerItems,event.currentTarget);
-  node('notification-filters-clear').onclick=()=>{Object.assign(centerContext,{offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:'',lifecycle:''});center(revision).catch(error=>toast(error.message));};
-  node('notification-center-prev').onclick=()=>{centerContext.offset=Math.max(0,centerContext.offset-25);center(revision).catch(error=>toast(error.message));};
-  node('notification-center-next').onclick=()=>{centerContext.offset+=25;center(revision).catch(error=>toast(error.message));};
+  node('notification-filters-clear').onclick=()=>navigateCenter({offset:0,unreadOnly:false,includeDismissed:false,severity:'',source:'',hostId:'',lifecycle:''},revision);
+  node('notification-center-prev').onclick=()=>navigateCenter({offset:Math.max(0,centerContext.offset-CENTER_PAGE)},revision);
+  node('notification-center-next').onclick=()=>navigateCenter({offset:Math.min(centerContext.offset+CENTER_PAGE,(MAX_CENTER_PAGE-1)*CENTER_PAGE)},revision);
+  centerDrawnRevision=revision;
+  if(pendingCenterRefresh===revision){
+   pendingCenterRefresh=null;
+   refreshCenterList(revision).catch(error=>{
+    if(currentView(revision,'notifications'))status('Notification updates are temporarily delayed. '+error.message);
+   });
+  }
  }
  return {start,reset,refresh,center};
 })();

@@ -38,6 +38,24 @@ BLOCKED_SUFFIX=(' No automatic retry is scheduled until the saved AI model or AP
     'the exact package evidence remains queued.')
 
 
+# A refusal and token-budget exhaustion reached the provider (#1158/#1162), so neither
+# may read as a key problem or as "nothing was sent". Eligibility is unchanged: the
+# configuration signature still re-admits on a model or key change.
+MODEL_REFUSAL_EXPLANATION=('The AI model declined to score these package updates. The request was sent and may be '
+    'billed. Changing the API key does not help; a different model may score them.')
+TOKEN_BUDGET_EXPLANATION=('The AI model used its whole response token budget before finishing these update scores. '
+    'The request was sent and may be billed. Select a model that completes within Mr Patchy\'s scoring budget. '
+    'Changing the API key does not help.')
+
+
+def blocked_explanation(error):
+    """Explanation stored on every package of a blocked batch (#1162)."""
+    cause=getattr(error,'cause',None)
+    if cause==ai.MODEL_REFUSAL:return MODEL_REFUSAL_EXPLANATION+BLOCKED_SUFFIX
+    if cause==ai.TOKEN_BUDGET:return TOKEN_BUDGET_EXPLANATION+BLOCKED_SUFFIX
+    return ai_runs.safe_error(error)+BLOCKED_SUFFIX
+
+
 def blocked_by(error):
     """True for a non-transient, non-policy AI failure (#790 AC1).
 
@@ -196,6 +214,17 @@ def _batch_scores(s, ids):
     return {row.id:row for row in s.scalars(select(UpdateScore).where(UpdateScore.id.in_(ids)))}
 
 
+def needs_dispatch(session):
+    """Schedule enabled scoring or recovery of a previously started run."""
+    settings = config(session)
+    if settings['ai_enabled'] and settings['ai_updates_enabled']:
+        return True
+    run = ai_runs.AIRun
+    return session.scalar(select(run.id).where(
+        run.purpose == 'update_scoring', run.state == 'running',
+    ).limit(1)) is not None
+
+
 def run_one():
     if not _MEMO:
         # A warm memo still uses the locked pass so an exhausted walk can prune
@@ -302,7 +331,7 @@ def run_one():
                     row.state='deferred' if deferred else 'blocked' if blocked else 'error';row.next_at=next_at
                     row.configuration=signature if blocked else ''
                     row.explanation=('Queued until shared AI eligibility; no evidence was discarded.' if deferred else
-                        ai_runs.safe_error(error)+(BLOCKED_SUFFIX if blocked else ''))
+                        blocked_explanation(error) if blocked else ai_runs.safe_error(error))
                 s.commit()
             if deferred:ai_runs.defer(run_id,next_at)
     finally:lock.release()

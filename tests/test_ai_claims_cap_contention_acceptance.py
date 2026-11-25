@@ -19,7 +19,7 @@ from types import SimpleNamespace
 import pytest
 from sqlalchemy import select
 
-from app import ai, ai_budget, ai_claims, ai_pricing, ai_retry, ai_runs, worker
+from app import ai, ai_admission, ai_budget, ai_claims, ai_pricing, ai_retry, ai_runs, worker
 from app.db import Behavior, Host, Session, Setting
 from app.security import seal
 from tests.test_ai_claims import result
@@ -70,7 +70,7 @@ def evidence(name):
     return {'executable': '/srv/' + name, 'sha256': 'a' * 64, 'uid': '1000', 'identity_verified': True}
 
 
-def seed(backlog, calls, mode='daily_cap', *, utc_now=None):
+def seed(backlog, calls, mode='daily_cap', *, utc_now=None, rate_per_hour=1000):
     """backlog maps host id to its number of eligible subjects; the cap admits `calls`."""
     utc_now = datetime.now(timezone.utc) if utc_now is None else utc_now
     # Each test asserts behavior within one window. Keep its clock well away
@@ -79,7 +79,7 @@ def seed(backlog, calls, mode='daily_cap', *, utc_now=None):
     with Session() as s:
         s.merge(Setting(key='config', value={
             'ai_enabled': True, 'ai_model': MODEL, 'ai_hourly_limit': 1000,
-            'ai_control_mode': mode, 'ai_rate_per_hour': 1000,
+            'ai_control_mode': mode, 'ai_rate_per_hour': rate_per_hour,
             # Half a call of headroom over K calls: K fit, K + 1 does not.
             'ai_daily_cap_usd': float(CALL * calls + CALL / 2), 'ai_budget_timezone': budget_timezone}))
         s.merge(Setting(key='openai_key', value={'encrypted': seal('private-key')}))
@@ -178,17 +178,30 @@ def subjects_for(run_ids):
 @pytest.mark.parametrize('mode,calls', [('daily_cap', 1), ('daily_cap', 3), ('rate_and_daily', 1)])
 @pytest.mark.parametrize('preflight', ['enforced', 'bypassed'])
 def test_concurrent_threads_never_send_beyond_the_cap_or_duplicate_a_subject(admin, monkeypatch, mode, calls, preflight):
-    seed({'host-' + str(n): 2 for n in range(6)}, calls, mode)
+    delayed_contender = preflight == 'bypassed' and mode == 'rate_and_daily'
+    seed({'host-' + str(n): 2 for n in range(6)}, calls, mode,
+         rate_per_hour=1 if delayed_contender else 1000)
     if preflight == 'bypassed':
-        # The claim-time budget check is advisory. With it admitting everything, every
-        # claim reaches the authoritative reservation, which alone must hold the cap.
+        # Bypass the claim-time hints so every contender reaches authoritative
+        # reservation. The normal rate admission still runs before transmission.
         monkeypatch.setattr(ai_budget, 'waiting', lambda *args, **kwargs: 0)
+        monkeypatch.setattr(ai_admission, 'waiting', lambda *args, **kwargs: 0)
     sent, guard, overlap = [], threading.Lock(), threading.Event()
-    monkeypatch.setattr(ai.transport, 'post', overlapping_post(sent, guard, overlap))
+    first_transmission = threading.Event()
+    respond = overlapping_post(sent, guard, overlap)
+
+    def post(*args, **kwargs):
+        first_transmission.set()
+        return respond(*args, **kwargs)
+
+    monkeypatch.setattr(ai.transport, 'post', post)
     start = threading.Barrier(10)
 
-    def run(_):
+    def run(index):
         start.wait(timeout=10)
+        if delayed_contender and index == 9:
+            # One worker arrives after the shared rate slot has been used.
+            assert first_transmission.wait(timeout=15), 'No worker received the first rate slot'
         worker.investigate_one()
 
     with ThreadPoolExecutor(max_workers=10) as pool:

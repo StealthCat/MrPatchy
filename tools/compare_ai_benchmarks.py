@@ -28,6 +28,7 @@ STAGES = (
 PACED_MODES = ('rate', 'rate_and_daily')
 CONTROL_MODES = ('legacy', 'unthrottled', 'daily_cap', *PACED_MODES)
 LEGACY_CONTROL_MODE = 'legacy'
+BUDGET_TIMING_STAGES = ('budget_reservation', 'budget_reconciliation')
 
 
 class ComparisonError(ValueError):
@@ -58,19 +59,16 @@ def _bounded(value, field, minimum, maximum):
     return value
 
 
-def _summary(report, stage, queue_age):
-    value = report['stages'].get(stage)
+def _summary(value, field, max_ms=MAX_STAGE_MS):
     if not isinstance(value, dict):
-        raise ComparisonError(f'stages.{stage} must be an object')
-    count = _integer(value.get('count'), f'stages.{stage}.count')
+        raise ComparisonError(f'{field} must be an object')
+    count = _integer(value.get('count'), f'{field}.count')
     if count == 0 and all(key in value and value[key] is None for key in ('p50_ms', 'p95_ms')):
         return {'count': 0, 'p50_ms': None, 'p95_ms': None}
-    # Observed queue age includes the seed and time spent in the fixture.
-    max_ms = MAX_STAGE_MS + queue_age * 1000 if stage == 'queue_age' else MAX_STAGE_MS
-    p50 = _bounded(value.get('p50_ms'), f'stages.{stage}.p50_ms', 0, max_ms)
-    p95 = _bounded(value.get('p95_ms'), f'stages.{stage}.p95_ms', 0, max_ms)
+    p50 = _bounded(value.get('p50_ms'), f'{field}.p50_ms', 0, max_ms)
+    p95 = _bounded(value.get('p95_ms'), f'{field}.p95_ms', 0, max_ms)
     if p95 < p50:
-        raise ComparisonError(f'stages.{stage}.p95_ms must not be less than p50_ms')
+        raise ComparisonError(f'{field}.p95_ms must not be less than p50_ms')
     return {'count': count, 'p50_ms': p50, 'p95_ms': p95}
 
 
@@ -154,10 +152,17 @@ def _validate(report, label):
     runs = _integer(report.get('runs'), f'{label}.runs', positive=True)
     if not 2 <= runs <= 20:
         raise ComparisonError(f'{label}.runs must be between 2 and 20')
+    peak_provider_requests = None
+    if 'peak_provider_requests' in report:
+        field = f'{label}.peak_provider_requests'
+        peak_provider_requests = _integer(report['peak_provider_requests'], field)
+        max_peak = min(concurrency, runs)
+        if not 1 <= peak_provider_requests <= max_peak:
+            raise ComparisonError(f'{field} must be between 1 and {max_peak}')
     # Historical reports always gave each subject its own server.
     fixture_hosts = _integer(report.get('fixture_hosts', runs), f'{label}.fixture_hosts')
-    if fixture_hosts not in (1, runs):
-        raise ComparisonError(f'{label}.fixture_hosts must be 1 or equal to runs')
+    if not 1 <= fixture_hosts <= runs:
+        raise ComparisonError(f'{label}.fixture_hosts must be between 1 and runs')
     single_server_slots = report.get('single_server_slots')
     if fixture_hosts == 1:
         single_server_slots = _integer(single_server_slots, f'{label}.single_server_slots')
@@ -167,6 +172,15 @@ def _validate(report, label):
             raise ComparisonError(f'{label}.concurrency exceeds single_server_slots')
     elif single_server_slots is not None:
         raise ComparisonError(f'{label}.single_server_slots requires one fixture server')
+    shared_server_slots = report.get('shared_server_slots')
+    if 1 < fixture_hosts < runs:
+        shared_server_slots = _integer(shared_server_slots, f'{label}.shared_server_slots')
+        if not 1 <= shared_server_slots <= MAX_SINGLE_SERVER_SLOTS:
+            raise ComparisonError(f'{label}.shared_server_slots must be between 1 and {MAX_SINGLE_SERVER_SLOTS}')
+        if concurrency > shared_server_slots:
+            raise ComparisonError(f'{label}.concurrency exceeds shared_server_slots')
+    elif shared_server_slots is not None:
+        raise ComparisonError(f'{label}.shared_server_slots requires a shared layout across several servers')
     provider_delay = _bounded(report.get('provider_delay_ms'), f'{label}.provider_delay_ms', 1, 1000)
     provider_calls = _integer(report.get('provider_calls'), f'{label}.provider_calls', positive=True)
     input_tokens = _integer(report.get('input_tokens'), f'{label}.input_tokens', positive=True)
@@ -184,7 +198,12 @@ def _validate(report, label):
     if not isinstance(report.get('stages'), dict):
         raise ComparisonError(f'{label}.stages must be an object')
     queue_age, queue_age_source = _queue_age(report, label)
-    stages = {stage: _summary(report, stage, queue_age) for stage in STAGES}
+    # Observed queue age includes the seed and time spent in the fixture.
+    stages = {
+        stage: _summary(report['stages'].get(stage), f'stages.{stage}',
+                        MAX_STAGE_MS + (queue_age * 1000 if stage == 'queue_age' else 0))
+        for stage in STAGES
+    }
     if stages['run']['count'] != runs:
         raise ComparisonError(f'{label} run sample count does not match runs')
     if stages['one_stage']['count'] + stages['two_stage']['count'] != runs:
@@ -288,6 +307,7 @@ def _validate(report, label):
         'database': database, 'database_version': database_version,
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'fixture_hosts': fixture_hosts, 'single_server_slots': single_server_slots,
+        'shared_server_slots': shared_server_slots,
         'provider_delay_ms': provider_delay, 'ssh_delay_ms': ssh_delay,
         'ssh_delay_source': ssh_delay_source,
         'persistence_delay_ms': persistence_delay,
@@ -295,6 +315,7 @@ def _validate(report, label):
         'queue_age_seconds': queue_age, 'queue_age_source': queue_age_source,
         'retained_history_rows': retained_history_rows,
         'provider_calls': provider_calls, 'input_tokens': input_tokens,
+        'peak_provider_requests': peak_provider_requests,
         'output_tokens': output_tokens, 'errors': errors,
         'elapsed_seconds': elapsed, 'runs_per_second': throughput,
         'cost_status': cost_status, 'workload_fingerprint': workload_fingerprint,
@@ -318,6 +339,30 @@ def _delta(baseline, candidate):
     }
 
 
+def _budget_timings(report, validated, label):
+    """Validate the optional timing evidence emitted by the capped fixture."""
+    stages = report['stages']
+    if not any(stage in stages for stage in BUDGET_TIMING_STAGES):
+        return None
+    if validated['fixture_budget'] is None:
+        raise ComparisonError(f'{label} budget timings apply only to capped modes')
+    maximum = validated['elapsed_seconds'] * 1000 + 1  # allow report rounding
+    expected_count = validated['fixture_budget']['settled_calls']
+    timings = {}
+    for stage in BUDGET_TIMING_STAGES:
+        field = f'{label}.stages.{stage}'
+        value = stages.get(stage)
+        if not isinstance(value, dict):
+            raise ComparisonError(f'{field} must be an object when budget timings are present')
+        count = _integer(value.get('count'), f'{field}.count')
+        if count != expected_count:
+            raise ComparisonError(f'{field}.count must equal settled provider calls')
+        p50 = _bounded(value.get('p50_ms'), f'{field}.p50_ms', 0, maximum)
+        p95 = _bounded(value.get('p95_ms'), f'{field}.p95_ms', p50, maximum)
+        timings[stage] = {'count': count, 'p50_ms': p50, 'p95_ms': p95}
+    return timings
+
+
 def compare(baseline, candidate, baseline_name='baseline', candidate_name='candidate'):
     base = _validate(baseline, 'baseline')
     current = _validate(candidate, 'candidate')
@@ -329,7 +374,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         if base['fixture_rate']['starts_per_hour'] != current['fixture_rate']['starts_per_hour']:
             raise ComparisonError('capability mismatch: fixture_rate.starts_per_hour differs')
     controls = (
-        'database', 'runs', 'fixture_hosts', 'single_server_slots',
+        'database', 'runs', 'fixture_hosts', 'single_server_slots', 'shared_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
         'queue_age_seconds', 'retained_history_rows',
         'provider_calls', 'input_tokens', 'output_tokens',
@@ -342,14 +387,29 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     for stage in STAGES:
         if base['stages'][stage]['count'] != current['stages'][stage]['count']:
             raise ComparisonError(f'capability mismatch: stages.{stage}.count differs')
+    baseline_budget = _budget_timings(baseline, base, 'baseline')
+    candidate_budget = _budget_timings(candidate, current, 'candidate')
+    budget_deltas = None
+    if baseline_budget is not None and candidate_budget is not None:
+        budget_deltas = {
+            stage: {percentile: _delta(baseline_budget[stage][percentile], candidate_budget[stage][percentile])
+                    for percentile in ('p50_ms', 'p95_ms')}
+            for stage in BUDGET_TIMING_STAGES
+        }
     return {
         'schema_version': SCHEMA_VERSION,
+        **({'budget_timings': {
+            'baseline': baseline_budget, 'candidate': candidate_budget, 'deltas': budget_deltas,
+        }}
+           if baseline_budget is not None or candidate_budget is not None else {}),
         'fixture_only': True,
         'capability_equivalent': True,
         'baseline': {
             'name': baseline_name, 'execution': base['execution'],
             'concurrency': base['concurrency'], 'runs': base['runs'],
+            'peak_provider_requests': base['peak_provider_requests'],
             'fixture_hosts': base['fixture_hosts'], 'single_server_slots': base['single_server_slots'],
+            **({'shared_server_slots': base['shared_server_slots']} if base['shared_server_slots'] is not None else {}),
             'provider_delay_ms': base['provider_delay_ms'],
             'ssh_delay_ms': base['ssh_delay_ms'],
             'ssh_delay_source': base['ssh_delay_source'],
@@ -367,7 +427,9 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'candidate': {
             'name': candidate_name, 'execution': current['execution'],
             'concurrency': current['concurrency'], 'runs': current['runs'],
+            'peak_provider_requests': current['peak_provider_requests'],
             'fixture_hosts': current['fixture_hosts'], 'single_server_slots': current['single_server_slots'],
+            **({'shared_server_slots': current['shared_server_slots']} if current['shared_server_slots'] is not None else {}),
             'provider_delay_ms': current['provider_delay_ms'],
             'ssh_delay_ms': current['ssh_delay_ms'],
             'ssh_delay_source': current['ssh_delay_source'],
@@ -403,12 +465,24 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         'interpretation': {
             'latency': 'Negative elapsed/stage deltas indicate lower fixture latency.',
             'throughput': 'Positive throughput deltas indicate higher fixture throughput.',
+            'provider_overlap': 'Recorded peak simultaneous fixture provider requests. '
+                                'One means no overlap was observed; null means the input omitted the measurement.',
             'scope': 'Disposable loopback fixture only; this comparison does not establish production performance.',
             'database': 'Both reports measured the same database backend; server versions are informational and may differ.',
             'cost': 'Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.',
             'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
     }
+
+
+def _provider_transport(report, label, provider_calls):
+    stages = report.get('persisted_stages')
+    if not isinstance(stages, dict):
+        raise ComparisonError(f'{label}.persisted_stages must be an object')
+    stage = _summary(stages.get('provider'), f'{label}.persisted_stages.provider')
+    if stage['count'] != provider_calls:
+        raise ComparisonError(f'{label}.persisted_stages.provider sample count does not match provider calls')
+    return stage
 
 
 def _load(path):
@@ -429,9 +503,22 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('baseline', type=Path)
     parser.add_argument('candidate', type=Path)
+    parser.add_argument('--provider-transport', action='store_true',
+                        help='compare persisted provider transport timings, excluding receipt and usage persistence')
     args = parser.parse_args(argv)
     try:
-        result = compare(_load(args.baseline), _load(args.candidate), args.baseline.name, args.candidate.name)
+        baseline, candidate = _load(args.baseline), _load(args.candidate)
+        result = compare(baseline, candidate, args.baseline.name, args.candidate.name)
+        if args.provider_transport:
+            calls = result['capability']['provider_calls']
+            base_transport = _provider_transport(baseline, 'baseline', calls)
+            current_transport = _provider_transport(candidate, 'candidate', calls)
+            result['provider_transport'] = {
+                'samples_per_report': calls,
+                'p50_ms': _delta(base_transport['p50_ms'], current_transport['p50_ms']),
+                'p95_ms': _delta(base_transport['p95_ms'], current_transport['p95_ms']),
+                'scope': 'Persisted transport timing for the loopback provider, excluding receipt and usage persistence.',
+            }
     except ComparisonError as error:
         print(f'comparison refused: {error}', file=sys.stderr)
         return 2

@@ -4,11 +4,11 @@ import time
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, event, select
 from test_operations import login_as
 
-from app import ai, scoring_queue_status, update_scores
-from app.db import Host, Package, Session, Setting, config
+from app import ai, ai_runs, scoring_queue_status, update_scores
+from app.db import Host, Package, Session, Setting, config, engine
 from app.security import seal
 
 STATUS = '/api/update-scores/status'
@@ -83,6 +83,39 @@ def test_retry_wait_reports_the_hourly_retry_boundary(admin):
             row.next_at = now + 7200
         s.commit()
     assert summary(now)['next_eligible_at'] == pytest.approx(now - 600 + 3600)
+
+
+def test_interrupted_scoring_attempt_enters_retry_wait_without_mutating_scores(admin):
+    now = seed()
+    attempted = now - 30
+    with Session() as s:
+        for row in s.scalars(select(update_scores.UpdateScore).where(
+                update_scores.UpdateScore.state.in_(('error', 'deferred')))):
+            row.state = 'complete'
+        interrupted = s.scalar(select(update_scores.UpdateScore).where(update_scores.UpdateScore.host_id == 'running'))
+        interrupted.run_id = 'interrupted'
+        s.add(ai_runs.AIRun(id='interrupted', purpose='update_scoring', state='interrupted',
+                           started=attempted + 1, finished=attempted + 2))
+        s.add(ai_runs.AIRun(id='live', purpose='update_scoring', started=attempted + 1))
+        for host, run_id, started in (('ready', 'live', attempted), ('fresh', 'interrupted', attempted + 3),
+                                      ('paused', '', attempted), ('expired', '', attempted)):
+            package = s.get(Package, host + ':secret-package')
+            s.merge(update_scores.UpdateScore(
+                id=update_scores.identity(s.get(Host, host), package), host_id=host, name=package.name,
+                installed='1', candidate='2', state='running', attempted=started, run_id=run_id))
+        interrupted_id = interrupted.id
+        s.commit()
+
+    result = summary(now)
+    assert result['counts']['retry_wait'] == 1
+    assert result['counts']['running'] == 3
+    assert result['next_eligible_at'] == pytest.approx(attempted + 3600)
+    expired = summary(attempted + 3600)
+    assert expired['counts']['retry_wait'] == 0
+    assert expired['counts']['eligible'] == result['counts']['eligible'] + 3
+    with Session() as s:
+        row = s.get(update_scores.UpdateScore, interrupted_id)
+        assert (row.state, row.run_id, row.attempted) == ('running', 'interrupted', attempted)
 
 
 def test_eligible_updates_are_exactly_the_ones_the_scheduler_sends(admin, monkeypatch):
@@ -174,6 +207,55 @@ def test_admin_endpoint_reports_counts_without_private_data(admin):
     assert body['counts']['eligible'] == 4
     # The exact-identity pass runs only on this endpoint, not on every Settings load.
     assert 'ai_scoring_queue' not in admin.get('/api/settings').json()
+
+
+@pytest.mark.parametrize('key_present', [True, False])
+def test_queue_state_and_blocked_counts_use_one_saved_key(admin, key_present):
+    seed()
+    with Session() as session:
+        saved_key = session.get(Setting, 'openai_key').value
+        if not key_present:
+            session.execute(delete(Setting).where(Setting.key == 'openai_key'))
+            session.commit()
+
+    reads = []
+    sqlite = engine.dialect.name == 'sqlite'
+
+    def observe(_connection, _cursor, statement, _parameters, context, _many):
+        if not statement.lstrip().startswith('SELECT') or 'FROM settings' not in statement:
+            return
+        if not any('openai_key' in row.values() for row in context.compiled_parameters):
+            return
+        reads.append(statement)
+        if sqlite and len(reads) == 1:
+            # Change the stored key after the first read. This response must
+            # use the same key observation for both the counts and the badge.
+            with Session() as writer:
+                if key_present:
+                    writer.execute(delete(Setting).where(Setting.key == 'openai_key'))
+                else:
+                    writer.add(Setting(key='openai_key', value=saved_key))
+                writer.commit()
+
+    event.listen(engine, 'after_cursor_execute', observe)
+    try:
+        reply = admin.get(STATUS)
+    finally:
+        event.remove(engine, 'after_cursor_execute', observe)
+    assert reply.status_code == 200
+    result = reply.json()
+    assert (result['scheduler'], result['counts']['blocked']) == (
+        ('enabled', 1) if key_present else ('not_configured', 0)
+    )
+    assert len(reads) == 1
+
+    if sqlite:
+        refreshed = admin.get(STATUS)
+        assert refreshed.status_code == 200
+        result = refreshed.json()
+        assert (result['scheduler'], result['counts']['blocked']) == (
+            ('not_configured', 0) if key_present else ('enabled', 1)
+        )
 
 
 @pytest.mark.parametrize('changes, state', [({'ai_enabled': False}, 'ai_disabled'),
