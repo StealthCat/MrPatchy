@@ -159,6 +159,41 @@ def test_if_errors_block():
     assert 'else_without_if' in codes(run('else\n'))
 
 
+def test_if_integers_outside_32_bit_long_block_instead_of_guessing():
+    # Review on 83bd65a: strtol saturates without ERANGE handling, so on a 64-bit long both sides
+    # equal LONG_MAX and squid takes the branch. The width is unobserved, so this must be a gap.
+    saturated = run('if 9223372036854775808 = 9223372036854775809\nurl_rewrite_program /bin/r\nendif\n')
+    assert 'if_integer_out_of_range' in codes(saturated) and saturated['complete'] is False
+    assert 'if_integer_out_of_range' in codes(run('if 3000000000 = 3000000001\nendif\n'))
+    assert 'if_integer_out_of_range' in codes(run('if -0x80000001 = 1\nendif\n'))
+    # A 4,500-digit literal is bounded before int() and becomes the same gap, not an exception.
+    huge = run('if ' + '9' * 4500 + ' = 1\nurl_rewrite_program /bin/r\nendif\n')
+    assert 'if_integer_out_of_range' in codes(huge) and huge['complete'] is False
+    # The 32-bit edges and leading zeros stay exact.
+    edges = run('if 2147483647 = 0x7fffffff\nurl_rewrite_program /bin/a\nendif\n'
+                'if -2147483648 = -020000000000\nstore_id_program /bin/b\nendif\n'
+                'if 0x' + '0' * 200 + '1 = 1\nauth_param basic program /bin/c\nendif\n')
+    assert not codes(edges) and edges['complete'] is True
+    assert [h[2] for h in helpers(edges)] == ['/bin/a', '/bin/b', '/bin/c']
+    # A non-numeric side is still invalid, even next to an out-of-range one.
+    assert codes(run('if 99999999999 = x\nendif\n')) == {'if_expression_invalid'}
+
+
+def test_physical_line_limit_is_measured_in_bytes():
+    # Review on 83bd65a: 4,231 characters but 8,431 UTF-8 bytes, so fgets(BUFSIZ) splits it.
+    line = 'url_rewrite_program /bin/true ' + '\u00e9' * 4200
+    assert len(line) < sh.BUFSIZ - 1 < len(line.encode('utf-8'))
+    split = run(line + '\n')
+    assert 'line_too_long' in codes(split) and split['complete'] is False
+    fits = run('url_rewrite_program /bin/true ' + '\u00e9' * 4000 + '\n')
+    assert fits['complete'] is True and len(fits['helpers']) == 1
+    # Undecodable bytes captured with surrogateescape count as one byte each.
+    escaped = run('url_rewrite_program /bin/true ' + '\udce9' * 8200 + '\n')
+    assert 'line_too_long' in codes(escaped)
+    unknown = run('url_rewrite_program /bin/true \ud800\n')
+    assert 'line_bytes_unknown' in codes(unknown) and unknown['complete'] is False
+
+
 def test_process_macros_need_context():
     text = 'if ${process_number} = 1\nurl_rewrite_program /bin/r ${service_name}\nendif\n'
     blocked = run(text)

@@ -39,7 +39,9 @@ It performs no I/O and never authorizes a response action. Constructs it does
 not model (runtime macros without a supplied process context, ``parameters()``
 files, malformed quoting, strict-mode token errors, unknown auth schemes,
 unobserved or unmatched includes, unbalanced ``if`` blocks, NUL bytes, physical
-lines that fgets would split, helper directives outside this slice) and
+lines that fgets would split (measured in UTF-8 bytes; lone surrogates are
+re-encoded with ``surrogateescape``), ``if`` integers outside the 32-bit C ``long``
+range, helper directives outside this slice) and
 over-limit input are explicit blocking gaps. A result with any of them is never
 reported complete.
 """
@@ -57,6 +59,9 @@ MAX_WORDS = 4096
 BUFSIZ = 8192  # fgets(config_input_line, BUFSIZ, fp)
 CONFIG_LINE_LIMIT = 2048  # UnQuote's LOCAL_ARRAY
 HELPER_MAX_ARGS = 64
+LONG32_MIN, LONG32_MAX = -(2 ** 31), 2 ** 31 - 1  # smallest C long width squid may be built with
+MAX_INT_DIGITS = 32  # more significant digits than any long in base 8, 10 or 16
+OUT_OF_RANGE = 'out_of_range'
 W_SPACE = ' \t\n\r'
 C_SPACE = ' \t\n\v\f\r'  # xisspace
 AUTH_SCHEMES = ('basic', 'digest', 'negotiate', 'ntlm')
@@ -72,7 +77,8 @@ STRICT_CHARS = frozenset('.,()-=_/:+')
 BLOCKING = frozenset({
     'input_malformed', 'text_too_large', 'nul_byte', 'line_too_long', 'too_many_files', 'too_many_words',
     'include_not_observed', 'include_no_match', 'include_too_deep', 'include_quoting', 'runtime_macro',
-    'if_expression_invalid', 'else_without_if', 'endif_without_if', 'unterminated_if', 'quoted_token_malformed',
+    'if_expression_invalid', 'if_integer_out_of_range', 'line_bytes_unknown', 'else_without_if',
+    'endif_without_if', 'unterminated_if', 'quoted_token_malformed',
     'unknown_cfg_function', 'parameters_function', 'strict_mode_token', 'directive_malformed',
     'unknown_auth_scheme', 'empty_program', 'external_acl_malformed', 'unmodelled_helper_directive',
     'gaps_truncated',
@@ -107,8 +113,15 @@ def _gap(gaps: list[dict[str, Any]], code: str, where: dict[str, Any] | None = N
     gaps.append(gap)
 
 
-def _strtol_full(text: str) -> int | None:
-    """``StrToInt``: strtol(str, &end, 0) consuming the whole string."""
+def _strtol_full(text: str) -> int | str | None:
+    """``StrToInt``: strtol(str, &end, 0) consuming the whole string.
+
+    Returns the value, ``None`` when strtol would not consume the whole string, or
+    ``OUT_OF_RANGE`` when the value lies outside the 32-bit ``long`` range. strtol
+    saturates there without an error, so squid's comparison depends on the
+    unobserved width of C ``long`` (32 or 64 bits). The digit count is bounded
+    before conversion, so no huge literal reaches ``int()``.
+    """
     s = text.lstrip(C_SPACE)
     sign = 1
     if s[:1] in ('+', '-'):
@@ -123,7 +136,13 @@ def _strtol_full(text: str) -> int | None:
     allowed = {8: '01234567', 10: '0123456789', 16: '0123456789abcdefABCDEF'}[base]
     if not digits or any(c not in allowed for c in digits):
         return None
-    return sign * int(digits, base)
+    significant = digits.lstrip('0') or '0'
+    if len(significant) > MAX_INT_DIGITS:
+        return OUT_OF_RANGE
+    value = sign * int(significant, base)
+    if not LONG32_MIN <= value <= LONG32_MAX:
+        return OUT_OF_RANGE
+    return value
 
 
 class _Tokens:
@@ -271,7 +290,13 @@ class _Parser:
         for number, raw in enumerate(physical, start=1):
             if self.stopped:
                 return
-            if len(raw) + 1 >= BUFSIZ:
+            try:
+                size = len(raw.encode('utf-8', 'surrogateescape'))
+            except UnicodeEncodeError:
+                _gap(self.gaps, 'line_bytes_unknown', {'file': path, 'line': number},
+                     'The line holds characters with no byte encoding, so its fgets length is unknown.')
+                continue
+            if size + 1 >= BUFSIZ:
                 _gap(self.gaps, 'line_too_long', {'file': path, 'line': number},
                      'fgets would split this line into several configuration lines.')
                 continue
@@ -340,6 +365,11 @@ class _Parser:
             left, right = expr.split('=', 1)
             a = _strtol_full(left.rstrip(C_SPACE))
             b = _strtol_full(right.lstrip(C_SPACE))
+            if OUT_OF_RANGE in (a, b) and None not in (a, b):
+                _gap(self.gaps, 'if_integer_out_of_range', loc,
+                     f'{expr!r}: strtol saturates out-of-range values at the C long limit, whose width (32 or 64 '
+                     'bits) is not observed.')
+                return False
             if a is not None and b is not None:
                 return a == b
         _gap(self.gaps, 'if_expression_invalid', loc, f'squid cannot evaluate {expr!r} and refuses to start.')
