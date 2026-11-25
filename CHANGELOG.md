@@ -1,3 +1,9 @@
+## 1.98.1 — 2026-11-25
+
+1. [PR #1496](https://github.com/StealthCat/MrPatchy/pull/1496): Fix: exact known-good cache hits are no longer held behind a paid triage item whose own quote cannot fit the remaining (still positive) daily cap balance. Admission tries the normal election once. If the elected paid subject is unfundable and has no exact hit, it makes at most one bounded exact-hit probe. The paid item stays queued and unchanged, and no extra provider calls or spend are made. Compatibility: no schema, API, configuration or response-authorization change. Fixes #1490.
+
+This source update does not publish a Docker image.
+
 ## 1.98.0 — 2026-11-25
 
 1. [PR #1466](https://github.com/StealthCat/MrPatchy/pull/1466): Fix: verified provider spend is now settled independently of the diagnostic usage receipt. If saving that receipt fails, the priced reply no longer holds its full reservation against the daily cap until the reset. Uncertain usage is still counted conservatively, and errors still propagate. Compatibility: no schema, API or response-authorization change. Fixes #1465.
