@@ -80,15 +80,33 @@ def test_backoff_persists_and_no_header_uses_bounded_exponential_jitter(admin, m
 
 
 def test_success_clears_shared_backoff_and_status(admin, monkeypatch):
-    configure();ai_provider_backoff.failed(ai.AIError('transient',transient=True,retry_after=5))
-    with Session() as session:
-        row=session.get(ai_provider_backoff.ProviderBackoff,'global');row.blocked_until=0;session.commit()
+    configure()
+    ai_provider_backoff.failed(ai.AIError('transient', transient=True, retry_after=5), now=100)
+    statements = []
+    original_lock = ai_provider_backoff.Lock
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if 'ai_provider_backoff' in statement.lower():
+            statements.append(statement.split()[0].upper())
+
+    @contextmanager
+    def trace_lock(name):
+        with original_lock(name):
+            event.listen(engine, 'before_cursor_execute', capture)
+            try:
+                yield
+            finally:
+                event.remove(engine, 'before_cursor_execute', capture)
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', trace_lock)
     monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: success())
     assert ai.request(payload(), 'fixture-key')=={}
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff,'global')
-        assert row.failures==0 and row.blocked_until==0
+        assert (row.failures, row.blocked_until, row.reason) == (0, 0, '')
+        assert row.updated > 105
         assert ai_provider_backoff.status(session)['blocked'] is False
+    assert statements == ['UPDATE']
 
 
 def test_overlapping_failures_preserve_the_reason_for_the_active_deadline(admin, monkeypatch):
@@ -221,6 +239,26 @@ def test_eligible_reset_rechecks_after_concurrent_failure(admin, monkeypatch):
     with Session() as session:
         row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
         assert (row.failures, row.blocked_until, row.updated) == (2, 222, 102)
+
+
+def test_eligible_reset_preserves_another_workers_completed_reset(admin, monkeypatch):
+    configure()
+    ai_provider_backoff.failed(ai.AIError('transient', transient=True, retry_after=30), now=100)
+    original_lock = ai_provider_backoff.Lock
+
+    @contextmanager
+    def concurrent_success(name):
+        with monkeypatch.context() as inner:
+            inner.setattr(ai_provider_backoff, 'Lock', original_lock)
+            ai_provider_backoff.succeeded(request_started=101, now=102)
+        with original_lock(name):
+            yield
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', concurrent_success)
+    ai_provider_backoff.succeeded(request_started=103, now=104)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.failures, row.blocked_until, row.reason, row.updated) == (0, 0, '', 102)
 
 
 def test_nontransient_provider_error_does_not_create_global_backoff(admin, monkeypatch):

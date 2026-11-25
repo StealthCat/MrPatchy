@@ -96,22 +96,23 @@ def failed(error,now=None):
 def succeeded(request_started=None,now=None):
     """Clear escalation unless a parallel request recorded a newer failure."""
     now=time.time() if now is None else now
-    clearable = select(ProviderBackoff).where(
+    clearable = (
         ProviderBackoff.id == 'global',
         or_(ProviderBackoff.failures != 0, ProviderBackoff.blocked_until != 0, ProviderBackoff.reason != ''),
     )
     if request_started is not None:
-        clearable = clearable.where(ProviderBackoff.updated <= request_started)
+        clearable += (ProviderBackoff.updated <= request_started,)
     # Healthy responses need one bounded read. Close the read transaction before
     # taking the distributed lock so the reset sees any newly committed failure.
     with Session() as session:
-        if session.scalar(clearable.with_only_columns(ProviderBackoff.id)) is None:
+        if session.scalar(select(ProviderBackoff.id).where(*clearable)) is None:
             return
     with Lock('ai-provider-backoff'):
         with Session() as session:
-            row=session.scalar(clearable)
-            if row:
-                row.blocked_until=0;row.failures=0;row.updated=now;row.reason=''
+            changed = session.execute(ProviderBackoff.__table__.update().where(*clearable).values(
+                blocked_until=0, failures=0, updated=now, reason='',
+            ))
+            if changed.rowcount:
                 session.commit()
 
 
