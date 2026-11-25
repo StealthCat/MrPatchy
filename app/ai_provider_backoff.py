@@ -44,23 +44,29 @@ class ProviderBackoff(Base):
     reason: Mapped[str]=mapped_column(Text,default='')
 
 
+def _active_deadline(session, now):
+    return session.scalar(select(ProviderBackoff.blocked_until).where(
+        ProviderBackoff.id == 'global', ProviderBackoff.blocked_until > now,
+    ))
+
+
 def admit(now=None):
     """Fail before budget/rate admission while a shared provider floor is active."""
     from .ai import AIError
-    now=time.time() if now is None else now
+
+    now = time.time() if now is None else now
     with Session() as session:
-        row=session.get(ProviderBackoff,'global')
-        if row and row.blocked_until>now:
-            error=AIError('Shared provider backoff is waiting for retry eligibility. No provider request was sent.',
-                policy_wait=True,retry_after=row.blocked_until-now)
-            error.provider_wait_until=row.blocked_until
+        deadline = _active_deadline(session, now)
+        if deadline is not None:
+            error = AIError('Shared provider backoff is waiting for retry eligibility. No provider request was sent.',
+                            policy_wait=True, retry_after=deadline - now)
+            error.provider_wait_until = deadline
             raise error
 
 
-def waiting(session,now):
+def waiting(session, now):
     """Read-only: the instant the shared provider floor lifts, or 0."""
-    row=session.get(ProviderBackoff,'global')
-    return row.blocked_until if row and row.blocked_until>now else 0
+    return _active_deadline(session, now) or 0
 
 
 def failed(error,now=None):

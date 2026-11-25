@@ -14233,3 +14233,15 @@ per run. At four investigation slots, the median paired elapsed difference was
 (range −6.349 to −5.913 s). These ranges describe the disposable fixture runs.
 Roadmap A still needs exact integrated-head reruns and production-equivalent
 benchmark evidence.
+
+### Provider deadline projection — Roadmap A checkpoint #1485
+
+Provider admission and the triage preflight read the active global provider
+deadline through a single-column query. The database filters expired deadlines,
+including the exact expiry boundary, before handing a result to the worker.
+
+The five projection regressions cover missing, expired, boundary and active
+holds, plus a normal triage investigation and its provider admission check.
+They measure five projected columns on current main and one on the revised
+paths. The admin status still includes the reason and review revision. Fleet
+throughput and exact integrated-head measurements remain open.
