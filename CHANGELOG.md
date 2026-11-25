@@ -1,3 +1,12 @@
+## 1.94.0 — 2026-11-25
+
+1. [PR #1169](https://github.com/StealthCat/MrPatchy/pull/1169): The notification center keeps its severity, source, server, status, unread/dismissed filters and page in the `#notifications` address. Reload, shared links and Back/Forward now reopen the same view, and invalid link values are ignored. It also fixes a race that could leave the center loading when it opened as live refresh started. Compatibility: no API, schema or authorization change. Closes #1168.
+2. [PR #1324](https://github.com/StealthCat/MrPatchy/pull/1324): An idle triage poll whose queue holds only paused, disabled or deleted servers returns before acquiring the distributed claim lock. It uses the locked election's own host predicates. Active peers and hostless legacy observations stay eligible, and expired claims and orphaned runs still reach recovery. Compatibility: no API, schema, configuration, provider or response-authorization change. Tracks #1323.
+3. [PR #1336](https://github.com/StealthCat/MrPatchy/pull/1336): A pure Roadmap F NRPE contract (`app/nrpe_commands.py`) resolves which `command[]` definitions nrpe runs. It reports the `/bin/sh -c` command line and `$ARGn$` macros, the account they run as (or that nrpe refuses to start as root), and which definitions are overridden. Compatibility: new module only, with no schema or behaviour change. Closes #1335.
+4. [PR #1424](https://github.com/StealthCat/MrPatchy/pull/1424): Automatic planning readiness reads stored pause policies and operation holds from one server snapshot. Readiness stays consistent, including for MySQL host ID aliases. Compatibility: no migration, configuration, UI or deployment change. Fixes #1423.
+
+Integrated together through batch [PR #1513](https://github.com/StealthCat/MrPatchy/pull/1513). This source update does not publish a Docker image.
+
 ## 1.93.0 — 2026-11-25
 
 1. [PR #1153](https://github.com/StealthCat/MrPatchy/pull/1153): A pure Roadmap F contract (`app/systemd_generators.py`) resolves which system, user and environment generators systemd runs at every boot and daemon-reload, as whom and in what order. It covers `/etc` and `/run` overrides and masks and entries skipped without shadowing. Malformed entries and other unresolved inputs are fail-closed coverage gaps. Compatibility: new module only, with no runtime, schema or UI change. Closes #1151.
