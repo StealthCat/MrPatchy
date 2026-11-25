@@ -4330,6 +4330,16 @@ Use the same history size, run count and delays for a serial/parallel pair.
 The fixture still checks the same provider, SSH evidence and completion workload.
 Native MySQL and production throughput acceptance remain open.
 
+### Compare executor and claim-lock timings — Roadmap A checkpoint #1321
+
+The fixture comparator's optional `queue_timing` block displays the per-side
+sample count and p50/p95 for executor wait, claim-lock wait and claim-lock hold.
+It compares a stage only when both reports measured it and requires one
+bounded timing sample per run. Historical pairs without executor wait or lock
+hold keep their existing comparison shape. The workload equivalence checks
+still apply. These fixture timings help locate admission overhead. Production
+performance remains open.
+
 ### Same-server process-triage benchmark (issue #654)
 
 The disposable benchmark can seed distinct process observations on one server.

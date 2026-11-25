@@ -406,6 +406,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     if base['fixture_rate'] is not None:
         if base['fixture_rate']['starts_per_hour'] != current['fixture_rate']['starts_per_hour']:
             raise ComparisonError('capability mismatch: fixture_rate.starts_per_hour differs')
+    queue_timing = _compare_queue_timings(baseline, candidate, base, current)
     controls = (
         'database', 'runs', 'fixture_hosts', 'single_server_slots', 'shared_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
@@ -436,6 +437,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         }}
            if baseline_budget is not None or candidate_budget is not None else {}),
         'fixture_only': True,
+        **({'queue_timing': queue_timing} if queue_timing else {}),
         'capability_equivalent': True,
         'baseline': {
             'name': baseline_name, 'execution': base['execution'],
@@ -510,6 +512,56 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
     }
+
+
+QUEUE_TIMING_GROUPS = {
+    'executor_wait': 'stages',
+    'claim_lock': 'persisted_stages',
+    'claim_lock_hold': 'persisted_stages',
+}
+
+
+def _has_new_queue_timing(report):
+    persisted = report.get('persisted_stages')
+    return ('executor_wait' in report['stages'] or
+            isinstance(persisted, dict) and 'claim_lock_hold' in persisted)
+
+
+def _queue_timings(report, normalized, label):
+    # Elapsed seconds and stage milliseconds are each rounded to three decimals.
+    max_ms = round(normalized['elapsed_seconds'] * 1000, 3) + 0.501
+    timings = {}
+    for stage, group in QUEUE_TIMING_GROUPS.items():
+        values = report.get(group, {})
+        if not isinstance(values, dict):
+            raise ComparisonError(f'{label}.{group} must be an object')
+        if stage not in values:
+            continue
+        field = f'{label}.{group}.{stage}'
+        summary = _summary(values[stage], field, max_ms)
+        if summary['count'] != normalized['runs']:
+            raise ComparisonError(f'{field}.count must match runs')
+        timings[stage] = summary
+    return timings
+
+
+def _compare_queue_timings(baseline, candidate, base, current):
+    if not (_has_new_queue_timing(baseline) or _has_new_queue_timing(candidate)):
+        return {}
+    before = _queue_timings(baseline, base, 'baseline')
+    after = _queue_timings(candidate, current, 'candidate')
+    comparison = {}
+    for stage in QUEUE_TIMING_GROUPS:
+        left, right = before.get(stage), after.get(stage)
+        if left is None and right is None:
+            continue
+        comparison[stage] = {
+            'baseline': left,
+            'candidate': right,
+            'p50_ms': _delta(left['p50_ms'], right['p50_ms']) if left and right else None,
+            'p95_ms': _delta(left['p95_ms'], right['p95_ms']) if left and right else None,
+        }
+    return comparison
 
 
 def _provider_transport(report, label, provider_calls):
