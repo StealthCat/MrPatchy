@@ -1,3 +1,21 @@
+## 1.93.0 — 2026-11-25
+
+1. [PR #1153](https://github.com/StealthCat/MrPatchy/pull/1153): A pure Roadmap F contract (`app/systemd_generators.py`) resolves which system, user and environment generators systemd runs at every boot and daemon-reload, as whom and in what order. It covers `/etc` and `/run` overrides and masks and entries skipped without shadowing. Malformed entries and other unresolved inputs are fail-closed coverage gaps. Compatibility: new module only, with no runtime, schema or UI change. Closes #1151.
+2. [PR #1320](https://github.com/StealthCat/MrPatchy/pull/1320): A capped process-triage claim builds its candidate cost quote once under the claim lock. It reuses that quote for both the whole-cap check and the remaining-headroom check against the freshly read ledger. The provider boundary still independently prices and reserves the exact outbound request. Compatibility: known-good lookup, unavailable-pricing handling, whole-cap blocking and deferral rules are unchanged, with no UI, schema, authorization or configuration change. Tracks #1319.
+3. [PR #1328](https://github.com/StealthCat/MrPatchy/pull/1328): A pure Roadmap F net-snmp contract (`app/snmpd_programs.py`) reports which `extend`, `exec`, `sh`, `*Fix`, `pass` and `pass_persist` programs snmpd runs, with which argv or shell command, as which user and group. It is traced from net-snmp 5.9.4 and reads its configuration order and includes from a captured filesystem snapshot. Configuration order it cannot resolve, and code-loading directives, are fail-closed gaps. Compatibility: new module only, with no schema or behaviour change. Part of #1327.
+4. [PR #1417](https://github.com/StealthCat/MrPatchy/pull/1417): Automatic incident planning checks operation, service-watch, quarantine, publication and process-response holds in one query per batch of up to 500 servers instead of several queries per server. It still queues the same servers. Compatibility: no migration, configuration, UI, role or response-authorization change. Fixes #1416.
+
+Integrated together through batch [PR #1512](https://github.com/StealthCat/MrPatchy/pull/1512). This source update does not publish a Docker image.
+
+## 1.92.0 — 2026-11-25
+
+1. [PR #1318](https://github.com/StealthCat/MrPatchy/pull/1318): A successful process-triage claim now records a `claim_lock_hold` timing sample, covering the time from acquiring the admission lock to the start of its release. It sits alongside the existing `claim_lock` wait sample in run timing diagnostics and the disposable benchmark. Refused and empty polls add no sample. Compatibility: optional diagnostic; historical runs still render. No schema, authorization, eligibility, lock-scope or provider-call change. Tracks #1317.
+2. [PR #1414](https://github.com/StealthCat/MrPatchy/pull/1414): Automatic incident planning reads every opted-in server's AI pause policy in one query per tick instead of one per server, and still queues the same servers. Malformed stored policies still fail closed. Compatibility: no migration, configuration, UI, role or response-authorization change. Fixes #1413.
+3. [PR #1454](https://github.com/StealthCat/MrPatchy/pull/1454): Scoring queue readiness and blocked counts stay in agreement when the saved AI key changes during a refresh. Compatibility: no API, schema or authorization change. Fixes #1453.
+4. [PR #1501](https://github.com/StealthCat/MrPatchy/pull/1501): CI: the `static` job's version-consistency step now compares a pull request with the base its merge commit was built on, rather than with the live `main`. Runs queued across a release no longer fail falsely. The `integration-version` merge gate is unchanged. Fixes #1500.
+
+Integrated together through batch [PR #1511](https://github.com/StealthCat/MrPatchy/pull/1511). This source update does not publish a Docker image.
+
 ## 1.91.0 — 2026-11-25
 
 1. [PR #1145](https://github.com/StealthCat/MrPatchy/pull/1145): A pure Roadmap F contract resolves which Python `.pth` import lines and `sitecustomize`/`usercustomize` modules run at every Debian python3.11–3.13 start, and in what order. Unknown, locale-dependent or patch-dependent inputs are explicit coverage gaps. Compatibility: new module only, with no runtime callers. Closes #1144.
