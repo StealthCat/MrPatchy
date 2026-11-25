@@ -13530,7 +13530,7 @@ keepalived runs administrator-configured programs on VRRP state changes, health 
   - First obtained value wins, and `none` counts as a value. `Host`/`Match` activation, including `Match all` and the quirk that `Match host x all` is accepted.
   - `Include`: relative to `/etc/ssh`, glob matches sorted. A file is entered with the includer's activation state, which is restored afterwards. A file included from an inactive block is read with `SSHCONF_NEVERMATCH`.
   - `match_cfg_line`: `exec` is skipped only after a failed earlier criterion on the same line. It still runs in files included from inactive blocks.
-  - `ssh.c`: `ProxyJump` followed by `ProxyCommand` exits with `inconsistent options`.
+  - `readconf.c`/`ssh.c`: a `ProxyCommand` after an effective `ProxyJump` never runs. OpenSSH 9.6 and 10.2 ignore it and use the jump host, and 10.6 exits with `inconsistent options`, so the conflict is reported as version-dependent.
   - `sshconnect.c`/`misc.c`: `KnownHostsCommand` is split with `argv_split` and goes through `subprocess()`, which requires an absolute path.
 - **Fatal outcomes:** these are reported as `config_fatal` with file, line and reason, together with the `Match exec` commands that already ran before ssh exited:
   - an unknown keyword (honouring `IgnoreUnknown`), invalid quotes, a missing argument, a bad `Match` condition, an invalid flag value, a `~` include path or a vanished glob match (ssh finishes the file, then exits);

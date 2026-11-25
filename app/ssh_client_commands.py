@@ -40,9 +40,12 @@ and ``sshconnect.c``:
   is split with ``argv_split`` and exec'd directly, and its argv[0] must be
   absolute or it is not run. ``PKCS11Provider`` and ``SecurityKeyProvider``
   name shared libraries the client loads (``internal`` is built in, and
-  ``$VAR`` reads the path from the environment). An effective ``ProxyJump``
-  together with an effective ``ProxyCommand`` makes ssh exit with
-  ``inconsistent options`` when it connects.
+  ``$VAR`` reads the path from the environment). When an effective
+  ``ProxyJump`` precedes an effective ``ProxyCommand``, that ``ProxyCommand``
+  never runs, but the outcome depends on the client version: OpenSSH 9.6 and
+  10.2 ignore the later ``ProxyCommand`` and use the jump host, while 10.6
+  stores it and exits with ``inconsistent options``. A ``ProxyCommand`` that
+  comes first always wins, because ``parse_jump`` ignores a later jump.
 * ``RemoteCommand`` runs on the remote server and is not reported.
 
 Every command runs as the user who invoked ssh, with that user's environment.
@@ -666,13 +669,22 @@ def evaluate(observation: Any) -> dict[str, Any]:
     for entry in parser.match_exec:
         entry['condition_note'] = 'runs during configuration parsing, before any connection'
     conflicts = []
-    # parse_jump() only sets the jump host while no ProxyCommand is set, but a
-    # later ProxyCommand is still stored: ssh.c then exits with
-    # "inconsistent options: ProxyCommand+ProxyJump".
+    # parse_jump() only sets the jump host while no ProxyCommand is set. A
+    # later ProxyCommand is version-dependent: OpenSSH 9.6 and 10.2 readconf.c
+    # skip it ("Ignore ProxyCommand if ProxyJump already specified"), while
+    # 10.6 stores it and ssh.c exits with "inconsistent options:
+    # ProxyCommand+ProxyJump". Either way that ProxyCommand never runs.
     jump = next((j for j in resolved.get('ProxyJump', []) if j['status'] == 'effective'), None)
     proxy = next((p for p in commands if p['directive'] == 'ProxyCommand' and p['status'] == 'effective'), None)
     if jump and proxy and not _is_none(jump['value']) and proxy['kind'] != 'disabled' and jump['seq'] < proxy['seq']:
-        conflicts.append({'code': 'proxyjump_with_proxycommand_fatal',
+        proxy['status'] = 'never_runs_after_proxyjump'
+        proxy['status_note'] = ('ignored in favour of the jump host by OpenSSH 9.6 and 10.2; '
+                                'OpenSSH 10.6 exits with inconsistent options')
+        conflicts.append({'code': 'proxyjump_before_proxycommand',
+                          'outcome': 'version_dependent',
+                          'outcome_by_version': {'9.6': 'proxycommand_ignored_jump_used',
+                                                 '10.2': 'proxycommand_ignored_jump_used',
+                                                 '10.6': 'fatal_inconsistent_options'},
                           'proxy_jump': {'file': jump['file'], 'line': jump['line']},
                           'proxy_command': {'file': proxy['file'], 'line': proxy['line']}})
     gaps = parser.gaps

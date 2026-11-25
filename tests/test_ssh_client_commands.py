@@ -362,11 +362,21 @@ def test_provider_libraries(line, kind, extra):
         assert lib[key] == value
 
 
-def test_proxyjump_before_proxycommand_is_a_fatal_conflict():
+def test_proxyjump_before_proxycommand_never_runs_the_command_with_a_version_dependent_outcome():
     result = run('ProxyJump bastion\nProxyCommand /usr/bin/nc %h %p\n')
-    assert result['conflicts'] == [{'code': 'proxyjump_with_proxycommand_fatal',
+    assert result['conflicts'] == [{'code': 'proxyjump_before_proxycommand',
+                                    'outcome': 'version_dependent',
+                                    'outcome_by_version': {'9.6': 'proxycommand_ignored_jump_used',
+                                                           '10.2': 'proxycommand_ignored_jump_used',
+                                                           '10.6': 'fatal_inconsistent_options'},
                                     'proxy_jump': {'file': MAIN, 'line': 1},
                                     'proxy_command': {'file': MAIN, 'line': 2}}]
+    [proxy] = [c for c in result['commands'] if c['directive'] == 'ProxyCommand']
+    assert proxy['status'] == 'never_runs_after_proxyjump'
+    assert 'inconsistent options' in proxy['status_note']
+    assert not [c for c in result['commands'] if c['status'] in ('effective', 'fallback', 'conditional')]
+    first = run('ProxyCommand /usr/bin/nc %h %p\nProxyJump bastion\n')
+    assert [c['status'] for c in first['commands']] == ['effective']
     assert run('ProxyCommand /usr/bin/nc %h %p\nProxyJump bastion\n')['conflicts'] == []
     assert run('ProxyJump none\nProxyCommand /usr/bin/nc %h %p\n')['conflicts'] == []
 
