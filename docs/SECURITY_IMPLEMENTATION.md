@@ -13117,3 +13117,30 @@ cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` f
 - **Not modeled:** whether cloud-init is installed or enabled, `cloud_final_modules` membership, a non-default `cloud_dir`, semaphore state, user-data `scripts_user` and `scripts_vendor`, and script contents.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### munin-node plugin contract — Roadmap F checkpoint #1498
+
+- **Outcome:** `app/munin_plugins.py` is a pure contract with no I/O. Its inputs are the captured `munin-node.conf`, the regular files in `/etc/munin/plugin-conf.d`, the `/etc/munin/plugins` listing (regular/executable after following symlinks) and the observed `munin-node` argv. It reports which plugins munin-node runs when a master connects and, for each one:
+  - the account and groups it runs as, and which section or default set them;
+  - the argv munin-node execs for `fetch` and `config`, including `command` with `%c`, a `PATH` lookup, and a Perl one-word `exec` that goes through `/bin/sh -c`;
+  - the effective `PATH` and the execution-affecting `env.*` variables.
+- **Semantics:** taken from munin 2.0.75 `Munin::Node::{Config,Service,OS,Server}`, `Munin::Common::Config` and `sbin/munin-node`, with Debian build defaults (`nobody`/`munin`, `/etc/munin`):
+  - Comments are stripped unless escaped (`\#`), and lines are trimmed. A plugin-conf.d line reading `0`, and a `[0]` section, are false in Perl and are handled as Perl handles them.
+  - plugin-conf.d files load in sorted order with munin's filename, hidden-file and `ignore_file` filters. A malformed line, an unknown key, `env NAME=value`, or a key before any section drops the rest of that file and keeps what was already read. Later files replace earlier keys, and env merges per variable.
+  - Wildcard sections (`prefix*`, `*suffix`) are Perl regexes. They are applied in descending string order and never replace keys already set by an exact section or an earlier wildcard.
+  - Plugins must be regular executables, with names in `[-\w@.:]`, not hidden, not ending in `.conf` and not matched by `ignore_file`. The weird-character rule runs before `ignore_file`.
+  - A plugin runs as its `user`, else `default_plugin_user`/`default_client_user`, else `nobody`. A daemon that is not root runs every plugin as itself. `munin-node.conf` names that are not munin or Net::Server settings become strings in the service table, and sections, wildcards or plugins with those names fail as Perl fails.
+- **Fails closed:** each of these is a blocking gap:
+  - unobserved inputs, NUL bytes, text that is not UTF-8, and over-limit or malformed input;
+  - an argv that is not modeled (abbreviated, single-dash or case-changed options) or that exits (`--help`, `--version`, a missing or unexpected argument);
+  - a `--config` path other than the captured one;
+  - a fatal `munin-node.conf` line;
+  - a daemon `user` that is missing, ambiguous or unresolvable;
+  - paranoia without per-path permission evidence;
+  - `ignore_file` or wildcard regexes outside the modeled Perl subset;
+  - filenames containing a newline.
+- **Redaction:** values of `env.*` variables outside the execution-affecting set (`PATH`, loader, interpreter, shell-startup and `MUNIN_LIBDIR` variables) are withheld. For example, `env.password` is reported by name only.
+- **Validation:** `tests/test_munin_plugins.py` has 20 tests. They cover Debian's shipped `munin-node.conf` and plugin-conf.d excerpts, wildcard precedence, file aborts, Perl truthiness, command and shell expansion, listing filters, paranoia, name collisions, argv handling, the regex subset and redaction.
+- **Not modeled:** group existence (the contract can over-report a plugin that fails before it runs, but it does not under-report), Net::Server's own parsing beyond a single plain `user` line, `munin-run`, `munin-async` spooling, per-plugin `timeout`/`host_name` and the plugins' own code.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** a differential run against munin's Perl modules, agent collection of the three inputs, a catalog entry, package provenance, UI and AI classification.
