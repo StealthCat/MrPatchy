@@ -45,18 +45,19 @@ LIMITATIONS = (
 
 
 def _signature(session, cfg):
-    key = session.get(Setting, 'openai_key')
-    if not cfg.get('ai_model') or key is None:
+    model = cfg.get('ai_model')
+    if not model:
         return None
-    return ai_retry.configuration_signature(cfg['ai_model'], key.value)
+    key = session.get(Setting, 'openai_key')
+    return ai_retry.configuration_signature(model, key.value) if key is not None else None
 
 
-def _scheduler_state(session, cfg):
+def _scheduler_state(cfg, *, configured):
     if not cfg.get('ai_enabled'):
         return 'ai_disabled'
     if not cfg.get('ai_updates_enabled'):
         return 'scoring_disabled'
-    if not cfg.get('ai_model') or session.get(Setting, 'openai_key') is None:
+    if not configured:
         return 'not_configured'
     return 'enabled'
 
@@ -148,7 +149,7 @@ def status(session, cfg, now=None):
         Package.host_id.in_(ai_policy.paused_ids()))) or 0
     total = sum(counts.values())
     return {
-        'scheduler': _scheduler_state(session, cfg),
+        'scheduler': _scheduler_state(cfg, configured=signature is not None),
         'current_updates': total,
         'counts': counts,
         'unscored': total - counts['complete'],
