@@ -12650,6 +12650,20 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 - **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
 - **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
 
+### Bounded fleet automatic plan policy reads — Roadmap A checkpoint #1429
+
+Fleet automatic plan status reads policy rows in pages of at most 512, ordered
+by server name and ID. It stops once it sees the first opted-in server beyond
+the displayed limit. Sparse opt-ins can require more pages. Previous opt-in
+truthiness, server order, truncated counts and the admin-only API still apply.
+If a concurrent rename moves a server past the cursor, its first listed
+identity and display name are used for the response.
+
+Controller initialization adds a server index on deletion state, name and ID
+to support the cursor query on fresh or existing databases. The tests cover
+repeat initialization, sparse policies, tied names, and exact versus truncated
+listings on SQLite and MySQL.
+
 ### Batch fleet automatic AI plan job status — Roadmap A checkpoint #1205
 
 The automatic AI plan status reads the active plan and latest automatic attempt
