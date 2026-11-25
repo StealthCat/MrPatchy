@@ -12692,6 +12692,19 @@ reads. The measured improvement is in database round trips. Production load
 time remains unmeasured. Scheduling, provider admission and response
 authorization remain outside this status change.
 
+### Automatic plan readiness snapshot — Roadmap A checkpoint #1423
+
+After checking global AI configuration, automatic plan status reads the listed
+servers' pause policies, operation and response holds, and lifecycle state in
+one statement. The database matches policy and hold identities using its
+configured collation. The per-server endpoint uses the resolved server ID
+when building the same status. Paused policies take precedence over holds,
+and held servers retain that status ahead of inactive servers.
+
+SQLite and native MySQL tests cover the read count, readiness precedence and
+five hold sources. Native MySQL also covers case aliases in saved policy or
+hold IDs and the per-server URL. The status endpoints remain read-only.
+
 ### Shared holds on automatic plan status — Roadmap A checkpoint #1249
 
 Security Coverage and Server → Security show the recorded shared AI start gates alongside
