@@ -618,11 +618,11 @@ def test_history_csv_cells_neutralise_every_formula_prefix():
 DAY=1793404800.0  # 2026-10-31T00:00:00Z
 
 
-def ledger(amount, *, created=DAY+60, status='reserved', reset=DAY+86400):
+def ledger(amount, *, created=DAY+60, status='reserved', reset=DAY+86400, timezone_name='UTC'):
     import uuid
     with Session() as session:
         session.add(ai_budget.BudgetEntry(id=str(uuid.uuid4()), created=created, updated=created,
-            reset_at=reset, timezone='UTC', model='gpt-6-luna', status=status,
+            reset_at=reset, timezone=timezone_name, model='gpt-6-luna', status=status,
             reservation_usd=Decimal(amount), pricing_version='fixture', pricing_source='fixture'))
         session.commit()
 
@@ -650,7 +650,7 @@ def test_exhausted_daily_cap_notifies_once_per_window_and_resolves_at_reset(admi
         assert revision.lifecycle=='active' and revision.severity=='medium'
         assert revision.deep_link=='#settings/ai'
         assert '$1 (UTC day)' in revision.reason and '2026-11-01T00:00:00Z' in revision.reason
-        assert 'deferred, not discarded' in revision.reason
+        assert 'Queued paid triage, scoring and plans wait for available budget' in revision.reason
         notifications.mark_read(session, 'admin', event.id, event.revision, now=DAY+200)
         session.commit()
     # Further spend in the same window is not a new observation.
@@ -674,6 +674,43 @@ def test_exhausted_daily_cap_notifies_once_per_window_and_resolves_at_reset(admi
         assert event.revision==3 and revision.lifecycle=='active'
         assert '2026-11-02T00:00:00Z' in revision.reason
         assert notifications.unread_count(session, 'admin')==1
+
+
+def test_cap_notification_explains_recheck_when_retained_spend_survives_reset(admin):
+    configure(mode='daily_cap', cap=Decimal('1'))
+    created = DAY + 12 * 3600
+    timezone_name = 'America/Los_Angeles'
+    _, retained_reset = ai_budget._window(created, timezone_name)
+    configured_reset = DAY + 86400
+    assert retained_reset > configured_reset
+    ledger('1', created=created, status='uncertain', reset=retained_reset, timezone_name=timezone_name)
+
+    operations.collect_alerts(created + 60)
+    with Session() as session:
+        event = cap_event(session)
+        revision = cap_revision(session, event)
+        assert event.revision == 1 and revision.lifecycle == 'active'
+        assert 'Recheck the budget at 2026-11-01T00:00:00Z' in revision.reason
+        assert 'Spend from an earlier budget window can still count after this time.' in revision.reason
+        assert 'until the reset' not in revision.reason
+        notifications.mark_read(session, 'admin', event.id, event.revision, now=created + 70)
+        session.commit()
+
+    operations.collect_alerts(created + 120)
+    with Session() as session:
+        assert cap_event(session).revision == 1
+        assert notifications.unread_count(session, 'admin') == 0
+
+    operations.collect_alerts(configured_reset + 60)
+    with Session() as session:
+        event = cap_event(session)
+        assert cap_revision(session, event).lifecycle == 'active'
+        assert ai_budget.status(session, configured_reset + 60)['remaining_usd'] == '0'
+
+    operations.collect_alerts(retained_reset + 60)
+    with Session() as session:
+        assert cap_revision(session, cap_event(session)).lifecycle == 'resolved'
+        assert ai_budget.status(session, retained_reset + 60)['remaining_usd'] == '1'
 
 
 @pytest.mark.parametrize('change', ['raise_cap', 'rate_mode', 'unthrottled', 'disabled'])
