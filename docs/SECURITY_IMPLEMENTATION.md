@@ -2788,6 +2788,17 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
 
+#### Automatic plan response-hold reads — Roadmap A checkpoint #1416
+
+The automatic incident plan tick checks operation, service-watch, quarantine,
+publication and process-response holds for opted-in, resumed servers in one
+statement per batch of at most 500 server IDs. Hold checks match server IDs
+using the database collation. The planning tick applies every hold, and queued
+plans still go through the existing execution-time checks.
+
+The worker regression measures hold-related reads and verifies enqueue results
+on SQLite and native MySQL. Fleet throughput measurement remains open.
+
 #### Fleet-wide release of failed automatic plans — worker checkpoint #1251
 
 - **Problem:** after fixing a fleet-wide cause (a rejected key, unsupported model or exhausted quota), an administrator had to open each opted-in server's Security tab to release its failed automatic attempts (#1036).
@@ -3351,6 +3362,14 @@ order and the retry signature retains its existing format. Capped eligibility
 still reads current settings after the queue lock, and the provider reservation
 remains authoritative. This reduces repeated settings reads. Production
 throughput remains unverified.
+
+Capped process triage computes one candidate quote after acquiring the host
+queue gate (#1319). It uses that quote for the whole-cap check and for the
+remaining-headroom check against the freshly read ledger. The provider
+boundary still prices the exact outbound payload and reserves atomically.
+The daily-cap and rate-plus-cap fixtures verify two pricing calls end to end:
+one at claim time and one at the provider boundary. This removes a repeated
+serialization inside the claim lock. Production throughput remains unverified.
 
 The server activity guard reads lifecycle state and revision in bounded batches
 after acquiring its existing ordered locks. Multi-server update scoring can
@@ -12994,6 +13013,31 @@ Every CPython start without `-S` imports `site`, including root services. `site`
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_python_site_hooks.py` has 20 tests and cannot run on main, where the module does not exist. A parametrized test runs the real `site.addsitedir` from the local python3.11, 3.12 and 3.13 against one fixture tree. It compares the executed lines, their order and the added `sys.path` entries, including the 3.13-only form-feed split. Six mutations are each caught: case-insensitive names, universal newlines on 3.13, indented or space-less `import` treated as code, unsorted order, dropping `after_code`, and treating non-ASCII bytes as exact on 3.12. Treating a dot-named `.pth` as skipped on 3.11 or 3.12 is also caught.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against `dpkg` ownership of the shipped `.pth` files and `/etc/python3.X/sitecustomize.py`, RPM-family layouts, and UI.
+### systemd generator contract — worker checkpoint #1151 (roadmap F)
+
+This is a contract increment only. The startup-awareness requirement is still incomplete. The startup catalog lists `systemd_generators` locations, but nothing resolved which generators systemd actually runs. Generators run before any unit is loaded, at every boot and at every `daemon-reload` (including the reloads package installs trigger). A same-named file in `/etc/systemd` or `/run/systemd` replaces or masks a vendor generator. `app/systemd_generators.py` is a pure, versioned contract for this. It takes supplied directory-entry metadata, performs no I/O and never reads a generator's contents.
+
+- **Source.** The rules were read in the systemd sources for v249, v252, v255, v256, v257 and v258: `generator_binary_paths()`/`env_generator_binary_paths()`, `files_add()` in `conf-files.c`, `execute_directories()`, `manager_run_generators()`/`manager_run_environment_generators()`, `null_or_empty()`/`stat_may_be_dev_null()` and `hidden_or_backup_file()`. A version outside v249–v258, or an unobserved version, is a blocking gap.
+- **Kinds and directories.** There are four kinds: system, user, system-environment and user-environment generators. Each searches `/run/systemd/<kind>`, `/etc/systemd/<kind>`, `/usr/local/lib/systemd/<kind>` and then the compiled-in directory, highest priority first. Only `system-generators` uses `<libexecdir>` (`/lib/systemd` on split-usr). An unknown split-usr layout is a blocking `libexec_dir_unknown` gap for system generators only.
+- **Entry rules.**
+  - Hidden and backup names are skipped.
+  - The first directory that yields a name wins, and lower same-named entries are reported as `overridden`.
+  - A mask is an empty regular file, or anything that resolves to a character device (including a device node placed directly in the directory). A mask hides the name in every lower directory. From v258, a dangling symlink whose text is `/dev/null` is also a mask.
+  - An unresolvable, non-regular or non-executable entry is skipped **without** claiming the name, so a lower same-named generator still runs.
+  - Ownership and writability are observations, not skips. So are `/run` placement and overriding a lower entry.
+- **Invocation.** Unit generators start in byte order and run in parallel with the normal, early and late output directories as arguments. Exit codes are ignored, and the build default timeout is 90 s. Environment generators run serially in the same order. System kinds run as root, and user kinds run as each user with a `systemd --user` manager.
+- **Fail closed.** Blocking gaps set `complete` to false: an unobserved, unreadable, truncated or contradictory directory, malformed or duplicate entries, missing metadata, an unobserved symlink target and over-limit input. A generator below a directory that was not fully observed is `higher_directory_unobserved`, never `runs`. A lower entry shadowed by an undetermined one is `shadow_undetermined`; a malformed entry with a valid name is itself undetermined, so it still shadows lower same-name entries, and a malformed entry without a usable name makes every lower generator `higher_directory_unobserved`. `origin` is always `not_assessed`, and no result is a safety verdict.
+- **Validation.** `tests/test_systemd_generators.py` (32 tests) includes a layout built on a real directory with `lstat`/`stat`. Nine mutations are each caught: skipped entries that shadow, reversed priority, no character-device mask, an ignored unobserved higher directory, the v258 threshold, an ignored split-usr layout, no undetermined shadowing, no execute-bit check, and parallel environment generators.
+
+**Not covered:**
+- agent collection;
+- adding the `/run` and environment-generator directories to the catalog's `systemd_generators` locations (a baseline-affecting change left for a later slice);
+- `SYSTEMD_*GENERATOR_PATH` overrides;
+- initrd generators;
+- which users have a user manager;
+- persistence, UI, provenance and AI classification.
+
+There is no schema, API, authentication or response-authorization change.
 
 ### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
 
@@ -13546,6 +13590,49 @@ keepalived runs administrator-configured programs on VRRP state changes, health 
 - **Remaining:**
   - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
 - **Acceptance:** stays incomplete until those are delivered.
+### net-snmp snmpd program contract — worker checkpoint #1327 (roadmap F, increment 1)
+
+snmpd runs configured programs whenever an SNMP manager reads, or for writable entries sets, the object identifiers they serve. On Debian and Ubuntu it runs them as `Debian-snmp`. The `extend`, `exec`, `sh`, `pass` and `pass_persist` directives are a known persistence and remote-execution surface, and the startup inventory did not model them.
+
+- **Change:** the pure `app/snmpd_programs.py` takes captured configuration text in snmpd's read order, the effective snmpd argv (default: the packaged `snmpd.service` command) and captured `/etc/passwd` and `/etc/group`. For each program snmpd would run, it returns the module and directive, the source file and line, the name or OID, the argv, `/bin/sh -c` command or pass argv prefix, whether the entry is writable or truncated, and the run user and group. It performs no I/O and never runs snmpd or a program.
+- **Fidelity:** traced from net-snmp 5.9.4 in Ubuntu 24.04 `net-snmp_5.9.4+dfsg-1.1ubuntu3.3`:
+  - That build does not include `ucd-snmp/extensible`, so the extend module also handles `exec`, `sh` and `execFix`.
+  - Handlers are looked up case-insensitively, but the shell and writable flags are chosen with a case-sensitive comparison. `EXTEND-SH` therefore runs through `execv`.
+  - A word that starts with `#` ends the line. `copy_nword` handles quoting and backslashes, and a word is truncated to its buffer.
+  - The extend command and its arguments are joined into a 511-byte buffer. Exec entries split that buffer again with `tokenize_exec_command`, so a quoted program path that contains a space splits at exec time.
+  - `pass` takes `strtol` priorities and stops its command at the first `#` or `;`. `pass_persist` is started through `parse_cmd`, which splits only at spaces.
+  - Among extend entries under the same root OID, the first one with a given name wins. `-I` lists select or exclude modules.
+  - Later `agentuser`/`agentgroup` lines replace `-u`/`-g`. An unknown name in the configuration keeps the earlier value, and an unknown `-u` name makes snmpd exit.
+- **Fail closed:** increment 1 does not derive snmpd's configuration search path or persistent-directory files, so every result carries the blocking `read_order_not_derived` gap and is never `complete`. The following are blocking gaps too:
+  - include directives and command-line configuration (`-c`, `-C`, `-Y`, `--token=value`);
+  - a permanent switch to an unknown `[type]`;
+  - `dlmod`, `perl` and `procfix`;
+  - symbolic OIDs, over-long names, and a `pass -p` without a value (snmpd dereferences NULL);
+  - unobserved files or account databases, invalid UTF-8, NUL bytes and over-limit input.
+  `origin` stays `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_snmpd_programs.py` (18 tests), with expected values traced from `read_config.c`, `extend.c`, `pass.c`, `pass_persist.c`, `execute.c`, `util_funcs.c` and `snmpd.c`. No differential run against a live snmpd was done in this increment.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Increment 2 (read order):** `evaluate_snapshot` derives snmpd's read order from a captured filesystem snapshot, following `read_config_files_of_type`, `read_config_files_in_path` and `read_config` in net-snmp 5.9.4 `snmplib/read_config.c`. The snapshot lists files, directory entries and absent paths. It returns the order it read files in, and can be `complete`.
+  - **Search path:** without `SNMPCONFPATH`, the path is `/etc/snmp:/usr/share/snmp:/usr/lib/x86_64-linux-gnu/snmp`. `$HOME/.snmp` is added only when `HOME` is set. The persistent directory (`SNMP_PERSISTENT_DIR`, default `/var/lib/snmp`) is read after it. With `SNMPCONFPATH`, snmpd reads only that list.
+  - **Files per directory:** `<type>.conf` is read, then `<type>.local.conf`. Missing and non-directory entries are skipped. Empty elements (`:<dir>`, `a::<dir>`) are skipped like snmpd's `stat("")`; only an empty remainder ends the list.
+  - **Persistent backups:** a directory matching the persistent-directory or `SNMP_PERSISTENT_FILE` prefix first gets `<type>.0.conf` to `<type>.10.conf`, stopping at the first missing one.
+  - **`includeFile`** resolves a relative name against the including file's directory.
+  - **`includeSearch`** searches the path for the name, with one `.conf` suffix removed.
+  - **`includeDir`** reads non-dot `*.conf` entries in the captured readdir order.
+  - **Include targets** are the raw rest of the line, trailing blanks included.
+  - **Context and nesting:** included files start in the includer's permanent context and do not change it. Nesting deeper than 16 is refused.
+  - **File types:** the `snmpd` type is read, then the `snmp` type.
+- **New blocking gaps (increment 2):**
+  - a path the snapshot does not describe, an unlisted directory, or an unobserved environment;
+  - a path truncated by the 300-byte buffer;
+  - a relative `includeDir`, which resolves against the working directory;
+  - an `includeDir` with more than one entry, because readdir order is filesystem-specific and the first extend name wins;
+  - `persistentDir`, a premib token that moves the persistent directory;
+  - snmpd handlers reached from an `snmp`-type file, because the type registration order is not derived.
+
+  `-c FILE[,FILE...]` is now modelled: the last `-c` wins, and its absolute files are read with the snmpd handlers after both types, or before them with a leading `-`. A relative `-c` name, `-C`, `-Y` and `--token=value` stay blocking. `evaluate` still takes its order on trust, so its results carry `read_order_not_derived`.
+- **Validation (increment 2):** 10 more tests (28 in total), traced from `read_config.c`. The amd64 library path and `/var/lib/snmp` are the Debian configure values, and have not yet been checked against a live install.
+- **Remaining (#1327):** model `-C`, derive the type registration order, and run differential validation against the packaged snmpd. Agent collection, a catalog entry, package provenance, persistence, UI and AI classification also remain.
 
 ### rsyncd.conf exec-command contract — worker checkpoint #1395 (roadmap F)
 
