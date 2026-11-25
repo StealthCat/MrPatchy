@@ -14148,3 +14148,37 @@ Procmail is often the local delivery agent, started by Postfix `mailbox_command`
 - **Fail closed:** gaps cover unknown or incomplete listings, unknown kinds or execute bits (including `/usr/bin/etckeeper`'s), trailing-newline names, Perl-versus-shell order differences when Perl presence is unknown, conf files with anything but literal assignments, hook-directory redirection, changed program/APT/cron/daily/unit files, unknown timer enablement or VCS, version drift, and the VCS hooks that shipped `commit.d/50vcs-commit` and `99push` run through `git commit`/`git push`. No result is a safety verdict, and `authorizes_response` is always false.
 - **Validation:** `tests/test_etckeeper_hooks.py` (43 tests). One test runs the exact `lsscripts` Perl body from `/usr/bin/etckeeper` against a temporary directory and checks the contract's selection and order against it.
 - **Remaining:** native collection, startup-catalog and inventory wiring, provenance and AI classification; the `etckeeper-dnf` plugin on RPM systems; resolving `.git/hooks` and `core.hooksPath`.
+
+### Repeated paired triage benchmarks — Roadmap A checkpoint #1483
+
+Use the existing disposable fixture to record at least three independent serial
+and parallel pairs under the same database version, AI controls, workload and
+concurrency settings. Keep the pairs in capture order and alternate which
+configuration runs first when possible.
+
+```bash
+python tools/compare_ai_benchmark_series.py \
+  --pair serial-1.json parallel-1.json \
+  --pair serial-2.json parallel-2.json \
+  --pair serial-3.json parallel-3.json
+```
+
+The command checks each pair with the existing comparator, requires stable
+controls and workloads across repeats, and refuses a reused report even if its
+JSON formatting changed. It records each elapsed and throughput difference and
+the median and range of the paired differences, along with the stage latency
+differences where samples exist. When the pair comparator reports observed
+provider overlap, the series keeps that measurement per pair. Differences in
+observed overlap do not invalidate otherwise matching runs. The series also
+includes executor wait, claim-lock wait and claim-lock hold when the pair
+comparator supplies timings for both reports. Each optional stage states how
+many pairs contributed, and one-sided observations contribute no delta. The
+existing one-pair tool remains available.
+
+A local check with three independent pairs per backend retained eight completed
+investigations, 12 simulated provider calls and four simulated SSH follow-ups
+per run. At four investigation slots, the median paired elapsed difference was
+−3.385 s on SQLite 3.50.4 (range −3.413 to −2.410 s) and −6.151 s on MySQL 8.4.13
+(range −6.349 to −5.913 s). These ranges describe the disposable fixture runs.
+Roadmap A still needs exact integrated-head reruns and production-equivalent
+benchmark evidence.
