@@ -67,6 +67,25 @@ def test_queue_age_is_bounded_before_starting_the_fixture():
         assert '--queue-age-seconds must be between 0 and 86400' in result.stderr
 
 
+def test_executor_wait_captures_time_behind_a_busy_serial_worker(tmp_path):
+    reports = []
+    for concurrency in ('1', '2'):
+        result = subprocess.run(
+            [sys.executable, str(BENCHMARK), '--runs', '2', '--concurrency', concurrency,
+             '--provider-delay-ms', '200', '--queue-age-seconds', '5'],
+            cwd=tmp_path, capture_output=True, text=True, timeout=60, check=True,
+        )
+        report = json.loads(result.stdout)
+        wait = report['stages']['executor_wait']
+        assert wait['count'] == report['completed_subjects'] == 2
+        assert 0 <= wait['p50_ms'] <= wait['p95_ms'] <= report['elapsed_seconds'] * 1000 + 0.5
+        reports.append(report)
+
+    serial, parallel = reports
+    assert serial['stages']['executor_wait']['p95_ms'] >= 200
+    assert compare(serial, parallel)['capability_equivalent'] is True
+
+
 def run_benchmark(concurrency, retained_history_rows=0, *, same_server=False, follow_up_runs=None):
     layout = ['--same-server'] if same_server else []
     stage_mix = [] if follow_up_runs is None else ['--follow-up-runs', str(follow_up_runs)]
@@ -122,6 +141,38 @@ def test_same_server_serial_and_parallel_preserve_workload():
         assert report['provider_calls'] == 6
         assert report['stages']['ssh_evidence']['count'] == 2
         assert 1 <= report['peak_provider_requests'] <= report['concurrency']
+
+
+def test_shared_server_fixture_compares_matched_serial_and_parallel_workloads():
+    reports=[]
+    for concurrency in (1,4):
+        result=subprocess.run(
+            [sys.executable,str(BENCHMARK),'--runs','5','--servers','2',
+             '--follow-up-runs','3','--concurrency',str(concurrency),'--provider-delay-ms','30'],
+            cwd=ROOT,capture_output=True,text=True,timeout=60)
+        assert result.returncode==0,result.stderr
+        report=json.loads(result.stdout)
+        assert report['fixture_hosts']==2 and report['shared_server_slots']==4
+        assert report['completed_subjects']==5 and report['approved_subjects']==0
+        assert report['provider_calls']==8 and report['stages']['ssh_evidence']['count']==3
+        reports.append(report)
+    result=compare(*reports)
+    assert result['capability_equivalent'] is True
+    assert result['baseline']['shared_server_slots']==result['candidate']['shared_server_slots']==4
+
+
+@pytest.mark.parametrize('layout,message', [
+    (['--servers','0'], '--servers must be between 1 and --runs'),
+    (['--servers','5'], '--servers must be between 1 and --runs'),
+    (['--same-server','--servers','2'], 'not allowed with argument'),
+    (['--servers','2','--concurrency','5'], '--servers requires --concurrency at most 4'),
+])
+def test_server_layout_rejects_invalid_options(layout,message):
+    result=subprocess.run(
+        [sys.executable,str(BENCHMARK),'--runs','4',*layout],
+        cwd=ROOT,capture_output=True,text=True,timeout=20)
+    assert result.returncode==2
+    assert message in result.stderr
 
 
 def test_same_server_rejects_threads_above_the_fixture_slot_limit():
