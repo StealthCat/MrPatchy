@@ -4,7 +4,7 @@ import hmac
 import random
 import time
 
-from sqlalchemy import String, Double, Integer, Text, or_, select
+from sqlalchemy import String, Double, Integer, Text, LargeBinary, and_, case, cast, or_, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -143,17 +143,27 @@ def clear(now=None,expected_revision=None):
 
 def revoke_item_waits(now):
     from .ai_retry import TriageRetry
-    from sqlalchemy import select
-    with Lock('ai-triage'),Session() as session:
-        rows=session.scalars(select(TriageRetry).where(TriageRetry.provider_until>now)).all()
-        for retry in rows:
-            # A later next_at belongs to the local retry gate, not the provider
-            # floor. Compare before clearing the saved provider deadline.
-            if retry.state=='deferred' and now<retry.next_at<=retry.provider_until:
-                retry.next_at=now
-            retry.provider_until=0
+
+    # Keep the former exact state comparison under a case-insensitive DB
+    # collation. A later retry time still belongs to the local retry gate.
+    provider_only = and_(
+        cast(TriageRetry.state, LargeBinary) == b'deferred',
+        TriageRetry.next_at > now,
+        TriageRetry.next_at <= TriageRetry.provider_until,
+    )
+    # MySQL applies assignments in order. Read the old floor before zeroing it.
+    statement = (
+        update(TriageRetry).where(TriageRetry.provider_until > now)
+        .ordered_values(
+            (TriageRetry.next_at, case((provider_only, now), else_=TriageRetry.next_at)),
+            (TriageRetry.provider_until, 0),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    with Lock('ai-triage'), Session() as session:
+        changed = session.execute(statement).rowcount
         session.commit()
-        return bool(rows)
+    return changed > 0
 
 
 def status(session,now=None):
