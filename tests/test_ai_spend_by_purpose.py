@@ -5,7 +5,7 @@ import time
 from sqlalchemy import event
 
 from app import ai_budget, ai_runs
-from app.db import Session, Setting
+from app.db import Session, Setting, engine
 from tests.test_ai_budget import configure
 
 
@@ -49,21 +49,30 @@ def test_groups_match_counted_spend_without_loading_ledger_rows(admin):
     configure(cap=Decimal('100'))
     _seed(time.time())
     loaded = []
+    ledger_queries = []
 
     def on_load(*args):
         loaded.append(1)
 
+    def on_query(_connection, _cursor, statement, *_args):
+        if 'ai_budget_entries' in statement:
+            ledger_queries.append(statement)
+
     for model in (ai_budget.BudgetEntry, ai_runs.AIRun):
         event.listen(model, 'load', on_load)
+    event.listen(engine, 'before_cursor_execute', on_query)
     try:
         response = admin.get('/api/settings/ai-spend-by-purpose')
     finally:
+        event.remove(engine, 'before_cursor_execute', on_query)
         for model in (ai_budget.BudgetEntry, ai_runs.AIRun):
             event.remove(model, 'load', on_load)
     assert response.status_code == 200 and not loaded
+    assert len(ledger_queries) == 1
     data = response.json()
     assert data['enabled'] and data['mode'] == 'daily_cap' and data['timezone'] == 'UTC'
     assert data['next_reset'] - data['window_start'] == 86400
+    assert data['next_reset_authoritative'] is True
     assert data['groups'] == [
         {'purpose': 'triage', 'call_count': 3, 'settled_usd': '0.125', 'reserved_usd': '0.2',
          'uncertain_usd': '0.3', 'counted_usd': '0.625'},
@@ -104,8 +113,27 @@ def test_window_kept_open_by_a_timezone_change_is_still_attributed(admin):
         session.commit()
         status = ai_budget.status(session, now)
         data = ai_budget.by_purpose(session, now)
+        after = ai_budget.by_purpose(session, reset + 1)
     assert status['counted_usd'] == data['counted_usd'] == '0.25'
+    assert status['next_reset_authoritative'] is data['next_reset_authoritative'] is False
     assert [(group['purpose'], group['counted_usd']) for group in data['groups']] == [('update_scoring', '0.25')]
+    assert after['next_reset_authoritative'] is True
+    assert after['counted_usd'] == '0.25'
+
+
+def test_only_positive_observed_unreleased_spend_affects_reset_authority(admin):
+    configure(cap=Decimal('100'))
+    start, reset = ai_budget._window(time.time(), 'UTC')
+    now = start + 3600
+    with Session() as session:
+        session.add_all([
+            _entry('released', '', 'released', '2', created=now - 60, reset=reset + 3600),
+            _entry('zero', '', 'settled', '3', Decimal('0'), created=now - 60, reset=reset + 3600),
+            _entry('future', '', 'reserved', '4', created=now + 60, reset=reset + 3600),
+        ])
+        session.commit()
+        assert ai_budget.status(session, now)['next_reset_authoritative'] is True
+        assert ai_budget.by_purpose(session, now)['next_reset_authoritative'] is True
 
 
 def test_uncapped_modes_report_no_cap_and_no_groups(admin):
@@ -116,6 +144,7 @@ def test_uncapped_modes_report_no_cap_and_no_groups(admin):
         assert data['mode'] == mode and not data['enabled']
         assert data['groups'] == [] and data['counted_usd'] == '0' and data['call_count'] == 0
         assert data['timezone'] is None and data['window_start'] is None and data['next_reset'] is None
+        assert data['next_reset_authoritative'] is False
 
 
 def test_empty_capped_window_and_role_boundary(admin, client):
@@ -123,6 +152,7 @@ def test_empty_capped_window_and_role_boundary(admin, client):
     configure(mode='rate_and_daily')
     data = admin.get('/api/settings/ai-spend-by-purpose').json()
     assert data['enabled'] and data['groups'] == [] and data['counted_usd'] == '0'
+    assert data['next_reset_authoritative'] is True
     assert len(data['limitations']) == 2
     with Session() as session:
         before = session.get(Setting, 'config').value
