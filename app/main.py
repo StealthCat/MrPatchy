@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = '1.93.0'
+APP_VERSION = '1.94.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -3470,8 +3470,8 @@ def security_auto_plan_status(host_id:str,user=Depends(admin_user)):
     """Read-only automatic AI plan status and pacing for this server (#922). Counts, codes and times only."""
     from . import auto_plan_status
     with Session() as s:
-        host_or_404(s,host_id)
-        return auto_plan_status.status(s,host_id)
+        host=host_or_404(s,host_id)
+        return auto_plan_status.status(s,host.id)
 
 @app.get('/api/security/auto-plan-status')
 def fleet_security_auto_plan_status(user=Depends(admin_user)):
