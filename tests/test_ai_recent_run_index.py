@@ -95,7 +95,7 @@ def test_recent_run_reads_use_purpose_and_time_range(admin, monkeypatch):
         event.remove(db.engine, 'before_cursor_execute', capture)
 
     assert len(queries) == 3
-    assert 'min(' in queries[0][0].lower()
+    assert 'ORDER BY ai_runs.started DESC' in queries[0][0]
     assert all('min(' not in statement.lower() for statement, _ in queries[1:])
     with db.engine.connect() as connection:
         assert connection.scalars(select(ai_claims.Claim.subject)).all() == []
@@ -108,5 +108,6 @@ def test_recent_run_reads_use_purpose_and_time_range(admin, monkeypatch):
                            for row in plan), plan
             else:
                 plan = connection.exec_driver_sql('EXPLAIN ' + statement, parameters).mappings().all()
-                run, = [row for row in plan if row['table'] == 'ai_runs']
-                assert run['type'] == 'range' and run['key'] == RUN_INDEX, plan
+                run_scans = [row for row in plan if row['table'] == 'ai_runs']
+                assert run_scans and all(row['type'] == 'range' and row['key'] == RUN_INDEX
+                                         for row in run_scans), plan
