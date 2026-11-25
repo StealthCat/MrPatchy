@@ -356,6 +356,35 @@ def test_comparison_requires_distinct_execution_configuration():
         compare_ai_benchmarks.compare(report(), copy.deepcopy(report()))
 
 
+def test_fixed_concurrency_cli_compares_matched_reports(tmp_path,capsys):
+    baseline=tmp_path/'main.json'
+    candidate=tmp_path/'candidate.json'
+    baseline.write_text(json.dumps({**report('parallel',4),'database_version':'3.49.1'}))
+    candidate.write_text(json.dumps({**report('parallel',4),'database_version':'3.49.1',
+                                     'elapsed_seconds':0.8,'runs_per_second':10.0}))
+    args=[str(baseline),str(candidate)]
+    assert compare_ai_benchmarks.main(['--fixed-concurrency',*args])==0
+    output=json.loads(capsys.readouterr().out)
+    assert output['comparison_mode']=='fixed_concurrency'
+    assert output['capability_equivalent'] is True
+    assert output['baseline']['concurrency']==output['candidate']['concurrency']==4
+    assert output['deltas']['elapsed_seconds']['absolute']==0.05
+
+
+@pytest.mark.parametrize('candidate,message', [
+    ({**report('parallel',4),'database_version':'3.49.1'}, 'requires identical concurrency'),
+    ({**report(),'database_version':'3.50.0'}, 'database_version differs'),
+    (report(), 'requires a recorded database_version'),
+    ({**report(),'database_version':'3.49.1','provider_delay_ms':25}, 'provider_delay_ms differs'),
+    ({**report(),'database_version':'3.49.1',
+      'workload_fingerprint':{'version':1,'sha256':'b'*64}}, 'workload_fingerprint differs'),
+])
+def test_fixed_concurrency_refuses_unmatched_reports(candidate,message):
+    baseline={**report(),'database_version':'3.49.1'}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError,match=message):
+        compare_ai_benchmarks.compare(baseline,candidate,fixed_concurrency=True)
+
+
 @pytest.mark.parametrize('elapsed', [1.234500001, 1.234567, 1.235499999])
 def test_comparison_accepts_producer_rounding_for_derived_throughput(elapsed):
     baseline = report()
