@@ -13,15 +13,18 @@ Unit coverage of the admission row itself is in ``tests/test_ai_admission.py``.
 The Unthrottled control comparison is in ``tests/test_ai_unthrottled_acceptance.py`` (#1018).
 """
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
 from sqlalchemy import func, select
 
-from app import ai, ai_admission, ai_budget, ai_retry, ai_runs, worker
-from app.db import Behavior, Host, Session, Setting
+from app import ai, ai_admission, ai_budget, ai_retry, ai_runs, update_scores, worker
+from app.db import Behavior, Host, Package, Session, Setting
 from app.security import seal
+from tests.test_ai_scoring_deferral import success as scored_response
 
 PRICED='gpt-6-astra'
 RATE=6
@@ -251,3 +254,85 @@ def test_connection_tests_and_triage_share_one_rate_slot(admin,clock,provider,mo
     assert len(provider.sent)==2
     with Session() as s:
         assert s.get(ai_admission.Admission,'global').admitted==2
+
+
+@pytest.mark.parametrize('mode', MODES)
+@pytest.mark.parametrize('winner', ['triage', 'update_scoring'])
+def test_scoring_and_triage_contend_for_one_shared_slot(admin, clock, provider, monkeypatch, mode, winner):
+    configure(mode, ai_updates_enabled=True)
+    subject = add_subject('triage-host')
+    with Session() as session:
+        session.add(Host(id='score-host', name='Score host', address='192.0.2.2', fingerprint='',
+                         state='online', inventory={'os': 'ID=debian'}))
+        session.add(Package(id='score-host:fixture', host_id='score-host', name='fixture',
+                            installed='1', candidate='2', available_since=time.time() - 30))
+        session.commit()
+
+    def post(*args, **kwargs):
+        schema = kwargs['json']['text']['format']['name']
+        if schema != 'update_importance':
+            return provider(*args, **kwargs)
+        provider.sent.append(ai_runs.active.get())
+        response = scored_response(*args, **kwargs)
+        return httpx.Response(200, request=response.request, json={
+            **response.json(), 'model': PRICED, 'service_tier': 'default', 'usage': USAGE,
+        })
+
+    monkeypatch.setattr(ai.transport, 'post', post)
+    real_admit = ai_admission.admit
+    arrived = threading.Barrier(2)
+    winner_admitted = threading.Event()
+
+    def contend(model):
+        with Session() as session:
+            purpose = session.get(ai_runs.AIRun, ai_runs.active.get()).purpose
+        # Both real paths are past their own preflight. Select which reaches the
+        # shared gate first so both deferral paths are tested deterministically.
+        arrived.wait(timeout=15)
+        if purpose == winner:
+            try:
+                return real_admit(model)
+            finally:
+                winner_admitted.set()
+        assert winner_admitted.wait(timeout=15)
+        return real_admit(model)
+
+    dispatch = {'triage': worker.investigate_one, 'update_scoring': update_scores.run_one}
+    with monkeypatch.context() as collision:
+        collision.setattr(ai_admission, 'admit', contend)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(run) for run in dispatch.values()]
+            for future in futures:
+                future.result(timeout=30)
+
+    loser = next(purpose for purpose in dispatch if purpose != winner)
+    assert provider.purposes() == [winner]
+    with Session() as session:
+        admission = session.get(ai_admission.Admission, 'global')
+        assert admission.admitted == 1
+        refill = admission.next_at
+        runs = {run.purpose: run for run in session.scalars(select(ai_runs.AIRun))}
+        assert runs[winner].state == 'complete' and runs[winner].calls == 1
+        assert runs[loser].state == 'deferred' and runs[loser].calls == 0
+        if loser == 'triage':
+            retry = session.get(ai_retry.TriageRetry, subject)
+            assert retry.state == 'deferred' and retry.attempts == 0
+            assert retry.next_at == pytest.approx(refill, abs=1)
+        else:
+            score = session.scalars(select(update_scores.UpdateScore)).one()
+            assert score.state == 'deferred' and score.score is None
+            assert score.next_at == pytest.approx(refill, abs=1)
+    assert ledger_statuses() == (['released', 'settled'] if mode == 'rate_and_daily' else [])
+
+    dispatch[loser]()
+    assert provider.purposes() == [winner]
+    clock.advance(refill - time.time() + 2)
+    dispatch[loser]()
+    assert provider.purposes() == [winner, loser]
+    assert verdicts(subject) == ['low']
+    with Session() as session:
+        assert session.get(ai_admission.Admission, 'global').admitted == 2
+        assert session.get(ai_retry.TriageRetry, subject) is None
+        score = session.scalars(select(update_scores.UpdateScore)).one()
+        assert (score.state, score.score, score.installed, score.candidate) == ('complete', 50, '1', '2')
+    assert ledger_statuses() == (['released', 'settled', 'settled'] if mode == 'rate_and_daily' else [])

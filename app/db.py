@@ -41,6 +41,7 @@ class Host(Base):
     telemetry: Mapped[dict] = mapped_column(JSON, default=dict)
     baseline: Mapped[dict] = mapped_column(JSON, default=dict)
     integrity: Mapped[list] = mapped_column(JSON, default=list)
+    __table_args__ = (Index('ix_hosts_deleted_name_id', 'deleted_at', 'name', 'id'),)
 class Package(Base):
     __tablename__ = 'packages'
     id: Mapped[str] = mapped_column(String(400), primary_key=True)
@@ -159,7 +160,7 @@ def init():
         if 'next_at' not in job_columns:
             connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
         # create_all() never adds indexes to a table that already exists.
-        for model in (Job, Assessment, Behavior):
+        for model in (Host, Job, Assessment, Behavior):
             for index in model.__table__.indexes:
                 index.create(connection,checkfirst=True)
         ACTIVE_RUN_INDEX.create(connection,checkfirst=True)
