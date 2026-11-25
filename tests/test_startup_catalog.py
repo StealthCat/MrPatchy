@@ -312,3 +312,67 @@ def test_builtin_home_root_is_credited_consistently_with_scope_validation():
     assert sc.validate_additional_scope(['/home'])['rejected'][0]['reason'] == 'overlaps_catalog_location'
     result = sc.coverage('debian', ['/home', '/srv/app'], complete=True, homes_complete=True)
     assert [a['path'] for a in result['additional']] == ['/srv/app']
+
+
+# Mechanisms whose pure entry contracts are on main but whose files no collector reads yet (#1273).
+CONTRACT_HOOKS = ('dhclient_hooks', 'needrestart_hooks', 'resolvconf_hooks', 'certbot_hooks', 'acpid_events',
+                  'apcupsd_events', 'nut_upsmon', 'smartd_warnings', 'supervisord')
+
+
+def test_contract_hook_mechanisms_are_catalogued_with_their_contract_locations():
+    debian, rpm = by_id(sc.catalog('debian')), by_id(sc.catalog('rpm'))
+    assert set(CONTRACT_HOOKS) <= set(debian)
+    assert debian['dhclient_hooks']['locations'] == ['/etc/dhcp/dhclient-enter-hooks', '/etc/dhcp/dhclient-enter-hooks.d',
+                                                     '/etc/dhcp/dhclient-exit-hooks', '/etc/dhcp/dhclient-exit-hooks.d']
+    assert '/etc/needrestart/hook.d' in debian['needrestart_hooks']['locations']
+    assert debian['resolvconf_hooks']['locations'] == ['/etc/resolvconf/update.d', '/etc/resolvconf/update-libc.d']
+    assert debian['certbot_hooks']['trigger'] == 'schedule' and debian['supervisord']['trigger'] == 'boot'
+    assert debian['nut_upsmon']['locations'] == ['/etc/nut'] and rpm['nut_upsmon']['locations'] == ['/etc/ups']
+    assert '/etc/smartd.conf' in debian['smartd_warnings']['locations']
+    assert rpm['smartd_warnings']['locations'] == ['/etc/smartmontools/smartd.conf']
+    assert debian['supervisord']['locations'] == ['/etc/supervisor', '/etc/supervisord.conf']
+    assert rpm['supervisord']['locations'] == ['/etc/supervisord.conf', '/etc/supervisord.d']
+    # Debian-only tools are never offered as an RPM layout.
+    for debian_only in ('dhclient_hooks', 'needrestart_hooks', 'resolvconf_hooks'):
+        assert debian_only not in rpm
+    for mechanism in CONTRACT_HOOKS:
+        assert debian[mechanism]['parse'] == 'metadata' and debian[mechanism]['trigger'] in ('event', 'schedule', 'boot')
+
+
+@pytest.mark.parametrize('family', sc.FAMILIES)
+def test_contract_hooks_are_explicit_gaps_under_the_current_agent_scope(family):
+    result = by_id(sc.coverage(family, AGENT_SCOPE, complete=True, entries_reported=True))
+    expected = set(CONTRACT_HOOKS) - ({'dhclient_hooks', 'needrestart_hooks', 'resolvconf_hooks'}
+                                      if family == 'rpm' else set())
+    assert expected <= set(result)
+    for mechanism in expected:
+        assert result[mechanism]['state'] == 'not_collected' and result[mechanism]['entries_parsed'] is False
+        assert any(g['code'] == 'locations_not_collected' for g in result[mechanism]['gaps'])
+
+
+def test_contract_hooks_report_collected_metadata_without_parsed_entries():
+    dhclient = ['/etc/dhcp/dhclient-enter-hooks', '/etc/dhcp/dhclient-enter-hooks.d', '/etc/dhcp/dhclient-exit-hooks',
+                '/etc/dhcp/dhclient-exit-hooks.d']
+    result = by_id(sc.coverage('debian', AGENT_SCOPE + dhclient + ['/etc/letsencrypt/renewal-hooks'],
+                               ['/etc/dhcp/dhclient-enter-hooks', '/etc/dhcp/dhclient-exit-hooks'],
+                               complete=True, entries_reported=True))
+    assert result['certbot_hooks']['state'] == 'covered' and result['certbot_hooks']['entries_parsed'] is False
+    assert any(g['code'] == 'metadata_only' for g in result['certbot_hooks']['gaps'])
+    assert result['dhclient_hooks']['state'] == 'covered' and result['dhclient_hooks']['entries_parsed'] is False
+    # A narrower root is partial, never covered.
+    partial = by_id(sc.coverage('debian', AGENT_SCOPE + ['/etc/dhcp/dhclient-exit-hooks.d'], complete=True))
+    assert partial['dhclient_hooks']['state'] == 'partial'
+
+
+@pytest.mark.parametrize('path', ['/etc/dhcp', '/etc/needrestart/hook.d', '/etc/letsencrypt', '/etc/acpi/events/x',
+                                  '/etc/supervisor', '/etc/nut', '/etc/smartd.conf'])
+def test_additional_scope_rejects_contract_hook_locations(path):
+    result = sc.validate_additional_scope([path], 'debian')
+    assert result['accepted'] == [] and result['rejected'] == [{'index': 0, 'reason': 'overlaps_catalog_location'}]
+
+
+def test_contract_hooks_leave_existing_mechanism_states_unchanged():
+    result = sc.coverage('debian', AGENT_SCOPE, ['/etc/rc.local'], complete=True, entries_reported=True)
+    states = {m['id']: m['state'] for m in result['mechanisms'] if m['id'] not in CONTRACT_HOOKS}
+    assert states['cron_system'] == 'covered' and states['rc_local'] == 'absent_reported'
+    assert states['systemd_system'] == 'partial' and states['event_hooks'] == 'not_collected'
