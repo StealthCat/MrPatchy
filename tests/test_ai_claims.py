@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 from sqlalchemy import select,event
-from app import ai, ai_claims, ai_runs, ai_assessments, ai_retry, host_lifecycle, worker, worker_registry
+from app import ai, ai_claims, ai_runs, ai_assessments, ai_policy, ai_retry, host_lifecycle, worker, worker_registry
 from app.db import Session, Host, Behavior, Setting,engine
 from app.security import seal
 
@@ -427,6 +427,84 @@ def test_idle_triage_still_recovers_abandoned_runs(admin, claim_state):
             assert claim is None and run.state == 'interrupted'
             assert s.scalar(select(ai_runs.AIEvent.id).where(
                 ai_runs.AIEvent.run_id == run.id, ai_runs.AIEvent.stage == 'interrupted')) is not None
+
+
+@pytest.mark.parametrize('hold', ['paused', 'disabled', 'deleted'])
+def test_held_only_queue_skips_claim_lock_and_preserves_eligible_work(admin, monkeypatch, hold):
+    seed(count=2)
+    policy_key = ai_policy.PREFIX + 'host-0'
+    with Session() as s:
+        host = s.get(Host, 'host-0')
+        if hold == 'paused':
+            s.add(Setting(key=policy_key, value={'paused': True}))
+        elif hold == 'disabled':
+            host.enabled = False
+        else:
+            host.deleted_at = time.time()
+        s.get(Behavior, 'subject-1').verdict = 'low'
+        s.commit()
+
+    lock_calls = []
+    original_lock = ai_claims.Lock
+
+    def observe_lock(name):
+        lock_calls.append(name)
+        return original_lock(name)
+
+    monkeypatch.setattr(ai_claims, 'Lock', observe_lock)
+    for _ in range(4):
+        assert ai_claims.acquire() is None
+    assert lock_calls == []
+
+    with Session() as s:
+        # Legacy observations may have no retained host row.
+        if hold != 'paused':
+            s.delete(s.get(Host, 'host-1'))
+        s.get(Behavior, 'subject-1').verdict = 'pending'
+        s.commit()
+    peer = ai_claims.acquire()
+    assert peer is not None and peer.subject == 'subject-1'
+    with peer:
+        with peer.mutation() as (_session, observation):
+            observation.verdict = 'low'
+
+    if hold == 'deleted':
+        return
+    with Session() as s:
+        if hold == 'paused':
+            s.delete(s.get(Setting, policy_key))
+        else:
+            s.get(Host, 'host-0').enabled = True
+        s.commit()
+    resumed = ai_claims.acquire()
+    assert resumed is not None and resumed.subject == 'subject-0'
+    with resumed:
+        pass
+
+
+@pytest.mark.parametrize('missing_claim', [False, True], ids=['expired', 'orphaned'])
+@pytest.mark.parametrize('hold', ['paused', 'disabled'])
+def test_held_only_queue_still_recovers_abandoned_work(admin, missing_claim, hold):
+    seed(count=1)
+    lease = ai_claims.acquire()
+    assert lease is not None
+    with Session() as s:
+        if hold == 'paused':
+            s.add(Setting(key=ai_policy.PREFIX + lease.host_id, value={'paused': True}))
+        else:
+            s.get(Host, lease.host_id).enabled = False
+        claim = s.get(ai_claims.Claim, lease.subject)
+        if missing_claim:
+            s.delete(claim)
+        else:
+            claim.expires = 0
+        s.commit()
+
+    assert ai_claims.acquire() is None
+    with Session() as s:
+        assert s.get(ai_claims.Claim, lease.subject) is None
+        assert s.get(ai_runs.AIRun, lease.run_id).state == 'interrupted'
+
 
 def test_drain_blocks_new_claims_but_keeps_existing_owner_valid(admin):
     seed(count=2)

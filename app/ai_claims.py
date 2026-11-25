@@ -241,9 +241,19 @@ def _free_hit(s,model,election_filters):
     return None
 
 
+def _eligible_host_filters():
+    return (
+        Behavior.host_id.not_in(ai_policy.paused_ids()),
+        Behavior.host_id.not_in(host_lifecycle.inactive_ids()),
+    )
+
+
 def _needs_admission_lock(s, now):
     """One read probes for possible work or recovery without selecting evidence."""
-    pending = select(Behavior.id).where(Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')))
+    pending = select(Behavior.id).where(
+        Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')),
+        *_eligible_host_filters(),
+    )
     expired = select(Claim.subject).where(Claim.expires <= now)
     runs = ai_runs.AIRun
     has_claim = select(Claim.subject).where(Claim.run_id == runs.id).exists()
@@ -290,8 +300,8 @@ def acquire(owner=None):
                 .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
             saturated_hosts=[host_id for host_id,count,key,policy in occupancy
                 if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
-            election_filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
-                Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
+            election_filters=(Behavior.approved==False,*_eligible_host_filters(),
+                Behavior.host_id.not_in(saturated_hosts),
                 Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
             if free_only:
                 row=_free_hit(s,cfg['ai_model'],election_filters)
