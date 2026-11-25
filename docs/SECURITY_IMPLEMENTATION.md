@@ -2281,6 +2281,12 @@ triage or worker diagnostic in one database snapshot, projecting only the fields
 used by the status response. This reduces a polling round trip. Production
 throughput and the full faster-AI acceptance milestones remain open.
 
+[#1441](https://github.com/StealthCat/MrPatchy/issues/1441) bounds the latest
+diagnostic lookup to the newest triage and worker candidates using the existing
+purpose/start index. It orders those two candidates by start time and run ID
+before reading diagnostic text. The newest diagnostic and running triage stage
+still share one status statement. This is a local database performance increment.
+
 Investigation lease validation checks the current claim before fetching host or
 behavior evidence. A live lease reads only the host lifecycle fields and still
 checks the full behavior evidence, owner, configuration and expiry. Focused
