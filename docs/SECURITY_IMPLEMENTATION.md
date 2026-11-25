@@ -12782,6 +12782,34 @@ samples. Compatibility: admin-only as before, no schema, collection, admission,
 budget or response-authorization change. Matched serial/parallel production
 throughput remains open.
 
+### incron table contract — worker checkpoint #1132 (roadmap F)
+
+incrond runs a command whenever an inotify event fires on a path named in an incron table. System tables in `/etc/incron.d` run as root. Per-user tables in `/var/spool/incron/<user>` run as that user, subject to `/etc/incron.allow` and `/etc/incron.deny`. Neither the startup catalog nor any contract covered them, so these event-triggered commands were invisible.
+
+- **Change:** a new pure module, `app/incron_tables.py`. It takes captured `incron.conf` text, table-directory listings, table text, allow/deny state and the account names. It reports which tables load, and for each entry the watched path, event names, flags, command, user and shell.
+- **Reference:** the rules follow incron 0.5.12 source (`incrontab.cpp`, `strtok.cpp`, `incroncfg.cpp`, `icd-main.cpp`, `usertable.cpp` and `usertable.h`):
+  - **Configuration:** `incron.conf` keeps the *first* value of a repeated key. A `#` starts a comment only at the start of a line, after optional blanks. A line over 1022 bytes stops reading.
+  - **Table discovery:** tables load only when `d_type` is `DT_REG`, or when `stat` reports a regular file for `DT_UNKNOWN`. Symlinks are skipped where `d_type` is reported. Dot-named system tables are skipped. An unopenable system directory is ignored. An unopenable user directory stops incrond.
+  - **User access:** a user table needs a `getpwnam` account and `IncronTab::CheckUser` approval. If the allow file exists, only listed users run. Otherwise, a deny file refuses the users it lists. Any other open failure refuses.
+  - **Table parsing:** tables have no comment syntax and are read in 999-byte `fgets` pieces. The two-delimiter tokenizer toggles its escape state twice per character, so `\ ` does not keep a space in the path.
+  - **Mask field:** a mask that starts with a decimal number (`%lu`) is used raw, with default flags. Unknown mask words contribute nothing.
+  - **Execution:** system commands run through `system()` (`/bin/sh -c`) as root. User commands run through `/bin/bash -c` after `setgid`/`initgroups`/`setuid`. For a non-root user the environment is reset first.
+  - **Loop suppression:** it needs the `LOOPER` build flag, which 0.5.12 does not define. `loopable` is therefore recorded but has no runtime effect.
+- **Gaps, never reported as covered:** each of these marks the affected table `unresolved`:
+  - unobserved configuration, listing, entry type, table text, account list or allow/deny state;
+  - malformed or duplicate listing names;
+  - invalid UTF-8 and NUL bytes;
+  - the 64 KiB text, 1024-entry listing and 512-entry table caps.
+- **Unobserved, stated in every result:**
+  - whether incrond runs, and a `-f` alternative configuration;
+  - which events occur;
+  - wildcard and recursive-watch expansion;
+  - per-user path access, which silently discards events;
+  - the contents of the programs the commands run.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_incron_tables.py` has 14 tests and cannot run on main, where the module does not exist. Three mutations are each caught: loading dot-named system tables, a single-toggle (working) escape in the tokenizer, and last-value-wins configuration. The tokenizer and parsing rules were ported by reading the source. Compiling the upstream source against the tests was not possible in the worker environment.
+- **Remaining:** collection wiring into the startup inventory, a startup catalog entry, provenance against the incron package's shipped files, and UI.
+
 ### Observed provider overlap in fixture comparisons (#1092, roadmap A)
 
 Comparison reports show each input's peak simultaneous fixture provider requests
