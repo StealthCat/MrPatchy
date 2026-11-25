@@ -46,22 +46,23 @@ def _readiness(session, host_ids, cfg):
     if not cfg['ai_model'] or session.scalar(select(Setting.key).where(Setting.key == 'openai_key')) is None:
         return dict.fromkeys(host_ids, 'not_configured')
 
-    keys = {host_id: ai_policy.PREFIX + host_id for host_id in host_ids}
-    policies = dict(session.execute(
-        select(Setting.key, Setting.value).where(Setting.key.in_(keys.values()))
-    ).all())
-    paused = {
-        host_id for host_id, key in keys.items()
-        if ai_policy.stored_paused(policies.get(key), present=key in policies)
-    }
-    from .operations import quarantined_hosts
-    held = quarantined_hosts(session, [host_id for host_id in host_ids if host_id not in paused])
-    unchecked = [host_id for host_id in host_ids if host_id not in paused and host_id not in held]
-    active = set(session.scalars(host_lifecycle.active_ids().where(Host.id.in_(unchecked)))) if unchecked else set()
+    from .operations import host_hold_exists
+
+    policy = aliased(Setting)
+    rows = session.execute(
+        select(Host.id, policy.key, policy.value, host_hold_exists(Host.id),
+               Host.id.in_(host_lifecycle.active_ids()))
+        .outerjoin(policy, policy.key == literal(ai_policy.PREFIX) + Host.id)
+        .where(Host.id.in_(host_ids))
+    )
     states = dict.fromkeys(host_ids, 'inactive')
-    states.update(dict.fromkeys(active, 'ready'))
-    states.update(dict.fromkeys(held, 'held'))
-    states.update(dict.fromkeys(paused, 'paused'))
+    for host_id, key, value, held, active in rows:
+        if ai_policy.stored_paused(value, present=key is not None):
+            states[host_id] = 'paused'
+        elif held:
+            states[host_id] = 'held'
+        elif active:
+            states[host_id] = 'ready'
     return states
 
 
