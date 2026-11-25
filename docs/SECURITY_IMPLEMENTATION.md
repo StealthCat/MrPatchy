@@ -13980,3 +13980,38 @@ libvirt runs `/etc/libvirt/hooks/<driver>` and every executable entry of `/etc/l
   - agent collection of the stat results and listings;
   - a catalog entry, package provenance, persistence, UI and AI classification;
   - a live differential against a running libvirt daemon.
+
+### Postfix `~/.forward` command contract — worker checkpoint #1489 (roadmap F)
+
+`app/dotforward_commands.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are the Postfix installation state, `postconf` values, passwd entries, and metadata plus text for each user's `.forward*` home entries. From these it reports which `|command` destinations Postfix `local(8)` runs on mail to each user. For each command it gives the recipient address (with or without an extension), the account it runs as and whether `allow_mail_to_commands` permits it.
+
+**Why it matters.** A `"|command"` line in `~/.forward` runs on every delivery to that user, which makes it a well-known per-user persistence trigger. #1215 covers `/etc/aliases` and leaves `.forward` files out of scope.
+
+**Source of the semantics.** Postfix `src/local/dotforward.c`, `token.c`, `command.c`, `local.c`, `local_expand.c` and `src/global/mail_params.h`:
+
+- **File selection.** `forward_path` defaults to `$home/.forward${recipient_delimiter}${extension}, $home/.forward`. An entry with an undefined macro is skipped: without an extension, only `$home/.forward` applies. The first entry that `lstat`s as the recipient is chosen, and no other entry is tried, even when the chosen file is then refused.
+- **Refusals.** The chosen file is used only if it is a regular file (by `lstat`, so a symlink is refused), owned by root or the recipient, and not world-writable.
+- **Parsing.** Lines that start with `#` in column one are skipped. Each address token is parsed. A destination that starts with `|` is a command, and it is refused unless `allow_mail_to_commands` contains `forward`. Commands in `:include:` files need `include`.
+- **Case folding.** `deliver_recipient` (`recipient.c`) case-folds the recipient before `split_addr` separates the user and extension at the first `recipient_delimiter` character. A passwd name with ASCII upper case, or one containing a delimiter character, is never looked up and is listed in `unreachable_users`. An extension file with ASCII upper case is never chosen. Non-ASCII names and extensions (SMTPUTF8 folding) and upper-case delimiters are blocking `casefold_not_modeled` gaps.
+- **Rights.** Commands run with the recipient's uid/gid. A uid or gid of 0 is replaced by `default_privs`, so a root `.forward` command runs as `nobody` by default. A non-empty `local_command_shell` is reported as the shell.
+
+**Fail closed.** The tokenizer is deliberately conservative. It accepts only comma-separated destinations, each either one bare atom or one whole quoted string. The following are blocking gaps:
+
+- comments, route addresses, group syntax, backslashes, unbalanced quotes, words joined by whitespace (such as an unquoted `|prog -f-`) and quoted strings glued to other tokens;
+- a non-default `forward_path`, `line_length_limit` or `local_transport`;
+- an unknown `allow_mail_to_commands` name;
+- an unresolved or privileged `default_privs`;
+- unobserved inputs or homes, unreadable homes, missing metadata or text, malformed captured text, over-limit lines, files or listings;
+- `:include:` files when `include` would allow their commands.
+
+**Validation.** `tests/test_dotforward_commands.py` has 37 tests. They cover:
+
+- quoted and bare commands, and root mapped to `default_privs`;
+- symlink, directory, foreign-owner and world-writable refusals, and root-owned acceptance;
+- the command-class gate, and an extension file chosen first that blocks fallback;
+- case folding: upper-case and delimiter-containing usernames, upper-case extensions and non-ASCII names;
+- every unsupported-syntax form, include handling, column-one comments, long lines and non-default parameters;
+- malformed and missing inputs, captured text with a lone surrogate (a blocking `content_malformed` gap while other users stay usable), surrogateescape bytes, duplicate passwd names and gap bounding.
+
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** a differential harness against a real Postfix `local(8)` and agent collection of homes and `postconf`. Also a catalog entry, provenance, persistence, UI and AI classification.
