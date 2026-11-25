@@ -7,7 +7,7 @@ import re
 import time
 import httpx
 from sqlalchemy.exc import DBAPIError
-from . import ai_runs, ai_transport as transport
+from . import ai_pricing, ai_runs, ai_transport as transport
 
 URL='https://api.openai.com/v1/responses'
 MODELS_URL='https://api.openai.com/v1/models'
@@ -260,8 +260,12 @@ def _request(payload,key,timeout,reservation,encoded_body):
         try:data=response.json()
         except (ValueError,UnicodeDecodeError):data=None
         with ai_runs.measure('usage_persistence'):
-            values=ai_runs.record_usage(call_id,data if isinstance(data,dict) else {},payload)
-            ai_budget.reconcile(reservation,values)
+            values = ai_pricing.estimate(data if isinstance(data, dict) else {}, payload)
+            try:
+                ai_runs.record_usage(call_id, values)
+            finally:
+                # A failed diagnostic write must not keep a priced reply at its full reservation.
+                ai_budget.reconcile(reservation, values)
         response.raise_for_status()
         ai_provider_backoff.succeeded(request_started)
     except transport.ResponseTooLarge as exception:

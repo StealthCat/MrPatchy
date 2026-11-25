@@ -3743,6 +3743,21 @@ Milestone 4 acceptance for **unknown pricing/usage**.
   them, and quoting an unpriceable request at zero fails 12.
 - **Unchanged:** no runtime change; no defect was found. Other milestone 4 items
   and measured throughput remain open.
+### Ledger settlement after a diagnostic write failure — worker checkpoint #1465
+
+Once Mr Patchy parses a provider reply, the same usage estimate drives its
+diagnostic receipt and its independent daily-cap ledger. If the diagnostic
+receipt update fails, the ledger still attempts reconciliation. A priced
+reply settles to the estimate and returns any unused reservation to the cap.
+An unpriceable reply keeps the full reservation marked uncertain.
+
+Acceptance injects a diagnostic table write failure after the provider reply
+on SQLite and MySQL. It verifies the ledger, the next budget admission, and
+the recorded failed AI run. A failed ledger update keeps the conservative
+sent reservation and the already saved usage diagnostic. A failure before
+reply parsing or a database outage can still leave a counted sent reservation.
+The wider Roadmap A acceptance remains open.
+
 ### Daily cap reset across DST days and midnight — worker checkpoint #984
 
 Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one UTC day and one timezone change. `tests/test_ai_budget_reset_acceptance.py` adds acceptance evidence only; no runtime behavior changes.
