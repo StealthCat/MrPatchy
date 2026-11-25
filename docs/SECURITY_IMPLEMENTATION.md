@@ -10407,6 +10407,18 @@ workers start. No target-helper/agent update, Docker publication, Git tag or sch
 change is included.
 
 
+### Queued AI plan waits during dispatch — Roadmap A checkpoint #1426
+
+A worker dispatch scan remembers server IDs whose due incident, startup or
+release plan must wait for global AI enablement or a saved server resume. Due
+plans on the same stored server ID reuse that wait within the scan. Ordinary
+jobs still follow their normal checks, and the next scan reads the policy
+again. The worker still checks policy before provider calls.
+
+The dispatch regression covers paused and malformed policies, an unrelated
+eligible server, ordinary work on a paused server and a subsequent saved
+resume. It measures two policy reads across 24 waiting jobs on two servers.
+
 ## v1.35.0 — Durable incident/startup advisory-plan deferral
 
 Issue-first reconciliation read merged v1.34.0 main, repository instructions, this
