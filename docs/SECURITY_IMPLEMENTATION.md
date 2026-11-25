@@ -13037,6 +13037,29 @@ never reads a sourced file.
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
 
+### auditd dispatcher-plugin contract — worker checkpoint #1217
+
+`app/auditd_plugins.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/audit/auditd.conf`, the effective plugin directory and stat metadata for the plugin programs. It reports which programs auditd's built-in dispatcher forks and `execve`s as root on every auditd start and reconfigure, with which arguments, and why every other plugin file starts nothing.
+
+- **Source of the semantics:** audit-userspace `v3.1.2`, the version Ubuntu 24.04 ships: `audisp/audispd.c`, `audisp/audispd-pconfig.c`, `src/auditd-config.c`, `src/auditd.c` and `common/strsplit.c`.
+  - **Plugin directory:** the last `plugin_dir` line wins over `/etc/audit/plugins.d`. Names starting with `.` or containing more than one `.` are skipped. No `.conf` suffix is required.
+  - **Plugin files:** each must be root-owned, not world-writable and regular after following symlinks.
+  - **Line reading:** the 160-byte `fgets` buffer means lines of 159 bytes or more are skipped. An unterminated last line is skipped, and so are NUL-hidden newlines together with the line after them.
+  - **Tokenizing:** words are split on spaces only. Words after the option are dropped. A missing `=`, an unknown keyword, an option on a keyword other than `args`, or an invalid value rejects the whole file.
+  - **Values:** `builtin_*` paths map to `/sbin/audisp-af_unix`. For other paths, glibc `dirname` must be at least four bytes. For every keyword the last line wins.
+  - **Start check:** an active plugin starts only if `stat` of its path finds a root-owned regular file with every `0750` bit set. It then runs with `execve(path, [path, args≤2], NULL)`: no shell, no `PATH` search and an empty environment.
+- **Fail closed:** blocking gaps cover an unobserved or unreadable `auditd.conf`, plugin directory, entry or program; entries that are FIFOs or devices; malformed input; and over-limit input.
+- **Validation:** `tests/test_auditd_plugins.py` has 61 tests.
+  - Its 21 parse vectors were checked against the real `load_pconfig`, compiled from the v3.1.2 source with a logging stub.
+  - A random differential against that build gave 0 mismatches over 10,000 cases, with real program files covering each permission and ownership case.
+  - The differential catches four mutations: wrong mode bits, wrong buffer size, wrong `dirname`, and treating tab as a separator.
+  - `glibc_dirname` matches libc `dirname` on all 5,461 exhaustive short paths.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Agent collection of `auditd.conf`, the plugin directory and program stats.
+  - A catalog entry, package provenance, UI and AI classification.
+  - Validation of the auditd.conf keywords other than `plugin_dir`. An invalid file can only stop auditd, so the contract may over-report but never under-report.
+
 ### mdadm alert-program contract — worker checkpoint #1213 (roadmap F)
 
 `app/mdadm_program.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/mdadm.conf`, `/etc/mdadm.conf.d`, `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. It reports which `PROGRAM` command `mdadm --monitor --scan` executes as root on RAID events, and which file and line it came from.
