@@ -282,3 +282,82 @@ def test_revocation_after_claim_cannot_send_during_provider_backoff(client, prov
     with Session() as s:
         retry = s.get(ai_retry.TriageRetry, 'behavior-two')
         assert retry.state == 'deferred' and retry.attempts == 0
+
+
+# --- Rotating free-hit probe window (#1241) ---------------------------------
+
+@pytest.fixture
+def fresh_cursor(monkeypatch):
+    monkeypatch.setattr(ai_claims, '_free_hit_cursor', None, raising=False)
+
+
+@pytest.fixture
+def probes(monkeypatch):
+    seen = []
+    probe = known_good.exact_hit_available
+
+    def counted(s, row, model):
+        seen.append(row.id)
+        return probe(s, row, model)
+
+    monkeypatch.setattr(known_good, 'exact_hit_available', counted)
+    return seen
+
+
+def test_a_hit_behind_a_full_window_of_older_paid_subjects_is_found(client, provider, fresh_cursor, probes):
+    configure()
+    exhaust()
+    older = ['older-%02d' % index for index in range(ai_claims.FREE_HIT_SCAN)]
+    for index, subject in enumerate(older):
+        seed(hit=False, subject=subject, host='host-three', first_seen=1 + index)
+    seed(first_seen=1000)
+
+    worker.investigate_one()
+    assert probes == older  # one bounded, oldest-first pass without a hit
+    assert held()
+    worker.investigate_one()
+
+    assert reused()
+    assert provider.bodies == [] and [status for status, _ in ledger()] == ['settled']
+    assert all(held(subject) for subject in older)
+    # The newest subject is probed first after the rotation, and every
+    # closed-gate pass stays within the probe bound.
+    assert probes[ai_claims.FREE_HIT_SCAN] == 'behavior-two'
+    assert len(probes) <= 2 * ai_claims.FREE_HIT_SCAN
+    assert ai_claims._free_hit_cursor is None
+
+
+def test_the_rotation_wraps_to_reach_a_new_hit_older_than_the_cursor(client, provider, fresh_cursor, probes, monkeypatch):
+    monkeypatch.setattr(ai_claims, 'FREE_HIT_SCAN', 2)
+    configure()
+    exhaust()
+    for index in range(3):
+        seed(hit=False, subject='miss-%d' % index, host='host-three', first_seen=10 + index)
+
+    worker.investigate_one()
+    worker.investigate_one()
+    assert probes == ['miss-0', 'miss-1', 'miss-2', 'miss-0']  # the second pass wraps
+    assert ai_claims._free_hit_cursor == (10, 'miss-0')
+
+    seed(first_seen=5)  # a hit older than every subject and the cursor
+    passes = 0
+    while not reused() and passes < 3:
+        worker.investigate_one()
+        passes += 1
+    assert reused()
+    assert passes <= 2  # reached within ceil(subjects / FREE_HIT_SCAN) passes
+    assert provider.bodies == []
+    assert all(held('miss-%d' % index) for index in range(3))
+
+
+def test_a_stale_cursor_still_probes_the_oldest_subjects(client, provider, fresh_cursor, monkeypatch):
+    # A cursor beyond every eligible subject (cleared queue, or a cursor left
+    # by an earlier database) wraps within the same pass instead of missing.
+    monkeypatch.setattr(ai_claims, '_free_hit_cursor', (10 ** 12, 'gone'), raising=False)
+    configure()
+    exhaust()
+    seed(hit=False, subject='older-miss', host='host-three', first_seen=1)
+    seed(first_seen=2)
+    worker.investigate_one()
+    assert reused() and held('older-miss')
+    assert provider.bodies == []

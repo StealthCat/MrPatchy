@@ -141,9 +141,10 @@ def test_mysql_mode_refuses_a_database_that_already_has_tables(empty_mysql):
 
 @needs_mysql
 @pytest.mark.parametrize('same_server', [False, True], ids=['cross-server', 'same-server'])
-def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql, same_server):
+@pytest.mark.parametrize('mode', ['legacy', 'daily_cap'])
+def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql, same_server, mode):
     workload = ['--runs', '4', '--provider-delay-ms', '250' if same_server else '40',
-                '--ssh-delay-ms', '1', '--retained-history-rows', '25']
+                '--ssh-delay-ms', '1', '--retained-history-rows', '25', '--control-mode', mode]
     if same_server:
         workload.append('--same-server')
     reports = []
@@ -163,7 +164,16 @@ def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(em
         assert report['fixture_hosts'] == (1 if same_server else 4)
         assert report['single_server_slots'] == (4 if same_server else None)
         assert report['stages']['two_stage']['count'] == report['stages']['ssh_evidence']['count'] == 2
-    assert serial['peak_provider_requests'] == 1 and parallel['peak_provider_requests'] > 1
+        if mode == 'daily_cap':
+            assert report['fixture_budget']['settled_calls'] == 6
+            assert report['fixture_budget']['settled_microusd'] == 120
+            for stage in ('budget_reservation', 'budget_reconciliation'):
+                assert report['stages'][stage]['count'] == 6
+        else:
+            assert not {'budget_reservation', 'budget_reconciliation'} & report['stages'].keys()
+    assert serial['peak_provider_requests'] == 1
+    if mode == 'legacy':
+        assert parallel['peak_provider_requests'] > 1
     comparison = compare(serial, parallel)
     assert comparison['capability_equivalent'] is True
     assert comparison['baseline']['database'] == comparison['candidate']['database'] == 'mysql'
@@ -274,3 +284,27 @@ def test_a_second_run_is_refused_while_the_first_holds_the_database(empty_mysql)
         first.release()
     # The lock is free again once the first run has finished.
     benchmark_ai.claim_empty_mysql(benchmark_ai.mysql_target({ENV: MYSQL_URL})).release()
+
+
+@needs_mysql
+@pytest.mark.parametrize('mode, custom_rate', [('rate', 900), ('rate_and_daily', 800)])
+def test_mysql_paced_serial_and_parallel_keep_followups_and_leave_no_tables(empty_mysql, mode, custom_rate):
+    reports = []
+    for concurrency in (1, 4):
+        result = run('--database', 'mysql', '--runs', '2', '--control-mode', mode,
+                     '--rate-per-hour', str(custom_rate), '--concurrency', str(concurrency), url=MYSQL_URL)
+        assert result.returncode == 0, result.stderr
+        assert _tables(empty_mysql) == []
+        empty_mysql.dispose()
+        sample = json.loads(result.stdout)
+        assert sample['fixture_rate']['admitted_starts'] == 2
+        assert sample['fixture_rate']['starts_per_hour'] == custom_rate
+        assert sample['elapsed_seconds'] >= round(3600 / custom_rate, 3)
+        assert sample['provider_calls'] == 3 and sample['stages']['ssh_evidence']['count'] == 1
+        if mode == 'rate_and_daily':
+            for stage in ('budget_reservation', 'budget_reconciliation'):
+                assert sample['stages'][stage]['count'] == sample['fixture_budget']['settled_calls'] == 3
+        else:
+            assert not {'budget_reservation', 'budget_reconciliation'} & sample['stages'].keys()
+        reports.append(sample)
+    assert compare(*reports)['capability_equivalent'] is True
