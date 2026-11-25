@@ -6,8 +6,8 @@ from sqlalchemy import func, select
 from test_auto_plan_status import seed
 from test_operations import login_as
 
-from app import ai, auto_plan_retry, auto_plan_status, incidents
-from app.db import Audit, Host, Job, Session
+from app import ai, ai_policy, auto_plan_retry, auto_plan_status, incidents
+from app.db import Audit, Host, Job, Session, Setting
 
 COUNT = '/api/hosts/{}/security/auto-plan-failed'
 RETRY = '/api/hosts/{}/security/auto-plan-failed/retry'
@@ -151,8 +151,9 @@ def test_inactive_server_releases_nothing(admin, change):
 
 def test_paused_server_releases_but_the_tick_still_waits(admin, monkeypatch):
     now = seed()
-    from app import ai_policy
-    monkeypatch.setattr(ai_policy, 'status', lambda s, host: {'paused': True})
+    with Session() as s:
+        s.add(Setting(key=ai_policy.PREFIX + 'web', value={'paused': True}))
+        s.commit()
     assert release(now)['released'] == 1
     assert tick(now, monkeypatch) == []
 
