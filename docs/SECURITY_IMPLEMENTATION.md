@@ -264,6 +264,18 @@ Hash correlation searches exact SHA-256 values among stored incident detections 
 Each server's scan policy can enable automatic AI response proposals. It is off by default and sends scanner evidence through the existing configured AI integration. The leader checks for unplanned open incidents, with at most ten queued plan requests per hour across the fleet (including manual requests) and one outstanding plan per host. Each incident/scan revision receives at most one automatic attempt; failures require manual retry or a later detection. Disabling the option prevents queued automatic jobs from making a new provider call. A changed or reviewed incident is checked again at execution. No plan is automatically approved or executed, and detection continues without AI.
 
 
+### Automatic incident plan pause lookup — Roadmap A checkpoint #1413
+
+The automatic incident plan tick reads security opt-ins and per-server AI pause
+settings in one query. The database matches setting keys using its configured
+collation. Missing pause settings allow planning, and malformed pause settings
+keep the server paused. The tick still checks response holds, active server
+lifecycle and plan occupancy, and the worker rechecks AI policy before sending
+a provider request.
+
+This increment measures policy reads in a six-server planning fixture. Fleet
+throughput and the remaining automatic planning admission costs are still open.
+
 ## Scanner traversal and signature provenance
 
 Version 2 scan receipts assess the **advertised daily database build date** from `clamscan --version`, with the subprocess locale set to C and timezone to UTC. The fixed age limit is seven days; dates more than five minutes in the future are flagged for clock review. Missing/unparseable dates, stale or future dates, failed final health checks, and a version change across a scan keep its coverage state **incomplete**. The scanner still retains detections from available signatures. The Security tab shows freshness and build time; older receipts explicitly show that freshness was not recorded.
@@ -2214,6 +2226,15 @@ adds observability only: lock, lease, lifecycle, pause, rate, budget, evidence a
 response-authorization behavior are unchanged. Production contention baselines
 and the broader faster-AI acceptance remain open.
 
+The `claim_lock_hold` sample (#1317) measures from acquisition of the
+fleet claim lock to the start of its release for a successful process-triage
+claim. It includes election, claim persistence and the database session's
+exit. Read it alongside the separate lock wait and aggregate admission
+times in AI stage timings or the fixture benchmark's `persisted_stages`.
+Samples use the monotonic clock and existing diagnostic retention. Older
+runs may have no sample, and refused or empty polls contribute none.
+Production contention and throughput remain to be measured.
+
 The fleet AI logs timing panel tracked in #611 presents the bounded retained-stage
 summary from #523. It reports per-stage sample counts, errors and p50/p95 with
 coverage and truncation, and keeps individual run logs available when the summary
@@ -2389,6 +2410,15 @@ scoring work. Shared admission still governs outbound calls.
 The regression covers overdue and future scores, paused and inactive servers,
 and disabled scoring without adding another aggregate query. Exact scoring
 identity and provider eligibility remain checked by the scheduler.
+
+### Consistent scoring queue status during key changes - Roadmap A checkpoint #1453
+
+The read-only scoring queue derives its scheduler state and its blocked update
+counts from the same saved key read. When an administrator adds or removes a
+key during a SQLite refresh, the current response keeps the original view and
+the next refresh observes the saved change. A configured model takes one key
+read during the summary. Runtime scoring continues to check the live settings
+separately before provider admission. Roadmap A remains incomplete.
 
 ### Update-scoring schedule-state reads
 
