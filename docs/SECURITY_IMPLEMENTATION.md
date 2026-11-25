@@ -13904,3 +13904,21 @@ Every libwrap-linked service (`tcpd` started from inetd or xinetd, or a daemon l
 - **Validation:** `tests/test_tcp_wrappers.py` (37 tests). The model was checked line by line against the patched source. No differential against a compiled libwrap has been run.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection, a catalog entry, package provenance (`libwrap0`/`tcpd`), persistence, UI and AI classification.
+
+### nsswitch.conf NSS module contract — worker checkpoint #1399 (roadmap F)
+
+glibc loads `libnss_<service>.so.2` into every process that looks up a user, group, host or similar database, including root daemons such as sshd, cron and login. A new service name in `/etc/nsswitch.conf` therefore makes those processes run new shared-object code at the next lookup. The startup inventory did not model this trigger.
+
+- **Change:** the pure `app/nss_modules.py` takes the captured file text. It returns, for each of glibc's 17 databases, the services glibc consults in order: the line or default they came from, each service's criteria, and whether it is built in (`files`, `dns`) or loads a shared object. It also returns the union of shared objects with the databases that load them. It performs no I/O and never loads a library.
+- **Fidelity (glibc 2.39 `nss_database.c`/`nss_action_parse.c`):**
+  - there are no comments, so `passwd: files # note` loads `libnss_#.so.2` and `libnss_note.so.2`;
+  - database names are case-sensitive, and the last line wins;
+  - a final line with no newline is never processed;
+  - a `[` with no service ends the list;
+  - one criteria syntax error rejects the whole file, so lookups fail and nothing is loaded;
+  - `shadow`, `gshadow` and `shadow_compat` inherit their counterpart, an unset `initgroups` uses `group`, and the per-database defaults apply;
+  - a service name holding `/` is flagged as a path.
+- **Fail closed:** an unsupplied file, a symlink that was not followed, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. `unobserved` names library resolution, which lookups processes perform, compat/nscd/sssd behaviour and other C libraries. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_nss_modules.py` (11 tests). A differential harness ran random configurations through the real glibc 2.39 loader in a private mount namespace (`LD_DEBUG=libs getent`) across 8 databases. It compared every attempted `libnss` load with this contract's ordered list for 1,230 configurations, 108 of which glibc rejected, and found 0 disagreements. Walks that reach a `MERGE` action were not compared, because lookup-walk semantics are outside this contract.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the file, a catalog entry, package provenance, persistence, UI and AI classification.
