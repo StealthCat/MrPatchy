@@ -63,6 +63,7 @@ is always ``not_assessed`` and ``authorizes_response`` is always false.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from typing import Any, Mapping
 
@@ -507,6 +508,19 @@ def _read_printers(text: str | None, state: _State) -> list[dict[str, Any]]:
     return printers
 
 
+def _program_fingerprint(server_bin: str, backends: list[dict[str, Any]]) -> str:
+    """Fingerprint which programs run, from credential-free fields only.
+
+    Raw ``printers.conf`` text can hold ``DeviceURI`` passwords, so it is never
+    hashed: a fast digest of it would allow offline guessing. Account
+    databases are left out too. Run accounts are reported in the result.
+    """
+    rows = [[row['printer'], row['executable'], row['argv0'], row['state'], row['file_check'],
+             row['runs_as_root']] for row in backends]
+    canonical = json.dumps([server_bin, rows], ensure_ascii=False, separators=(',', ':'))
+    return hashlib.sha256(canonical.encode('utf-8', 'surrogateescape')).hexdigest()
+
+
 def evaluate(*, printers_conf: str | bytes | None, cups_files_conf: str | bytes | None = None,
              file_meta: Mapping[str, Any] | None = None, passwd_text: str | None = None,
              group_text: str | None = None, cupsd_uid: int = 0) -> dict[str, Any]:
@@ -521,10 +535,6 @@ def evaluate(*, printers_conf: str | bytes | None, cups_files_conf: str | bytes 
     """
     state = _State()
     file_meta = file_meta or {}
-    digest = hashlib.sha256()
-    for part in (printers_conf, cups_files_conf, passwd_text, group_text):
-        raw = part.encode('utf-8', 'surrogateescape') if isinstance(part, str) else (part or b'')
-        digest.update(len(raw).to_bytes(8, 'big') + raw)
     if not isinstance(cupsd_uid, int) or isinstance(cupsd_uid, bool) or not 0 <= cupsd_uid <= UID_MAX:
         state.gap('cupsd_uid_invalid')
         cupsd_uid = 0
@@ -537,10 +547,10 @@ def evaluate(*, printers_conf: str | bytes | None, cups_files_conf: str | bytes 
                 for printer in _read_printers(printers_conf, state)]
     blocking = [gap for gap in state.gaps if gap['blocking']]
     return {
+        'program_sha256': _program_fingerprint(settings['server_bin'], backends),
         'contract': 'cups_backends',
         'contract_version': CONTRACT_VERSION,
         'source_version': SOURCE_VERSION,
-        'input_sha256': digest.hexdigest(),
         'complete': not blocking,
         'server_root': settings['server_root'],
         'server_bin': settings['server_bin'],

@@ -179,6 +179,16 @@ class PrintersConfTest(unittest.TestCase):
         row = by_name(run('<Printer q>\nDeviceURI plain\n</Printer>\n', file_meta=meta(plain=0o100700)))['q']
         self.assertEqual(row['executable'], '/usr/lib/cups/backend/plain')
 
+    def test_fingerprint_never_hashes_device_uri_credentials(self):
+        files = meta(smb=0o100700)
+        first = run('<Printer q>\nDeviceURI smb://u:secret1@host/share\n</Printer>\n', file_meta=files)
+        second = run('<Printer q>\nDeviceURI smb://u:other2@host/share\n</Printer>\n', file_meta=files)
+        self.assertEqual(first['program_sha256'], second['program_sha256'])
+        self.assertNotIn('secret1', repr(first))
+        self.assertNotIn('input_sha256', first)
+        moved = run('<Printer q>\nDeviceURI smb://u:secret1@host/other\n</Printer>\n', file_meta=files)
+        self.assertNotEqual(first['program_sha256'], moved['program_sha256'])
+
     def test_credentials_are_removed_only_before_the_resource(self):
         self.assertEqual(cb.sanitize_device_uri('smb://u:p@host/share'), 'smb://host/share')
         self.assertEqual(cb.sanitize_device_uri('lpd://host/q@x'), 'lpd://host/q@x')
