@@ -13305,3 +13305,15 @@ cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` f
 - **Not modeled:** whether cloud-init is installed or enabled, `cloud_final_modules` membership, a non-default `cloud_dir`, semaphore state, user-data `scripts_user` and `scripts_vendor`, and script contents.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.
+
+
+### LightDM seat-script contract — worker checkpoint #1301 (roadmap F)
+
+LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-script`, `session-setup-script` and `session-cleanup-script` as root at every display start and stop, greeter start, user login and logout. They are set in `lightdm.conf`, in `lightdm.conf.d` drop-ins under the XDG data and config directories, and in per-seat `[Seat:<glob>]` sections. The startup inventory did not model them.
+
+- **Change:** the pure `app/lightdm_scripts.py` takes captured file text and captured `lightdm.conf.d` listings. For each assumed seat name (default `seat0`) it returns the effective command for each script, its source file and section, its SHA-256 and whether the value reads as unset. It performs no I/O and never runs a command.
+- **Fidelity:** it follows LightDM 1.30.0 `config_load_from_standard_locations`. XDG data directories load first, then XDG config directories, each in reverse order. `/etc/lightdm/lightdm.conf.d` loads next and `/etc/lightdm/lightdm.conf` last. Only `.conf` names are read, in `strcmp` order. It also follows LightDM's `[SeatDefaults]` alias, the `[Seat:*]` then matching `[Seat:<glob>]` order (`g_pattern_match_simple`), and `g_key_file_get_string` unescaping, where an invalid value unsets the script. A drop-in that GKeyFile refuses is skipped whole. A main file that GKeyFile refuses is `config_error` with no scripts, because LightDM exits.
+- **Fail closed:** an unobserved file or directory listing, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. The GLib default XDG directories are assumed unless others are passed. Real seat names, the service environment and how `g_shell_parse_argv` splits the command are listed as not observed. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.
