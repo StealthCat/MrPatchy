@@ -171,6 +171,49 @@ def test_leading_yara_incidents_do_not_hide_owed_incidents(admin, monkeypatch):
     assert queued == ['owed-old']
 
 
+def test_tick_projects_identifiers_after_filtering_older_yara_rows(admin, monkeypatch):
+    from sqlalchemy import event
+    from app.db import engine
+
+    now=1_750_000_000
+    variants=[('without-engine',None),('clam','ClamAV'),('lowercase','yara'),('with-space','YARA ')]
+    with Session() as s:
+        s.merge(Setting(key='config', value={'ai_enabled':True,'ai_model':'fixture','ai_control_mode':'legacy'}))
+        s.add(Setting(key='openai_key',value={'encrypted':'fixture-unused'}))
+        for index,(host,scan_engine) in enumerate(variants):
+            s.add(Host(id=host,name=host,address='192.0.2.1',fingerprint=''))
+            s.add(Setting(key=f'security-policy:{host}',value={'auto_ai_plan':True}))
+            evidence={} if scan_engine is None else {'scan_context':{'engine':scan_engine}}
+            s.add(incidents.Incident(id=f'eligible-{host}',host_id=host,scan_id=f'scan-{host}',
+                                     updated=now-60+index,evidence=evidence))
+        s.add_all(incidents.Incident(id=f'excluded-{index}',host_id=variants[0][0],scan_id=f'yara-{index}',
+                                     updated=now-700+index,evidence={
+                                         'scan_context':{'engine':'YARA'},'fixture_padding':'x'*8000})
+                  for index in range(120))
+        s.commit()
+
+    queued=[]
+    monkeypatch.setattr('app.worker.enqueue',
+                        lambda _s,host,action,payload:queued.append((host,action,payload)))
+    reads=[]
+    def capture(_conn,_cursor,statement,*_args):
+        sql=' '.join(statement.lower().split())
+        if sql.startswith('select') and 'order by security_incidents.updated' in sql:
+            reads.append(sql)
+
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        incidents.auto_plan_tick(now)
+    finally:
+        event.remove(engine,'before_cursor_execute',capture)
+
+    assert queued==[(host,'security-plan',{'incident_id':f'eligible-{host}',
+                    'scan_id':f'scan-{host}','automatic':True}) for host,_ in variants]
+    assert len(reads)==1
+    projection=reads[0].split(' from security_incidents ',1)[0]
+    assert projection=='select security_incidents.id, security_incidents.host_id, security_incidents.scan_id'
+
+
 def test_endpoint_is_admin_only_and_redacted(client, admin, monkeypatch):
     def no_provider(*args, **kwargs):
         raise AssertionError('the status must not call a provider')
