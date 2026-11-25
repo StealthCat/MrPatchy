@@ -123,9 +123,14 @@ def test_state_precedence_explains_why_nothing_is_enqueued(admin):
     assert status(now)['state'] == 'inactive'
 
 
-def test_held_server_reports_held(admin, monkeypatch):
+def test_held_server_reports_held(admin):
+    from app.service_monitor import Watch
+
     now = seed()
-    monkeypatch.setattr('app.operations.host_quarantined', lambda s, host, **kw: host == 'web')
+    with Session() as s:
+        s.add(Watch(id='fixture-watch', host_id='web', actor='admin',
+                    reason='Fixture service watch', revision='fixture-revision', hold=True))
+        s.commit()
     assert status(now)['state'] == 'held'
 
 
