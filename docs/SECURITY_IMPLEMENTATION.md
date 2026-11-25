@@ -2522,11 +2522,14 @@ recorded call count. Avoided USD sums the run's priced receipts only when every
 call is priced, using decimal arithmetic. Reuse whose source run is unpriced or
 partly priced, pruned, unlinked or still running is counted separately and
 never treated as free, so incomplete coverage makes the figures lower bounds.
-The estimate reads candidates in bounded batches without loading evidence or
-snapshots. It is not a provider invoice, does not measure misses and does not
-predict what a fresh investigation would cost today. Lookup, publication,
-revocation, pause, budget, role, approval and response boundaries are
-unchanged. Hit/miss reasons and matched production acceptance remain open.
+The estimate groups reuses by the exact originating run ID and reads distinct
+runs and receipts in bounded batches without loading evidence or snapshots
+([#1433](https://github.com/StealthCat/MrPatchy/issues/1433)). Missing source
+assessments count toward unavailable coverage. It is not a provider invoice,
+does not measure misses and does not predict what a fresh investigation would
+cost today. Lookup, publication, revocation, pause, budget, role, approval and
+response boundaries are unchanged. Hit/miss reasons and matched production
+acceptance remain open.
 
 Worker checkpoint #779 notifies the other administrators when an
 administrator revokes a fleet known-good candidate through
@@ -2716,6 +2719,13 @@ Before this checkpoint a non-transient provider failure, such as a rejected key,
 - **Validation:** in `tests/test_triage_block_causes.py`, the refusal, token-budget and cause-classification tests fail on main `11cc8e0` and pass after. They drive the real worker path with only the provider transport and SSH as fixtures. Parametrized tests confirm eligibility, the blocked count and model-change re-admission are unchanged for both causes.
 - **Remaining:** update scoring and advisory plans keep their existing failure handling and wording; only process-triage retry reasons changed.
 
+#### Model refusal and token-budget wording in the Settings model test — worker checkpoint #1219
+
+- **Problem:** after #1158, process triage, advisory plans and release configuration reviews name a refusal and `max_output_tokens` exhaustion (update scoring follows in #1162). The Settings **Test model** action (`POST /api/settings/ai-test`) still returned and recorded the triage diagnostic, for example "Review this observation manually; no safety assessment was accepted". The test supplies no observation, and the text never said the request reached the provider and may be billed.
+- **Change:** `main._ai_test_investigate()` maps cause `model_refusal` and cause `token_budget` to test-specific text: the model declined (or exhausted its budget on) the compatibility test, the request was sent and may be billed, changing the API key does not help, and a different model (or one that completes within the task budget) should be selected. The rewritten `AIError` keeps the cause, so the `connection_test` run history stores the same text. Transient and policy-wait errors and every other cause are re-raised unchanged; provider refusal text is never returned or stored.
+- **Unchanged:** the 502 status, the `Test failed for model … Your saved model was not changed.` framing, the one-minute test interval, the connection-test lock, run tracking and cost receipts, admission, roles/CSRF, the saved model and response authorization.
+- **Validation:** `tests/test_ai_test_block_causes.py` drives the real route with only the provider transport as a fixture. Restoring main's call site fails both cause tests and leaves the four invariant guards passing: invalid output, other incomplete responses, rejected key, and rate limit/lock release after a refusal.
+
 #### Retry failed automatic AI plans — worker checkpoint #1036
 
 Automatic AI plans make one attempt per incident scan. Before this checkpoint, when that attempt failed (a rejected key, unsupported model, exhausted quota or invalid structured result), the incident was never tried again automatically, even after the cause was fixed.
@@ -2729,6 +2739,19 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Unchanged:** schema, admission, reservations, plan approval, response authorization, notifications (#806) and the read-only status payloads (#922/#936).
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
+
+#### Fleet-wide release of failed automatic plans — worker checkpoint #1251
+
+- **Problem:** after fixing a fleet-wide cause (a rejected key, unsupported model or exhausted quota), an administrator had to open each opted-in server's Security tab to release its failed automatic attempts (#1036).
+- **Change:** `auto_plan_retry` applies the #1036 predicate to every **active** (enabled, not deleted) server. Disabled and deleted servers are neither counted nor released, so the count matches what a release can act on.
+  - Admin-only `GET /api/security/auto-plan-failed` returns `{failed}`.
+  - Admin-only, CSRF-protected `POST /api/security/auto-plan-failed/retry` takes the existing `security-plan-queue` lock and releases up to 200 incidents across active servers, oldest first, with the same `retry_released` marking (who and when). It returns `{released, remaining}` and writes one audit row naming the fleet scope, the incident count and the server count when anything was released.
+  - A failed job is marked only when it was filed under the incident's own server.
+- **No bypass:** releasing enqueues nothing and sends no provider request. The ordinary `auto_plan_tick` still applies the policy opt-in, AI pause, response holds, lifecycle, one plan per server, the legacy hourly allowance and the shared AI start gates. Exclusions match the per-server action: planned, resolved, YARA, older-scan, stale-evidence, manual and still-attempted incidents are never counted.
+- **UI:** Security coverage → **Automatic AI plans across the fleet** shows **Retry failed automatic plans** to administrators only when the fleet count is above 0, with the same fix-the-cause-first and no-request-now wording. It says disabled servers are not included, reports partial batches, and refreshes the count and the automatic plan status afterwards. Failed, zero or malformed counts hide the action; operators and viewers never request it.
+- **Unchanged:** the per-server routes and their counts (a disabled server's own count still reports its failures), schema, admission, reservations, plan approval, notifications and response authorization.
+- **Validation:** `tests/test_auto_plan_retry_fleet.py` (8 tests) fails on main `1ae31e1b` and passes after, with the existing #1036 tests unchanged. `tests/ui_fleet_auto_plan_retry.cjs` fails on main and covers the action, partial and empty batches, the refresh of both reads, zero/malformed/failed counts, escaping, the operator role, no per-server route use and no horizontal scroll at 320, 768 and 1440 px.
+- **Remaining:** startup-change plans are never automatic and are not covered.
 
 ### Throttling, daily cap and unthrottled operation
 
@@ -3203,6 +3226,18 @@ Worker checkpoint #1154 keeps the triage contention fixtures within one configur
   window.
 
 No runtime behaviour changes. The rest of milestone 4 remains open.
+
+### AI Settings current budget boundary — worker checkpoint #1278 (roadmap A)
+
+The current window card in Settings → AI uses the saved budget snapshot's
+`next_reset_authoritative` flag. When earlier-window spend can carry across
+the configured boundary, the card shows a recheck time and explains that the
+spend may still count. Authoritative reset dates retain their original label.
+
+The browser regression covers both labels and the existing spend amounts,
+with narrow, tablet and desktop layout checks. Admission and accounting
+continue to use the existing budget policy.
+
 ### Concurrent cap admissions racing settings saves — worker checkpoint #990
 
 `tests/test_ai_budget_settings_race_acceptance.py` covers the milestone 4 item
@@ -3220,6 +3255,22 @@ A separate test shows that no settings save rewrites, releases or deletes ledger
 Mutations that remove the shared lock from `reserve()` or reuse a stale settings
 snapshot fail the suite. The suite runs on SQLite locally and on MySQL in the hosted
 shards. No runtime behaviour changes, and the rest of milestone 4 remains open.
+
+### Daily-cap recovery after a worker process exits (#1103, roadmap A)
+
+The lease acceptance suite starts triage in a separate process and uses a
+loopback provider that records a complete request and holds its response.
+The test kills the process before Python can reconcile the call. It verifies
+the durable lease and sent reservation, advances lease and retry eligibility,
+then checks that a successor interrupts the stale run without another
+provider request, ledger charge or accepted assessment in the spent window.
+At the next reset the successor completes with its own reservation and the
+original unreconciled row remains in the ledger.
+
+SQLite and MySQL use the same scenario. Lease expiry and reset are advanced
+in the fixture instead of waiting. The provider is synthetic, so this covers
+the application's recovery and accounting rather than provider billing,
+deployed multi-controller failover or production throughput.
 
 ### Finite implementation and acceptance milestones
 
@@ -3246,6 +3297,17 @@ Issue reproduction/fixes retain priority over these roadmap milestones. Reconcil
 unfinished related work first and use the existing cycle budget, source/PR versioning
 and exact-final-commit CI gates. The scheduled task carries the same requirements;
 the feature remains outstanding until runtime behavior and acceptance are delivered.
+
+### Shared rate-slot contention between triage and scoring (#1105, roadmap A)
+
+The rate acceptance suite brings real process triage and package scoring to the
+same authoritative admission gate, letting each path arrive first in turn.
+Both Rate throttle and Rate with daily cap grant one provider start. The
+deferred path retains its evidence and next eligibility, and a capped attempt
+that lost the rate slot releases the unused reservation. At refill the waiting
+path completes under its own admission. SQLite and MySQL use the same scenarios.
+The fixture controls arrival order and provider responses, so sustained
+cross-purpose fairness and production throughput remain separate acceptance.
 
 ### Daily-cap deferral reason — bug fix checkpoint #1015 (P3)
 
@@ -3585,6 +3647,21 @@ counts and timestamps. Admission behavior is unchanged. Migrating legacy
 installations to an explicit mode and the broader shared-controls acceptance
 remain open.
 
+### Use the real legacy triage reopening time — Roadmap A checkpoint #1255
+
+Investigations and the shared AI controls report the same legacy reopening time.
+Each overfull one-hour window clears when the entry ranked at its allowance
+leaves the window. If both recent behavior attempts and triage runs hold
+admission closed, the later opening applies. A window with no scheduled
+opening reports no time. The query retains the existing historical count and
+uses the indexed attempt and run timestamps without adding query round trips.
+
+The SQLite and MySQL acceptance fixtures exercise each counter independently
+and both together, compare the admin endpoints and verify actual claim
+eligibility immediately before and at the reported boundary. Explicit AI
+control modes retain their own gate timing. This checkpoint changes queue
+visibility. Admission, reservations and provider calls follow the existing path.
+
 ### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
 
 The shared AI start gates and automatic AI plan status now fetch each legacy
@@ -3596,6 +3673,26 @@ retain their existing behavior. In an overfilled fixture with 259 scoring runs
 and an allowance of three, the status read went from two statements to one.
 The time remained correct when entries tied at the boundary. Production latency
 and the broader shared-controls acceptance remain open.
+
+### Database connection loss during a capped reservation — milestone 4 acceptance #1293
+
+`tests/test_ai_budget_connection_loss.py` interrupts the native connection
+around the reservation commit with an earlier uncertain charge already counted.
+It checks both outcomes through the normal provider request path. A transaction
+that rolls back leaves headroom for one retry. A durable commit whose outcome
+the caller could not confirm leaves the reservation counted and defers a retry
+to the saved reset. The interrupted call sends no provider request in either case.
+
+When the driver reports a lost connection during budget admission, the worker
+keeps the investigation queued for a local recheck after 30 seconds. The
+deferral preserves its retry allowance and does not set a provider backoff.
+The next admission reads the retained ledger again. Other database errors and
+failures after provider transmission retain their existing classification.
+
+SQLite closes the connection and MySQL terminates the test's own database
+session. The test simulates a lost acknowledgement by committing before
+disconnecting. It uses fixture provider replies and leaves database writer
+promotion and multi-host recovery open.
 
 ### Two-call follow-up reservations under a daily cap — worker checkpoint #988
 
@@ -3851,6 +3948,17 @@ unavailable and never implies a plan will start.
 - **Limitations:** this is a point-in-time read for one server. A fleet-wide
   plan queue view and startup-change plans (never automatic) are not covered.
 
+### Fail-closed pause in shared AI queues — Roadmap A/C checkpoint #1309
+
+The shared SQLite/MySQL filter now agrees with the per-server status and the
+outbound provider check. A missing policy or a policy object with no
+`paused` field is resumed by default. An explicit JSON false resumes it.
+Other stored field types and non-object policies are paused. Fleet counts,
+server backlog status and work selection use the same filter. A malformed
+server's work stays queued while other eligible servers can claim work.
+Administrators can repair the saved policy through the audited control. The
+per-server backlog notice explains that the server stays paused until repair.
+
 ### Per-server process-triage queue breakdown — worker checkpoint #975
 
 `GET /api/investigation-status` reports fleet-wide totals only. When the queue
@@ -3877,6 +3985,11 @@ enforces. The list holds at most 50 servers, largest backlog
 first, and states the number of servers with a backlog and whether it was
 truncated.
 
+[#1439](https://github.com/StealthCat/MrPatchy/issues/1439) derives that total
+from the grouped backlog statement before applying the page limit. The ranked
+rows and truncation metadata describe the same database read, and an empty
+backlog returns zero. SQLite and MySQL use the existing schema.
+
 The classes use the predicates of `ai_runs.status()` and the claim query, so
 per-server pending, paused, eligible-unclaimed and active counts add up to the
 fleet totals. One difference is deliberate: a running claim takes precedence,
@@ -3889,10 +4002,8 @@ so an investigation on its last attempt is `active` here while the fleet
   claims, pause, budget, schema, roles and response authorization are unchanged.
 - **Limitations:** this is a point-in-time read, and "eligible" is not a promise
   to start: shared start gates, worker capacity, the per-server limit and pause
-  still apply. Pause is read as the fleet status reads it, so a manually
-  corrupted per-server AI policy is not shown as paused although provider calls
-  for that server are refused. Servers beyond the first 50 and matched
-  production acceptance remain open.
+  still apply. Servers beyond the first 50 and matched production acceptance
+  remain open.
 - **UI panel (worker follow-up):** the fleet AI activity page (`#ai-logs`) now
   has an administrator-only, on-demand **Servers holding the triage backlog**
   panel. It reads this endpoint and shows each server's pending, active,
@@ -3973,6 +4084,20 @@ Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
 At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
 one. Matched production measurements remain open.
 
+### Daily ledger timings in capped triage fixtures — Roadmap A checkpoint #1302
+
+Capped fixture reports include `stages.budget_reservation` and
+`stages.budget_reconciliation` with sample counts and p50/p95 durations.
+They measure the real daily ledger calls, including database lock wait. The
+receipt/usage delay option only simulates diagnostic persistence latency.
+The benchmark checks that each budget stage has one sample per settled
+provider call, including follow-ups. Uncapped reports omit these stages.
+
+SQLite and MySQL acceptance cover daily cap and combined rate-and-cap modes
+with both serial and parallel configurations. The stages are additive report
+fields. Existing comparator semantics and production measurement milestones
+are unchanged.
+
 ### Native MySQL mode for the triage benchmark — worker checkpoint #976
 
 `tools/benchmark_ai.py --database mysql` runs the same disposable fixture on a
@@ -4023,6 +4148,21 @@ Cleanup validation for #1095 covers a disconnected session, an absent lock
 and a lock assigned to another session. The native MySQL fixture verifies that
 stale cleanup leaves the subsequent holder's table intact. This is fixture
 cleanup acceptance. Production failover and throughput acceptance remain open.
+
+### Verify retained assessments in fixture throughput reports — Roadmap A checkpoint #1299
+
+After the timed serial or parallel workload, the benchmark checks that each
+fixture observation retained exactly one AI assessment linked to its run,
+host and model. It checks the fixture result, evidence snapshot and saved
+input trail against the captured provider inputs, including the collected
+evidence and second input for subjects that requested a follow-up. The
+assessment summary includes counts of verified subjects, input stages and
+follow-up subjects. If durable records are missing or differ, the benchmark
+exits before emitting throughput.
+
+These checks apply to the disposable SQLite and MySQL fixtures. They do not
+change runtime triage or the report comparator. Production measurements and
+the broader capability acceptance remain open.
 
 ### Advisory plan result-persistence timing — Roadmap A checkpoint #1176
 
@@ -6118,6 +6258,78 @@ of bracketed control values, module binaries and the programs they run,
 collection from servers, catalog wiring, persistence, UI, provenance and AI
 classification. No schema, API, UI or authorization change, and nothing is
 labelled safe.
+### xinetd configuration contract — worker checkpoint #1122
+
+This is a contract increment only, and the startup-awareness requirement
+remains incomplete. `app/xinetd_conf.py` is a pure, versioned contract for
+`/etc/xinetd.conf` and the files it reaches through `include` and
+`includedir`. xinetd listens for each enabled service and, for every
+connection, starts its `server` with `server_args` as its `user`, or answers
+with a built-in. So one `/etc/xinetd.d` file with `server = /bin/sh` and
+`user = root` puts a root shell on a port. The contract takes captured file
+text and directory listings and performs no I/O, name lookup or response
+action.
+
+- **Source.** The rules come from reading the xinetd 2.3.15.4 source as
+  packaged by Ubuntu (`xinetd_2.3.15.4-6build1`); no compiled xinetd was run.
+  - orig tarball sha256: `cbb6d078…2129a`
+  - debian tarball sha256: `68b3e200…15832`
+- **Files.** Comments are lines whose first non-space character is `#`. A
+  `#` after other text is a value.
+  - `service`/`defaults` must be followed by a line holding only `{`.
+    Otherwise the entry is skipped up to the next line holding only `}`.
+  - `includedir` reads regular files in `strcmp` order and skips names
+    containing `.` or ending in `~`.
+  - An `include` cycle is reported as a blocking gap.
+- **Attributes.**
+  - An attribute needs a space before its operator, or the whole entry is
+    dropped.
+  - Unknown attributes, repeats of single-valued attributes (the first one
+    wins), `+=`/`-=` on single-valued attributes and wrong value counts are
+    each ignored.
+  - A failed attribute parser disables the service. A later `disable = no`
+    re-enables it.
+  - On any `disable` line, if the service is disabled at that point, the
+    entry is abandoned.
+- **Loading.**
+  - A defaults `enabled` list disables every unlisted id, and re-enables
+    listed ids even after a parser failure.
+  - A defaults `disabled` list removes listed ids.
+  - Any other defaults attribute that reaches its parser is a blocking
+    `defaults_attribute_not_evaluated` gap: a failing defaults parser makes
+    xinetd log a fatal error and exit, and those parsers are not evaluated.
+  - The lookup-independent `service_fill`/`check_entry`/`service_attr_check`
+    rules apply: required attributes, `dgram` services must `wait`, the
+    NAMEINARGS and redirect rules, TCPMUX must be UNLISTED, and an UNLISTED
+    service needs a port.
+- **Per-service report.** Each service reports:
+  - its file and line, and its id;
+  - a status: `loads_if_lookups_succeed`, `unresolved` (some other attribute
+    parser was not modelled) or `disabled` with its reasons;
+  - its server and argv (NAMEINARGS uses `server_args` as the full argv);
+    redirects and built-ins have no argv;
+  - its user and group, and a root flag (`root` or uid `0`; `null` for other
+    names);
+  - its socket type, protocol, port, types, flags and bind address;
+  - the lookups it needs: passwd and group, `server` executability,
+    `/etc/services`, `/etc/protocols` and `/etc/rpc`.
+- **Fail closed.** These inputs make the result incomplete:
+  - an unobserved, unreadable, binary or over-limit file;
+  - an unobserved `includedir` listing;
+  - an unparsable defaults line;
+  - defaults `-=`.
+
+  `origin` stays `not_assessed`. `not_observed` names:
+  - whether xinetd is installed or running, and its options;
+  - Debian `INETD_COMPAT`, which also loads `/etc/inetd.conf`;
+  - name, uid and executable lookups;
+  - bind resolution, duplicate port/protocol/bind conflicts and built-in
+    availability;
+  - program contents.
+- **Out of scope:** collection, catalog wiring, persistence and alerts, UI,
+  AI classification and any response action. There is no schema, API, auth
+  or response-authorization change.
+
 ### Per-user shell startup files contract — worker checkpoint #1057
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -6218,6 +6430,190 @@ expression. It takes a captured listing, captured rule-file text and the
 catalog `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
 response-authorization change.
+
+### crypttab keyscript contract — worker checkpoint #1225
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/crypttab_keyscripts.py` is a pure, versioned contract for the programs
+Debian and Ubuntu cryptsetup run as root while unlocking `/etc/crypttab`
+mappings at boot. A `keyscript=` program is `exec`'d with the third crypttab
+field as its argument and its output becomes the key; on the cryptdisks init
+path a `check=` program also runs on every unlocked device. It takes captured
+crypttab text, root's view of the paths the options name and
+`$CRYPTDISKS_CHECK`, and performs no I/O.
+
+- **Source.** `debian/functions`, `debian/cryptdisks-functions` and
+  `debian/initramfs/scripts/local-top/cryptroot` in Ubuntu `cryptsetup`
+  2.7.0-1ubuntu4 and 2.8.4-1ubuntu4. The only differences between them
+  (`tcrypt-system`, `x-initrd.attach`) cannot change a keyscript or check
+  outcome. An opt-in differential test sources the real `debian/functions`
+  under dash for 600 random crypttabs per version. It gave 0 mismatches for
+  both versions, and three deliberate model mutations each made it fail.
+- **Lines.** Fields are split as `IFS=" \t" read -r name source key options`:
+  the fourth field keeps inner spaces, so `luks, keyscript=x` has an ignored
+  unknown option ` keyscript` and runs no keyscript. A name starting with `#`
+  is a comment. An entry missing its source or key is skipped. A final line
+  without a newline is never processed.
+- **Options.** Comma-split words are validated as `crypttab_validate_option`
+  does, including aliases, required values, `grep -Ex` numeric checks and the
+  `[ -x ] && [ -f ]` test on `keyscript` (relative names resolve under
+  `/lib/cryptsetup/scripts`) and `check` (under `/lib/cryptsetup/checks`).
+  `header` must exist because both boot paths pass `--missing-path=fail`. A
+  bare `check` uses `$CRYPTDISKS_CHECK` and is dropped when that is empty.
+  Unknown options are ignored. A later option replaces an earlier one, and any
+  invalid value rejects the whole entry.
+- **Programs.** An accepted entry reports its unlock method: `keyscript`
+  (argv `[program, key field]`, with `CRYPTTAB_KEY` and the other `CRYPTTAB_*`
+  variables exported), `askpass` (key field `none`: `/lib/cryptsetup/askpass`
+  with a prompt), `keyfile` (nothing runs) or `exec_fails` (a keyscript of
+  `/lib/cryptsetup/askpass` with a real key reaches `exec ""`). On the
+  cryptdisks path it also reports the `check` argv and whether `noauto` or
+  `noearly` keep the entry out of automatic boot. The initramfs path never
+  runs `check`.
+- **Fail closed.** Unobserved crypttab text, path facts or
+  `$CRYPTDISKS_CHECK`, a relative `header`, a backslash (`printf '%b'`
+  decoding is not modelled), a glob character in the unquoted options
+  expansion, NUL bytes, invalid UTF-8 and over-limit input are blocking gaps
+  and leave entries `unresolved`. Every result names what it cannot observe:
+  which boot path handles each entry (the initramfs only unlocks entries its
+  hook copied, and systemd-cryptsetup-generator, which does not support
+  `keyscript=`, may handle the rest), whether the source device exists, the
+  programs' contents and the number of unlock attempts. `origin` is always
+  `not_assessed`, `authorizes_response` is False and no result is a safety
+  verdict.
+
+**Not covered:** agent collection of `/etc/crypttab` and path facts, catalog
+mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
+provenance and AI classification. No schema, API, auth or
+response-authorization change.
+
+### sysvinit inittab contract — worker checkpoint #1110
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/inittab.py` is a pure, versioned contract for sysvinit's `/etc/inittab`.
+On a host whose PID 1 is sysvinit `init`, each accepted entry runs as root at
+boot, on entering a runlevel, on respawn, or on a power or keyboard event. It
+takes captured inittab text and whether `/etc/inittab.d` and `/etc/initscript`
+exist, and performs no I/O.
+
+- **Source.** `read_inittab()` and `spawn()` in sysvinit 3.14 and 3.15
+  `src/init.c`, which are identical. The rules come from reading that source;
+  no compiled init was run.
+- **Lines.** `fgets` reads into a 256-byte buffer. A line that has no newline
+  within 255 bytes is skipped as "possibly too long", and so is a final line
+  without a newline. Comment and blank lines are skipped before that check.
+  Because of this, init's 256-byte process limit can never trigger.
+- **Fields.** `id:runlevels:action:process` are split with `strsep`, and the
+  process keeps any further colons. Rejections are recorded with init's own
+  message: a missing field, an id over 4 bytes, runlevels over 11, an action
+  over 32, an unknown action (matched case-insensitively), or a duplicate id
+  (`~~` excepted).
+- **Effective runlevels.** Empty runlevels become `0123456789`, or
+  `S0123456789` for power and ctrl-alt-del actions. `sysinit` gets `#`, and
+  `boot` and `bootwait` get `*`. A lowercase `s` is kept as written, so it
+  does not select single-user mode; this is noted on the entry.
+- **Implicit and default entries.** When no entry covers `S`, init appends
+  `~~:S:wait:/sbin/sulogin`, and the result reports that entry as `implicit`.
+  The default runlevel is the highest runlevel character of the first
+  `initdefault` entry, uppercased. A value outside `0-9S`, or no
+  `initdefault` entry, means init prompts on the console.
+- **Commands.** Each entry reports its trigger, whether init waits for it, and
+  how `spawn()` starts it:
+  - one leading `+` is dropped, which also stops utmp/wtmp records;
+  - a readable `/etc/initscript` wraps the command outside runlevel S;
+  - otherwise a process containing a shell metacharacter, and not starting
+    with `@`, runs as `/bin/sh -c`;
+  - any other process is split into at most 14 words and stops at `#`. A
+    word that starts with `#` still adds an empty argument, and dropped words
+    are counted.
+- **Fail closed.** The result is incomplete when any of these holds:
+  - the inittab text, the `/etc/inittab.d` listing or the `/etc/initscript`
+    state was not observed;
+  - `/etc/inittab.d` contains `*.tab` files, which this slice does not
+    resolve yet;
+  - the input has invalid UTF-8 or NUL bytes, or is over the limit;
+  - the `initdefault` runlevels contain non-ASCII bytes. `get_init_default()`
+    keeps the highest plain `char`, which is signed on x86_64 (those bytes
+    never win) and unsigned on arm (they do), so the default runlevel and
+    prompt are left unresolved.
+
+  Every result names what it cannot observe: whether PID 1 is sysvinit
+  (systemd ignores the file, and BusyBox init uses another format), the
+  runlevel in use, the programs an entry runs, respawn throttling, and how
+  much of a shell-mode process init copies (`spawn()` sizes that copy with
+  `strlen()` on an uninitialised buffer). `origin`
+  is always `not_assessed`, and no result is a safety verdict.
+
+**Not covered:** `/etc/inittab.d` parsing, agent collection, catalog wiring,
+persistence, baselines and alerts, UI, provenance, AI classification and
+native acceptance. No schema, API, auth or response-authorization change.
+
+### openbsd-inetd configuration contract — worker checkpoint #1114
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/inetd_conf.py` is a pure, versioned contract for `/etc/inetd.conf`.
+inetd listens on each configured socket and, for every connection or datagram,
+starts the configured program as the configured user, or answers with a
+built-in service. A line such as `31337 stream tcp nowait root /bin/sh sh -i`
+is a root shell on a port. The contract takes the captured file text and
+performs no I/O, name lookup or response action.
+
+- **Source.** `inetd.c` in openbsd-inetd 0.20221205 with the Debian patches
+  applied (Ubuntu `openbsd-inetd_0.20221205-3build5`). The orig tarball's
+  sha256 is `2d53137f…8ab5a` and the debian tarball's is `4c34c5bc…7e5b`. The
+  packaged systemd unit runs `/usr/sbin/inetd` without arguments. The rules
+  come from reading that source; no compiled inetd was run.
+- **Lines.** `fgets` reads 1023-byte pieces. Only a piece whose *first* byte
+  is `#` is a comment; an indented `#` is parsed as fields. Fields split at
+  spaces and tabs only. When a line runs out, an indented next line continues
+  the entry, so a blank line followed by an indented line starts an entry.
+- **Fields.** `host:` prefixes (`[v6]:`, `:` for `*`, comma-separated host
+  lists), `host:` default-host lines, `stream`/`dgram` (other socket types
+  never listen), protocol with `,sndbuf=`/`,rcvbuf=` sizes, `wait`/`nowait`
+  with a `.max` rate (invalid values fall back to the `-R` default of 256 per
+  60 s), `user` with `.group` or `:group`, the program or `internal`, and at
+  most 20 arguments (extra arguments are dropped and counted). With no
+  arguments, argv[0] is the program's base name. Built-ins (`echo`, `discard`,
+  `time`, `daytime`, `chargen`) run inside inetd as root and never wait.
+- **IPv4 and IPv6.** Debian's `default_v4v6` patch loads a protocol without a
+  trailing `4` or `6` twice, as IPv4 and then as IPv6 with `6` appended. The
+  IPv6 pass re-parses only a saved copy of the entry's first physical line.
+  Arguments on continuation lines are therefore missing from the IPv6 copy,
+  and a field missing from that line rejects it. The copy is parsed in place,
+  so `skip()` and the host parser leave NUL bytes in it: when a re-parse fails
+  before the protocol, the next one reads the line cut at the first NUL and can
+  take a later continuation line as the rest of the entry (for example an IPv6
+  root shell after a malformed protocol). When a re-parse consumes no line and
+  leaves the copy unchanged, inetd repeats it forever; this is reported as a
+  blocking gap. A literal address of the wrong family drops that listener.
+- **Merging and spawn.** A later entry with the same service, host, protocol
+  and address replaces the earlier one's user, group, program, argv and rate.
+  It takes the wait mode only when the earlier entry was `wait` or the later
+  one is `nowait`, and never from a built-in. The first entry's socket type and
+  built-in stay. A root user's group is ignored, because inetd sets root's own
+  primary group. `execv` runs the program path as written, and relative paths
+  are flagged.
+- **Each service reports** its line(s), host and address, family, port or unix
+  socket path, socket type, protocol, RPC versions and program, wait mode, rate
+  limit, user and group, built-in or program and argv, a root flag and any
+  name lookup it needs. The root flag is `true` for `root` and built-ins and
+  `null` otherwise, because uid mapping is not observed. Rejected entries
+  record inetd's reason: `syntax_error`, `unknown_internal_service`,
+  `malformed_buffer_option`, `too_many_buffer_sizes`, `invalid_buffer_size`,
+  `no_rpc_version`, `bad_rpc_version` or `no_resolvable_address`.
+- **Fail closed.** An unobserved or unreadable file, NUL bytes, invalid UTF-8
+  and over-limit input mark the result incomplete. So does a buffer size inetd
+  parses by reading past the end of its string (a digits-only last size such
+  as `,rcvbuf=65536`); that service is `unresolved`. An absent file means the
+  packaged unit does not start inetd. Name lookups (`/etc/services`,
+  `/etc/rpc` and host names) are listed per service as non-blocking gaps.
+  Every result also names what it cannot observe: whether inetd runs and with
+  which options or file, uid mapping, kernel IPv6 support, socket binding, and
+  program contents and working directory. `origin` is always `not_assessed`.
+
+**Not covered:** xinetd, agent collection, catalog wiring, persistence,
+baselines and alerts, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -6407,6 +6803,61 @@ standalone-worker workflow. Existing app/worker containers, MySQL job coordinati
 and the shared-local-volume deployment are prerequisites. Deliver deployment
 separation and supported remote-worker setup as one coherent feature, with
 incremental milestones where needed.
+
+### networkd-dispatcher script contract — worker checkpoint #1126
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/networkd_dispatcher.py` is a pure, versioned contract for
+networkd-dispatcher. Ubuntu Server installs it, and its root daemon runs the
+files in `<state>.d` directories whenever a systemd-networkd link enters that
+state. The Debian/Ubuntu package also runs them once at service start. It takes
+captured directory and file metadata and the text of
+`/etc/default/networkd-dispatcher`, and performs no I/O.
+
+- **Source.** `scripts_in_path`, `check_perms`, `handle_state`,
+  `run_hooks_for_state` and `parse_args` in networkd-dispatcher 2.2.4, the
+  shipped unit and the Debian patches (`2.2.4-1.2ubuntu1`) that move its
+  `EnvironmentFile` to `/etc/default/networkd-dispatcher` and set
+  `--run-startup-triggers`. The rules come from reading that source; the daemon
+  was not run.
+- **Directories.** The default directories are `/etc/networkd-dispatcher` and
+  then `/usr/lib/networkd-dispatcher`. `-S`/`--script-dir` (including unique
+  long-option prefixes and clustered short options) replaces them. Only the 16
+  known administrative and operational state names are dispatched; any other
+  `<name>.d` is reported as never run.
+- **Selection.** For each state, the entry names of every directory are unioned
+  and sorted by code point, with no name filter (hidden and backup names run).
+  Each name uses the first directory in which:
+  - the path is a regular file after following symlinks;
+  - the `<state>.d` directory itself is exactly `0755` and `root:root` (a
+    symlinked directory always fails);
+  - the resolved file is exactly `0755` and `root:root`.
+
+  A failing entry falls through to the next directory instead of masking it.
+- **Report.** Each script's order and its argv (`[path]`, executed directly,
+  with no shell) run as root. The environment variable names are listed, with
+  `ESSID` and `json` flagged because a nearby transmitter chooses the network
+  name. The report also says whether startup triggers run, and evaluates the
+  unit's `ConditionPathExistsGlob`.
+- **Fail closed.** These mark the result incomplete:
+  - an unobserved, unreadable or unparsable arguments file (backslashes, `$`,
+    mixed quoting, or unknown, `--help` or argument-less options);
+  - a relative or empty `--script-dir` component;
+  - unobserved directory listings, directory modes or file metadata;
+  - duplicate or malformed entries;
+  - over-limit input.
+
+  An entry whose name an unlisted (unobserved or unreadable) higher-priority
+  directory for the same state could hold is reported `unresolved`, not
+  `runs`, and is left out of the ordered script list.
+
+  `origin` is always `not_assessed`. Each result names what it cannot observe:
+  package and service state, unit overrides, link states, the daemon's
+  inherited environment and script contents.
+
+**Not covered:** agent collection, catalog `entries_parsed` wiring,
+persistence, baselines and alerts, UI, provenance and AI classification. No
+schema, API, auth or response-authorization change.
 
 ### Fixed role Compose files — worker checkpoint #676
 
@@ -7254,6 +7705,29 @@ the same transaction that records the job state.
 - Notifications never retry, reconcile, acknowledge or authorize anything.
 
 Milestones 2–4 remain open.
+
+Worker checkpoint (issue #1257, #342 alert-producer slice): the advisory resource
+attention codes in the endpoint-agent view now reach the notification center. Each
+30-second `collect_alerts()` tick publishes one admin-only `operations`/`resource-attention`
+event (medium, linking to `#servers/<id>/agent`) per enabled, enrolled server whose
+**fresh** telemetry reports `disk-space-low`, `disk-inodes-low` or `memory-low`
+(10% or less available) or `clock-unsynchronized`.
+
+- The reason text is fixed and names only the affected categories. Changing
+  percentages add no revision; a changed category set adds one.
+- Hysteresis: a capacity category already in the active event stays until it is
+  above 15% available, so values hovering around 10% do not flap.
+- Unknown is not recovery. Stale, missing, future-dated or malformed telemetry, or a
+  metric that is now unknown, leaves the active event unchanged. Telemetry loss is
+  reported by its own producer.
+- Disabled and deleted servers resolve through the shared operational path.
+  Enrolling servers publish nothing.
+- Notification-only: no SMTP/webhook outbox alert. It never changes agent health
+  classification, makes an AI call, frees space, adjusts clocks or authorizes any
+  response. No schema, route or UI change.
+
+Remaining in #342: certificate expiry, metric history, configurable thresholds,
+preflight blockers and SMART/NVMe or kernel-error signals.
 
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
@@ -8782,6 +9256,13 @@ issue and PR lists were empty. No reported issue or issue closure is claimed.
 The faster-triage program remains unfinished. This batch selects a runtime
 concurrency increment independently of the larger authenticated-context/cache
 program; none of the v1.21.0 context gaps become cache eligibility.
+
+Worker checkpoint (#1108): the leader skips idle update-scoring submissions
+when scoring is disabled. A previously running score still receives recovery
+through its ordinary execution lock. Enabled scoring keeps alternating with
+triage. With one executor slot and scoring off, the deterministic scheduler
+fixture dispatches triage on all four five-second ticks instead of two. This
+measures dispatch cadence. It does not measure production throughput.
 
 `MRPATCHY_AI_CONCURRENCY` sizes the real shared AI executor from 1–8 tasks, default
 4. Independent servers can overlap full one/two-stage process investigations.
@@ -11135,6 +11616,21 @@ This measures the loopback benchmark on a disposable database. A reported
 throughput figure is fixture-only. Representative live-provider and production
 failover measurements remain open.
 
+### Transport latency in triage fixture comparisons — Roadmap A checkpoint #1120
+
+Run `python tools/compare_ai_benchmarks.py serial.json parallel.json --provider-transport`
+to add a separate p50/p95 comparison for the persisted provider transport
+timing. The usual workload equivalence checks still run first. Both reports
+must contain one valid timing sample per provider call. This transport
+measurement excludes receipt and usage persistence, which contribute to the
+existing, wider provider-call measurement.
+
+The retained SQLite loopback records have 30 transport samples per report.
+Cross-server p95 was 26.738 ms serial and 58.657 ms parallel. Same-server p95
+was 27.447 ms serial and 59.814 ms parallel. These figures describe the
+retained fixture runs. Matched live-provider timings and production throughput
+remain open. The original comparison reports still reproduce without the flag.
+
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
@@ -11170,12 +11666,71 @@ they measured, and the comparator could not detect a mixed pair.
   | legacy | 7.04/s | 11.02/s |
   | unthrottled | 7.21/s | 10.41/s |
 
-- **Still open:** `rate`, `daily_cap` and `rate_and_daily` benchmark modes. Rate
-  pacing deliberately spaces starts, and a capped mode needs a priced fixture
-  model. MySQL records (#976) and production measurements are also open.
+- **Follow-up:** #1231 covers the daily-cap fixture. #1245 covers the
+  shared-rate fixture, alone and with the daily cap. Production measurements
+  remain open.
 - **Unchanged:** no runtime, admission, provider, schema or
   response-authorization behavior.
 
+
+### Daily-cap triage benchmarks — Roadmap A checkpoint #1231
+
+Run the serial and parallel loopback fixtures with
+`--control-mode daily_cap` to include the real reservation, transmission and
+settlement operations. The tool applies a fixture-only price and a fixed USD 10
+daily cap in UTC inside the disposable process. The price and the reported
+settlements are synthetic. No charges are incurred.
+
+The benchmark requires one settled ledger row per call receipt, including
+follow-up calls. It checks the receipt, run, model, pricing version, estimated
+amount and reservation ceiling before reporting complete settlement. The
+comparator requires capped-mode settlement evidence and a matched workload.
+Existing legacy and unthrottled reports keep their format.
+
+SQLite and disposable MySQL tests exercise both cross-server and same-server
+workloads. This covers the ordinary capped path with available headroom. Tests
+for exhausted caps, deferral and restart remain separate. Production latency
+remains unmeasured. #1245 extends the same fixture to rate-paced modes.
+
+
+### Rate-paced triage benchmarks — Roadmap A checkpoint #1245
+
+Use `--control-mode rate` or `--control-mode rate_and_daily` with the disposable
+loopback benchmark. Both fixtures use the recorded shared gate at 1,000
+starts/hour. Each investigation consumes one start and its follow-up can
+continue under that start. The dispatcher observes the persisted next start
+time and waits while earlier work can finish. It refuses to emit a complete
+report if the ledger lacks a start for any investigation.
+
+Reports include the fixture rate, durable starts and dispatch waiting time.
+The waiting interval can overlap earlier investigations, so it is already
+included in total elapsed time. The comparator requires consistent evidence
+and refuses an elapsed time too short for the claimed starts. The combined
+mode checks the synthetic spend ledger as well. Legacy and unthrottled
+reports and retained comparisons are still accepted with their existing
+format.
+
+SQLite and disposable MySQL exercise serial and parallel workloads with
+follow-up calls. These are loopback measurements with deliberate pacing
+and cap headroom. Production speeds and exhausted-cap throughput are outside
+this checkpoint.
+
+
+### Choose the rate for paced triage benchmarks — Roadmap A checkpoint #1253
+
+In `rate` and `rate_and_daily` fixture modes, pass the same `--rate-per-hour` to
+each serial and parallel run to compare a specific shared throttle. The default
+remains 1,000 starts/hour. The benchmark validates the rate against the
+application's 1–1,000 range and rejects combinations requiring more than five
+minutes of minimum spacing between starts before opening the disposable
+database. For example, a two-investigation sample at 20 starts/hour includes
+one three-minute interval.
+
+The comparison requires both reports to record the same rate and one durable
+start per investigation. Existing reports retain their format. SQLite and
+disposable MySQL fixtures check actual pacing with follow-up evidence. These
+runs use local fixtures and do not measure production throughput or an
+exhausted spend cap.
 
 ### Verified operating-system lifecycle status — worker checkpoint #341
 
@@ -11491,8 +12046,25 @@ because it carries endpoint text.
 - **Unchanged:** a rejected payload never blocks alert collection. The raw
   `integrity` alert, `host.integrity` and patching gates are unchanged. Nothing
   is acknowledged, remediated or authorized, and there is no schema change.
-- **Remaining:** a configurable threshold, and a native agent sweep-stall
-  acceptance test.
+- **Remaining:** ~~a configurable threshold~~ (addressed by the #1265 worker
+  checkpoint below), and a native agent sweep-stall acceptance test.
+
+### Configurable hash-sweep stall threshold — worker checkpoint #1265
+
+Closes the "configurable threshold" item from checkpoint #794: the admin-only `integrity-sweep`/`hash-sweep-stalled` notice no longer waits a fixed 30 minutes.
+
+- **Setting:** Settings → Patch policy adds **Hash-sweep stall notice after · minutes**, whole minutes from 10 to 1440, default 30. The minimum stays well above the 360-second ingest check so a slow sweep does not flap. The settings finder matches "hash sweep" and "integrity".
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `integrity_sweep_stalled_minutes`. Out-of-range or non-integer values return 422, and clients that omit the field keep the stored value.
+  - A change appends `hash-sweep stall notification threshold changed from A to B minutes` to the existing admin-only settings audit row. Saving the same value adds nothing.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 30 (`integrity_sweep_notifications.stalled_minutes`), so a bad value never silences the notice.
+  - The value lives in the existing `config` setting, so there is no schema change.
+- **Producer:** `operations.collect_alerts` passes its configuration to `integrity_sweep_notifications.publish`, and `classify` uses the configured threshold for `overdue`.
+  - The fixed reason text names the configured minutes. At 30 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of a still-qualifying active event once.
+  - Raising the threshold above a server's current stall resolves its event, and the same event reopens if the stall later passes the new threshold.
+- **Unchanged:** the `future` category, the 360-second `host.integrity` ingest check and the patching hold it causes, the raw `integrity` SMTP/webhook alert, roles, CSRF, the admin-only audience and response authorization. The notice stays advisory.
+- **Validation:** `tests/test_integrity_sweep_threshold.py` has 8 tests, all failing on main `7a165a60` and passing after (the `future` test is a behavioral control that fails on main only because the setting does not exist). `tests/ui_settings_hash_sweep.cjs` fails on main and passes after; it covers the finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px. The existing sweep, telemetry-loss, operational-notification, route-role and settings tests pass.
+- **Remaining:** a native agent sweep-stall acceptance test.
 
 
 ### External alert-delivery failure notifications — worker checkpoint #792
@@ -11826,6 +12398,52 @@ times both selections sort by descending job ID. The fleet still lists at most
 to one while preserving the result for each server. Incident counts and server
 readiness still make per-server reads. Production load time remains unmeasured.
 
+### Batch fleet automatic AI plan readiness — Roadmap A checkpoint #1223
+
+The automatic AI plan status batches credential presence, server pause, holds
+and lifecycle reads for the listed fleet page. The same classification feeds
+the individual-server view. It reports malformed stored pause policies as
+paused, matching the provider gate. The precedence remains policy opt-in,
+global configuration, server pause, holds, then lifecycle.
+
+With 100 ready servers the disposable SQLite fixture reduced readiness queries
+from 1,000 to eight. Incident-count reads remain per server and production
+latency is unmeasured. This status work leaves scheduling, provider admission
+and response authorization intact.
+
+
+### Batch awaiting-incident summaries — Roadmap A checkpoint #1238
+
+The fleet automatic AI plan status now reads per-server counts and oldest
+timestamps in one database statement. Each listed host's subquery applies
+the same automatic-candidate exclusions and its existing limit before
+aggregating. An extra qualifying row still signals truncation. The
+single-server status uses the same summary and the fleet totals still
+describe the listed servers only. SQLite and newer MySQL versions correlate
+the bounded read. MySQL releases before 8.0.14 use one UNION statement
+with an independent bounded read per server.
+
+The SQLite fleet fixture used one incident-summary statement with both 12
+and 100 hosts, down from 12 and 100. Both layouts now use 12 total status
+reads. The measured improvement is in database round trips. Production load
+time remains unmeasured. Scheduling, provider admission and response
+authorization remain outside this status change.
+
+### Shared holds on automatic plan status — Roadmap A checkpoint #1249
+
+Security Coverage and Server → Security show the recorded shared AI start gates alongside
+automatic plan status in explicit control modes. Both surfaces read the existing admin-only
+control snapshot once per load, independently of the plan-status response. They distinguish
+the latest shared eligibility time, a reset recheck, and holds without a scheduled release.
+Worker slots, server readiness and call-specific checks can still defer a request after the
+shared gates open. If the snapshot fails or its mode differs from the plan status, the plan
+counts, job history and readiness remain visible with an unavailable timing state.
+
+Acceptance covers timed and indefinite holds, open and unavailable snapshots, legacy pacing,
+escaped text and fleet and server layouts at 320, 768 and 1440 pixels. Queue admission, provider
+accounting and response authorization retain their existing behavior. Deferred work and
+per-call admission across all AI purposes remain tracked under the wider Roadmap A milestones.
+
 ### Notification-center status filter — worker checkpoint #835 (roadmap J)
 
 The notification center adds a **Status** filter (All statuses / Active / Resolved) beside the severity, source and server filters.
@@ -11845,6 +12463,21 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
 
+### Disclose a capped triage reset as a recheck — Roadmap A checkpoint #1268
+
+At an exhausted daily cap, the admin Investigations worker status reports a
+timed retry only if the shared budget snapshot confirms the configured reset
+is authoritative. If reservations from an earlier budget window overlap the
+reset, the status explains that those reservations can still count and the cap
+card shows the configured reset as a recheck. The ledger, role checks, reservations
+and queue admission retain their existing behavior.
+
+The SQLite and MySQL acceptance uses persisted entries in a current or
+overlapping window and compares both admin status routes. At the configured
+reset the overlapping reservation remains counted until its original window
+closes. This checkpoint covers the current queue status. The proposed Settings
+change preview is tracked separately in #1267.
+
 ### Free exact known-good hits under an exhausted daily cap — worker checkpoint #1030
 
 Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit spends nothing. Before this checkpoint `ai_claims.acquire()` refused every claim once the cap had no headroom, or once the elected subject's own quote exceeded it. A free cached verdict on another server therefore stayed `pending` until the next reset.
@@ -11852,7 +12485,17 @@ Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit
 - **Change:** with the global cap gate closed, admission elects only from a bounded, oldest-first window (`FREE_HIT_SCAN = 50` per verdict range) of subjects that pass the normal pause, lifecycle, saturation, claim and retry filters, and claims the oldest one whose read-only probe `known_good.exact_hit_available()` hits. The probe derives evidence as the worker does (`file_status.before_ai(..., persist=False)`), honours an administrator Refresh and an authenticated `changed` artifact, and runs the strict `known_good.lookup`. It is re-checked under the host queue gate. With the global gate open, a subject whose own quote exceeds the headroom is also claimed when it probes as a hit. The election and oldest-subject queries moved unchanged into `_elect_host()` and `_oldest()`.
 - **Unchanged:** every subject that would call the provider keeps today's deferral, with no claim, run or reservation. The rate gate, provider backoff, pause, lifecycle, data-sharing and Refresh behavior are unchanged. If evidence changes between the probe and the worker's own lookup, the atomic `ai_budget.reserve()` still refuses the provider call, so nothing is sent or charged and the existing policy-wait deferral applies. No schema, API, UI, roles or response authorization change.
 - **Validation:** `tests/test_known_good_daily_cap_hit.py` has 8 tests. Five fail on main `c5c1504`: the exhausted cap, a quote below one reservation (the issue's reproduction), an older paid subject in front of a newer hit, pause then resume, and the probe itself. The other three pass both before and after: a paid subject, a Re-triage and a revoked candidate all stay held. The related SQLite admission, budget, claims, file-status, known-good, triage, retry, pause and worker-control selection passes (419 passed).
-- **Remaining:** while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
+- **Remaining:** ~~while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear.~~ Addressed by the #1241 worker checkpoint below. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
+
+### Rotating free known-good hit probe window — worker checkpoint #1241 (roadmap A/B)
+
+The #1030 checkpoint bounded closed-gate admission to the 50 oldest eligible subjects (`FREE_HIT_SCAN`). A free exact hit behind 50 or more older paid subjects was therefore never probed while the daily cap, rate admission or provider backoff stayed closed, which under an exhausted cap meant waiting for the reset.
+
+- **Change:** `ai_claims._free_hit()` now rotates its window. A pass without a hit records the `(first_seen, id)` of the last subject it probed. The next pass resumes after it and, at the queue end, wraps to the oldest subjects it has not reached, so a hit behind N older non-hit subjects is claimed within `ceil((N+1)/FREE_HIT_SCAN)` closed-gate admissions. A found hit clears the cursor, so the next pass starts from the oldest again and consecutive hits stay oldest-first. A cursor beyond every eligible subject wraps within the same pass.
+- **Scope of the cursor:** it is per process and in memory. Admission runs under the distributed `ai-triage` lock, so passes in one process never overlap. Several processes each rotate independently. A restart starts again from the oldest subject. No schema change.
+- **Unchanged:** at most `FREE_HIT_SCAN` probes per admission; the pause, lifecycle, saturation, claim, retry, Refresh and revocation filters; the re-check under the host queue gate; and every paid subject's deferral with no claim, run, reservation or provider call. While the gate is open, election is unchanged. No API, UI, role or response-authorization change.
+- **Validation:** three tests in `tests/test_known_good_daily_cap_hit.py`. Two fail on main `9f972053`: a hit behind a full window of 50 older paid subjects, and a wrap that reaches a new hit older than the cursor. The third, a stale cursor, is a control.
+- **Remaining:** after a pass without a hit, a hit that appears before the cursor waits for the wrap, so it may be claimed after a newer hit. MySQL was not run locally.
 ### dhclient hook contract — worker checkpoint #1063 (roadmap F)
 
 ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
@@ -11874,6 +12517,21 @@ ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hoo
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dhclient_hooks.py` has 16 tests and cannot run on main, where the module does not exist. One test runs the copied reference hook functions with the real `run-parts` against a fixture tree, comparing which hooks are sourced and in what order. Four mutations are each caught: allowing `.` in names, sourcing symlinks to directories, case-insensitive ordering, and dropping the single hook file.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the package's shipped hooks, and UI.
+
+### dhcpcd hook contract — worker checkpoint #1363 (roadmap F)
+
+`dhcpcd-run-hooks` sources `/etc/dhcpcd.enter-hook`, every `<hookdir>/*` entry and `/etc/dhcpcd.exit-hook` as root on every dhcpcd event. dhcpcd is the DHCP client on Raspberry Pi OS and is packaged as `dhcpcd-base` on current Debian and Ubuntu. Neither the startup catalog nor the dhclient contract covered it.
+
+- **Change:** a new pure module, `app/dhcpcd_hooks.py`. From captured `lstat`/`stat` metadata it reports which files are sourced, in which order, and why other entries are not.
+- **Reference:** the hook loop of the packaged `dhcpcd-run-hooks` in `dhcpcd-base` 10.0.6-1ubuntu3.2 and 10.1.0-8 (identical files, hook directory `/usr/lib/dhcpcd/dhcpcd-hooks`) and 10.5.2-6 (`/usr/libexec/dhcpcd-hooks`, otherwise the same loop). The script's SHA-256 selects the hook directory.
+  - The glob is sorted in byte order, because `/bin/sh` is dash, which uses `strcmp`. Dotfiles are not matched.
+  - Paths ending in `~` are skipped, and so are paths that a `nohook` word matches as `*/word`, `*/NN-word` or `*/NN-word.sh`. dhcpcd turns commas in a `nohook` value into spaces before it sets `$skip_hooks` (`if-options.c`, case `C`), so the contract takes raw option values and splits them the same way.
+  - A remaining path is sourced when `[ -f ]` holds, which means a regular file after following symlinks. No executable bit is needed.
+- **Gaps, never reported as covered:** a missing or unrecognized script hash, an unobserved or unreadable hook directory, an enter or exit hook with neither metadata nor confirmed absence, an unobserved symlink target, malformed or duplicate input, the 1024-entry cap, and a `nohook` word containing a glob character. Unquoted `$skip_hooks` expansion makes such a word depend on dhcpcd's working directory. When `nohook` words are not supplied, none are assumed, so the result can only over-report.
+- **Unobserved, stated in every result:** whether dhcpcd is the client in use, a replacement `dhcpcd.conf` `script`, which `nohook` options apply per interface, and hook contents.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Validation:** `tests/test_dhcpcd_hooks.py` has 17 tests. One runs the reference loop verbatim under dash on 150 random fixture trees, with paths rewritten, random comma-joined `nohook` values (commas turned into spaces for the shell, as dhcpcd does) and the `.` replaced by a print, and compares the sourced list and order. Five mutations are each caught: case-insensitive order, sourcing `~` paths, dropping the `.sh` skip pattern, matching dotfiles, and sourcing directories.
+- **Remaining:** collection, `dhcpcd.conf` `script`/`nohook` parsing, a catalog entry, provenance against the package's shipped hooks, and UI.
 ### Provider backoff under reversed failure writes — Roadmap A checkpoint #1117
 
 Shared provider backoff retains the latest recorded failure timestamp. If an
@@ -12050,6 +12708,80 @@ incrond runs a command whenever an inotify event fires on a path named in an inc
 - **Validation:** `tests/test_incron_tables.py` has 14 tests and cannot run on main, where the module does not exist. Three mutations are each caught: loading dot-named system tables, a single-toggle (working) escape in the tokenizer, and last-value-wins configuration. The tokenizer and parsing rules were ported by reading the source. Compiling the upstream source against the tests was not possible in the worker environment.
 - **Remaining:** collection wiring into the startup inventory, a startup catalog entry, provenance against the incron package's shipped files, and UI.
 
+### Observed provider overlap in fixture comparisons (#1092, roadmap A)
+
+Comparison reports show each input's peak simultaneous fixture provider requests
+alongside its configured concurrency. A peak of one means the run observed no
+provider overlap. Older inputs that omit the measurement report null. Explicit
+peaks must be positive integers within both the configured concurrency and the
+number of investigations. This metric is an observation, so it may differ across
+an otherwise capability-equivalent pair.
+
+The comparator regressions cover observed overlap, a parallel run without
+provider overlap, historical inputs and invalid peaks. Both retained comparison
+records are regenerated from the original SQLite fixture inputs. Matched
+production throughput and the broader faster-triage acceptance remain open.
+
+### pppd hook contract — worker checkpoint #1091 (roadmap F)
+
+When a PPP link changes state, pppd runs `/etc/ppp` scripts as root. On Debian and Ubuntu, the packaged `ip-up`, `ip-down`, `ip-pre-up`, `ipv6-up` and `ipv6-down` wrappers then run their `.local` override or `run-parts` over their `.d` directory. No startup catalog entry or contract covered any of this.
+
+- **Change:** a new pure module, `app/ppp_hooks.py`. It takes the text of `/etc/ppp/options` and `/etc/ppp/peers/*`, `lstat`/`stat` metadata and package verification of each wrapper. For each of the ten events it reports the effective script path, which configurations select it (options alone, or `peer:<name>`), and whether pppd runs it as root and why. For a verified wrapper it also reports what the wrapper runs.
+- **Reference:** `ppp_2.5.2.orig.tar.gz` (sha256 `47da358d…33cb2`) and `ppp_2.5.2-1+2build1.debian.tar.xz` (sha256 `ef4ad7b7…0d873`), both re-downloaded and read this run.
+  - Default paths come from `pathnames.h`; Debian's `zzz_config` patch leaves them unchanged.
+  - The eight `*-script` options are `OPT_PRIV|OPT_STATIC` without `OPT_PRIO`, so `process_option` keeps the last privileged value. `/etc/ppp/options` is read before the command line, where `call <peer>` reads its peer file, so a peer file overrides `/etc/ppp/options`. `auth-up` and `auth-down` cannot be overridden.
+  - `run_program` runs a path only if `stat` shows a regular file with any execute bit, and skips a missing path silently. The child runs as uid 0 with a cleared environment.
+  - The package ships only the five IP wrappers. Any existing `auth-*` or `net-*` script is marked `not_shipped_by_package`.
+  - A wrapper `exec`s `<name>.local` when `[ -x ]` holds. As root that includes a directory, whose `exec` then fails, so nothing after it runs. Otherwise the wrapper runs `run-parts` without `--lsbsysinit`. The module reuses `run_parts_name` and byte ordering, because the cleared environment means the C locale applies.
+- **Gaps, never reported as covered:**
+  - The wrapper `.local`/`.d` expansion is applied only when the caller marks that wrapper `unchanged` by package verification. A `modified` or `unverified` wrapper is a blocking `wrapper_not_verified` gap, and its entries are listed as unresolved.
+  - Other blocking gaps:
+    - option text that is unobserved, over the limit or has a missing argument;
+    - quotes, escapes, `#` inside a word, over-long words or `option=value` forms;
+    - `file`/`call` includes;
+    - relative override paths;
+    - unobserved metadata, directories or symlink targets;
+    - unreadable directories;
+    - malformed or duplicate input;
+    - more than 1024 files or 256 peers;
+    - a ppp version outside the 2.5 series, or a family other than Debian.
+- **Unobserved, stated in every result:**
+  - script contents;
+  - the pppd command line, `~/.ppprc`, `/etc/ppp/options.<tty>` and included option files;
+  - other command-running options (`connect`, `pty`, `plugin` and so on);
+  - argument-position ambiguity;
+  - which peers and events actually occur.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_ppp_hooks.py` has 19 tests and cannot run on main, where the module does not exist. They cover:
+  - a group-execute-only file;
+  - a symlink to a directory;
+  - dangling and non-executable `.local` files;
+  - a `.local` directory;
+  - an override outside `/etc/ppp`;
+  - last-wins precedence and peer-over-options precedence;
+  - every gap class.
+
+  12 mutations were each caught, including execute-bit-owner-only, first-wins precedence, options-over-peer precedence, ignoring wrapper verification, case-insensitive ordering and dropping the `call` include gap. The wrapper was not executed in this environment, so the `.local`/`run-parts` rules come from reading the Debian wrapper source.
+- **Remaining:** collection wiring (option text, metadata and `dpkg --verify` wrapper state), a catalog entry, provenance of `.d` entries against package files, and UI.
+
+### DNF post-transaction-actions contract — worker checkpoint #1101 (roadmap F)
+
+The dnf-plugins-core `post-transaction-actions` plugin makes root run shell commands after every RPM transaction. Each `*.action` line, `package_filter:in|out|any:command`, runs through `/bin/sh -c`, and package metadata (`$name`, `$repoid`, `$state`, …) is substituted into it without shell escaping. The startup catalog listed `/etc/dnf/plugins` as metadata only. Debian's APT (#950) and dpkg (#970) hooks were resolved, but the RPM side was not.
+
+- **Change:** a new pure module, `app/dnf_actions.py`. From captured `dnf.conf`, `post-transaction-actions.conf`, the default action-directory listing and the plugin installation state, it reports:
+  - the plugin's state: `enabled`, `disabled`, `not_installed`, `config_error` or `unknown`, with the reason;
+  - every action the plugin would run: source file and line, filter, state, the bounded command with its SHA-256, the metadata variables it substitutes, and whether it runs;
+  - every line the plugin rejects.
+- **Reference:**
+  - The action rules follow dnf-plugins-core `plugins/post-transaction-actions.py`. Files come from `glob(actiondir + "*.action")`, which skips hidden names and returns the unspecified directory order. Lines come from `readlines()` with universal newlines, then `strip()`. Only `#` starts a comment. A line must split three ways with `split(':', 2)`, and the state must be exactly `in`, `out` or `any`.
+  - The enablement rules follow dnf `Plugin.read_config` and `_check_enabled`, read with the libdnf `IniParser`: case-sensitive keys and sections, the last value wins, matching outer quotes are trimmed, indented lines continue a value, and OptionBool words are used. A parse error or a non-boolean `enabled` or `plugins` value is reported as `config_error`.
+  - Review repair (2026-11-24, `magical-goodall`): as in DNF 4.21.1 `Base.init_plugins`, which skips loading when plugins are globally off and reads local configuration only for discovered plugin classes, a plugin known to be absent (`not_installed`) or globally disabled (`dnf_conf_plugins_disabled`) is decided before its local configuration is read. A malformed, unreadable, uncollected or overriding local file then adds no gap and cannot turn the result into `config_error` or `unknown`; global `dnf.conf` errors stay decisive. A non-regular `*.action` entry aborts `_parse_actions()` before any command is selected, so actions from other files are kept as evidence with `runs: false` and `blocked_by: action_file_read_error`.
+- **Gaps that make the result incomplete:** any uncollected input; unknown plugin installation; a `pluginconfpath` or `pluginpath` override, or an `actiondir` override for a plugin that is not known to be inactive; a non-regular, unreadable, NUL-containing or over-limit `*.action` entry (the plugin's `open()` raises on these); and malformed observations.
+- **Disclosed in every result:** command-line `--enableplugin`, `--disableplugin` and `--setopt`; DNF 5's separate `libdnf5-plugins/actions.d` plugin; and the transaction-dependent order of execution.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_dnf_actions.py` has 30 tests. The module does not exist on main, so they cannot run there. A randomized test runs the plugin's own `_parse_actions` logic with the real `glob` on 300 fixture directories, built with comment, colon, case, whitespace, `\r`, `\f` and U+2028 edge cases, and requires identical actions. Ten mutations are each caught: per-part stripping, hidden-file eligibility, `splitlines()` instead of `readlines()`, `;` comments, case-insensitive keys, no quote trimming, a case-insensitive state, a normalized `actiondir` glob, missing NUL handling, and installation precedence.
+- **Remaining:** agent collection, a DNF 5 actions contract, a catalog parse-level update after collection, and UI.
+
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
 New disposable SQLite and MySQL benchmark reports require one successful
@@ -12191,9 +12923,225 @@ never reads a sourced file.
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
 
+### mdadm alert-program contract — worker checkpoint #1213 (roadmap F)
+
+`app/mdadm_program.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/mdadm.conf`, `/etc/mdadm.conf.d`, `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. It reports which `PROGRAM` command `mdadm --monitor --scan` executes as root on RAID events, and which file and line it came from.
+
+- **Source of the semantics:** mdadm 4.3 `config.c`, `lib.c` and `Monitor.c` at tag `mdadm-4.3`, plus the Ubuntu 24.04 `mdadm_4.3-1ubuntu2.1` package. From the package I used its unit files, embedded default paths and a changelog entry removing Debian's `conffile-location.patch`.
+  - `/etc/mdadm.conf` is opened first. Only when that open fails does mdadm use `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. So a planted `/etc/mdadm.conf` hides Debian's file. The drop-in directory is still read when neither main file exists.
+  - Drop-ins must not start with `.`, must be at least six bytes and must end in `.conf`. They are read in `strcmp` byte order. A main path that is a directory is read the same way.
+  - The tokenizer is a direct port of `conf_word`/`conf_line`, covering quotes, `#` comments, whitespace continuation and comment lines that do not end a logical line. Keywords match any ASCII case-insensitive prefix of at least three characters.
+  - The first `PROGRAM` word wins across all lines and files. Later words are listed as ignored.
+  - `Monitor` runs only when a program or `MAILADDR` is set. It calls `execl(PROGRAM, PROGRAM, EVENT, MD_DEVICE[, COMPONENT])` as root, with no shell and no `PATH` search. Empty and relative names are explained.
+  - `mdmonitor.service` runs `--monitor --scan`. The daily `mdmonitor-oneshot.timer` runs it with `--oneshot` when `AUTOSCAN=true`.
+- **Fail closed:** blocking gaps cover malformed input, an unobserved path that mdadm would read, unreadable paths or drop-ins, FIFOs and devices, files over 256 KiB, more than 512 drop-ins, and gap truncation.
+- **Validation:** `tests/test_mdadm_program.py` has 23 tests built from vectors derived from the source.
+  - The sandbox did not allow running the downloaded `mdadm` binary, so there is no real-binary differential.
+  - Four mutations are each caught: a two-character keyword prefix, last-wins `PROGRAM`, case-folded drop-in order, and always using the Debian path.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the four paths, the service and timer state, any `--program`, `--config` or `--mail` override on the command line, a catalog entry, package provenance, UI and AI classification.
+
+
 
 ### D-Bus bus-activation contract — Roadmap F checkpoint #1211
 
 `app/dbus_activation.py` is a pure, versioned contract for captured, ordered D-Bus service-directory entries and `.service` text. It reports parsed files, bus-name precedence/winners and declared `Exec`, `User` and `SystemdService` values. When the caller supplies bus type and systemd-activation state, it also reports whether a name starts, is refused, remains unresolved or cannot yet be determined, including system-bus `User` checks and the launch helper's independent `<Name>.service` lookup. Parsing and start behavior were differentially observed against dbus-daemon 1.14.10 on session and system buses.
 
 The contract performs no file or bus I/O, starts no helper or command, does not assess origin and does not authorize a response. Unobserved inputs fail closed. User-database lookups and AppArmor/SELinux mediation are not modeled; the caller supplies directories in bus order. Collection, inventory, UI and AI wiring remain outside this checkpoint. The system-bus helper differential is opt-in and requires root because it uses the installed setuid helper and writes uniquely named fixtures under system service directories, then removes them.
+
+### certbot renewal-hooks contract — worker checkpoint #1229 (roadmap F)
+
+`app/certbot_hooks.py` is a pure, versioned, I/O-free roadmap F contract. From entry metadata for `/etc/letsencrypt/renewal-hooks/{pre,deploy,post}`, it reports which scripts certbot runs as root through `/bin/sh -c`, in what order, on which renewal events and with which environment.
+
+- **Why it matters:** distribution packages run `certbot -q renew` as root from `certbot.timer` or `/etc/cron.d/certbot`, normally twice a day. Every executable in these directories is then run as root, so a script dropped there is a recurring root execution path that no existing contract reported.
+- **Source of the semantics:** certbot 2.9.0 (`_internal/hooks.py`, `main.py`, `renewal.py`, `compat/filesystem.py`, `compat/misc.py`), the version Ubuntu 24.04 ships.
+  - Listing is `os.listdir` plus `isfile` (symlinks followed) plus `os.access(X_OK)`, excluding only names ending `~`. Unlike run-parts there is no name filter: dotfiles, `.dpkg-dist` copies and `.sh` names run. Order is Python `sorted()` of the full paths.
+  - Each path is passed to `subprocess.run(path, shell=True)`. A name with shell-special characters is parsed by `/bin/sh` as command text, so it is reported as `runs_as_shell_text` with a blocking `shell_reinterpreted` gap.
+  - `pre` runs once per `renew`, before the first due certificate. `post` runs once after `renew` when at least one renewal was attempted, with `RENEWED_DOMAINS` and `FAILED_DOMAINS`. Both include dry runs. `deploy` runs after every successful renewal of an existing lineage, for any verb, with `RENEWED_DOMAINS` and `RENEWED_LINEAGE`. It is skipped on `--dry-run` unless `--run-deploy-hooks` is given, and does not run for new issuance.
+  - A failing hook does not stop later hooks. A hook path that is not a directory makes certbot raise, failing the renewal in progress (a non-blocking `directory_breaks_renewal` gap).
+- **Fail closed:** blocking gaps cover an unobserved or unsupported family, unknown installation state, unobserved/unreadable/truncated listings, malformed or duplicate entries, missing metadata, unobserved symlink targets, shell-reinterpreted names and over-limit input. Unobserved mount flags are non-blocking. Unresolved entries are never reported as running.
+- **Validation:** `tests/test_certbot_hooks.py` has 58 tests. Four differential tests load certbot's real `hooks.py` and `compat` modules (only logging/display and unused helpers are stubbed) and execute real hooks through `/bin/sh` from temporary directories. They compare what ran, its order, deduplication, environment, the `renew`/other-verb split, dry-run and `--no-directory-hooks` behavior, a name with a space, and a non-directory hook path with the contract. They run when `MRPATCHY_CERTBOT_SOURCE` points at an unpacked certbot wheel or certbot is installed, and are skipped otherwise. Seven mutations are each caught.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** agent collection of the directories and the certbot installation state, a catalog entry, provenance, persistence, UI and AI classification. Hook commands in `/etc/letsencrypt/renewal/*.conf` and `cli.ini`, and `--config-dir` overrides, are not modeled.
+
+### apcupsd event-script contract — worker checkpoint #1243 (roadmap F)
+
+`app/apcupsd_events.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are `/etc/apcupsd/apcupsd.conf` text, the effective `apcupsd.service` `ExecStart` and entry metadata for `/etc/apcupsd`. From these it reports which programs apcupsd runs as root on UPS power events:
+
+- the `apccontrol` program the daemon execs from the effective `SCRIPTDIR`;
+- the `/etc/apcupsd/config` file the packaged `apccontrol` sources as shell;
+- which `/etc/apcupsd/<event>` scripts run, for each of the 19 daemon events and for `killpower` at final shutdown.
+
+**Why it matters.** Every executable named after a UPS event in `/etc/apcupsd` runs as root whenever that event fires. A `SCRIPTDIR` line makes the daemon run a different `apccontrol` entirely. Both are event-triggered root execution paths that no existing contract reported.
+
+**Source of the semantics.** apcupsd 3.14.14 (`src/lib/apcconfig.c`, `src/lib/apcexec.c`, `src/action.c`, `src/apcupsd.c`) and the Ubuntu 24.04 package `3.14.14-3.1build2` (`apccontrol`, `apcupsd.service`, `apcupsd_shutdown`):
+
+- **Config parsing.** The config is read with `fgets` into 256 bytes, so the tail of an overlong line, including the tail of a comment, is parsed as its own line. Keywords are upper-cased up to the first whitespace. The value is cut at the first `#` anywhere, trailing whitespace is removed, and the last `SCRIPTDIR` wins.
+- **Program path.** `SCRIPTDIR` + `/apccontrol` is formatted into a 256-byte buffer and exec'd with `EVENT UPSNAME CONNECTED POWERED` after `chdir("/")`. An empty or relative `SCRIPTDIR` therefore resolves from `/`.
+- **Packaged `apccontrol`.** It hardcodes `SCRIPTDIR=/etc/apcupsd` and sources `/etc/apcupsd/config` when `[ -f ]` holds. It runs `/etc/apcupsd/EVENT` when `[ -f p -a -x p ]` holds: symlinks are followed and, for root, any execute bit passes. Exit status 99 skips the built-in action (`/sbin/shutdown` for `doshutdown`/`doreboot`).
+- **Shutdown hook.** `/lib/systemd/system-shutdown/apcupsd_shutdown` runs `apccontrol killpower` when the powerfail flag exists.
+- **Missing config.** apcupsd aborts at startup without its config file, so the daemon runs no events.
+
+**Fail closed.** Each of the following is a blocking gap:
+
+- an unobserved or non-Debian family, or unknown installation state;
+- an unobserved or non-default `ExecStart`;
+- an unobserved, unreadable or over-limit config;
+- a non-default, relative or path-truncated `SCRIPTDIR`;
+- an `apccontrol` not authenticated as the unchanged packaged file;
+- a sourced `/etc/apcupsd/config`;
+- unobserved, unreadable or truncated listings, malformed entries, missing metadata or unobserved symlink targets;
+- unobserved mount flags on an executable event script, which leave that event `unresolved` because `[ -x ]` fails on a noexec mount.
+
+Unresolved entries are never reported as running. Scripts are reported as they would run if apcupsd starts; the contract does not check whether an unknown keyword or bad value aborts startup, which over-reports rather than under-reports.
+
+**Validation.** `tests/test_apcupsd_events.py` has 22 tests, covering:
+
+- `fgets` chunk splitting, `#` truncation, case folding, last-wins, empty and relative values, and the 245/255-byte path boundary;
+- the sourced config file, symlinks, noexec mounts, unobserved mount flags as the only gap, directories and special files;
+- truncated listings, malformed input and the gap bound.
+
+A root-only differential runs the packaged `[ -f p -a -x p ]` test through `/bin/sh` on temporary files and compares it with the contract. Six mutations are each caught.
+
+There is no live differential against a built apcupsd: this session's classifier refused building the downloaded source. The config-parsing rules come from reading the source.
+
+**Unchanged.** There is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+
+**Remaining:**
+
+- agent collection of the config, `ExecStart`, directory metadata and package authentication of `apccontrol`;
+- a catalog entry, provenance, persistence, UI and AI classification;
+- RPM/EPEL layouts, `multimon.conf`/CGI and the contents of the sourced `config` are not modeled.
+
+### fail2ban jail contract — Roadmap F checkpoint #1263
+
+- **Outcome:** `app/fail2ban_jails.py` is a pure contract with no I/O. It takes captured `/etc/fail2ban` file text and complete directory listings and reports which jails `fail2ban-client start` enables for the root `fail2ban-server`, from which effective files in load order, and which action specs each enabled jail names (`command` actions from `action.d/<name>` files, and `<name>.py` actions loaded as Python into the root server).
+- **Semantics:** an independent reimplementation over the standard library `configparser` of fail2ban 1.0.2 (Ubuntu `1.0.2-3ubuntu0.1`) `configreader.py`, `configparserinc.py`, `jailreader.py` and `jailsreader.py`: the `jail.conf`, `jail.d/*.conf`, `jail.local`, `jail.d/*.local` load order; `[INCLUDES] before=`/`after=` and sibling `.local` expansion with the `seen` chain and include-list cache; key-by-key merging with `KNOWN/<section>`; `name?cond` conditional sections; `__name__` and `%(section/option)s` interpolation; `enabled`/`backend`/`filter` first pass; per-jail `config_error` for invalid `filter`/`action` specs or filters and actions with no file, while other jails still start; and the reader result when every enabled jail fails.
+- **Fails closed:** unobserved files or directories, `..` paths, NUL bytes, invalid UTF-8, over-limit input, parse and interpolation errors that make upstream raise, include recursion (which upstream hits as `RecursionError`), and any `known/` interpolation a filter could supply. Filter and action file contents are not evaluated in this slice, so any enabled jail that reads one carries the blocking `definitions_not_evaluated` gap.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Linear action splitting (code scanning alert #24):** upstream `splitWithOptions` uses a regex that backtracks exponentially on ambiguous option lists (CodeQL `py/redos`). The contract replaces it with a linear scanner that follows the regex's first-choice path, which is exactly the regex result whenever that path succeeds; where the regex would backtrack into alternative splits, the result carries the blocking `action_syntax_unresolved` gap instead. Scratch fuzzing against the upstream regex found 0 disagreements over 600,000 random inputs, and the CodeQL witness shape with 20,000 repetitions now finishes in milliseconds (the old regex did not finish 18 repetitions in 120 s).
+- **Remaining:** resolving `action.d` command text (`<tag>` substitution, `[Init]`, `actionstart_on_demand`), filter evaluation and the `known/` values it supplies, the `logpath` glob check in `convert()`, `fail2ban.conf`, agent collection, a catalog entry, package provenance, UI and AI classification.
+- **Differential:** compared with the real fail2ban 1.0.2 `JailsReader` from the Ubuntu package, run offline with trivial valid filter and action files: 0 disagreements on enabled jails, per-jail errors, action specs and reader status over 1,978 random configurations that the contract resolved (7,500 generated). The contract left the other 5,522 incomplete; upstream itself raised on 5,329 of them, and the remaining 193 are fail-closed over-reports such as `known/` references and `..` paths.
+
+### NUT upsmon command contract — Roadmap F checkpoint #1247
+
+- **Outcome:** `app/nut_upsmon.py` is a pure contract with no I/O. It takes the text of `upsmon.conf`, the observed `upsmon` argv and the daemon's `NUT_CONFPATH`, and reports which commands Network UPS Tools' `upsmon` runs through `/bin/sh`, as which user and on which events:
+  - `SHUTDOWNCMD` runs as root. In the default split mode it runs in the privileged parent, and under `-p` in the single root process.
+  - `NOTIFYCMD "<message>"` runs for each notify event whose effective flags include `EXEC` and not `IGNORE`. It runs as `RUN_AS_USER` in split mode, or as root under `-p`.
+- **Semantics:** taken from NUT v2.8.1 `clients/upsmon.c` and `common/parseconf.c`:
+  - The parseconf state machine is modeled byte for byte: `#` comments, `\` literals and continuation, quoted words that span lines, a bare `=` word, discarded control and non-ASCII bytes, and the 512-byte word and 32-word line limits.
+  - A `#` inside quotes is a parse error. The rest of that line is then read as a new line, so a directive hidden behind it still applies.
+  - Directive names are exact-case, apart from `DEBUG_MIN`, and the last value wins.
+  - `NOTIFYFLAG` matches the event name case-insensitively and takes exact-case flags joined by `+`. Each line replaces the earlier flags. The default flags are `SYSLOG+WALL`.
+  - A `RUN_AS_USER` in the file overrides `-u`.
+  - getopt stops at the first operand.
+- **Fails closed:** each of these is a blocking gap:
+  - an unobserved config, argv or environment;
+  - NUL bytes, text that is not UTF-8, and over-limit input;
+  - an argv that makes upsmon exit instead of monitoring (`-c`, `-h`, `-V`, `-K`, `-i`, an unknown option or a missing argument);
+  - a captured config path different from the one upsmon reads.
+
+  Notify message templates are reported as a hash with flags for shell-active characters, a UPS-name substitution and possible truncation. A template whose `printf` conversions are not modeled leaves its event `unresolved`.
+- **Redaction:** `MONITOR` and `CERTIDENT` passwords, notify message text and the text of unknown or other directives are never copied into the result.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Startup-fatal `MONITOR` and `MINSUPPLIES` conditions are not modeled. The contract can over-report commands for a daemon that exits, but it does not under-report.
+  - Reload behavior is not modeled: split-mode parents ignore a changed `SHUTDOWNCMD`, and the account is not re-applied.
+  - Not yet done: account resolution, agent collection, a catalog entry, package provenance, UI and AI classification.
+- **Differential:** the tokenizer and directive handling were compared with the real NUT v2.8.1 `parseconf.c` and the `upsmon.c` `parse_conf_arg`, `set_notifyflag` and `set_notifymsg` handlers, compiled into a harness. There were 0 mismatches in 13,000 random configs; the 60 configs that hit the fatal 5-word `MONITOR` exit were excluded, as documented. `parse_argv` matched glibc `getopt` with the upsmon optstring on 3,000 random argv lists.
+
+### TuneD profile script contract — worker checkpoint #1237 (roadmap F)
+
+`app/tuned_profiles.py` is a pure, versioned, I/O-free roadmap F contract. Its input is captured TuneD state: `active_profile`, `profile_mode`, `post_loaded_profile`, the `/usr/lib/tuned` and `/etc/tuned` listings, and the candidate `tuned.conf` texts. From that it reports which executables the TuneD daemon starts as root for the active profile, with which arguments, in which order and under which conditions.
+
+- **Why it matters:** TuneD is installed and enabled by default on RHEL-family servers. On every boot and profile switch it runs:
+  - each `[script]` unit's `script=` executable with `start`, and with `stop` on unload;
+  - any unit's `script_pre`/`script_post` once per device;
+  - `${f:exec:...}` calls.
+
+  A custom `/etc/tuned/<name>/tuned.conf` shadows the stock profile of the same name. A custom profile can also add scripts through `include=`. No existing contract reported any of this.
+- **Source of the semantics:** TuneD 2.21.0 as packaged in Ubuntu 24.04. The files read were `profiles/{locator,loader,merger,profile,unit,variables}.py`, `plugins/{base,plugin_script}.py`, `units/manager.py`, `daemon/daemon.py` and `utils/commands.py`. The contract models:
+  - the profile-mode rules: an empty mode means manual when an active profile is set, auto mode is a blocking gap, and an invalid mode refuses the load;
+  - the single post-loaded profile;
+  - the known-name check before `safe_name` filtering;
+  - `/etc/tuned` taking precedence over `/usr/lib/tuned`, with processed files skipped and the search falling through to the next directory;
+  - optional `-name` includes and depth-first `include=` loading;
+  - parsing with the same `configparser` settings TuneD uses;
+  - `${i:PROFILE_DIR}` expansion and `script=` normalization;
+  - TuneD's merge rules: `replace`, `drop`, `enabled`, overwritten regexes and device scripts, and `script` concatenation, which repeats the earlier scripts when a later `[script]` unit sets none;
+  - integer priority ordering;
+  - the `units/manager.py` check order for each enabled unit (`cpuinfo_regex`, then `uname_regex`, then `int(priority)`), where an uncompilable regex or a non-integer priority aborts the whole apply;
+  - relative `script_pre`/`script_post` paths, which never run.
+- **Fail closed:** blocking gaps cover:
+  - an unobserved family or installation state;
+  - an unobserved or unreadable state file, listing or path;
+  - malformed or over-limit input;
+  - auto mode, because the recommended profile is not modeled;
+  - variables in `include=`;
+  - a `[variables] include=` file;
+  - any `exec` function call, including one whose name is assembled from a variable or a nested function result, which is found by substituting `[variables]` values textually before reading each `{f:` name;
+  - a function name that is not a literal word after that substitution, or a `${` that is neither a plain `${NAME}` reference nor a literal `${f:<name>` call, since TuneD re-splits that outer call after a nested function result is spliced in (`${${f:strip:f\:exec\:cmd}}` runs `cmd`) (`function_expansion_not_modeled`);
+  - a reference to a variable the loaded profile does not define, because the daemon's variable store outlives a single load (`variable_undefined`);
+  - `${i:PROFILE_DIR}` in a profile whose directory name contains a backslash, which `re.sub` treats as a template escape (`profile_dir_escape_not_modeled`);
+  - an invalid regex or priority that is only reached when an earlier regex of the same unit matches the host (`apply_refusal_conditional`).
+
+  A parse error, an unknown or missing profile, an invalid priority or regex reached unconditionally, an invalid mode or a multi-word post-loaded profile is reported as `load_refused` with no invocations, because the daemon then loads nothing. CPU/uname regexes and per-device scripts are reported as conditions, not as definite runs.
+- **Validation:** `tests/test_tuned_profiles.py` has 19 tests. They were derived from a reading of the source and were not run against TuneD itself. The automatic mode classifier refused executing the downloaded package code in two worker sessions, so there is no live differential. A second source review of `units/manager.py` found that the check order makes some invalid priorities host-dependent; that is now modeled. A third review of `profiles/variables.py` and `profiles/functions/functions.py` found that `exec` could be assembled from a variable or a nested function result and that `${i:PROFILE_DIR}` is a `re.sub` template; both now fail closed. Run as text over all 38 stock profiles in the 2.21.0 package, the contract resolves 30 completely. The other 8 are blocked by their `[variables] include=` file or a function in `include=`, as before.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change.
+- **Remaining:**
+  - a differential against the real loader;
+  - agent collection of the TuneD files and installation state;
+  - a catalog entry, provenance, persistence, UI and AI classification;
+  - recommended-profile (`recommend.d`) resolution, variable expansion and `tuned-main.conf` `default_instance_priority` collection.
+
+### ifplugd init-script start contract — worker checkpoint #1377 increment 2 (roadmap F)
+
+- **What it covers:** `app/ifplugd_init.py` is a pure, versioned contract for `/etc/init.d/ifplugd start` at boot. It reports that `/etc/default/ifplugd` is sourced as root shell code. It also reports which `ifplugd -i $IF $A` daemon starts follow, with each `$A` string and whether it came from `ARGS_<IF>` or `ARGS`. Those strings are the `ARGS` input of `app/ifplugd_actions.py`, which is increment 1.
+- **Pinned source:** `/etc/init.d/ifplugd` from `ifplugd_0.28-19.7_amd64.deb` (sha256 `bce99ac5…1136`), run by `dash`.
+  - `INTERFACES` is split on the default IFS. Only the exact values `auto` and `all` select `all_interfaces`. That walks `/sys/class/net/*` in byte order without dot names, and keeps an entry that has `device` and either no regular `type` file or a `type` line that is exactly `1`, and whose name starts with `eth` or `wlan`.
+  - An interface that is not present is skipped. `IF1` replaces only the first `-` with `_`. A non-empty `echo ${ARGS_<IF1>}` (word-split and re-joined) wins; otherwise `$ARGS` is used unchanged.
+- **Fail closed:** the config is understood only as blank lines, comments and simple `NAME=value` assignments, using plain characters, single quotes, or double quotes without `$`, a backquote or a backslash. Any other line, including `export`, a function, a command substitution, a tilde, CR or a continuation, is `config_not_simple_assignment`.
+  - Assigning `IFPLUGD` is `daemon_overridden`, and the replacement is reported as the root program. Assigning `IFS`, `PATH`, `ENV` or `CDPATH` is `config_changes_shell_environment`.
+  - Interface words with glob characters, `/`, `.`/`..`, a backslash or `-n` are gaps. So is an `IF1` that is not a plain name, because `eval` would parse it as a parameter operator or a bad substitution. So is an `ARGS_*` value that `echo` or globbing would change. A plain `ARGS` fallback with a glob character or a backslash is also `args_not_modelled`, because `$IFPLUGD -i $IF $A` expands `$A` unquoted. Unobserved config or interfaces are gaps, and malformed or over-cap input is refused.
+- **Validation:** `tests/test_ifplugd_init.py` has 44 tests. A differential ran 400 random configs and `/sys/class/net` trees against real `dash` running the shipped init script, with a recording `ifplugd` stub. Every complete result matched, more than 200 of them. Three injected model mutations were each caught: replacing every `-`, a strict `type` match, and dropping the `ARGS` fallback.
+- **Not modelled (listed in each result):** positional `start` interfaces, `/lib/lsb/init-functions` and its hooks, the inherited environment, the `ifplugd -c` running-daemon skip, and boot-time interface presence. The `/sys/class/net` observation is taken at collection time.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining for #1377:** the udev `HOTPLUG_INTERFACES` agent path, agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### ifplugd udev hotplug-agent contract — worker checkpoint #1377 increment 3 (roadmap F)
+
+- **What it covers:** `app/ifplugd_hotplug.py` is a pure, versioned contract for `/lib/udev/rules.d/60-ifplugd.rules` (`SUBSYSTEM=="net", RUN+="ifplugd.agent"`). udev runs `/lib/udev/ifplugd.agent` as root on every network-interface event. For each observed interface name, the contract reports whether the agent runs `exec $DAEMON -i $INTERFACE $A` on `add`/`register`, and with which `$A`. It also reports whether the agent runs `exec $DAEMON -k -i $INTERFACE` on `remove`/`unregister`. The `$A` strings are the `ARGS` input of `app/ifplugd_actions.py`. The contract reuses the config parser and `echo` model of `app/ifplugd_init.py`.
+- **Pinned source:** `/lib/udev/ifplugd.agent` and `/lib/udev/rules.d/60-ifplugd.rules` from `ifplugd_0.28-19.7_amd64.deb` (sha256 `bce99ac5…1136`), run by `dash`.
+  - The `-x /usr/sbin/ifplugd` check runs before the config is read. A config that is missing or not a regular file makes the agent exit.
+  - An interface named in `INTERFACES`, or any interface when that list contains `all`, is left to the init script. `auto` does not match here.
+  - Otherwise an interface named in `HOTPLUG_INTERFACES`, or any interface when that list contains `all`, gets a daemon. `HOTPLUG_INTERFACES=all` has no `eth*|wlan*` filter, so it starts a root daemon for `lo`, bridges and container `veth` pairs.
+- **Fail closed:** the same simple-assignment config model as increment 2 applies, and so do the shell-environment gaps.
+  - Assigning `DAEMON` (the agent's variable, not `IFPLUGD`) is `daemon_overridden`. Assigning `INTERFACE` or `ACTION` replaces udev's event values and is `config_overrides_udev_environment`.
+  - A list word or interface name with glob characters is a gap. So is an interface name that `echo` would reinterpret, an `IF1` that `eval` would parse as more than a name, and an `ARGS_*` value that `echo` or globbing would change. A plain `ARGS` fallback with a glob character or a backslash is `args_not_modelled`, because `exec $DAEMON -i $INTERFACE $A` expands `$A` unquoted. An unobserved daemon state, config or interface list is a gap. Names that Linux `dev_valid_name` would reject are refused.
+- **Validation:** `tests/test_ifplugd_hotplug.py` has 45 tests. 44 unit tests pass. A differential test compares 300 random configs against real `dash` running the shipped agent, with a recording daemon stub, for `add`, `remove` and `change` events. It is gated on `IFPLUGD_AGENT_SCRIPT` and root, and it has not yet been run (see PR). The contract was instead checked line by line against the pinned agent source.
+- **Not modelled (listed in each result):** udev environment the config leaves unset (a rule can set `ENV{HOTPLUG_INTERFACES}`), other rules that change `RUN` or the name, the `wait_for_interface lo` loop, the running-daemon check, and other event actions. Interface names are taken at collection time.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining for #1377:** agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### supervisord program contract — worker checkpoint #1259 (roadmap F)
+
+supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x]` it loads from its main file and its `[include] files =` globs, at supervisord start when `autostart` is true (the default), as the section's `user` or as supervisord's own user, normally root. The startup inventory did not model `conf.d/*.conf` as a persistence location.
+
+- **Change:** the pure `app/supervisor_programs.py` takes captured file text and captured include-glob matches and returns each process supervisord would start: section, kind, program and group name, process name and number, the expanded command and its SHA-256, the configured user, and whether it starts at supervisord start or only on demand. It performs no I/O and never runs a command.
+- **Fidelity:** it parses with the same standard-library `RawConfigParser` settings supervisor 4.2.5 uses, reads includes in its order with per-file `%(here)s` replacement, honours `[DEFAULT]`, `[group:x]` membership and supervisord's per-process expansion and option converters, and reports `config_error`, with no processes, only for the refusals it models exactly.
+- **Fail closed:** an unobserved file or glob result, an include pattern that needs the unobserved host name or process environment, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. A command that needs an unobserved `%(ENV_*)s` or `%(host_node_name)s` is reported as starting with an unresolved command. Validations it does not model (users, log directories, `[supervisord]` server options, rpcinterface plugins, fcgi sockets) can only stop supervisord, so the result over-reports and says so. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_supervisor_programs.py` (11 tests). A differential harness ran 3,400 random configurations, with includes, groups, `[DEFAULT]`, numprocs, environments and invalid values, against the real supervisor 4.2.5 `ServerOptions.read_config`. There were 0 disagreements and 0 over-reported configuration errors.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### cloud-init script-directory contract — worker checkpoint #1271 (roadmap F)
+
+cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` final-stage modules run every executable entry of `/var/lib/cloud/scripts/per-boot`, `per-instance` and `per-once` as root: at every boot, once per instance ID (again after it changes, for example on a cloned image), and once. The startup inventory and catalog did not model these directories.
+
+- **Change:** the pure `app/cloud_init_scripts.py` takes captured directory listings and followed-stat metadata, and returns each script cloud-init would run, in order, with its frequency, `argv` and user, plus a reason for every skipped entry. It performs no I/O and never runs a command.
+- **Fidelity:** it follows cloud-init 24.4 `subp.runparts`/`is_exe` and `cc_scripts_per_*`, read from the upstream source. Entries run in `sorted(os.listdir())` code-point order, with no name filter. Unlike `run-parts`, that includes dotfiles, `x~` and `*.dpkg-old` backups. An entry runs when it is a regular file after following symlinks, has any execute bit and is not on a `noexec` mount, which is root's `X_OK`. A missing or non-directory root runs nothing.
+- **Fail closed:** unobserved, unreadable or truncated listings, malformed or missing metadata, unobserved symlink targets, duplicate names and over-limit input are blocking gaps. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_cloud_init_scripts.py` has 9 tests. One of them, run as root, compares the contract with a line-for-line port of upstream `runparts` selection on a real directory tree. A scratch differential over 500 random trees, with random modes, names, directories, FIFOs and live or dangling symlinks, had 0 disagreements.
+- **Not modeled:** whether cloud-init is installed or enabled, `cloud_final_modules` membership, a non-default `cloud_dir`, semaphore state, user-data `scripts_user` and `scripts_vendor`, and script contents.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.

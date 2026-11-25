@@ -13,15 +13,17 @@ module.exports=async page=>{
   // The guard's first moves are dropped whichever API it uses.
   window.__realTraverseTo??=navigation.traverseTo;
   const real=window.__realTraverseTo.bind(navigation),go=History.prototype.go;let left=count;
-  history.go=function(delta){if(left<=0)return go.call(this,delta);left--;};
+  window.__droppedMoves=0;
+  history.go=function(delta){if(left<=0)return go.call(this,delta);left--;window.__droppedMoves++;};
   navigation.traverseTo=(key,options)=>{
    if(left<=0)return real(key,options);
-   left--;
+   left--;window.__droppedMoves++;
    const outcome=mode==='reject'?Promise.reject(new DOMException('dropped','AbortError')):Promise.resolve();
    outcome.catch(()=>{});
    return {committed:outcome,finished:outcome};
   };
  },[mode,count]);
+ const restore=()=>page.evaluate(()=>{navigation.traverseTo=window.__realTraverseTo;delete history.go;});
  await page.locator('[data-nav=settings]').click();
  await page.locator('[href="#settings/history"]').first().click();
  const history=page.locator('[name=history_days]');await history.waitFor();
@@ -41,13 +43,18 @@ module.exports=async page=>{
   assert.equal(await repo.inputValue(),String(+minutes+5),'Stay must keep the edits');
   // Back -> Discard reaches exactly the requested entry, not one beyond it, even when
   // the undo and all of its retries were lost and the page never left that entry.
-  await drop(mode,4);
+  // Every move is dropped until Discard, not a fixed number: a retry timer still pending
+  // from the Stay step above can fire after Back and take one of a fixed allowance, which
+  // let the guard's last retry land (issue #1221). Wait for the guard's full retry budget
+  // (four moves) to be dropped instead of a fixed delay.
+  await drop(mode,Infinity);
   await page.goBack();
   await page.locator('#modal-title').filter({hasText:'Leave without saving?'}).waitFor();
-  await page.waitForTimeout(500);
+  await page.waitForFunction(()=>window.__droppedMoves>=4,null,{timeout:5000});
   assert.equal((await state()).hash,'#settings/history','the undo was expected to be lost');
   await page.locator('#unsaved-discard').click();
   await history.waitFor();
+  await restore();
   const left=await settle('#settings/history');
   assert.equal(left.key,start.previous,`Discard after a lost undo must reach the previous entry, not one beyond it (${mode})`);
   assert.equal(await dialog.evaluate(d=>d.open),false);
@@ -64,6 +71,6 @@ module.exports=async page=>{
  await history.waitFor();
  const opened=await settle('#settings/history');
  assert.equal(opened.previous,start.key,'Discard opens the tab directly after the edited entry');
- await page.evaluate(()=>{navigation.traverseTo=window.__realTraverseTo;delete history.go;delete window.__realTraverseTo;});
+ await page.evaluate(()=>{navigation.traverseTo=window.__realTraverseTo;delete history.go;delete window.__realTraverseTo;delete window.__droppedMoves;});
  assert.equal(await page.evaluate(()=>history.go===History.prototype.go),true);
 };
