@@ -10394,6 +10394,18 @@ followed by safe crash/restart investigation #104. Issue #103 remains a policy q
 resumes only after these higher-priority actionable fixes.
 
 
+### Advisory-plan eligibility during server pause — Roadmap A checkpoint #1355
+
+Investigations now reports the earliest future retry on an active server with
+AI resumed. Paused plans retain their recorded dates in the by-purpose
+details. The combined next-eligibility time uses the eligible date; a queue
+with only paused plans directs the administrator to resume server AI. The
+admin status derives both dates from the existing grouped query.
+
+The window describes queue timing. Shared admission and worker capacity still
+govern the actual start. Older controllers expose their date as a recorded
+retry. Queue and provider behavior retain the existing execution controls.
+
 ## v1.35.3 — Deferred advisory-plan contract and status corrections
 
 Delivery record: version **v1.35.3**, implementation commit
