@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import ai, ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff
+from app import ai, ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff, ai_runs
 from app.db import Session, Setting
 from app.security import seal
 
@@ -99,31 +99,47 @@ def test_indefinite_policy_or_configuration_blocker_refuses_a_claimed_time(admin
     assert [item['code'] for item in result['blockers']] == ['disabled', 'configuration', 'rate_throttle']
 
 
-def test_timezone_overlap_exposes_recheck_without_promising_headroom(admin, monkeypatch):
+@pytest.mark.parametrize('overlapping', [True, False], ids=['retained-window', 'current-window'])
+def test_exhausted_cap_distinguishes_recheck_from_retry(admin, monkeypatch, overlapping):
     priced_catalog(monkeypatch)
     now = datetime(2026, 3, 8, 8, 0, tzinfo=timezone.utc).timestamp()
     created = datetime(2026, 3, 7, 22, 0, tzinfo=timezone.utc).timestamp()
+    timezone_name = 'Pacific/Kiritimati'
+    reservation_zone = 'Pacific/Pago_Pago' if overlapping else timezone_name
+    reservation_reset = ai_budget._window(created, reservation_zone)[1]
+    configured_reset = ai_budget._window(now, timezone_name)[1]
     configure(model='gpt-6-luna', mode='daily_cap', cap=1)
-    old_reset = ai_budget._window(created, 'Pacific/Pago_Pago')[1]
-    configured_reset = ai_budget._window(now, 'Pacific/Kiritimati')[1]
     with Session() as session:
-        settings = session.get(Setting, 'config').value
-        settings['ai_budget_timezone'] = 'Pacific/Kiritimati'
+        settings = dict(session.get(Setting, 'config').value)
+        settings['ai_budget_timezone'] = timezone_name
         session.merge(Setting(key='config', value=settings))
-        session.add(ai_budget.BudgetEntry(id='old-window', created=created, updated=created,
-            reset_at=old_reset, timezone='Pacific/Pago_Pago', model='fixture-model', status='sent',
+        session.merge(Setting(key='worker:heartbeat', value={'seen': now}))
+        session.add(ai_budget.BudgetEntry(id='window', created=created, updated=created,
+            reset_at=reservation_reset, timezone=reservation_zone, model='fixture-model', status='sent',
             reservation_usd=Decimal('1'), pricing_version='fixture', pricing_source='fixture'))
         session.commit()
         result = ai_control_status.snapshot(session, now)
-        assert ai_budget.status(session, configured_reset)['remaining_usd'] == '0'
-        assert ai_budget.status(session, old_reset)['remaining_usd'] == '1'
+        assert ai_budget.status(session, configured_reset)['remaining_usd'] == ('0' if overlapping else '1')
+        assert ai_budget.status(session, reservation_reset)['remaining_usd'] == '1'
 
     blocker = result['blockers'][0]
     assert blocker['code'] == 'daily_cap'
-    assert blocker['next_at'] is None
-    assert blocker['recheck_at'] == configured_reset
-    assert result['next_start_at'] is None
-    assert 'recheck boundary only' in blocker['message']
+    assert blocker['next_at'] == result['next_start_at'] == (None if overlapping else configured_reset)
+    assert blocker['recheck_at'] == (configured_reset if overlapping else None)
+    if overlapping:
+        assert 'recheck boundary only' in blocker['message']
+
+    monkeypatch.setattr(ai_runs, 'time', SimpleNamespace(time=lambda: now))
+    response = admin.get('/api/investigation-status')
+    assert response.status_code == 200
+    status = response.json()
+    assert status['reason'] == 'spend_limited'
+    assert status['retry_at'] == result['next_start_at']
+    assert status['budget']['remaining_usd'] == '0'
+    assert status['budget']['next_reset'] == configured_reset
+    assert status['budget']['next_reset_authoritative'] is (not overlapping)
+    if overlapping:
+        assert 'earlier budget windows can still count' in status['message']
 
 
 def test_unthrottled_configured_snapshot_is_read_only_and_explains_remaining_gates(admin):
