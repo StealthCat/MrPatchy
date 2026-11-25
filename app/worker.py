@@ -763,6 +763,7 @@ def investigate_one(owner=None):
         try:
             with ai_runs.track('triage',lease.cfg['ai_model'],row.host_id,row.id,run_id=lease.run_id):
                 ai_runs.timing('claim_lock',lease.claim_lock_wait)
+                ai_runs.timing('claim_lock_hold',lease.claim_lock_hold)
                 lease.check()
                 ai_runs.timing('admission',time.perf_counter()-admission_started)
                 ai_runs.timing('queue_age',time.time()-row.first_seen)
@@ -1080,10 +1081,21 @@ def _loop(reporter):
                     # waits. Alternate purposes even with a serial pool. Only the
                     # coordinator scores; any supported worker may claim triage.
                     owner=(reporter.id,reporter.boot) if hasattr(reporter,'id') else None
+                    open_slots = capacity['ai'] - len(ai_tasks)
+                    scoring_available = is_leader and 'scoring' not in ai_tasks.values()
+                    scoring_turn = open_slots > 1 or (open_slots == 1 and next_ai == 'scoring')
+                    if scoring_available and scoring_turn:
+                        try:
+                            with Session() as s:
+                                scoring_available = update_scores.needs_dispatch(s)
+                        except Exception:
+                            # Keep normal dispatch if the optional hint fails. The
+                            # scoring worker still checks settings and recovery.
+                            log.exception('Update scoring dispatch check failed')
                     while len(ai_tasks)<capacity['ai']:
-                        scoring=is_leader and next_ai=='scoring' and 'scoring' not in ai_tasks.values()
-                        if scoring:
+                        if scoring_available and next_ai == 'scoring':
                             ai_tasks[ai.submit(update_scores.run_one)]='scoring';next_ai='triage'
+                            scoring_available = False
                         else:
                             ai_tasks[ai.submit(investigate_one,owner)]='triage';next_ai='scoring'
                     last_ai=now

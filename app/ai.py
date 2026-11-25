@@ -6,7 +6,8 @@ import math
 import re
 import time
 import httpx
-from . import ai_runs, ai_transport as transport
+from sqlalchemy.exc import DBAPIError
+from . import ai_pricing, ai_runs, ai_transport as transport
 
 URL='https://api.openai.com/v1/responses'
 MODELS_URL='https://api.openai.com/v1/models'
@@ -29,6 +30,8 @@ FOLLOW_UP_EVIDENCE_SIZE='follow_up_evidence_size'
 # max_output_tokens budget before completing the JSON. Neither is a key or quota problem.
 MODEL_REFUSAL='model_refusal'
 TOKEN_BUDGET='token_budget'
+BUDGET_CONNECTION_LOST='budget_connection_lost'
+BUDGET_CONNECTION_RETRY_SECONDS=30
 
 
 class AIError(RuntimeError):
@@ -41,11 +44,9 @@ class AIError(RuntimeError):
         self.retry_after=retry_after
         self.provider_retry_after=retry_after  # provider-sent delay only; retry_after may later include local backoff
         self.policy_wait=policy_wait
-        # Why a non-transient failure happened, for retry wording only (#1007).
-        # 'evidence_size' is a local refusal before any provider request;
-        # 'follow_up_evidence_size' is that refusal on the follow-up request, after
-        # the first-stage call was sent. 'model_refusal' and 'token_budget' were sent
-        # and may be billed (#1158). Anything else keeps the provider/configuration meaning. Never changes eligibility.
+        # The cause selects retry wording and distinguishes local database waits
+        # from shared provider and rate waits. policy_wait and transient control
+        # whether the error can be deferred.
         self.cause=cause
 
 
@@ -228,7 +229,16 @@ def request(payload,key,timeout=60):
             with ai_runs.measure('provider_admission'):
                 stack.enter_context(ai_policy.provider())
                 ai_provider_backoff.admit()
-                reservation=ai_budget.reserve(payload)
+                try:
+                    reservation=ai_budget.reserve(payload)
+                except DBAPIError as error:
+                    if not error.connection_invalidated:raise
+                    # This call has not reached transport. An uncertain commit
+                    # may still have left a reservation for the next admission.
+                    wait=AIError('Waiting to recheck the AI budget after the database connection was lost. '
+                        'This provider call was held before transmission.', policy_wait=True,cause=BUDGET_CONNECTION_LOST)
+                    wait.retry_after=BUDGET_CONNECTION_RETRY_SECONDS
+                    raise wait from None
                 ai_admission.admit(payload.get('model',''))
             return _request(provider_payload,key,timeout,reservation,encoded_body)
         except Exception:
@@ -250,8 +260,12 @@ def _request(payload,key,timeout,reservation,encoded_body):
         try:data=response.json()
         except (ValueError,UnicodeDecodeError):data=None
         with ai_runs.measure('usage_persistence'):
-            values=ai_runs.record_usage(call_id,data if isinstance(data,dict) else {},payload)
-            ai_budget.reconcile(reservation,values)
+            values = ai_pricing.estimate(data if isinstance(data, dict) else {}, payload)
+            try:
+                ai_runs.record_usage(call_id, values)
+            finally:
+                # A failed diagnostic write must not keep a priced reply at its full reservation.
+                ai_budget.reconcile(reservation, values)
         response.raise_for_status()
         ai_provider_backoff.succeeded(request_started)
     except transport.ResponseTooLarge as exception:
