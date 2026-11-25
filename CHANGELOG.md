@@ -1,3 +1,39 @@
+## 1.91.0 — 2026-11-25
+
+1. [PR #1145](https://github.com/StealthCat/MrPatchy/pull/1145): A pure Roadmap F contract resolves which Python `.pth` import lines and `sitecustomize`/`usercustomize` modules run at every Debian python3.11–3.13 start, and in what order. Unknown, locale-dependent or patch-dependent inputs are explicit coverage gaps. Compatibility: new module only, with no runtime callers. Closes #1144.
+2. [PR #1287](https://github.com/StealthCat/MrPatchy/pull/1287): Acceptance tests cover daily-cap admission when the process holding the shared budget lock is killed before or after committing its reservation. Compatibility: tests and roadmap notes only. Closes #1285.
+3. [PR #1292](https://github.com/StealthCat/MrPatchy/pull/1292): When a new fleet known-good candidate is published while the shared provider start gate is closed, the free-hit rotation sweeps from the oldest eligible subject up to its saved cursor, so an older, newly reusable subject is claimed before a newer one, with zero provider calls. Probes stay bounded per pass and the cursor never moves back. The coordinator added the worker's proposed roadmap checkpoint. Compatibility: no schema, API, UI, role or response-authorization change. Fixes #1291.
+4. [PR #1308](https://github.com/StealthCat/MrPatchy/pull/1308): Pure keepalived 2.2.8 primitives resolve, from captured `keepalived.conf` text, which programs the parent, VRRP and checker processes run, with their argv, user and source block; unmodelled preprocessing and structure fail closed. Compatibility: new module only, not yet wired into collection or the UI. Fixes #1307.
+5. [PR #1410](https://github.com/StealthCat/MrPatchy/pull/1410): Automatic-plan selection skips excluded candidates before loading eligible incident identifiers. Compatibility: no API, schema or authorization change. Fixes #1409.
+
+Integrated together through batch [PR #1506](https://github.com/StealthCat/MrPatchy/pull/1506). This source update does not publish a Docker image.
+
+## 1.90.0 — 2026-11-25
+
+1. [PR #1137](https://github.com/StealthCat/MrPatchy/pull/1137): A pure Roadmap F contract resolves which `/etc/grub.d` scripts and `/etc/default/grub` files `grub-mkconfig` runs or sources as root when GRUB configuration is regenerated. Compatibility: new module, not yet wired into collection or the UI. Closes #1136.
+2. [PR #1284](https://github.com/StealthCat/MrPatchy/pull/1284): On Refresh, the spend-by-activity card labels a non-authoritative budget boundary as a recheck and explains carryover. Compatibility: the administrator activity endpoint adds `next_reset_authoritative`, derived in the existing grouped read; older replies keep their previous label; no schema or admission change. Fixes #1283.
+3. [PR #1354](https://github.com/StealthCat/MrPatchy/pull/1354): Runtime dependencies are updated to fastapi 0.165.0, SQLAlchemy 2.1.9, python-multipart 0.0.34 and Authlib 1.9.9, with the hashed `requirements.lock` regenerated. This supersedes Dependabot PRs #1346, #1347, #1348 and #1350. Compatibility: dependency versions only. Closes #1353.
+4. [PR #1394](https://github.com/StealthCat/MrPatchy/pull/1394): AI triage benchmarks compare serial and parallel workloads distributed across several fixture servers. Compatibility: benchmark tooling and tests only. Fixes #1393.
+5. [PR #1408](https://github.com/StealthCat/MrPatchy/pull/1408): The legacy automatic-plan allowance reads its history only up to the hourly allowance, reducing database work while preserving queued job counts. Compatibility: no API, schema or authorization change. Fixes #1407.
+6. [PR #1442](https://github.com/StealthCat/MrPatchy/pull/1442): Fleet AI status finds the newest triage and worker diagnostic with one bounded lookup per purpose instead of scanning retained history. Compatibility: same response shape. Fixes #1441.
+7. [PR #1450](https://github.com/StealthCat/MrPatchy/pull/1450): AI timing summaries read runs and events from one database snapshot, so they stay consistent when old diagnostics are pruned during a refresh. The fixture median latency of this diagnostic read rose slightly as a trade-off. Compatibility: same response shape. Fixes #1449.
+8. [PR #1464](https://github.com/StealthCat/MrPatchy/pull/1464): A pure tcsh/csh startup-file contract reports which `/etc/csh.*` files and `~/.tcshrc`, `~/.cshrc`, `~/.login`, `~/.cshdirs` and `~/.logout` a session sources, in which order, with explicit gaps. Compatibility: new module, not yet wired into collection or the UI. Closes #1463.
+
+Integrated together through batch [PR #1505](https://github.com/StealthCat/MrPatchy/pull/1505). This source update does not publish a Docker image.
+
+## 1.89.0 — 2026-11-25
+
+1. [PR #1133](https://github.com/StealthCat/MrPatchy/pull/1133): A pure Roadmap F contract resolves which incron table entries run which commands, as which user, on which inotify events, following incron 0.5.12 rules. Compatibility: new module, not yet wired into collection or the UI. Closes #1132.
+2. [PR #1218](https://github.com/StealthCat/MrPatchy/pull/1218): A pure auditd dispatcher-plugin contract resolves which `/etc/audit/plugins.d` programs auditd starts as root, with which arguments, and why other plugin files start nothing. It is validated against the audit-userspace 3.1.2 parser. Compatibility: new module, nothing calls it yet. Closes #1217.
+3. [PR #1274](https://github.com/StealthCat/MrPatchy/pull/1274): The startup catalog lists nine boot and event hook mechanisms that already have contracts (dhclient, needrestart, resolvconf, certbot, acpid, apcupsd, NUT upsmon, smartd and supervisord), and startup coverage reports each as an explicit uncollected gap. Compatibility: no change to running behavior. Closes #1273.
+4. [PR #1282](https://github.com/StealthCat/MrPatchy/pull/1282): The exhausted AI budget notification states when to recheck and why earlier spend can still count. Compatibility: the topic, destination, administrator visibility, ledger accounting and admission behavior are unchanged; an already-active notice may gain one updated revision. Fixes #1281.
+5. [PR #1303](https://github.com/StealthCat/MrPatchy/pull/1303): A pure resolver identifies the display, greeter and session scripts LightDM runs as root, following LightDM 1.30.0's configuration load order and seat-section merging, and fails closed on unobserved, invalid or over-limit input. Compatibility: new files only; it performs no I/O and authorizes nothing. Fixes #1301.
+6. [PR #1316](https://github.com/StealthCat/MrPatchy/pull/1316): AI triage fixture benchmark reports include `stages.executor_wait`, measuring the time from submitting an investigation to its executor thread starting it, separately from admission and rate pacing. Compatibility: additive, optional report field; fixture evidence only. Closes #1315.
+7. [PR #1349](https://github.com/StealthCat/MrPatchy/pull/1349): The lint dependency `ruff` is updated from 0.17.4 to 0.17.5 in `requirements-lint.txt`. Compatibility: static-check tooling only.
+8. [PR #1356](https://github.com/StealthCat/MrPatchy/pull/1356): Investigations show an advisory plan's next timed eligibility separately from retry times saved for paused servers, so a paused server's saved time no longer appears as the next eligibility. Compatibility: read-only status; existing API fields and recorded dates are kept, and older controllers' dates show as a recorded retry. Closes #1355.
+
+Integrated together through batch [PR #1504](https://github.com/StealthCat/MrPatchy/pull/1504). This source update does not publish a Docker image.
+
 ## 1.88.0 — 2026-11-24
 
 1. [PR #1116](https://github.com/StealthCat/MrPatchy/pull/1116): AI Activity now shows package scoring interrupted by worker loss as waiting to retry and reports its next eligibility. Compatibility: status display only. Fixes #1115.

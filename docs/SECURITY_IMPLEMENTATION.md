@@ -2281,6 +2281,12 @@ triage or worker diagnostic in one database snapshot, projecting only the fields
 used by the status response. This reduces a polling round trip. Production
 throughput and the full faster-AI acceptance milestones remain open.
 
+[#1441](https://github.com/StealthCat/MrPatchy/issues/1441) bounds the latest
+diagnostic lookup to the newest triage and worker candidates using the existing
+purpose/start index. It orders those two candidates by start time and run ID
+before reading diagnostic text. The newest diagnostic and running triage stage
+still share one status statement. This is a local database performance increment.
+
 Investigation lease validation checks the current claim before fetching host or
 behavior evidence. A live lease reads only the host lifecycle fields and still
 checks the full behavior evidence, owner, configuration and expiry. Focused
@@ -2836,6 +2842,16 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
   but it is smaller than the next call's quote, admission defers that call
   without a notification, because no call payload is available here. Other
   blocker producers (missing key, unknown pricing, provider backoff) remain open.
+
+Worker checkpoint #1281 updates the exhausted-cap notification. The configured
+budget boundary is a time to recheck. Spend from an earlier window can still
+count after that time, so queued paid work waits for available budget. The
+notification remains active while counted spend exhausts the cap. Its existing
+window and cap revision keys still prevent repeated collection from reopening a
+read notice within that window. An active notice can get one updated revision
+when the new wording first reaches it. The persisted-ledger regression covers
+the notification across a timezone overlap and its resolution after the
+retained window ends.
 
 Worker checkpoint #733 adds an AI configuration-blocker notification producer.
 A non-transient provider failure (rejected key, unavailable quota, unsupported
@@ -3612,6 +3628,17 @@ connection tests. The groups sum to the counted total in the budget status.
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
 
+Worker checkpoint #1283 adds `next_reset_authoritative` to the activity snapshot.
+The grouped query checks whether any positive, observed spend will still count
+after the configured boundary. It uses the same predicate as the saved-budget
+snapshot and reads the ledger once. The activity card shows a recheck and
+explains carryover when the flag is false. Each Refresh uses its own snapshot.
+The date uses browser-local time and labels the budget timezone separately.
+The API regressions cover a real retained earlier window, released and zero-cost
+rows, unobserved spend, and authoritative, empty and uncapped windows. The
+browser regression refreshes from a reset to a recheck and verifies the same
+activity totals and escaped text.
+
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
 The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
@@ -3839,6 +3866,32 @@ and that a sent call may still be billable. From code reading, not tested here: 
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
 
+
+### Daily-cap admission failover when the admitting process dies — milestone 4 acceptance #1285
+
+Milestone 4 acceptance for **failover** of capped admission. Every capped reservation
+is admitted under the fleet-wide `ai-shared-budget` lock (a file lock on SQLite, a
+`GET_LOCK` named lock on MySQL). `tests/test_ai_budget_failover_acceptance.py` runs the
+real `ai_budget.reserve()` in a child process, stops it while it holds that lock,
+checks that the lock is really held, kills the child with `SIGKILL` and lets the test
+process take over admission. Nothing clears the lock by hand.
+
+- **Killed before commit.** The reservation row was added but not committed. The
+  lock is released with the dead process, the ledger has no row from it, and the
+  successor's reservation is the only counted spend.
+- **Killed after commit, before the lock is released.** The dead process's `reserved`
+  row stays counted. With headroom for one reservation the successor is refused with
+  the policy wait, the dead row's reset as `budget_wait_until`, and no new row. This
+  turns the earlier code-reading note (process death between `reserve` and
+  `mark_sent` leaves a counted `reserved` row) into tested behavior.
+- **Headroom remains.** With room for two reservations the successor admits beside the
+  dead row, both count, and a third is refused.
+
+Mutation check: excluding `reserved` rows from counted spend in `ai_budget._state`
+fails all three tests. No defect found and no runtime change. The SQLite run is local;
+MySQL runs through the CI shards. Controller/coordinator failover, a database failover
+mid-admission and before/after production performance remain open.
+
 ### Recover expired and orphaned investigations from one read — worker checkpoint #1461
 
 Triage admission reads expired claims and running investigations without a
@@ -4013,6 +4066,13 @@ lifecycle, role and response authorization are unchanged.
 **Compatibility:** API clients that save expanding controls must preview first
 and resend the save with the returned confirmation.
 
+Roadmap A checkpoint #1409 filters exact YARA incidents before the automatic
+plan tick's candidate limit. The worker reads incident, host and scan IDs in
+one oldest-first window. The shared SQL predicate compares the engine label
+byte-for-byte on SQLite and MySQL, keeping missing engine data and other labels
+consistent with the prior worker rule. An older excluded backlog regression
+verifies the narrower query and identical enqueue decisions.
+
 ### Per-server automatic AI plan status — worker checkpoint #922
 
 The scan-policy toggle for automatic AI plans always said "at most ten plan
@@ -4162,6 +4222,21 @@ two-stage workload before comparing their stage percentiles and throughput.
 These are loopback and stubbed SSH measurements. Production comparison remains
 open.
 
+### Measure executor queue wait in triage fixtures — Roadmap A checkpoint #1315
+
+The benchmark's `stages.executor_wait` records a count and p50/p95 in
+milliseconds from submitting each investigation to the point its executor
+thread starts work. It is a measured fixture wait distinct from seeded
+observation age and the worker's admission time. In paced fixtures, the
+dispatcher waits for the durable rate slot before submission. Read that
+time separately in `fixture_rate.dispatch_wait_seconds`.
+
+Compare the raw stage in matched serial and parallel reports. Use the
+existing comparator to check capability equivalence. Acceptance covers a
+busy serial executor, sample counts, and paced SQLite and MySQL workloads.
+Historical reports omit this measurement. It does not establish production
+queue latency or throughput.
+
 ### Retained behavior history in the triage benchmark — worker checkpoint #641
 
 Use `--retained-history-rows` to seed 0–50,000 older completed observations in
@@ -4184,6 +4259,15 @@ python tools/benchmark_ai.py --same-server --runs 8 --concurrency 1 --provider-d
 python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-delay-ms 150 > parallel.json
 python tools/compare_ai_benchmarks.py serial.json parallel.json
 ```
+
+Roadmap A checkpoint #1393 adds a balanced mixed workload. Run the benchmark
+with `--runs 8 --servers 3` at concurrency 1 and 4 to measure the same eight
+investigations across three servers. The report verifies the retained subject
+assignments and records the per-server slot limit so the comparator rejects
+different layouts or limits. Shared layouts cap benchmark concurrency at that
+limit so a temporarily full server cannot leave a submitted fixture unprocessed.
+Existing one-server and one-server-per-subject reports remain comparable under
+their existing controls. These measurements cover disposable fixtures.
 
 The benchmark checks that every persisted run belongs to the expected subject
 and server, with a receipt for every provider call. Reports record the observed
@@ -4292,6 +4376,15 @@ format. Worker fixtures exercise both plan types through a successful write,
 a failed write, an invalid response and a refusal. Existing plan state,
 evidence, manual approval and provider accounting retain their behavior.
 Production throughput and release-plan timings remain separate.
+
+### Consistent timing samples during retention - Roadmap A checkpoint #1449
+
+The timing summary selects the bounded run and event samples in one database
+statement for process triage and update scoring. A concurrent retention pass
+can remove both from the next response. It no longer makes a single response
+count a pruned run as missing a timing sample. The summary preserves the
+existing run and event limits, newest-event order, malformed-event counts,
+redaction and access checks. Roadmap A remains incomplete.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -10384,6 +10477,18 @@ followed by safe crash/restart investigation #104. Issue #103 remains a policy q
 resumes only after these higher-priority actionable fixes.
 
 
+### Advisory-plan eligibility during server pause — Roadmap A checkpoint #1355
+
+Investigations now reports the earliest future retry on an active server with
+AI resumed. Paused plans retain their recorded dates in the by-purpose
+details. The combined next-eligibility time uses the eligible date; a queue
+with only paused plans directs the administrator to resume server AI. The
+admin status derives both dates from the existing grouped query.
+
+The window describes queue timing. Shared admission and worker capacity still
+govern the actual start. Older controllers expose their date as a recorded
+retry. Queue and provider behavior retain the existing execution controls.
+
 ## v1.35.3 — Deferred advisory-plan contract and status corrections
 
 Delivery record: version **v1.35.3**, implementation commit
@@ -12572,6 +12677,13 @@ The notification center adds a **Status** filter (All statuses / Active / Resolv
 - **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
 ### Daily-cap window in the Investigations worker status — worker checkpoint #876
 
+Roadmap A checkpoint #1407 caps the legacy automatic-plan tick's history read
+at its ten-job allowance. The count stays exact below the cap and a saturated
+window still queues no plans. The worker applies the same incident/startup
+action filter and strict one-hour cutoff. Status reads continue to show full
+counts and retry deadlines. The real tick regression verifies empty, nearly
+full, full and overfilled windows on SQLite and MySQL.
+
 The admin-only **AI worker status** card on Investigations now shows the full daily-cap window from the existing `budget` object of `GET /api/investigation-status`. It previously showed only counted, remaining and uncertain spend.
 - **Amounts:** cap, counted, settled, reserved, uncertain and remaining. Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled.
 - **Reconciliation:** when transmitted calls await a usage receipt, the card shows their count and the oldest reservation time, and notes that their full ceiling stays counted until reconciliation. When the count is 0, nothing is added.
@@ -12612,7 +12724,15 @@ The #1030 checkpoint bounded closed-gate admission to the 50 oldest eligible sub
 - **Scope of the cursor:** it is per process and in memory. Admission runs under the distributed `ai-triage` lock, so passes in one process never overlap. Several processes each rotate independently. A restart starts again from the oldest subject. No schema change.
 - **Unchanged:** at most `FREE_HIT_SCAN` probes per admission; the pause, lifecycle, saturation, claim, retry, Refresh and revocation filters; the re-check under the host queue gate; and every paid subject's deferral with no claim, run, reservation or provider call. While the gate is open, election is unchanged. No API, UI, role or response-authorization change.
 - **Validation:** three tests in `tests/test_known_good_daily_cap_hit.py`. Two fail on main `9f972053`: a hit behind a full window of 50 older paid subjects, and a wrap that reaches a new hit older than the cursor. The third, a stale cursor, is a control.
-- **Remaining:** after a pass without a hit, a hit that appears before the cursor waits for the wrap, so it may be claimed after a newer hit. MySQL was not run locally.
+- **Remaining:** ~~after a pass without a hit, a hit that appears before the cursor waits for the wrap, so it may be claimed after a newer hit.~~ Addressed for newly published candidates by the #1291 worker checkpoint below. MySQL was not run locally.
+
+### Free-hit rotation restart after a new candidate — worker checkpoint #1291 (roadmap A/B)
+
+- **Change:** `_free_hit()` records the fleet candidate row count with its cursor. When a later closed-gate pass sees more rows, the following passes sweep from the oldest eligible subject up to the cursor, `FREE_HIT_SCAN` probes per pass, before the rotation resumes after it. A newly published candidate that turns older subjects into exact hits is therefore claimed oldest-first, wherever they sit behind the cursor. The cursor never moves back; another publication restarts the sweep. Revocation never restarts the rotation.
+- **Unchanged:** the probe bound, filters, host-gate re-check, paid-subject deferral, schema, API, UI, roles and response authorization.
+- **Validation:** `tests/test_known_good_daily_cap_hit.py` covers oldest-first after publication within and beyond the first window, a publication during a sweep, and no rewind; they fail on main `c3ce48da`. A revocation control passes on both.
+- **Remaining:** hits that appear without a new candidate still wait for the wrap.
+
 ### dhclient hook contract — worker checkpoint #1063 (roadmap F)
 
 ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
@@ -12796,6 +12916,92 @@ usage persistence, result persistence and run timings; triage-only stages show n
 samples. Compatibility: admin-only as before, no schema, collection, admission,
 budget or response-authorization change. Matched serial/parallel production
 throughput remains open.
+
+### incron table contract — worker checkpoint #1132 (roadmap F)
+
+incrond runs a command whenever an inotify event fires on a path named in an incron table. System tables in `/etc/incron.d` run as root. Per-user tables in `/var/spool/incron/<user>` run as that user, subject to `/etc/incron.allow` and `/etc/incron.deny`. Neither the startup catalog nor any contract covered them, so these event-triggered commands were invisible.
+
+- **Change:** a new pure module, `app/incron_tables.py`. It takes captured `incron.conf` text, table-directory listings, table text, allow/deny state and the account names. It reports which tables load, and for each entry the watched path, event names, flags, command, user and shell.
+- **Reference:** the rules follow incron 0.5.12 source (`incrontab.cpp`, `strtok.cpp`, `incroncfg.cpp`, `icd-main.cpp`, `usertable.cpp` and `usertable.h`):
+  - **Configuration:** `incron.conf` keeps the *first* value of a repeated key. A `#` starts a comment only at the start of a line, after optional blanks. A line over 1022 bytes stops reading.
+  - **Table discovery:** tables load only when `d_type` is `DT_REG`, or when `stat` reports a regular file for `DT_UNKNOWN`. Symlinks are skipped where `d_type` is reported. Dot-named system tables are skipped. An unopenable system directory is ignored. An unopenable user directory stops incrond.
+  - **User access:** a user table needs a `getpwnam` account and `IncronTab::CheckUser` approval. If the allow file exists, only listed users run. Otherwise, a deny file refuses the users it lists. Any other open failure refuses.
+  - **Table parsing:** tables have no comment syntax and are read in 999-byte `fgets` pieces. The two-delimiter tokenizer toggles its escape state twice per character, so `\ ` does not keep a space in the path.
+  - **Mask field:** a mask that starts with a decimal number (`%lu`) is used raw, with default flags. Unknown mask words contribute nothing.
+  - **Execution:** system commands run through `system()` (`/bin/sh -c`) as root. User commands run through `/bin/bash -c` after `setgid`/`initgroups`/`setuid`. For a non-root user the environment is reset first.
+  - **Loop suppression:** it needs the `LOOPER` build flag, which 0.5.12 does not define. `loopable` is therefore recorded but has no runtime effect.
+- **Gaps, never reported as covered:** each of these marks the affected table `unresolved`:
+  - unobserved configuration, listing, entry type, table text, account list or allow/deny state;
+  - malformed or duplicate listing names;
+  - invalid UTF-8 and NUL bytes;
+  - the 64 KiB text, 1024-entry listing and 512-entry table caps.
+- **Unobserved, stated in every result:**
+  - whether incrond runs, and a `-f` alternative configuration;
+  - which events occur;
+  - wildcard and recursive-watch expansion;
+  - per-user path access, which silently discards events;
+  - the contents of the programs the commands run.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_incron_tables.py` has 14 tests and cannot run on main, where the module does not exist. Three mutations are each caught: loading dot-named system tables, a single-toggle (working) escape in the tokenizer, and last-value-wins configuration. The tokenizer and parsing rules were ported by reading the source. Compiling the upstream source against the tests was not possible in the worker environment.
+- **Remaining:** collection wiring into the startup inventory, a startup catalog entry, provenance against the incron package's shipped files, and UI.
+### Python site startup-hook contract — worker checkpoint #1144 (roadmap F)
+
+Every CPython start without `-S` imports `site`, including root services. `site` executes each `.pth` line that starts with `import ` or `import\t` in every processed site directory, then imports `sitecustomize`, and `usercustomize` when the user site is enabled. This is a known persistence hook (MITRE ATT&CK T1546.018). Neither the startup catalog nor any contract covered it.
+
+- **Change:** a new pure module, `app/python_site_hooks.py`. From captured directory listings and `.pth` bytes it reports:
+  - which site directories `site` processes, in order;
+  - which `.pth` files it reads;
+  - which lines it executes as code, which it appends to `sys.path`, and which are reached only if earlier code did not raise;
+  - which observed `sitecustomize` or `usercustomize` an import finds first, per account and with the user site disabled.
+- **Reference:** the rules follow Debian CPython 3.11, 3.12 and 3.13 `Lib/site.py` (`main`, `getsitepackages`, `addsitedir`, `addpackage`).
+  - The user site comes first, then `/usr/local/lib/python3.X/dist-packages`, `/usr/lib/python3/dist-packages` and `/usr/lib/python3.X/dist-packages`. Each is processed only when it is a directory.
+  - `.pth` names are case-sensitive and files are read in `sorted()` order. A leading dot hides a file only on builds with gh-113659 (upstream 3.11.8, 3.12.2 and all 3.13); Debian bookworm's 3.11.2 still reads it.
+  - `#` lines and blank lines are skipped. Only `import ` or `import\t` at column 0 runs; an indented `import` is a path line.
+  - The first failing line stops the rest of its file.
+  - 3.13 strips a UTF-8 BOM and splits with `splitlines()`. 3.11 and 3.12 read in locale text mode with universal newlines.
+  - Directories added by path lines are not scanned for `.pth` files.
+  - For the customize modules, `FileFinder` takes a package before an extension, an extension before source, and source before sourceless bytecode.
+- **Gaps, never reported as covered:**
+  - an unobserved or incompletely listed directory, and unread, truncated or special `.pth` files;
+  - a dot-named `.pth` file on 3.11 or 3.12 (`pth_hidden_name_patch_dependent`), because whether it runs depends on the unobserved interpreter patch level;
+  - non-ASCII content on 3.11 or 3.12, and non-UTF-8 content on 3.13, because decoding depends on the locale;
+  - a path line whose target was not observed;
+  - extension-module, zip or namespace-only customize candidates;
+  - malformed input, hash mismatches and caps;
+  - a family other than Debian, and any version other than 3.11–3.13, including free-threaded builds.
+- **Unobserved, stated in every result:**
+  - the script directory and `PYTHONPATH`;
+  - the interpreter options `-S`, `-s` and `-I`, and `PYTHONNOUSERSITE`;
+  - `HOME` and `PYTHONUSERBASE` overrides;
+  - virtual environments and other interpreters;
+  - what executed hook code does, including changes to `sys.path`.
+
+  A resolution reached after `.pth` code has run carries `pth_code_may_change_sys_path`.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_python_site_hooks.py` has 20 tests and cannot run on main, where the module does not exist. A parametrized test runs the real `site.addsitedir` from the local python3.11, 3.12 and 3.13 against one fixture tree. It compares the executed lines, their order and the added `sys.path` entries, including the 3.13-only form-feed split. Six mutations are each caught: case-insensitive names, universal newlines on 3.13, indented or space-less `import` treated as code, unsorted order, dropping `after_code`, and treating non-ASCII bytes as exact on 3.12. Treating a dot-named `.pth` as skipped on 3.11 or 3.12 is also caught.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against `dpkg` ownership of the shipped `.pth` files and `/etc/python3.X/sitecustomize.py`, RPM-family layouts, and UI.
+
+### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
+
+`grub-mkconfig` (`grub2-mkconfig` on RPM families) runs as root whenever the GRUB configuration is regenerated. That includes `update-grub`, GRUB's maintainer scripts and, on Debian and Ubuntu, every kernel install or removal through `/etc/kernel/postinst.d/zz-update-grub`. Each run sources `/etc/default/grub` (and, on Debian, `/etc/default/grub.d/*.cfg`) as shell, then runs the executable scripts in `/etc/grub.d`, whose output becomes `grub.cfg`. Neither the startup catalog nor any contract covered this root execution path.
+
+- **Change:** a new pure module, `app/grub_mkconfig.py`. From captured directory listings, entry types, mode bits and symlink-target observations, it reports which files are sourced, which scripts run and in which order, and why the other entries do not run.
+- **Reference:** GRUB 2.06/2.12 `util/grub-mkconfig.in` and `grub-mkconfig_lib.in`, checked against `grub-common` 2.12-1ubuntu7.3.
+  - `/etc/default/grub` is sourced when `test -f` succeeds. On Debian, each `/etc/default/grub.d/*.cfg` that passes `-e` is then sourced in glob order. A `.cfg` path that exists but is not a regular file is reported as a non-blocking `source_non_file` shell error.
+  - A script is skipped when its name ends in `~` or is `#…#`.
+  - `grub_file_is_not_garbage` requires `test -f`, so symlinks are followed. It rejects `*.dpkg-*`, `*.rpmsave`, `*.rpmnew`, `README*` and `*.sig`.
+  - For root, `test -x` succeeds when any execute bit is set.
+  - The glob skips dot-names. dash (Debian `/bin/sh`) orders it by bytes. bash (RPM `/bin/sh`) uses locale collation, so the order is flagged `order_locale_dependent` whenever punctuation-insensitive, case-folded collation could reorder the names.
+- **Gaps, never reported as covered:** an unknown family; an unobserved, unreadable or mismatched listing; an unobserved entry type, mode, symlink target or `/etc/default/grub`; malformed or duplicate entries; and the 1024-entry cap.
+- **Unobserved, stated in every result:**
+  - script and sourced-file contents, and each script's interpreter;
+  - mount options, ACLs and security modules that can make `test -x` fail;
+  - wrapper or distribution changes to the directories;
+  - a sourced file that ends the run early;
+  - which events regenerate the configuration on the host.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_grub_mkconfig.py` has 16 tests. One copies the reference sourcing and script loop verbatim and runs it under `/bin/sh` against a fixture tree, comparing which files are sourced and run and in what order. Four mutations are each caught: matching dot-names, requiring the owner execute bit, treating a lone `#` as an autosave file, and treating bash glob order as certain.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the GRUB packages' shipped scripts, and UI.
 
 ### Observed provider overlap in fixture comparisons (#1092, roadmap A)
 
@@ -13024,6 +13230,29 @@ never reads a sourced file.
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
 
+### auditd dispatcher-plugin contract — worker checkpoint #1217
+
+`app/auditd_plugins.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/audit/auditd.conf`, the effective plugin directory and stat metadata for the plugin programs. It reports which programs auditd's built-in dispatcher forks and `execve`s as root on every auditd start and reconfigure, with which arguments, and why every other plugin file starts nothing.
+
+- **Source of the semantics:** audit-userspace `v3.1.2`, the version Ubuntu 24.04 ships: `audisp/audispd.c`, `audisp/audispd-pconfig.c`, `src/auditd-config.c`, `src/auditd.c` and `common/strsplit.c`.
+  - **Plugin directory:** the last `plugin_dir` line wins over `/etc/audit/plugins.d`. Names starting with `.` or containing more than one `.` are skipped. No `.conf` suffix is required.
+  - **Plugin files:** each must be root-owned, not world-writable and regular after following symlinks.
+  - **Line reading:** the 160-byte `fgets` buffer means lines of 159 bytes or more are skipped. An unterminated last line is skipped, and so are NUL-hidden newlines together with the line after them.
+  - **Tokenizing:** words are split on spaces only. Words after the option are dropped. A missing `=`, an unknown keyword, an option on a keyword other than `args`, or an invalid value rejects the whole file.
+  - **Values:** `builtin_*` paths map to `/sbin/audisp-af_unix`. For other paths, glibc `dirname` must be at least four bytes. For every keyword the last line wins.
+  - **Start check:** an active plugin starts only if `stat` of its path finds a root-owned regular file with every `0750` bit set. It then runs with `execve(path, [path, args≤2], NULL)`: no shell, no `PATH` search and an empty environment.
+- **Fail closed:** blocking gaps cover an unobserved or unreadable `auditd.conf`, plugin directory, entry or program; entries that are FIFOs or devices; malformed input; and over-limit input.
+- **Validation:** `tests/test_auditd_plugins.py` has 61 tests.
+  - Its 21 parse vectors were checked against the real `load_pconfig`, compiled from the v3.1.2 source with a logging stub.
+  - A random differential against that build gave 0 mismatches over 10,000 cases, with real program files covering each permission and ownership case.
+  - The differential catches four mutations: wrong mode bits, wrong buffer size, wrong `dirname`, and treating tab as a separator.
+  - `glibc_dirname` matches libc `dirname` on all 5,461 exhaustive short paths.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Agent collection of `auditd.conf`, the plugin directory and program stats.
+  - A catalog entry, package provenance, UI and AI classification.
+  - Validation of the auditd.conf keywords other than `plugin_dir`. An invalid file can only stop auditd, so the contract may over-report but never under-report.
+
 ### mdadm alert-program contract — worker checkpoint #1213 (roadmap F)
 
 `app/mdadm_program.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/mdadm.conf`, `/etc/mdadm.conf.d`, `/etc/mdadm/mdadm.conf` and `/etc/mdadm/mdadm.conf.d`. It reports which `PROGRAM` command `mdadm --monitor --scan` executes as root on RAID events, and which file and line it came from.
@@ -13235,6 +13464,19 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
 
+### Startup catalog entries for contract-modelled hooks — worker checkpoint #1273 (roadmap F)
+
+The dhclient (#1063), needrestart (#1148), smartd (#1207), resolvconf (#1199), certbot (#1229), apcupsd (#1243), NUT upsmon (#1247) and supervisord (#1259) checkpoints, and the acpid event contract, each left "a catalog entry" as remaining work. `app/startup_catalog.py` did not list their locations, so `coverage()` never reported them, not even as `not_collected`.
+
+- **Change:** nine mechanism IDs: `dhclient_hooks`, `needrestart_hooks`, `resolvconf_hooks`, `certbot_hooks`, `acpid_events`, `apcupsd_events`, `nut_upsmon`, `smartd_warnings` and `supervisord`. Each lists the locations its contract reads. The trigger is `event`, except `schedule` for certbot's renewal run and `boot` for supervisord.
+- **Families:** dhclient, needrestart and resolvconf are Debian only. NUT uses `/etc/nut` on Debian and `/etc/ups` on RPM. smartd uses `/etc/smartd.conf` and the `smartmontools` run and warning directories on Debian, and `/etc/smartmontools/smartd.conf` on RPM. supervisord uses `/etc/supervisord.conf` on both, plus `/etc/supervisor` on Debian and `/etc/supervisord.d` on RPM. certbot, acpid and apcupsd use the same paths on both.
+- **Fail closed:** every new mechanism is `parse: metadata`, because no collector feeds its contract yet. Under today's agent scope each one is `not_collected` with a `locations_not_collected` gap, never `covered` or `absent_reported`. A narrower collected root is `partial`.
+- **Additional scope:** `validate_additional_scope` now rejects administrator paths that overlap these locations with `overlaps_catalog_location`, as for every other catalog location. The module is not called from the running application, and the agent's own `validate_custom_paths` is unchanged, so no stored or running scope changes.
+- **Unchanged:** existing mechanism IDs, locations and states, `CONTRACT_VERSION`, the agent, schema, scheduling, AI, roles and response authorization.
+- **Validation:** five new tests in `tests/test_startup_catalog.py`, 11 cases in all with the parametrized ones. All 11 fail on main `c3ce48da` and pass after the change, and the 55 existing tests still pass (66 passed).
+- **Remaining:** agent collection of these locations, wiring their contracts into the startup inventory, package provenance, persistence, UI and AI classification.
+
+
 ### cloud-init script-directory contract — worker checkpoint #1271 (roadmap F)
 
 cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` final-stage modules run every executable entry of `/var/lib/cloud/scripts/per-boot`, `per-instance` and `per-once` as root: at every boot, once per instance ID (again after it changes, for example on a cloned image), and once. The startup inventory and catalog did not model these directories.
@@ -13246,3 +13488,46 @@ cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` f
 - **Not modeled:** whether cloud-init is installed or enabled, `cloud_final_modules` membership, a non-default `cloud_dir`, semaphore state, user-data `scripts_user` and `scripts_vendor`, and script contents.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.
+
+
+### LightDM seat-script contract — worker checkpoint #1301 (roadmap F)
+
+LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-script`, `session-setup-script` and `session-cleanup-script` as root at every display start and stop, greeter start, user login and logout. They are set in `lightdm.conf`, in `lightdm.conf.d` drop-ins under the XDG data and config directories, and in per-seat `[Seat:<glob>]` sections. The startup inventory did not model them.
+
+- **Change:** the pure `app/lightdm_scripts.py` takes captured file text and captured `lightdm.conf.d` listings. For each assumed seat name (default `seat0`) it returns the effective command for each script, its source file and section, its SHA-256 and whether the value reads as unset. It performs no I/O and never runs a command.
+- **Fidelity:** it follows LightDM 1.30.0 `config_load_from_standard_locations`. XDG data directories load first, then XDG config directories, each in reverse order. `/etc/lightdm/lightdm.conf.d` loads next and `/etc/lightdm/lightdm.conf` last. Only `.conf` names are read, in `strcmp` order. It also follows LightDM's `[SeatDefaults]` alias, the `[Seat:*]` then matching `[Seat:<glob>]` order (`g_pattern_match_simple`), and `g_key_file_get_string` unescaping, where an invalid value unsets the script. A drop-in that GKeyFile refuses is skipped whole. A main file that GKeyFile refuses is `config_error` with no scripts, because LightDM exits.
+- **Fail closed:** an unobserved file or directory listing, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. The GLib default XDG directories are assumed unless others are passed. Real seat names, the service environment and how `g_shell_parse_argv` splits the command are listed as not observed. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.
+### keepalived script contract — worker checkpoint #1307 (roadmap F, in progress)
+
+keepalived runs administrator-configured programs on VRRP state changes, health checks, LVS events and at startup and shutdown. They run as root, or as `script_user` / `keepalived_script`.
+
+- **Increment 1 (draft):** the pure `app/keepalived_scripts.py` ports these keepalived 2.2.8 functions:
+  - `lib/parser.c`: `read_line` preprocessing, `decomment`, the brace split, and `alloc_strvec_r`
+  - `lib/notify.c`: `alloc_strvec_quoted_escaped` and `notify_script_init`
+- **What it yields:** the argv and configured user/group of a single script keyword line.
+- **Fails closed:** `include`, definitions, standard `$_*` parameters, `~SEQ`/`~LST`, `@` conditionals without an observed `config_id`, continuations, over-buffer lines, NUL bytes, invalid UTF-8 and over-limit input all make the result incomplete.
+- **Increment 2 (draft):** `vrrp_programs` emulates `process_stream`, `alloc_value_block` and `skip_block` as the VRRP process runs them. It uses the 2.2.8 keyword tables for `vrrp_instance`, `vrrp_sync_group`, `vrrp_script` and `authentication`, and every root keyword. All build-conditional keywords are present in the Ubuntu binary.
+  - **What it yields:** every notify and `vrrp_script` program, with its argv, runtime-appended argument count, configured or default user, and source block.
+  - **Defaults and precedence:** first-wins notify slots, last-wins `script`, duplicate-name skipping, and the cached default user (`script_user`, `keepalived_script`, root, or refused under `enable_script_security`) in walk order.
+  - **Blocking gaps:** unknown keywords, unexpected or missing braces, unbalanced or unterminated blocks, unnamed blocks, unmodelled nested blocks, and an unobserved `keepalived_script` account. In 2.2.8 an unknown keyword's `{` is ignored and its `}` closes the enclosing block, so later scripts move.
+- **Increment 3 (draft):** `keepalived_programs` adds the `global_defs` scripts and tags each program with the process that runs it. `vrrp_programs` also gains the FIFO scripts.
+  - **Parent:** only the parent runs `startup_script` and `shutdown_script`, first wins. It parses every non-global root as inactive, so it resolves default users from `global_defs` order alone.
+  - **VRRP child:** runs `notify_fifo_script` and `vrrp_notify_fifo_script` only when the matching FIFO is named, and appends the FIFO path as the last argument. A `vrrp_notify_fifo` that names the global FIFO is dropped along with its script.
+  - **When the VRRP child starts:** only with a `vrrp_instance` or `static_*` root (`have_vrrp_config`), or under `--all`. An unobserved `--all` with no VRRP configuration is a blocking gap.
+  - **Default-user refusal:** under `enable_script_security` with no `keepalived_script` account, refusal is sticky (`default_user_fail`). A later `script_user` does not revive it. A dropped notify script leaves its slot free for a later line.
+  - **Not modelled:** runtime outcomes stay out of scope. These are FIFO creation or open failure, invalid configured users, insecure-script disabling under script security, and the `-P`/`-C` daemon flags.
+- **Increment 4 (draft):** `keepalived_programs` adds the checker process, from `check/check_parser.c` and the `check/check_*.c` keyword tables.
+  - **What it yields:** `virtual_server` `quorum_up`/`quorum_down` and `real_server` `notify_up`/`notify_down` (first wins), and `MISC_CHECK` `misc_path` (last wins, with the block's `user` or the default user looked up when the block ends). It also yields the checker's own copy of the global `notify_fifo_script`, plus `lvs_notify_fifo_script`.
+  - **When the checker starts:** only with a `virtual_server` root (`have_checker_config`) or under `--all`. The `vrrp_*` roots are inactive there.
+  - **Addresses:** these follow `inet_stosockaddr`. An invalid virtual or real server address skips its block. A port the contract cannot decide is a blocking gap.
+  - **Dropped servers:** a virtual server left with no real servers loses its scripts. So does a non-TUN real server whose address family differs from its virtual server's.
+  - **Not modelled:** post-parse validation that later removes servers. It can only over-report programs. `vrrp_programs` on its own still reports the checker blocks as a blocking gap.
+- **Increment 5 (draft):** the BFD, track-process and track-file review, traced against `bfd/bfd_parser.c`, `bfd/bfd_daemon.c`, `trackers/track_file.c` and `vrrp/vrrp_parser.c`.
+  - **No programs:** `bfd_instance`, `vrrp_track_process` and `track_file`/`vrrp_track_file` install no script keyword. The only `fork()` under `bfd/` starts the BFD daemon child itself, and no tracker executes a configured program.
+  - **Value lists:** `track_group` `group` and `garp_group` `interfaces` are `read_value_block` lists. Their lines are now walked as values, so ordinary track-group and GARP configurations no longer raise a blocking `unmodelled_nested_block`. A repeated `track_group` `group` list, which keepalived skips by brace count, still fails closed.
+- **Remaining:**
+  - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
+- **Acceptance:** stays incomplete until those are delivered.
