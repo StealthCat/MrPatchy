@@ -31,8 +31,12 @@ def test_startup_adds_score_history_index_without_losing_retained_scores(admin):
 def test_score_history_and_deferred_lookup_use_package_index(admin):
     score = update_scores.UpdateScore
     with db.Session() as session:
-        session.add(db.Host(id='host', name='Fixture', address='192.0.2.1', fingerprint=''))
-        session.add(db.Package(id='host:target', host_id='host', name='target', installed='1', candidate='3'))
+        host = db.Host(id='host', name='Fixture', address='192.0.2.1', fingerprint='', inventory={})
+        package = db.Package(id='host:target', host_id='host', name='target', installed='1', candidate='3',
+                             priority='', priority_manual=False, held=False, dpkg_state='')
+        session.add_all([host, package])
+        session.flush()
+        exact_id = update_scores.identity(host, package)
         session.execute(insert(score), [
             {'id': f'old-{i}', 'host_id': 'host', 'name': f'other-{i}', 'installed': '1',
              'candidate': '2', 'state': 'complete', 'score': 30, 'completed': i}
@@ -42,6 +46,7 @@ def test_score_history_and_deferred_lookup_use_package_index(admin):
             score(id='history', host_id='host', name='target', installed='1', candidate='2',
                   state='complete', score=70, completed=100),
             score(id='deferred', host_id='host', name='target', installed='1', candidate='3', state='deferred'),
+            score(id=exact_id, host_id='host', name='target', installed='1', candidate='3', state='complete'),
         ])
         session.commit()
 
@@ -60,7 +65,8 @@ def test_score_history_and_deferred_lookup_use_package_index(admin):
     try:
         with db.Session() as session:
             history = update_scores.historical(session, 'host', 'target', ['2'], before=['1'])
-            _, _, _, _, deferred = next(update_scores.scoring_candidates(session))
+            _, _, _, current, deferred = next(update_scores.scoring_candidates(session))
+            assert current.id == exact_id
             assert history['score'] == 70 and history['from_version'] == '1' and history['to_version'] == '2'
             assert [row.id for row in deferred] == ['deferred']
     finally:
@@ -76,3 +82,6 @@ def test_score_history_and_deferred_lookup_use_package_index(admin):
             plan = connection.exec_driver_sql(('EXPLAIN QUERY PLAN ' if sqlite else 'EXPLAIN ') + sql, parameters)
             plans[name] = [row[3] for row in plan] if sqlite else [row['key'] for row in plan.mappings()]
     assert all(any(HISTORY_INDEX in (part or '') for part in plan) for plan in plans.values()), plans
+
+    primary = 'sqlite_autoindex_update_scores_1' if sqlite else 'PRIMARY'
+    assert any(primary in (part or '') for part in plans['deferred']), plans

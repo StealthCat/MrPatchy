@@ -2402,6 +2402,16 @@ The regression verifies rollback when the score write fails and confirms
 successful scoring at the original eligibility boundary. A crash before
 linking the run and independent scoring admission remain open.
 
+### One score-state read per scoring page - Roadmap A checkpoint #1445
+
+Update scoring loads exact current scores and deferred score history in one
+statement per populated package page. The branches keep their existing index
+predicates and project only scheduling fields. A current deferred score can
+still appear in both sets, and a deferred row for changed evidence retains its
+supersession path. Main takes six score reads for three fixture pages. This
+increment takes three. Validate both index paths, page order, retry and stale
+history behavior on SQLite and MySQL. Roadmap A remains incomplete.
+
 ### Deferred scoring eligibility in fleet status — Roadmap A checkpoint #1142
 
 The fleet status distinguishes deferred scores eligible now from the earliest
