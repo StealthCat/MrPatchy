@@ -68,9 +68,9 @@ def _merge_commit(upstream, base, change):
     return merge
 
 
-def _checkout(tmp_path, upstream, sha):
+def _checkout(tmp_path, upstream, sha, name="work"):
     """Clone like actions/checkout with this step's fetch depth, at ``sha``."""
-    work = tmp_path / "work"
+    work = tmp_path / name
     # actions/checkout fetches one commit unless the job asks for more.
     depth = str(_static()["steps"][0].get("with", {}).get("fetch-depth", 1))
     _git(tmp_path, "init", "-q", str(work))
@@ -131,8 +131,8 @@ def test_push_still_compares_with_the_previous_main_commit(tmp_path, upstream):
     _git(upstream, "add", "-A")
     _git(upstream, "commit", "-qm", "unversioned direct push")
     unversioned = _git(upstream, "rev-parse", "HEAD")
-    shutil.rmtree(tmp_path / "work")
-    result = _run(_checkout(tmp_path, upstream, unversioned), "push", released)
+    # A second checkout instead of deleting the first: Windows refuses to remove read-only git objects.
+    result = _run(_checkout(tmp_path, upstream, unversioned, "work-unversioned"), "push", released)
     assert result.returncode == 1 and "must increase source version" in result.stderr
 
 
