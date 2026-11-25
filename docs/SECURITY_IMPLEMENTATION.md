@@ -2837,6 +2837,16 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
   without a notification, because no call payload is available here. Other
   blocker producers (missing key, unknown pricing, provider backoff) remain open.
 
+Worker checkpoint #1281 updates the exhausted-cap notification. The configured
+budget boundary is a time to recheck. Spend from an earlier window can still
+count after that time, so queued paid work waits for available budget. The
+notification remains active while counted spend exhausts the cap. Its existing
+window and cap revision keys still prevent repeated collection from reopening a
+read notice within that window. An active notice can get one updated revision
+when the new wording first reaches it. The persisted-ledger regression covers
+the notification across a timezone overlap and its resolution after the
+retained window ends.
+
 Worker checkpoint #733 adds an AI configuration-blocker notification producer.
 A non-transient provider failure (rejected key, unavailable quota, unsupported
 model) leaves each affected process investigation `blocked`, with no automatic
