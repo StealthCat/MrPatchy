@@ -13922,3 +13922,20 @@ glibc loads `libnss_<service>.so.2` into every process that looks up a user, gro
 - **Validation:** `tests/test_nss_modules.py` (11 tests). A differential harness ran random configurations through the real glibc 2.39 loader in a private mount namespace (`LD_DEBUG=libs getent`) across 8 databases. It compared every attempted `libnss` load with this contract's ordered list for 1,230 configurations, 108 of which glibc rejected, and found 0 disagreements. Walks that reach a `MERGE` action were not compared, because lookup-walk semantics are outside this contract.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the file, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### pam_env environment contract — worker checkpoint #1436 (roadmap F)
+
+`pam_env.so` runs in the session (and often auth) stacks of login, sshd, su, sudo, cron and display managers. Every variable it sets reaches the processes those services start, so `LD_PRELOAD`, `BASH_ENV` or `PATH` in `/etc/environment` or `/etc/security/pam_env.conf` makes every later login load or run code. Until now the startup catalog listed `/etc/environment` only as file metadata, and `pam_env.conf` and `~/.pam_environment` not at all.
+
+- **Change:** the pure `app/pam_env_contract.py` takes the captured text of the configuration, environment and optional user environment files, plus the module arguments, PAM items, the `PAM_USER` passwd entry and the starting PAM environment. It returns each variable one `pam_env.so` call leaves set, with its value and source file and line, the variables it removes, the module result and an explanation for loader, shell, interpreter, `PATH` and `less` hook variables. It performs no I/O.
+- **Fidelity:** it follows Linux-PAM 1.5.3 as Debian/Ubuntu build it.
+  - Argument parsing uses C `atoi`, and empty paths are ignored.
+  - Line assembly drops text after `#`, joins backslash continuations and discards an unterminated final continuation.
+  - `DEFAULT=`/`OVERRIDE=` follow the quoting rules, including the quote-flag carry-over. `${VAR}` and `@{ITEM}` expand, and escapes are honoured.
+  - `pam_putenv` splits on the first `=`.
+  - `/etc/environment` handling covers `export`, key checks and partial quote stripping.
+  - A missing configuration file returns `PAM_IGNORE` without reading `/etc/environment`. A malformed final configuration line, or a final line that removes an unset variable, returns `PAM_ABORT`, also without reading it.
+- **Fail closed:** unobserved files, expansions that depend on unknown PAM items, an unknown passwd entry or an incompletely known starting environment, an override whose emptiness is unknown, NUL bytes and lines or values near pam_env's 8 KiB buffers are reported as gaps, with `complete: False`. Unresolved variables are still listed, with any risk explanation.
+- **Validation:** `tests/test_pam_env_contract.py` has 36 tests, including a differential test against the installed `pam_env.so` when available. A random differential harness drove the real `pam_env.so` from libpam-modules 1.5.3-5ubuntu5.7 through `pam_start_confdir`/`pam_open_session`/`pam_getenvlist` on 9,500 random configuration and environment files with varied starting environments. It found 0 mismatches in final variables, order or module result. A soundness harness hid some starting variables and the `PAM_RHOST` value from the contract. Of 4,000 runs, 2,895 results were reported complete, and none of them disagreed with the real module. Hand checks covered `readenv=0`, non-numeric `readenv`, `user_readenv=1` and unknown arguments.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization. Nothing imports the module yet.
+- **Remaining:** which PAM services stack `pam_env.so` and with which control flag (join with `app/pam_stacks.py`), the auth-phase `pam_sm_setcred` call, libeconf/vendordir builds, agent collection, catalog entry, provenance, persistence, UI and AI classification.
