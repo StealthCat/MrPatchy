@@ -18,6 +18,8 @@ def test_initialization_after_pooled_schema_change(admin,table,column):
     try:
         with ThreadPoolExecutor(max_workers=4) as pool:list(pool.map(warm,range(4)))
         with engine.begin() as connection:
+            if (table, column) == ('hosts', 'deleted_at'):
+                connection.execute(text('DROP INDEX ix_hosts_deleted_name_id'))
             connection.execute(text('ALTER TABLE '+table+' DROP COLUMN '+column))
         init();init()
         with engine.connect() as connection:

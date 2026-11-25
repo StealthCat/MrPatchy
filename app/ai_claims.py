@@ -258,7 +258,10 @@ def _needs_admission_lock(s, now):
     runs = ai_runs.AIRun
     has_claim = select(Claim.subject).where(Claim.run_id == runs.id).exists()
     orphaned = select(runs.id).where(runs.purpose == 'triage', runs.state == 'running', ~has_claim)
-    return s.scalar(select(or_(pending.exists(), expired.exists(), orphaned.exists())))
+    # An in-flight investigation can still have a pending or retry verdict.
+    # Its claim already excludes it from election. Expiry is checked separately.
+    unclaimed = pending.where(Behavior.id.not_in(select(Claim.subject)))
+    return s.scalar(select(or_(unclaimed.exists(), expired.exists(), orphaned.exists())))
 
 
 def acquire(owner=None):

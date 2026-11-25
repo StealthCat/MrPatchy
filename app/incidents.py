@@ -363,14 +363,15 @@ def auto_plan_tick(now=None):
             from .operations import unheld_hosts
             enabled=unheld_hosts(s,enabled)
             if not enabled:return
+            # Older incidents on an occupied server must leave room for
+            # available servers in the bounded candidate window.
+            enabled = select(Host.id).where(Host.id.in_(enabled), ~_active_plan_for_host(Host.id))
             candidates=s.execute(select(Incident.id,Incident.host_id,Incident.scan_id).where(
                 Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),
                 *awaiting_auto_plan(),automatic_candidate_sql())
                 .order_by(Incident.updated,Incident.id).limit(100)).all()
             if not candidates:return
-            occupied=select(Job.id).where(
-                Job.host_id==Incident.host_id,Job.action.in_(['security-plan','startup-plan']),
-                Job.state.in_(['queued','running'])).exists()
+            occupied=_active_plan_for_host(Incident.host_id)
             eligibility={incident_host:(canonical_host,has_active_plan) for incident_host,canonical_host,has_active_plan in s.execute(
                 select(Incident.host_id,Host.id,occupied).join(Host,Host.id==Incident.host_id)
                 .where(Incident.id.in_([row.id for row in candidates])))}
@@ -385,6 +386,16 @@ def auto_plan_tick(now=None):
                     enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True})
                     occupied_hosts.add(canonical_host);remaining-=1
                 except ValueError:continue
+
+
+def _active_plan_for_host(host_id):
+    from .db import Job
+
+    return select(Job.id).where(
+        Job.host_id == host_id,
+        Job.action.in_(('security-plan', 'startup-plan')),
+        Job.state.in_(('queued', 'running')),
+    ).exists()
 
 
 def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):
