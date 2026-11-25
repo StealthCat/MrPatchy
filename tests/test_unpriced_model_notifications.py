@@ -39,6 +39,8 @@ def current():
 
 # The clock is explicit and the bundled window is the subject under test, so opt out of the #742 fresh-catalog pin.
 @pytest.mark.bundled_pricing_catalog
+# Reads the stored AI price catalog, which needs the Settings table (#1487 fails closed).
+@pytest.mark.usefixtures('client')
 def test_model_status_is_alias_aware_and_fails_closed():
     assert ai_pricing.model_status('gpt-6-luna', NOW) == {'ok': True, 'code': '', 'model': 'gpt-6-luna', 'reason': '',
                                                          'version': ai_pricing.VERSION}

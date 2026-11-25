@@ -67,6 +67,8 @@ def test_capped_unknown_pricing_fails_before_rate_or_provider(admin, monkeypatch
     assert sent == []
 
 
+# Reads the stored AI price catalog, which needs the Settings table (#1487 fails closed).
+@pytest.mark.usefixtures('client')
 def test_pricing_catalog_status_has_exact_freshness_boundaries():
     before=ai_pricing.catalog_status(ai_pricing.VERIFIED_AT-1)
     fresh=ai_pricing.catalog_status(ai_pricing.VERIFIED_AT)

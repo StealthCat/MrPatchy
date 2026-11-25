@@ -38,6 +38,8 @@ def revision(session, item):
     return session.get(notifications.NotificationRevision, (item.id, item.revision))
 
 
+# Reads the stored AI price catalog, which needs the Settings table (#1487 fails closed).
+@pytest.mark.usefixtures('client')
 def test_floor_is_a_lower_bound_for_every_billable_path():
     floor = headroom.minimum_call_reservation(MODEL, DAY)
     assert floor['ok'] and Decimal('0.08') < floor['amount_usd'] < Decimal('0.081')

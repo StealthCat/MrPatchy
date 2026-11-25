@@ -9,6 +9,11 @@ from app.identity import User
 from app.security import seal
 
 
+# These cases read the stored AI price catalog, which needs the Settings table: since #1487 an
+# unreadable catalog fails closed, so they must not rely on an earlier test creating the schema.
+pytestmark = pytest.mark.usefixtures('client')
+
+
 def response_body(**changes):
     return {'model': 'gpt-6-luna', 'service_tier': 'default', 'status': 'completed',
             'usage': {'input_tokens': 1000, 'output_tokens': 200, 'total_tokens': 1200,
