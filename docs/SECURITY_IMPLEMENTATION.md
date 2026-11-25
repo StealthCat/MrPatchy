@@ -14111,3 +14111,18 @@ Procmail is often the local delivery agent, started by Postfix `mailbox_command`
 - **Validation:** `tests/test_procmail_rc.py` (46 tests). The rules were checked against the procmail 3.24 source. No differential test runs the real binary, because running a downloaded procmail binary was not permitted in this environment.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of `/etc/procmailrc` and `~/.procmailrc`, linking with the `.forward` (#1489) and Postfix `mailbox_command` evidence, following `INCLUDERC`/`SWITCHRC`, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### etckeeper hook contract — worker checkpoint #1517 (roadmap F)
+
+- **Delivered:** `app/etckeeper_hooks.py` is a pure contract that says which `/etc/etckeeper/<command>.d` scripts run as root, in which order, and from which trigger: the APT `DPkg::Pre-Invoke`/`DPkg::Post-Invoke` hooks in `05etckeeper` (`pre-install`, `post-install`), `/etc/cron.daily/etckeeper`, and `etckeeper.timer` → `etckeeper.service` → `/etc/etckeeper/daily` (`unclean`, then `commit`). Nested commands are followed only through unchanged shipped scripts (`pre-install` → `list-installed`, `unclean`, `commit`; `post-install` → `unclean`, `list-installed`, `commit`). Each script is `shipped_unchanged`, `shipped_modified`, `custom` or `unverified`.
+- **Semantics:** pinned to Ubuntu `etckeeper 1.18.20-2` with SHA-256 of the program, hooks, cron job and units:
+  - `etckeeper.conf` is sourced as root shell before the hook directory is chosen, and can redirect `ETCKEEPER_CONF_DIR`/`ETCKEEPER_DIR`;
+  - a command exits before any script when its `.d` directory is missing or no VCS is configured or detected;
+  - `lsscripts` selects `glob "$dir/*"` names matching `[-a-zA-Z0-9]+` that are not directories and are `-x`. With `LANG=C`, Perl's File::Glob orders case-folded names, then bytes; the no-Perl `/bin/sh` fallback uses dash byte order;
+  - scripts run under `set -e`, so a failure stops the rest of that command;
+  - the cron job honours `AVOID_DAILY_AUTOCOMMITS="1"` (after sourcing the conf); `etckeeper.service` does not.
+  - the APT hooks and `/etc/etckeeper/daily` run etckeeper only when `[ -x /usr/bin/etckeeper ]`, so an unknown execute bit leaves every trigger unknown;
+  - in the conf, `#` starts a comment only after whitespace: `AVOID_DAILY_AUTOCOMMITS=1#note` keeps the literal `1#note` and is reported as not understood.
+- **Fail closed:** gaps cover unknown or incomplete listings, unknown kinds or execute bits (including `/usr/bin/etckeeper`'s), trailing-newline names, Perl-versus-shell order differences when Perl presence is unknown, conf files with anything but literal assignments, hook-directory redirection, changed program/APT/cron/daily/unit files, unknown timer enablement or VCS, version drift, and the VCS hooks that shipped `commit.d/50vcs-commit` and `99push` run through `git commit`/`git push`. No result is a safety verdict, and `authorizes_response` is always false.
+- **Validation:** `tests/test_etckeeper_hooks.py` (43 tests). One test runs the exact `lsscripts` Perl body from `/usr/bin/etckeeper` against a temporary directory and checks the contract's selection and order against it.
+- **Remaining:** native collection, startup-catalog and inventory wiring, provenance and AI classification; the `etckeeper-dnf` plugin on RPM systems; resolving `.git/hooks` and `core.hooksPath`.
