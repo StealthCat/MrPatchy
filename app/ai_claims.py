@@ -241,9 +241,19 @@ def _free_hit(s,model,election_filters):
     return None
 
 
+def _eligible_host_filters():
+    return (
+        Behavior.host_id.not_in(ai_policy.paused_ids()),
+        Behavior.host_id.not_in(host_lifecycle.inactive_ids()),
+    )
+
+
 def _needs_admission_lock(s, now):
     """One read probes for possible work or recovery without selecting evidence."""
-    pending = select(Behavior.id).where(Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')))
+    pending = select(Behavior.id).where(
+        Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')),
+        *_eligible_host_filters(),
+    )
     expired = select(Claim.subject).where(Claim.expires <= now)
     runs = ai_runs.AIRun
     has_claim = select(Claim.subject).where(Claim.run_id == runs.id).exists()
@@ -290,8 +300,8 @@ def acquire(owner=None):
                 .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
             saturated_hosts=[host_id for host_id,count,key,policy in occupancy
                 if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
-            election_filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
-                Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
+            election_filters=(Behavior.approved==False,*_eligible_host_filters(),
+                Behavior.host_id.not_in(saturated_hosts),
                 Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
             # At most two elections: the normal one, then, only when the elected
             # paid subject's own quote cannot fit a positive remaining balance,
@@ -371,7 +381,7 @@ def _admit(s,row,cfg,secret,owner,signature,now,free_only,claim_lock_wait):
                 quote=ai_pricing.reservation(payload)
                 cap=Decimal(str(cfg['ai_daily_cap_usd']))
                 over=quote['ok'] and quote['amount_usd']>cap
-                if ((over or ai_budget.waiting(s,now,payload)) and
+                if ((over or ai_budget.waiting(s,now,quote=quote)) and
                     not known_good.exact_hit_available(s,row,cfg['ai_model'])):
                     if over:ai_retry.over_cap(s,row,signature,quote['amount_usd'],cap);s.commit();return None
                     # Leave it queued and unchanged; the caller probes for a free hit.

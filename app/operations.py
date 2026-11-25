@@ -5,7 +5,7 @@ import json
 import logging
 import time
 import httpx
-from sqlalchemy import String,Text,Double,select,func
+from sqlalchemy import String,Text,Double,select,func,or_
 from sqlalchemy.orm import Mapped,mapped_column
 from . import ai_policy_repair_notifications
 from . import ai_budget,ai_control_migration,ai_credential_notifications,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
@@ -32,6 +32,7 @@ def in_window(windows,now=None):
     return any(date.weekday() in w['days'] and w['start']<=minute<w['end'] for w in windows)
 
 QUARANTINE_STATES=('running','recovery_required')
+HOLD_READ_BATCH = 500
 
 def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=False,process_id=None,read_only_response_id=None,staging_response_id=None,publication_id=None,publication_response_id=None,service_response_id=None):
     query=select(Job.id).where(Job.host_id==host_id,Job.state.in_(QUARANTINE_STATES))
@@ -67,23 +68,56 @@ def host_quarantined(s,host_id,exclude=None,response_id=None,local_observation=F
     if publication_response_id:processes=processes.where(ProcessResponse.quarantine_id!=publication_response_id)
     return s.scalar(processes.limit(1)) is not None
 
-def quarantined_hosts(s,host_ids):
-    """Hosts among host_ids that host_quarantined(s,host_id) would report held, using one query per hold table."""
+def _hold_sources():
     from .service_monitor import Watch as ServiceWatch
     from .quarantine import Quarantine
     from .repair_publication import Publication
     from .process_response import ProcessResponse
+    return (
+        (Job.host_id, Job.state.in_(QUARANTINE_STATES)),
+        (ServiceWatch.host_id, ServiceWatch.hold == True),
+        (Quarantine.host_id, Quarantine.hold == True),
+        (Publication.host_id, Publication.hold == True),
+        (ProcessResponse.host_id, ProcessResponse.hold == True),
+    )
+
+
+def quarantined_hosts(s,host_ids):
+    """Hosts among host_ids that host_quarantined(s,host_id) would report held, using one query per hold table."""
     host_ids=list(host_ids); held=set()
-    for start in range(0,len(host_ids),500):
-        chunk=host_ids[start:start+500]
-        for column,where in ((Job.host_id,Job.state.in_(QUARANTINE_STATES)),(ServiceWatch.host_id,ServiceWatch.hold==True),
-                             (Quarantine.host_id,Quarantine.hold==True),(Publication.host_id,Publication.hold==True),
-                             (ProcessResponse.host_id,ProcessResponse.hold==True)):
+    sources = _hold_sources()
+    for start in range(0,len(host_ids),HOLD_READ_BATCH):
+        chunk=host_ids[start:start+HOLD_READ_BATCH]
+        for column,where in sources:
             held.update(s.scalars(select(column).where(column.in_(chunk),where).distinct()))
     return held
 
+
+def unheld_hosts(s, host_ids):
+    """Read server IDs without an operation or response hold, with no exemptions."""
+    # Compare host IDs in the database so differently cased legacy values use
+    # the same identity rules as the single-server hold check.
+    no_holds = [
+        ~select(column).where(column == Host.id, condition).exists()
+        for column, condition in _hold_sources()
+    ]
+    hosts = []
+    for start in range(0, len(host_ids), HOLD_READ_BATCH):
+        batch = host_ids[start:start + HOLD_READ_BATCH]
+        hosts.extend(s.scalars(select(Host.id).where(Host.id.in_(batch), *no_holds)))
+    return hosts
+
 def _recovery_flags(row):
     return {name:bool(row and row.value.get(name)) for name in ('reboot','rollback')}
+
+
+def host_hold_exists(host_id):
+    """SQL expression for any operation or response hold, with no exemptions."""
+    return or_(*(
+        select(column).where(column == host_id, condition).exists()
+        for column, condition in _hold_sources()
+    ))
+
 
 def recovery_policy(s,host_id):
     return _recovery_flags(s.get(Setting,'recovery:'+host_id))
