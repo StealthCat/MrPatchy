@@ -178,8 +178,13 @@ def summary(retry,signature,now,attempted=0):
         return {'state':'legacy_wait' if attempted>now-3600 else 'ready','attempts':0,
                 'next_at':attempted+3600 if attempted>now-3600 else 0,'reason':''}
     exhausted=retry.state=='interrupted' and retry.attempts>=MAX_ATTEMPTS
-    changed=(retry.state=='blocked' or exhausted) and retry.configuration!=signature and retry.provider_until<=now
-    if exhausted and not changed:return {'state':'blocked','attempts':retry.attempts,'next_at':0,'reason':'Interrupted automatic attempt limit reached. Review the failure before explicitly retrying.'}
-    state='ready' if changed or (retry.state in ('deferred','interrupted') and retry.next_at<=now) else retry.state
+    if (retry.state=='blocked' or exhausted) and retry.configuration!=signature:
+        if retry.provider_until>now:
+            return {'state':'deferred','attempts':retry.attempts,'next_at':retry.provider_until,
+                    'reason':'API configuration changed. Waiting for the provider Retry-After to expire.'}
+        return {'state':'ready','attempts':retry.attempts,'next_at':0,
+                'reason':'API configuration changed; eligible for another attempt.'}
+    if exhausted:return {'state':'blocked','attempts':retry.attempts,'next_at':0,'reason':'Interrupted automatic attempt limit reached. Review the failure before explicitly retrying.'}
+    state='ready' if retry.state in ('deferred','interrupted') and retry.next_at<=now else retry.state
     return {'state':state,'attempts':retry.attempts,'next_at':retry.next_at or retry.provider_until,
-            'reason':'API configuration changed; eligible for another attempt.' if changed else retry.reason}
+            'reason':retry.reason}
