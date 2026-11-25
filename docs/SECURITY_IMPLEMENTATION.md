@@ -12041,6 +12041,20 @@ full SQLite/MySQL/browser checks and fresh code scanning remain required before
 this checkpoint is delivered.
 
 
+### Automatic plan candidate availability — Roadmap A checkpoint #1419
+
+The automatic planning tick excludes servers with queued or running incident
+or startup plans before taking its 100-incident window. Older incidents on an
+occupied server can fill that window, so applying the occupancy check before
+the limit allows other servers to queue work in the same tick. The query uses
+database host identity matching. The later occupancy lookup and existing
+within-tick, lifecycle and worker execution checks still apply.
+
+The SQLite and native MySQL regression uses 110 older incidents on two
+occupied servers and verifies that the two available servers are queued in
+oldest-first order. Fairness among independently available servers with large
+incident backlogs remains open.
+
 ### Batched automatic security-plan eligibility — worker checkpoint #592
 
 This bounded faster-AI increment shortens the database work performed while holding
