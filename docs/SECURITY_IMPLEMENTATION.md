@@ -13578,3 +13578,46 @@ keepalived runs administrator-configured programs on VRRP state changes, health 
 - **Remaining:**
   - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
 - **Acceptance:** stays incomplete until those are delivered.
+### net-snmp snmpd program contract — worker checkpoint #1327 (roadmap F, increment 1)
+
+snmpd runs configured programs whenever an SNMP manager reads, or for writable entries sets, the object identifiers they serve. On Debian and Ubuntu it runs them as `Debian-snmp`. The `extend`, `exec`, `sh`, `pass` and `pass_persist` directives are a known persistence and remote-execution surface, and the startup inventory did not model them.
+
+- **Change:** the pure `app/snmpd_programs.py` takes captured configuration text in snmpd's read order, the effective snmpd argv (default: the packaged `snmpd.service` command) and captured `/etc/passwd` and `/etc/group`. For each program snmpd would run, it returns the module and directive, the source file and line, the name or OID, the argv, `/bin/sh -c` command or pass argv prefix, whether the entry is writable or truncated, and the run user and group. It performs no I/O and never runs snmpd or a program.
+- **Fidelity:** traced from net-snmp 5.9.4 in Ubuntu 24.04 `net-snmp_5.9.4+dfsg-1.1ubuntu3.3`:
+  - That build does not include `ucd-snmp/extensible`, so the extend module also handles `exec`, `sh` and `execFix`.
+  - Handlers are looked up case-insensitively, but the shell and writable flags are chosen with a case-sensitive comparison. `EXTEND-SH` therefore runs through `execv`.
+  - A word that starts with `#` ends the line. `copy_nword` handles quoting and backslashes, and a word is truncated to its buffer.
+  - The extend command and its arguments are joined into a 511-byte buffer. Exec entries split that buffer again with `tokenize_exec_command`, so a quoted program path that contains a space splits at exec time.
+  - `pass` takes `strtol` priorities and stops its command at the first `#` or `;`. `pass_persist` is started through `parse_cmd`, which splits only at spaces.
+  - Among extend entries under the same root OID, the first one with a given name wins. `-I` lists select or exclude modules.
+  - Later `agentuser`/`agentgroup` lines replace `-u`/`-g`. An unknown name in the configuration keeps the earlier value, and an unknown `-u` name makes snmpd exit.
+- **Fail closed:** increment 1 does not derive snmpd's configuration search path or persistent-directory files, so every result carries the blocking `read_order_not_derived` gap and is never `complete`. The following are blocking gaps too:
+  - include directives and command-line configuration (`-c`, `-C`, `-Y`, `--token=value`);
+  - a permanent switch to an unknown `[type]`;
+  - `dlmod`, `perl` and `procfix`;
+  - symbolic OIDs, over-long names, and a `pass -p` without a value (snmpd dereferences NULL);
+  - unobserved files or account databases, invalid UTF-8, NUL bytes and over-limit input.
+  `origin` stays `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_snmpd_programs.py` (18 tests), with expected values traced from `read_config.c`, `extend.c`, `pass.c`, `pass_persist.c`, `execute.c`, `util_funcs.c` and `snmpd.c`. No differential run against a live snmpd was done in this increment.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Increment 2 (read order):** `evaluate_snapshot` derives snmpd's read order from a captured filesystem snapshot, following `read_config_files_of_type`, `read_config_files_in_path` and `read_config` in net-snmp 5.9.4 `snmplib/read_config.c`. The snapshot lists files, directory entries and absent paths. It returns the order it read files in, and can be `complete`.
+  - **Search path:** without `SNMPCONFPATH`, the path is `/etc/snmp:/usr/share/snmp:/usr/lib/x86_64-linux-gnu/snmp`. `$HOME/.snmp` is added only when `HOME` is set. The persistent directory (`SNMP_PERSISTENT_DIR`, default `/var/lib/snmp`) is read after it. With `SNMPCONFPATH`, snmpd reads only that list.
+  - **Files per directory:** `<type>.conf` is read, then `<type>.local.conf`. Missing and non-directory entries are skipped. Empty elements (`:<dir>`, `a::<dir>`) are skipped like snmpd's `stat("")`; only an empty remainder ends the list.
+  - **Persistent backups:** a directory matching the persistent-directory or `SNMP_PERSISTENT_FILE` prefix first gets `<type>.0.conf` to `<type>.10.conf`, stopping at the first missing one.
+  - **`includeFile`** resolves a relative name against the including file's directory.
+  - **`includeSearch`** searches the path for the name, with one `.conf` suffix removed.
+  - **`includeDir`** reads non-dot `*.conf` entries in the captured readdir order.
+  - **Include targets** are the raw rest of the line, trailing blanks included.
+  - **Context and nesting:** included files start in the includer's permanent context and do not change it. Nesting deeper than 16 is refused.
+  - **File types:** the `snmpd` type is read, then the `snmp` type.
+- **New blocking gaps (increment 2):**
+  - a path the snapshot does not describe, an unlisted directory, or an unobserved environment;
+  - a path truncated by the 300-byte buffer;
+  - a relative `includeDir`, which resolves against the working directory;
+  - an `includeDir` with more than one entry, because readdir order is filesystem-specific and the first extend name wins;
+  - `persistentDir`, a premib token that moves the persistent directory;
+  - snmpd handlers reached from an `snmp`-type file, because the type registration order is not derived.
+
+  `-c FILE[,FILE...]` is now modelled: the last `-c` wins, and its absolute files are read with the snmpd handlers after both types, or before them with a leading `-`. A relative `-c` name, `-C`, `-Y` and `--token=value` stay blocking. `evaluate` still takes its order on trust, so its results carry `read_order_not_derived`.
+- **Validation (increment 2):** 10 more tests (28 in total), traced from `read_config.c`. The amd64 library path and `/var/lib/snmp` are the Debian configure values, and have not yet been checked against a live install.
+- **Remaining (#1327):** model `-C`, derive the type registration order, and run differential validation against the packaged snmpd. Agent collection, a catalog entry, package provenance, persistence, UI and AI classification also remain.
