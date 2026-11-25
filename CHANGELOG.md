@@ -1,3 +1,11 @@
+## 1.95.0 — 2026-11-25
+
+1. [PR #1164](https://github.com/StealthCat/MrPatchy/pull/1164): Blocked update-score explanations now name a model refusal and response token-budget exhaustion. The new text says the request was sent and may be billed, says that changing the API key does not help, and names the remedy. All other blocked wording, eligibility and notifications are unchanged. Compatibility: no API, schema or authorization change. Fixes #1162.
+2. [PR #1340](https://github.com/StealthCat/MrPatchy/pull/1340): A pure Roadmap F Postfix `master.cf` contract (`app/postfix_master.py`) resolves which services `master(8)` starts as root from `daemon_directory`, with their program and argument vector. For `pipe` and `spawn` services it reports which `argv=` command runs as which `user=`, or that the daemon refuses it. Unobserved, expansion-dependent or ambiguous input is a blocking gap. Compatibility: new module only, with no schema, auth, scheduling or response-authorization change. Closes #1338.
+3. [PR #1430](https://github.com/StealthCat/MrPatchy/pull/1430): Fleet automatic plan status reads server policies in bounded, indexed pages of at most 512 and stops once it has enough opted-in servers, instead of loading every policy row. Results, ordering, totals and truncation are unchanged. Compatibility: controller initialization adds an index on `hosts(deleted_at, name, id)` to existing databases; there is no migration step, configuration or UI change. Fixes #1429.
+
+Integrated together through batch [PR #1516](https://github.com/StealthCat/MrPatchy/pull/1516). This source update does not publish a Docker image.
+
 ## 1.94.0 — 2026-11-25
 
 1. [PR #1169](https://github.com/StealthCat/MrPatchy/pull/1169): The notification center keeps its severity, source, server, status, unread/dismissed filters and page in the `#notifications` address. Reload, shared links and Back/Forward now reopen the same view, and invalid link values are ignored. It also fixes a race that could leave the center loading when it opened as live refresh started. Compatibility: no API, schema or authorization change. Closes #1168.
