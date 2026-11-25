@@ -71,6 +71,13 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(got['a.esc'], 'a\tb\\c"d')
         self.assertEqual(got['a.empty'], '')
 
+    def test_inner_whitespace_modes(self):
+        text = '[a]\n\tk = x \t y\n'
+        self.assertEqual(gc.parse_config(text)[0]['value'], 'x   y')
+        self.assertEqual(gc.parse_config(text, inner_whitespace='verbatim')[0]['value'], 'x \t y')
+        with self.assertRaises(ValueError):
+            gc.parse_config(text, inner_whitespace='other')
+
     def test_subsection_case_and_legacy_form(self):
         names = [e['name'] for e in gc.parse_config(DIFFERENTIAL_CORPUS[1])]
         self.assertEqual(names, ['alias.Foo.x', 'alias.bar.y'])
@@ -212,7 +219,12 @@ class NativeGitTests(unittest.TestCase):
         return subprocess.run(['git', 'config', '--system', '--list', '-z'], env=_git_env(system, self.tmp),
                               cwd=self.tmp, capture_output=True, check=False)
 
+    def _whitespace_mode(self):
+        proc = self._list('[a]\n\tk = x\ty\n')
+        return 'verbatim' if proc.stdout == b'a.k\nx\ty\0' else 'space'
+
     def test_parser_matches_git_config_list(self):
+        mode = self._whitespace_mode()
         for text in DIFFERENTIAL_CORPUS:
             with self.subTest(text=text):
                 proc = self._list(text)
@@ -221,7 +233,7 @@ class NativeGitTests(unittest.TestCase):
                 for item in proc.stdout.decode('utf-8').split('\0')[:-1]:
                     name, sep, value = item.partition('\n')
                     native.append((name, value if sep else None))
-                ours = [(e['name'], e['value']) for e in gc.parse_config(text)]
+                ours = [(e['name'], e['value']) for e in gc.parse_config(text, inner_whitespace=mode)]
                 self.assertEqual(ours, native)
 
     def test_git_rejects_what_the_parser_rejects(self):

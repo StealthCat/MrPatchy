@@ -29,7 +29,8 @@ The rules follow the git 2.43 sources: ``config.c`` (``get_next_char``,
   may share a line, so ``[core] pager = x`` is valid, and a key before any
   section header is named by the key alone.
 - Values: leading and trailing whitespace is dropped; each inner unquoted
-  whitespace character becomes one space; ``"`` toggles quoting; ``#`` and
+  whitespace character becomes one space in git 2.43 (newer git keeps the
+  character; ``inner_whitespace='verbatim'``); ``"`` toggles quoting; ``#`` and
   ``;`` start a comment outside quotes (so ``!f() { a; }; f`` is cut at the
   first ``;``); ``\\n``, ``\\t``, ``\\b``, ``\\\\`` and ``\\"`` are escapes,
   backslash-newline joins lines, and any other escape or an unterminated
@@ -88,6 +89,7 @@ SYSTEM_PATH = '/etc/gitconfig'
 MAX_TEXT = 262144
 MAX_ENTRIES = 8192
 MAX_INCLUDE_DEPTH = 10
+WHITESPACE_MODES = ('space', 'verbatim')
 
 _SPACE = ' \t\n\r'
 _TRUE = ('true', 'yes', 'on')
@@ -160,10 +162,10 @@ class _Reader:
         return c
 
 
-def _parse_value(r: _Reader) -> str:
+def _parse_value(r: _Reader, verbatim: bool) -> str:
     out: list[str] = []
     quote = comment = False
-    space = 0
+    space: list[str] = []
     start = r.line
     while True:
         c = r.next()
@@ -175,13 +177,13 @@ def _parse_value(r: _Reader) -> str:
             continue
         if c in _SPACE and not quote:
             if out:
-                space += 1
+                space.append(c if verbatim else ' ')
             continue
         if not quote and c in ';#':
             comment = True
             continue
-        out.extend(' ' * space)
-        space = 0
+        out.extend(space)
+        space = []
         if c == '\\':
             c = r.next()
             if c == '\n':
@@ -233,13 +235,18 @@ def _parse_section(r: _Reader) -> tuple[str, str | None]:
     return ''.join(name), ''.join(sub)
 
 
-def parse_config(text: str) -> list[dict[str, Any]]:
+def parse_config(text: str, *, inner_whitespace: str = 'space') -> list[dict[str, Any]]:
     """Return the entries of one config file in order, as git reads them.
 
     Each entry has ``line``, ``name`` (the canonical ``git config --list``
     name), ``section``, ``subsection``, ``key`` and ``value`` (None for a bare
-    key). Raises ``ValueError`` with ``(line, reason)`` on a syntax error.
+    key). ``inner_whitespace`` is ``space`` (git 2.43: each inner unquoted
+    whitespace character becomes a space) or ``verbatim`` (newer git keeps the
+    character). Raises ``ValueError`` with ``(line, reason)`` on a syntax error.
     """
+    if inner_whitespace not in WHITESPACE_MODES:
+        raise ValueError(f'inner_whitespace must be one of {WHITESPACE_MODES}')
+    verbatim = inner_whitespace == 'verbatim'
     r = _Reader(text)
     entries: list[dict[str, Any]] = []
     section: str | None = None
@@ -280,7 +287,7 @@ def parse_config(text: str) -> list[dict[str, Any]]:
             if c != '\n':
                 if c != '=':
                     raise _SyntaxError(line, 'invalid_key_line')
-                value = _parse_value(r)
+                value = _parse_value(r, verbatim)
             k = ''.join(key)
             name = '.'.join(p for p in (section, subsection, k) if p is not None)
             entries.append({'line': line, 'name': name, 'section': section,
@@ -316,18 +323,21 @@ def _expand_include(path: str, base_file: str) -> tuple[str | None, str | None]:
 
 
 def assess_system_gitconfig(files: Mapping[str, str | None] | None, *,
-                            path: str = SYSTEM_PATH) -> dict[str, Any]:
+                            path: str = SYSTEM_PATH, inner_whitespace: str = 'space') -> dict[str, Any]:
     """Return the programs the system gitconfig can make every git call start.
 
     ``files`` maps absolute paths to captured text. A value of None records
     that the file was observed to be absent or unreadable; a path missing from
-    the mapping was not captured.
+    the mapping was not captured. ``inner_whitespace`` is passed to
+    ``parse_config``.
     """
+    if inner_whitespace not in WHITESPACE_MODES:
+        raise ValueError(f'inner_whitespace must be one of {WHITESPACE_MODES}')
     result: dict[str, Any] = {
         'contract_version': CONTRACT_VERSION, 'source_versions': list(SOURCE_VERSIONS),
         'path': path, 'complete': True, 'files': [], 'entries': [], 'includes': [],
         'executions': [], 'transport_risks': [], 'gaps': [], 'warnings': [],
-        'origin': 'not_assessed',
+        'inner_whitespace': inner_whitespace, 'origin': 'not_assessed',
     }
     gaps, warnings = result['gaps'], result['warnings']
 
@@ -356,7 +366,7 @@ def assess_system_gitconfig(files: Mapping[str, str | None] | None, *,
             return
         result['files'].append({'path': file, 'present': True, 'depth': depth, 'condition': condition})
         try:
-            parsed = parse_config(text)
+            parsed = parse_config(text, inner_whitespace=inner_whitespace)
         except ValueError as exc:
             line, reason = exc.args
             gap('syntax_error', file=file, line=line, detail=reason)
