@@ -2281,6 +2281,12 @@ triage or worker diagnostic in one database snapshot, projecting only the fields
 used by the status response. This reduces a polling round trip. Production
 throughput and the full faster-AI acceptance milestones remain open.
 
+[#1441](https://github.com/StealthCat/MrPatchy/issues/1441) bounds the latest
+diagnostic lookup to the newest triage and worker candidates using the existing
+purpose/start index. It orders those two candidates by start time and run ID
+before reading diagnostic text. The newest diagnostic and running triage stage
+still share one status statement. This is a local database performance increment.
+
 Investigation lease validation checks the current claim before fetching host or
 behavior evidence. A live lease reads only the host lifecycle fields and still
 checks the full behavior evidence, owner, configuration and expiry. Focused
@@ -2672,6 +2678,18 @@ transport is a fixture.
   `tests/test_known_good.py`, not through this worker path. Production hit
   rates are not measured.
 
+### Provider retry deadlines on investigation cards — Roadmap A checkpoint #1130
+
+After a saved model or API key change, an individual blocked investigation or
+exhausted interrupted attempt displays a timed provider wait until its retained
+Retry-After expires. The card then shows retry eligibility without a stale
+deadline. The retained attempt history, active and paused overrides, and all
+provider and manual retry checks still apply.
+
+The acceptance cases cover both retained failure states, their deadline
+boundary, the investigation list, and refusal of manual retry before expiry.
+Independent scoring admission and matched production throughput remain open.
+
 ### Retry blocked process investigations — worker checkpoint #934
 
 Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
@@ -2825,6 +2843,16 @@ says deferred work is kept rather than discarded, and links to `#settings/ai`.
   without a notification, because no call payload is available here. Other
   blocker producers (missing key, unknown pricing, provider backoff) remain open.
 
+Worker checkpoint #1281 updates the exhausted-cap notification. The configured
+budget boundary is a time to recheck. Spend from an earlier window can still
+count after that time, so queued paid work waits for available budget. The
+notification remains active while counted spend exhausts the cap. Its existing
+window and cap revision keys still prevent repeated collection from reopening a
+read notice within that window. An active notice can get one updated revision
+when the new wording first reaches it. The persisted-ledger regression covers
+the notification across a timezone overlap and its resolution after the
+retained window ends.
+
 Worker checkpoint #733 adds an AI configuration-blocker notification producer.
 A non-transient provider failure (rejected key, unavailable quota, unsupported
 model) leaves each affected process investigation `blocked`, with no automatic
@@ -2870,6 +2898,16 @@ matching `secret.key`), `operations.collect_alerts()` publishes one admin-only
   describes possible provider-side causes alongside this one. Saving the key
   again changes the retry signature, which makes them eligible again. Blocked
   update-scoring and advisory-plan work remains uncovered.
+
+Worker checkpoint #1311 adds an administrator-only repair notice for malformed
+per-server AI policies. Operational alert collection checks active servers while
+central AI is enabled. A malformed policy that holds the server's AI work causes
+one in-app event linked to that server's Security tab. An intentional pause uses
+its existing coverage notification. Healthy, missing and intentionally paused
+policies do not trigger a repair notice. Repeated observations stay on one
+revision. Repair, disabling AI or leaving active management resolves it, and a
+recurrence appears unread. The event carries fixed text and the server identity.
+It does not send a provider request or change SMTP, webhook or response state.
 
 Worker checkpoint #739 adds an advance warning to the daily-cap producer. While
 counted spend in an enabled cap mode is at least a fixed 80% of the cap but
@@ -3196,9 +3234,12 @@ Worker checkpoint #1154 keeps the triage contention fixtures within one configur
   - Every other subject was refused before a run started, or is deferred to the
     window reset with no retry attempt used. None is blocked.
   - A second round in the same window sends nothing more.
-- **Preflight bypassed:** the same holds when the claim-time budget preflight
-  admits everything. All ten workers claim work, and the authoritative
-  reservation alone holds the cap.
+- **Preflights bypassed (#1295):** all ten contenders reach authoritative
+  reservation when the advisory claim-time budget and rate checks are
+  bypassed. Runtime reservation and rate admission still run. In
+  `rate_and_daily`, one worker starts after the first provider call has used
+  the rate slot, so coverage of the contended reservation does not depend on
+  which worker runs first.
 - **`rate_and_daily`:** checked with room for one call, because the rate gate
   also spaces admissions.
 - **Processes:** four fresh OS processes with two threads each share one cap.
@@ -3472,6 +3513,23 @@ in-flight cases fail. No defect was found and runtime code is unchanged. CI runs
 the file on SQLite and on the MySQL shards. Draining a worker inside a
 separate-machine deployment is still covered only by the planned roadmap G
 remote-worker acceptance.
+
+### Scheduler coordinator loss under a daily spend cap — milestone 4 acceptance #1289
+
+`tests/test_ai_budget_coordinator_failover.py` starts a disposable process that
+owns the real scheduler lock. A registered follower runs the worker dispatch
+loop, performs a capped investigation and leaves update scoring for the
+coordinator. After the lock owner dies, the same follower becomes coordinator
+and dispatches the queued score against the same ledger window.
+
+With headroom, the score gets its own settled receipt alongside the first
+unreconciled reservation. A tighter fixture cap fits either request on its own.
+The earlier reservation then defers the score to the reset and the ledger still
+contains only the triage charge. Dispatch is deterministic within the test and
+provider replies are fixtures. SQLite and MySQL check the same lock-owner loss
+contract. Database writer failover and multi-host deployment acceptance remain
+open.
+
 ### Server AI pause and global AI disable under a daily cap — worker checkpoint #998
 
 `tests/test_ai_budget_pause_acceptance.py` covers part of milestone 4's
@@ -3570,6 +3628,17 @@ connection tests. The groups sum to the counted total in the budget status.
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
 
+Worker checkpoint #1283 adds `next_reset_authoritative` to the activity snapshot.
+The grouped query checks whether any positive, observed spend will still count
+after the configured boundary. It uses the same predicate as the saved-budget
+snapshot and reads the ledger once. The activity card shows a recheck and
+explains carryover when the flag is false. Each Refresh uses its own snapshot.
+The date uses browser-local time and labels the budget timezone separately.
+The API regressions cover a real retained earlier window, released and zero-cost
+rows, unobserved spend, and authoritative, empty and uncapped windows. The
+browser regression refreshes from a reset to a recheck and verifies the same
+activity totals and escaped text.
+
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
 The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
@@ -3630,6 +3699,17 @@ Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one U
 - **Call in flight at the reset:** a call reserved before the reset and unanswered after it keeps its ledger row but uses none of the new window's headroom. A late receipt settles it under the window that admitted it, and the retained spend history lists it there.
 - **tz database revisions:** the zones that change at local midnight revise their rules often. Those cases locate their days from the installed tz database and skip when it has none; the long-standing zones must always produce both.
 - **Remaining in milestone 4:** multi-process and multi-worker admission races at the reset, failover, lease loss and drain, settings changes during admission, and before/after production performance.
+
+### Daily-cap admission races at the reset — worker checkpoint #1275
+
+Milestone 4 acceptance for **multi-process and multi-worker admission races at the reset**. #984 crossed the reset with one caller at a time, and #1012 raced callers inside one window. `tests/test_ai_budget_reset_race_acceptance.py` races the authoritative `ai_budget.reserve()` admission across the boundary itself. It adds evidence only; no runtime behavior changes.
+
+- **Threads at the reset instant:** the old window is exhausted and still holds a sent-but-unanswered call, an uncertain call and an unsent reservation. Ten threads reserve at the reset in UTC, Asia/Kolkata and America/New_York. Exactly K calls are admitted into the new window (the cap is K calls plus half a call). Every refused caller gets a policy wait ending at the following reset. The old window's rows keep their `reset_at` and statuses and use none of the new headroom.
+- **Callers straddling the reset:** threads 1 ms or 0.75 s before the reset (or workers whose clocks lag by that much) race interleaved threads the same distance after it. The old window admits only its one remaining call, and a refused pre-reset caller waits only until the reset it observed. The new window admits exactly K. A further test fills the new window first and then admits a lagging caller into the old window's remaining headroom.
+- **Late receipt during the race:** an old-window call that settles cheaply, or turns uncertain, while new-window callers race stays in its own window. A cheap settlement frees only old-window headroom, and new-window admission is still exactly K.
+- **Fresh processes:** four child processes with three threads each, at and shortly after the reset, share the database and admit exactly K distinct calls in total.
+- **Evidence:** 13 tests, run on SQLite locally and on MySQL by the CI shards. Removing the shared budget lock fails all 13. Counting only rows whose `reset_at` is still ahead fails 12. Treating a row whose `reset_at` equals the current time as still open fails 3. Counting a row created exactly at the reset in the old window fails 3. Reporting a refused caller's wait from the wrong reset fails 11. Dropping the `reset_at` clause (counting by creation time alone) passes, as expected: that clause keeps spend counted across a timezone change, not across this boundary.
+- **Unchanged:** no defect was found. Failover, lease loss during the reset and before/after production performance remain open in milestone 4.
 
 ### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
 
@@ -3785,6 +3865,42 @@ and that a sent call may still be billable. From code reading, not tested here: 
 `mark_sent` leaves a `reserved` row counted until its window closes. That is
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
+
+### Lease loss across the daily-cap reset — milestone 4 acceptance #1277
+
+`tests/test_ai_budget_lease_reset_acceptance.py` combines the #992 lease-loss
+fixtures with the calendar-day reset. Each window's cap has room for exactly one
+conservative reservation. A capped call is reserved and sent in one window, the
+clock passes the reset, and the worker's lease then expires. The late outcome is
+either an answer (`answer`) or a lost connection (`failure`).
+
+- **Admission.** The successor for the same subject is admitted against the new
+  window. That is possible only because the lost call's still-`sent` ceiling is not
+  counted there. Each row keeps the `reset_at` it was admitted under.
+- **Late outcome.** The late outcome is reconciled into the lost call's own row
+  without moving it.
+  - An answer settles at its actual cost.
+  - A failure becomes `uncertain`. Its full ceiling stays counted in the old window
+    of `ai_budget.history()`, and the reset never releases it.
+- **New window unchanged.** The next window's cap is set to exactly one
+  reservation ceiling. In both cases the new window's counted spend and next
+  eligibility are identical before and after the late outcome. A distinct second
+  subject is not claimed, reserved or sent, either before or after it, so it
+  defers to the following reset.
+- **Stale run rejected.** Only the successor's assessment is accepted, and the lost
+  run stays `interrupted`.
+
+**Mutation evidence:**
+
+| Mutation | Result |
+|---|---|
+| Settlement or `mark_uncertain` rewrites `reset_at` to the current window | Both variants fail |
+| A late uncertain row past its reset is released | The `failure` variant fails |
+| Rows are counted regardless of their own window | Both variants fail: the successor is deferred |
+| Preflight and reserve ignore spend already counted in the window | Both variants fail: the second subject is sent |
+
+No defect was found and there is no runtime change. Failover and before/after
+production performance remain open.
 
 ### Non-expanding legacy migration proposal — worker checkpoint #879 (fixes #878)
 
@@ -4028,6 +4144,19 @@ Previously it always advertised the legacy investigation limit, which only
 applies in legacy mode. This is display-only: admission, spend, pause, lifecycle
 and authorization behavior are unchanged. A browser regression covers every mode.
 
+### Compare daily ledger timings — Roadmap A checkpoint #1305
+
+`tools/compare_ai_benchmarks.py` adds a `budget_timings` section when either
+capped fixture report includes ledger timings. It verifies both reservation
+and reconciliation timings on each measured side, including one sample per
+settled provider call and finite ordered durations within the run elapsed
+time. A complete pair includes p50/p95 deltas. For a mixed pair the historical
+side and the deltas are null. A pair of older reports keeps its existing
+comparison shape. Uncapped reports cannot supply capped ledger timings.
+
+Workload equivalence checks still apply before comparisons. These measurements
+cover the disposable fixture ledger and leave production throughput open.
+
 ### SSH evidence delay in the triage benchmark — worker checkpoint #524
 
 `tools/benchmark_ai.py` accepts `--ssh-delay-ms` from 0 to 1,000. The default
@@ -4044,6 +4173,21 @@ Check that both reports retain the same provider call count and one-stage and
 two-stage workload before comparing their stage percentiles and throughput.
 These are loopback and stubbed SSH measurements. Production comparison remains
 open.
+
+### Measure executor queue wait in triage fixtures — Roadmap A checkpoint #1315
+
+The benchmark's `stages.executor_wait` records a count and p50/p95 in
+milliseconds from submitting each investigation to the point its executor
+thread starts work. It is a measured fixture wait distinct from seeded
+observation age and the worker's admission time. In paced fixtures, the
+dispatcher waits for the durable rate slot before submission. Read that
+time separately in `fixture_rate.dispatch_wait_seconds`.
+
+Compare the raw stage in matched serial and parallel reports. Use the
+existing comparator to check capability equivalence. Acceptance covers a
+busy serial executor, sample counts, and paced SQLite and MySQL workloads.
+Historical reports omit this measurement. It does not establish production
+queue latency or throughput.
 
 ### Retained behavior history in the triage benchmark — worker checkpoint #641
 
@@ -4068,6 +4212,15 @@ python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-d
 python tools/compare_ai_benchmarks.py serial.json parallel.json
 ```
 
+Roadmap A checkpoint #1393 adds a balanced mixed workload. Run the benchmark
+with `--runs 8 --servers 3` at concurrency 1 and 4 to measure the same eight
+investigations across three servers. The report verifies the retained subject
+assignments and records the per-server slot limit so the comparator rejects
+different layouts or limits. Shared layouts cap benchmark concurrency at that
+limit so a temporarily full server cannot leave a submitted fixture unprocessed.
+Existing one-server and one-server-per-subject reports remain comparable under
+their existing controls. These measurements cover disposable fixtures.
+
 The benchmark checks that every persisted run belongs to the expected subject
 and server, with a receipt for every provider call. Reports record the observed
 server count, the single-server slot limit, and peak simultaneous loopback
@@ -4083,6 +4236,20 @@ Peak simultaneous provider handling rose from one to four in all three pairs.
 Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
 At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
 one. Matched production measurements remain open.
+
+### Daily ledger timings in capped triage fixtures — Roadmap A checkpoint #1302
+
+Capped fixture reports include `stages.budget_reservation` and
+`stages.budget_reconciliation` with sample counts and p50/p95 durations.
+They measure the real daily ledger calls, including database lock wait. The
+receipt/usage delay option only simulates diagnostic persistence latency.
+The benchmark checks that each budget stage has one sample per settled
+provider call, including follow-ups. Uncapped reports omit these stages.
+
+SQLite and MySQL acceptance cover daily cap and combined rate-and-cap modes
+with both serial and parallel configurations. The stages are additive report
+fields. Existing comparator semantics and production measurement milestones
+are unchanged.
 
 ### Native MySQL mode for the triage benchmark — worker checkpoint #976
 
@@ -4135,6 +4302,21 @@ and a lock assigned to another session. The native MySQL fixture verifies that
 stale cleanup leaves the subsequent holder's table intact. This is fixture
 cleanup acceptance. Production failover and throughput acceptance remain open.
 
+### Verify retained assessments in fixture throughput reports — Roadmap A checkpoint #1299
+
+After the timed serial or parallel workload, the benchmark checks that each
+fixture observation retained exactly one AI assessment linked to its run,
+host and model. It checks the fixture result, evidence snapshot and saved
+input trail against the captured provider inputs, including the collected
+evidence and second input for subjects that requested a follow-up. The
+assessment summary includes counts of verified subjects, input stages and
+follow-up subjects. If durable records are missing or differ, the benchmark
+exits before emitting throughput.
+
+These checks apply to the disposable SQLite and MySQL fixtures. They do not
+change runtime triage or the report comparator. Production measurements and
+the broader capability acceptance remain open.
+
 ### Advisory plan result-persistence timing — Roadmap A checkpoint #1176
 
 Incident and startup plan runs record a retained `result_persistence` timing
@@ -4146,6 +4328,15 @@ format. Worker fixtures exercise both plan types through a successful write,
 a failed write, an invalid response and a refusal. Existing plan state,
 evidence, manual approval and provider accounting retain their behavior.
 Production throughput and release-plan timings remain separate.
+
+### Consistent timing samples during retention - Roadmap A checkpoint #1449
+
+The timing summary selects the bounded run and event samples in one database
+statement for process triage and update scoring. A concurrent retention pass
+can remove both from the next response. It no longer makes a single response
+count a pruned run as missing a timing sample. The summary preserves the
+existing run and event limits, newest-event order, malformed-event counts,
+redaction and access checks. Roadmap A remains incomplete.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -6518,6 +6709,73 @@ exist, and performs no I/O.
 **Not covered:** `/etc/inittab.d` parsing, agent collection, catalog wiring,
 persistence, baselines and alerts, UI, provenance, AI classification and
 native acceptance. No schema, API, auth or response-authorization change.
+
+### openbsd-inetd configuration contract — worker checkpoint #1114
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/inetd_conf.py` is a pure, versioned contract for `/etc/inetd.conf`.
+inetd listens on each configured socket and, for every connection or datagram,
+starts the configured program as the configured user, or answers with a
+built-in service. A line such as `31337 stream tcp nowait root /bin/sh sh -i`
+is a root shell on a port. The contract takes the captured file text and
+performs no I/O, name lookup or response action.
+
+- **Source.** `inetd.c` in openbsd-inetd 0.20221205 with the Debian patches
+  applied (Ubuntu `openbsd-inetd_0.20221205-3build5`). The orig tarball's
+  sha256 is `2d53137f…8ab5a` and the debian tarball's is `4c34c5bc…7e5b`. The
+  packaged systemd unit runs `/usr/sbin/inetd` without arguments. The rules
+  come from reading that source; no compiled inetd was run.
+- **Lines.** `fgets` reads 1023-byte pieces. Only a piece whose *first* byte
+  is `#` is a comment; an indented `#` is parsed as fields. Fields split at
+  spaces and tabs only. When a line runs out, an indented next line continues
+  the entry, so a blank line followed by an indented line starts an entry.
+- **Fields.** `host:` prefixes (`[v6]:`, `:` for `*`, comma-separated host
+  lists), `host:` default-host lines, `stream`/`dgram` (other socket types
+  never listen), protocol with `,sndbuf=`/`,rcvbuf=` sizes, `wait`/`nowait`
+  with a `.max` rate (invalid values fall back to the `-R` default of 256 per
+  60 s), `user` with `.group` or `:group`, the program or `internal`, and at
+  most 20 arguments (extra arguments are dropped and counted). With no
+  arguments, argv[0] is the program's base name. Built-ins (`echo`, `discard`,
+  `time`, `daytime`, `chargen`) run inside inetd as root and never wait.
+- **IPv4 and IPv6.** Debian's `default_v4v6` patch loads a protocol without a
+  trailing `4` or `6` twice, as IPv4 and then as IPv6 with `6` appended. The
+  IPv6 pass re-parses only a saved copy of the entry's first physical line.
+  Arguments on continuation lines are therefore missing from the IPv6 copy,
+  and a field missing from that line rejects it. The copy is parsed in place,
+  so `skip()` and the host parser leave NUL bytes in it: when a re-parse fails
+  before the protocol, the next one reads the line cut at the first NUL and can
+  take a later continuation line as the rest of the entry (for example an IPv6
+  root shell after a malformed protocol). When a re-parse consumes no line and
+  leaves the copy unchanged, inetd repeats it forever; this is reported as a
+  blocking gap. A literal address of the wrong family drops that listener.
+- **Merging and spawn.** A later entry with the same service, host, protocol
+  and address replaces the earlier one's user, group, program, argv and rate.
+  It takes the wait mode only when the earlier entry was `wait` or the later
+  one is `nowait`, and never from a built-in. The first entry's socket type and
+  built-in stay. A root user's group is ignored, because inetd sets root's own
+  primary group. `execv` runs the program path as written, and relative paths
+  are flagged.
+- **Each service reports** its line(s), host and address, family, port or unix
+  socket path, socket type, protocol, RPC versions and program, wait mode, rate
+  limit, user and group, built-in or program and argv, a root flag and any
+  name lookup it needs. The root flag is `true` for `root` and built-ins and
+  `null` otherwise, because uid mapping is not observed. Rejected entries
+  record inetd's reason: `syntax_error`, `unknown_internal_service`,
+  `malformed_buffer_option`, `too_many_buffer_sizes`, `invalid_buffer_size`,
+  `no_rpc_version`, `bad_rpc_version` or `no_resolvable_address`.
+- **Fail closed.** An unobserved or unreadable file, NUL bytes, invalid UTF-8
+  and over-limit input mark the result incomplete. So does a buffer size inetd
+  parses by reading past the end of its string (a digits-only last size such
+  as `,rcvbuf=65536`); that service is `unresolved`. An absent file means the
+  packaged unit does not start inetd. Name lookups (`/etc/services`,
+  `/etc/rpc` and host names) are listed per service as non-blocking gaps.
+  Every result also names what it cannot observe: whether inetd runs and with
+  which options or file, uid mapping, kernel IPv6 support, socket binding, and
+  program contents and working directory. `origin` is always `not_assessed`.
+
+**Not covered:** xinetd, agent collection, catalog wiring, persistence,
+baselines and alerts, UI, provenance and AI classification. No schema, API,
+auth or response-authorization change.
 
 ### Startup mechanism catalog and coverage contract — worker checkpoint #723
 
@@ -9161,6 +9419,13 @@ The faster-triage program remains unfinished. This batch selects a runtime
 concurrency increment independently of the larger authenticated-context/cache
 program; none of the v1.21.0 context gaps become cache eligibility.
 
+Worker checkpoint (#1108): the leader skips idle update-scoring submissions
+when scoring is disabled. A previously running score still receives recovery
+through its ordinary execution lock. Enabled scoring keeps alternating with
+triage. With one executor slot and scoring off, the deterministic scheduler
+fixture dispatches triage on all four five-second ticks instead of two. This
+measures dispatch cadence. It does not measure production throughput.
+
 `MRPATCHY_AI_CONCURRENCY` sizes the real shared AI executor from 1–8 tasks, default
 4. Independent servers can overlap full one/two-stage process investigations.
 Only one process investigation per host is admitted across supported workers,
@@ -10163,6 +10428,18 @@ followed by safe crash/restart investigation #104. Issue #103 remains a policy q
 #98 and #96 remain lower-impact maintenance/roadmap work. Faster-AI roadmap development
 resumes only after these higher-priority actionable fixes.
 
+
+### Advisory-plan eligibility during server pause — Roadmap A checkpoint #1355
+
+Investigations now reports the earliest future retry on an active server with
+AI resumed. Paused plans retain their recorded dates in the by-purpose
+details. The combined next-eligibility time uses the eligible date; a queue
+with only paused plans directs the administrator to resume server AI. The
+admin status derives both dates from the existing grouped query.
+
+The window describes queue timing. Shared admission and worker capacity still
+govern the actual start. Older controllers expose their date as a recorded
+retry. Queue and provider behavior retain the existing execution controls.
 
 ## v1.35.3 — Deferred advisory-plan contract and status corrections
 
@@ -11513,6 +11790,21 @@ This measures the loopback benchmark on a disposable database. A reported
 throughput figure is fixture-only. Representative live-provider and production
 failover measurements remain open.
 
+### Transport latency in triage fixture comparisons — Roadmap A checkpoint #1120
+
+Run `python tools/compare_ai_benchmarks.py serial.json parallel.json --provider-transport`
+to add a separate p50/p95 comparison for the persisted provider transport
+timing. The usual workload equivalence checks still run first. Both reports
+must contain one valid timing sample per provider call. This transport
+measurement excludes receipt and usage persistence, which contribute to the
+existing, wider provider-call measurement.
+
+The retained SQLite loopback records have 30 transport samples per report.
+Cross-server p95 was 26.738 ms serial and 58.657 ms parallel. Same-server p95
+was 27.447 ms serial and 59.814 ms parallel. These figures describe the
+retained fixture runs. Matched live-provider timings and production throughput
+remain open. The original comparison reports still reproduce without the flag.
+
 ### AI control mode in triage benchmark reports — worker checkpoint #1061
 
 Before this change, `tools/benchmark_ai.py` stored a fixture config without
@@ -11928,8 +12220,25 @@ because it carries endpoint text.
 - **Unchanged:** a rejected payload never blocks alert collection. The raw
   `integrity` alert, `host.integrity` and patching gates are unchanged. Nothing
   is acknowledged, remediated or authorized, and there is no schema change.
-- **Remaining:** a configurable threshold, and a native agent sweep-stall
-  acceptance test.
+- **Remaining:** ~~a configurable threshold~~ (addressed by the #1265 worker
+  checkpoint below), and a native agent sweep-stall acceptance test.
+
+### Configurable hash-sweep stall threshold — worker checkpoint #1265
+
+Closes the "configurable threshold" item from checkpoint #794: the admin-only `integrity-sweep`/`hash-sweep-stalled` notice no longer waits a fixed 30 minutes.
+
+- **Setting:** Settings → Patch policy adds **Hash-sweep stall notice after · minutes**, whole minutes from 10 to 1440, default 30. The minimum stays well above the 360-second ingest check so a slow sweep does not flap. The settings finder matches "hash sweep" and "integrity".
+  - `PUT /api/settings/patching` takes an optional, strictly-integer `integrity_sweep_stalled_minutes`. Out-of-range or non-integer values return 422, and clients that omit the field keep the stored value.
+  - A change appends `hash-sweep stall notification threshold changed from A to B minutes` to the existing admin-only settings audit row. Saving the same value adds nothing.
+  - `GET /api/settings` reports the effective value. A missing or invalid stored value falls back to 30 (`integrity_sweep_notifications.stalled_minutes`), so a bad value never silences the notice.
+  - The value lives in the existing `config` setting, so there is no schema change.
+- **Producer:** `operations.collect_alerts` passes its configuration to `integrity_sweep_notifications.publish`, and `classify` uses the configured threshold for `overdue`.
+  - The fixed reason text names the configured minutes. At 30 minutes it is byte-identical to the previous text, so active events gain no revision on upgrade.
+  - A threshold change rewrites the text of a still-qualifying active event once.
+  - Raising the threshold above a server's current stall resolves its event, and the same event reopens if the stall later passes the new threshold.
+- **Unchanged:** the `future` category, the 360-second `host.integrity` ingest check and the patching hold it causes, the raw `integrity` SMTP/webhook alert, roles, CSRF, the admin-only audience and response authorization. The notice stays advisory.
+- **Validation:** `tests/test_integrity_sweep_threshold.py` has 8 tests, all failing on main `7a165a60` and passing after (the `future` test is a behavioral control that fails on main only because the setting does not exist). `tests/ui_settings_hash_sweep.cjs` fails on main and passes after; it covers the finder match, the default value, browser range validation with no request sent, the save round-trip, reload, and no horizontal scroll at 320, 768 and 1440 px. The existing sweep, telemetry-loss, operational-notification, route-role and settings tests pass.
+- **Remaining:** a native agent sweep-stall acceptance test.
 
 
 ### External alert-delivery failure notifications — worker checkpoint #792
@@ -12320,6 +12629,13 @@ The notification center adds a **Status** filter (All statuses / Active / Resolv
 - **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
 ### Daily-cap window in the Investigations worker status — worker checkpoint #876
 
+Roadmap A checkpoint #1407 caps the legacy automatic-plan tick's history read
+at its ten-job allowance. The count stays exact below the cap and a saturated
+window still queues no plans. The worker applies the same incident/startup
+action filter and strict one-hour cutoff. Status reads continue to show full
+counts and retry deadlines. The real tick regression verifies empty, nearly
+full, full and overfilled windows on SQLite and MySQL.
+
 The admin-only **AI worker status** card on Investigations now shows the full daily-cap window from the existing `budget` object of `GET /api/investigation-status`. It previously showed only counted, remaining and uncertain spend.
 - **Amounts:** cap, counted, settled, reserved, uncertain and remaining. Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled.
 - **Reconciliation:** when transmitted calls await a usage receipt, the card shows their count and the oldest reservation time, and notes that their full ceiling stays counted until reconciliation. When the count is 0, nothing is added.
@@ -12327,6 +12643,21 @@ The admin-only **AI worker status** card on Investigations now shows the full da
 - **Safety:** malformed amounts, counts or times render as "Unavailable". Text is escaped. Nothing appears while no cap is enabled.
 - **Unchanged:** the API, schema, roles (admin-only per #230), admission and reservation behavior, and Settings.
 - **Validation:** `tests/ui_ai_budget_status.cjs` covers authoritative, recheck-boundary, disabled and malformed/injection payloads at 320, 768 and 1440 px. It times out on main and passes on the change.
+
+### Disclose a capped triage reset as a recheck — Roadmap A checkpoint #1268
+
+At an exhausted daily cap, the admin Investigations worker status reports a
+timed retry only if the shared budget snapshot confirms the configured reset
+is authoritative. If reservations from an earlier budget window overlap the
+reset, the status explains that those reservations can still count and the cap
+card shows the configured reset as a recheck. The ledger, role checks, reservations
+and queue admission retain their existing behavior.
+
+The SQLite and MySQL acceptance uses persisted entries in a current or
+overlapping window and compares both admin status routes. At the configured
+reset the overlapping reservation remains counted until its original window
+closes. This checkpoint covers the current queue status. The proposed Settings
+change preview is tracked separately in #1267.
 
 ### Free exact known-good hits under an exhausted daily cap — worker checkpoint #1030
 
@@ -12530,6 +12861,56 @@ samples. Compatibility: admin-only as before, no schema, collection, admission,
 budget or response-authorization change. Matched serial/parallel production
 throughput remains open.
 
+### incron table contract — worker checkpoint #1132 (roadmap F)
+
+incrond runs a command whenever an inotify event fires on a path named in an incron table. System tables in `/etc/incron.d` run as root. Per-user tables in `/var/spool/incron/<user>` run as that user, subject to `/etc/incron.allow` and `/etc/incron.deny`. Neither the startup catalog nor any contract covered them, so these event-triggered commands were invisible.
+
+- **Change:** a new pure module, `app/incron_tables.py`. It takes captured `incron.conf` text, table-directory listings, table text, allow/deny state and the account names. It reports which tables load, and for each entry the watched path, event names, flags, command, user and shell.
+- **Reference:** the rules follow incron 0.5.12 source (`incrontab.cpp`, `strtok.cpp`, `incroncfg.cpp`, `icd-main.cpp`, `usertable.cpp` and `usertable.h`):
+  - **Configuration:** `incron.conf` keeps the *first* value of a repeated key. A `#` starts a comment only at the start of a line, after optional blanks. A line over 1022 bytes stops reading.
+  - **Table discovery:** tables load only when `d_type` is `DT_REG`, or when `stat` reports a regular file for `DT_UNKNOWN`. Symlinks are skipped where `d_type` is reported. Dot-named system tables are skipped. An unopenable system directory is ignored. An unopenable user directory stops incrond.
+  - **User access:** a user table needs a `getpwnam` account and `IncronTab::CheckUser` approval. If the allow file exists, only listed users run. Otherwise, a deny file refuses the users it lists. Any other open failure refuses.
+  - **Table parsing:** tables have no comment syntax and are read in 999-byte `fgets` pieces. The two-delimiter tokenizer toggles its escape state twice per character, so `\ ` does not keep a space in the path.
+  - **Mask field:** a mask that starts with a decimal number (`%lu`) is used raw, with default flags. Unknown mask words contribute nothing.
+  - **Execution:** system commands run through `system()` (`/bin/sh -c`) as root. User commands run through `/bin/bash -c` after `setgid`/`initgroups`/`setuid`. For a non-root user the environment is reset first.
+  - **Loop suppression:** it needs the `LOOPER` build flag, which 0.5.12 does not define. `loopable` is therefore recorded but has no runtime effect.
+- **Gaps, never reported as covered:** each of these marks the affected table `unresolved`:
+  - unobserved configuration, listing, entry type, table text, account list or allow/deny state;
+  - malformed or duplicate listing names;
+  - invalid UTF-8 and NUL bytes;
+  - the 64 KiB text, 1024-entry listing and 512-entry table caps.
+- **Unobserved, stated in every result:**
+  - whether incrond runs, and a `-f` alternative configuration;
+  - which events occur;
+  - wildcard and recursive-watch expansion;
+  - per-user path access, which silently discards events;
+  - the contents of the programs the commands run.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_incron_tables.py` has 14 tests and cannot run on main, where the module does not exist. Three mutations are each caught: loading dot-named system tables, a single-toggle (working) escape in the tokenizer, and last-value-wins configuration. The tokenizer and parsing rules were ported by reading the source. Compiling the upstream source against the tests was not possible in the worker environment.
+- **Remaining:** collection wiring into the startup inventory, a startup catalog entry, provenance against the incron package's shipped files, and UI.
+
+### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
+
+`grub-mkconfig` (`grub2-mkconfig` on RPM families) runs as root whenever the GRUB configuration is regenerated. That includes `update-grub`, GRUB's maintainer scripts and, on Debian and Ubuntu, every kernel install or removal through `/etc/kernel/postinst.d/zz-update-grub`. Each run sources `/etc/default/grub` (and, on Debian, `/etc/default/grub.d/*.cfg`) as shell, then runs the executable scripts in `/etc/grub.d`, whose output becomes `grub.cfg`. Neither the startup catalog nor any contract covered this root execution path.
+
+- **Change:** a new pure module, `app/grub_mkconfig.py`. From captured directory listings, entry types, mode bits and symlink-target observations, it reports which files are sourced, which scripts run and in which order, and why the other entries do not run.
+- **Reference:** GRUB 2.06/2.12 `util/grub-mkconfig.in` and `grub-mkconfig_lib.in`, checked against `grub-common` 2.12-1ubuntu7.3.
+  - `/etc/default/grub` is sourced when `test -f` succeeds. On Debian, each `/etc/default/grub.d/*.cfg` that passes `-e` is then sourced in glob order. A `.cfg` path that exists but is not a regular file is reported as a non-blocking `source_non_file` shell error.
+  - A script is skipped when its name ends in `~` or is `#…#`.
+  - `grub_file_is_not_garbage` requires `test -f`, so symlinks are followed. It rejects `*.dpkg-*`, `*.rpmsave`, `*.rpmnew`, `README*` and `*.sig`.
+  - For root, `test -x` succeeds when any execute bit is set.
+  - The glob skips dot-names. dash (Debian `/bin/sh`) orders it by bytes. bash (RPM `/bin/sh`) uses locale collation, so the order is flagged `order_locale_dependent` whenever punctuation-insensitive, case-folded collation could reorder the names.
+- **Gaps, never reported as covered:** an unknown family; an unobserved, unreadable or mismatched listing; an unobserved entry type, mode, symlink target or `/etc/default/grub`; malformed or duplicate entries; and the 1024-entry cap.
+- **Unobserved, stated in every result:**
+  - script and sourced-file contents, and each script's interpreter;
+  - mount options, ACLs and security modules that can make `test -x` fail;
+  - wrapper or distribution changes to the directories;
+  - a sourced file that ends the run early;
+  - which events regenerate the configuration on the host.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_grub_mkconfig.py` has 16 tests. One copies the reference sourcing and script loop verbatim and runs it under `/bin/sh` against a fixture tree, comparing which files are sourced and run and in what order. Four mutations are each caught: matching dot-names, requiring the owner execute bit, treating a lone `#` as an autosave file, and treating bash glob order as certain.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the GRUB packages' shipped scripts, and UI.
+
 ### Observed provider overlap in fixture comparisons (#1092, roadmap A)
 
 Comparison reports show each input's peak simultaneous fixture provider requests
@@ -12603,6 +12984,18 @@ The dnf-plugins-core `post-transaction-actions` plugin makes root run shell comm
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dnf_actions.py` has 30 tests. The module does not exist on main, so they cannot run there. A randomized test runs the plugin's own `_parse_actions` logic with the real `glob` on 300 fixture directories, built with comment, colon, case, whitespace, `\r`, `\f` and U+2028 edge cases, and requires identical actions. Ten mutations are each caught: per-part stripping, hidden-file eligibility, `splitlines()` instead of `readlines()`, `;` comments, case-insensitive keys, no quote trimming, a case-insensitive state, a normalized `actiondir` glob, missing NUL handling, and installation precedence.
 - **Remaining:** agent collection, a DNF 5 actions contract, a catalog parse-level update after collection, and UI.
+
+### Interrupted package scoring in AI Activity — Roadmap A checkpoint #1115
+
+The scoring queue summary shows an exact current package attempt as waiting to
+retry when worker recovery has recorded its linked scoring run as interrupted.
+It reports the existing one-hour eligibility boundary. A live, missing or older
+run link cannot supply evidence of interruption for the current attempt.
+
+The regression compares counts before and after the retry boundary and verifies
+that reading the summary leaves the score intact. If the worker stops before
+linking its run, the summary has no run state for that attempt. Independent
+scoring admission and native fleet throughput acceptance remain open.
 
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
@@ -12744,6 +13137,29 @@ never reads a sourced file.
   - argument validation of non-mail directives (the contract over-reports, never under-reports);
   - a real-binary differential;
   - agent collection, a catalog entry, provenance, UI and AI classification.
+
+### auditd dispatcher-plugin contract — worker checkpoint #1217
+
+`app/auditd_plugins.py` is a pure, versioned, I/O-free roadmap F contract. It works from observations of `/etc/audit/auditd.conf`, the effective plugin directory and stat metadata for the plugin programs. It reports which programs auditd's built-in dispatcher forks and `execve`s as root on every auditd start and reconfigure, with which arguments, and why every other plugin file starts nothing.
+
+- **Source of the semantics:** audit-userspace `v3.1.2`, the version Ubuntu 24.04 ships: `audisp/audispd.c`, `audisp/audispd-pconfig.c`, `src/auditd-config.c`, `src/auditd.c` and `common/strsplit.c`.
+  - **Plugin directory:** the last `plugin_dir` line wins over `/etc/audit/plugins.d`. Names starting with `.` or containing more than one `.` are skipped. No `.conf` suffix is required.
+  - **Plugin files:** each must be root-owned, not world-writable and regular after following symlinks.
+  - **Line reading:** the 160-byte `fgets` buffer means lines of 159 bytes or more are skipped. An unterminated last line is skipped, and so are NUL-hidden newlines together with the line after them.
+  - **Tokenizing:** words are split on spaces only. Words after the option are dropped. A missing `=`, an unknown keyword, an option on a keyword other than `args`, or an invalid value rejects the whole file.
+  - **Values:** `builtin_*` paths map to `/sbin/audisp-af_unix`. For other paths, glibc `dirname` must be at least four bytes. For every keyword the last line wins.
+  - **Start check:** an active plugin starts only if `stat` of its path finds a root-owned regular file with every `0750` bit set. It then runs with `execve(path, [path, args≤2], NULL)`: no shell, no `PATH` search and an empty environment.
+- **Fail closed:** blocking gaps cover an unobserved or unreadable `auditd.conf`, plugin directory, entry or program; entries that are FIFOs or devices; malformed input; and over-limit input.
+- **Validation:** `tests/test_auditd_plugins.py` has 61 tests.
+  - Its 21 parse vectors were checked against the real `load_pconfig`, compiled from the v3.1.2 source with a logging stub.
+  - A random differential against that build gave 0 mismatches over 10,000 cases, with real program files covering each permission and ownership case.
+  - The differential catches four mutations: wrong mode bits, wrong buffer size, wrong `dirname`, and treating tab as a separator.
+  - `glibc_dirname` matches libc `dirname` on all 5,461 exhaustive short paths.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:**
+  - Agent collection of `auditd.conf`, the plugin directory and program stats.
+  - A catalog entry, package provenance, UI and AI classification.
+  - Validation of the auditd.conf keywords other than `plugin_dir`. An invalid file can only stop auditd, so the contract may over-report but never under-report.
 
 ### mdadm alert-program contract — worker checkpoint #1213 (roadmap F)
 
@@ -12956,6 +13372,19 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
 
+### Startup catalog entries for contract-modelled hooks — worker checkpoint #1273 (roadmap F)
+
+The dhclient (#1063), needrestart (#1148), smartd (#1207), resolvconf (#1199), certbot (#1229), apcupsd (#1243), NUT upsmon (#1247) and supervisord (#1259) checkpoints, and the acpid event contract, each left "a catalog entry" as remaining work. `app/startup_catalog.py` did not list their locations, so `coverage()` never reported them, not even as `not_collected`.
+
+- **Change:** nine mechanism IDs: `dhclient_hooks`, `needrestart_hooks`, `resolvconf_hooks`, `certbot_hooks`, `acpid_events`, `apcupsd_events`, `nut_upsmon`, `smartd_warnings` and `supervisord`. Each lists the locations its contract reads. The trigger is `event`, except `schedule` for certbot's renewal run and `boot` for supervisord.
+- **Families:** dhclient, needrestart and resolvconf are Debian only. NUT uses `/etc/nut` on Debian and `/etc/ups` on RPM. smartd uses `/etc/smartd.conf` and the `smartmontools` run and warning directories on Debian, and `/etc/smartmontools/smartd.conf` on RPM. supervisord uses `/etc/supervisord.conf` on both, plus `/etc/supervisor` on Debian and `/etc/supervisord.d` on RPM. certbot, acpid and apcupsd use the same paths on both.
+- **Fail closed:** every new mechanism is `parse: metadata`, because no collector feeds its contract yet. Under today's agent scope each one is `not_collected` with a `locations_not_collected` gap, never `covered` or `absent_reported`. A narrower collected root is `partial`.
+- **Additional scope:** `validate_additional_scope` now rejects administrator paths that overlap these locations with `overlaps_catalog_location`, as for every other catalog location. The module is not called from the running application, and the agent's own `validate_custom_paths` is unchanged, so no stored or running scope changes.
+- **Unchanged:** existing mechanism IDs, locations and states, `CONTRACT_VERSION`, the agent, schema, scheduling, AI, roles and response authorization.
+- **Validation:** five new tests in `tests/test_startup_catalog.py`, 11 cases in all with the parametrized ones. All 11 fail on main `c3ce48da` and pass after the change, and the 55 existing tests still pass (66 passed).
+- **Remaining:** agent collection of these locations, wiring their contracts into the startup inventory, package provenance, persistence, UI and AI classification.
+
+
 ### cloud-init script-directory contract — worker checkpoint #1271 (roadmap F)
 
 cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` final-stage modules run every executable entry of `/var/lib/cloud/scripts/per-boot`, `per-instance` and `per-once` as root: at every boot, once per instance ID (again after it changes, for example on a cloned image), and once. The startup inventory and catalog did not model these directories.
@@ -12968,6 +13397,17 @@ cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` f
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.
 
+
+### LightDM seat-script contract — worker checkpoint #1301 (roadmap F)
+
+LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-script`, `session-setup-script` and `session-cleanup-script` as root at every display start and stop, greeter start, user login and logout. They are set in `lightdm.conf`, in `lightdm.conf.d` drop-ins under the XDG data and config directories, and in per-seat `[Seat:<glob>]` sections. The startup inventory did not model them.
+
+- **Change:** the pure `app/lightdm_scripts.py` takes captured file text and captured `lightdm.conf.d` listings. For each assumed seat name (default `seat0`) it returns the effective command for each script, its source file and section, its SHA-256 and whether the value reads as unset. It performs no I/O and never runs a command.
+- **Fidelity:** it follows LightDM 1.30.0 `config_load_from_standard_locations`. XDG data directories load first, then XDG config directories, each in reverse order. `/etc/lightdm/lightdm.conf.d` loads next and `/etc/lightdm/lightdm.conf` last. Only `.conf` names are read, in `strcmp` order. It also follows LightDM's `[SeatDefaults]` alias, the `[Seat:*]` then matching `[Seat:<glob>]` order (`g_pattern_match_simple`), and `g_key_file_get_string` unescaping, where an invalid value unsets the script. A drop-in that GKeyFile refuses is skipped whole. A main file that GKeyFile refuses is `config_error` with no scripts, because LightDM exits.
+- **Fail closed:** an unobserved file or directory listing, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. The GLib default XDG directories are assumed unless others are passed. Real seat names, the service environment and how `g_shell_parse_argv` splits the command are listed as not observed. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.
 
 ### OpenRC local.d contract — worker checkpoint #1447 (roadmap F)
 
