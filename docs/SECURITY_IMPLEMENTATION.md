@@ -13271,6 +13271,19 @@ supervisord starts every `[program:x]`, `[eventlistener:x]` and `[fcgi-program:x
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
 
+### Startup catalog entries for contract-modelled hooks — worker checkpoint #1273 (roadmap F)
+
+The dhclient (#1063), needrestart (#1148), smartd (#1207), resolvconf (#1199), certbot (#1229), apcupsd (#1243), NUT upsmon (#1247) and supervisord (#1259) checkpoints, and the acpid event contract, each left "a catalog entry" as remaining work. `app/startup_catalog.py` did not list their locations, so `coverage()` never reported them, not even as `not_collected`.
+
+- **Change:** nine mechanism IDs: `dhclient_hooks`, `needrestart_hooks`, `resolvconf_hooks`, `certbot_hooks`, `acpid_events`, `apcupsd_events`, `nut_upsmon`, `smartd_warnings` and `supervisord`. Each lists the locations its contract reads. The trigger is `event`, except `schedule` for certbot's renewal run and `boot` for supervisord.
+- **Families:** dhclient, needrestart and resolvconf are Debian only. NUT uses `/etc/nut` on Debian and `/etc/ups` on RPM. smartd uses `/etc/smartd.conf` and the `smartmontools` run and warning directories on Debian, and `/etc/smartmontools/smartd.conf` on RPM. supervisord uses `/etc/supervisord.conf` on both, plus `/etc/supervisor` on Debian and `/etc/supervisord.d` on RPM. certbot, acpid and apcupsd use the same paths on both.
+- **Fail closed:** every new mechanism is `parse: metadata`, because no collector feeds its contract yet. Under today's agent scope each one is `not_collected` with a `locations_not_collected` gap, never `covered` or `absent_reported`. A narrower collected root is `partial`.
+- **Additional scope:** `validate_additional_scope` now rejects administrator paths that overlap these locations with `overlaps_catalog_location`, as for every other catalog location. The module is not called from the running application, and the agent's own `validate_custom_paths` is unchanged, so no stored or running scope changes.
+- **Unchanged:** existing mechanism IDs, locations and states, `CONTRACT_VERSION`, the agent, schema, scheduling, AI, roles and response authorization.
+- **Validation:** five new tests in `tests/test_startup_catalog.py`, 11 cases in all with the parametrized ones. All 11 fail on main `c3ce48da` and pass after the change, and the 55 existing tests still pass (66 passed).
+- **Remaining:** agent collection of these locations, wiring their contracts into the startup inventory, package provenance, persistence, UI and AI classification.
+
+
 ### cloud-init script-directory contract — worker checkpoint #1271 (roadmap F)
 
 cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` final-stage modules run every executable entry of `/var/lib/cloud/scripts/per-boot`, `per-instance` and `per-once` as root: at every boot, once per instance ID (again after it changes, for example on a cloned image), and once. The startup inventory and catalog did not model these directories.
