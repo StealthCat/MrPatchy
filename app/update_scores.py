@@ -6,6 +6,7 @@ import time
 from typing import NamedTuple
 from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
+from sqlalchemy import Boolean, column, literal
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy, ai_retry
@@ -36,6 +37,24 @@ class UpdateScore(Base):
 
 BLOCKED_SUFFIX=(' No automatic retry is scheduled until the saved AI model or API key changes; '
     'the exact package evidence remains queued.')
+
+
+# A refusal and token-budget exhaustion reached the provider (#1158/#1162), so neither
+# may read as a key problem or as "nothing was sent". Eligibility is unchanged: the
+# configuration signature still re-admits on a model or key change.
+MODEL_REFUSAL_EXPLANATION=('The AI model declined to score these package updates. The request was sent and may be '
+    'billed. Changing the API key does not help; a different model may score them.')
+TOKEN_BUDGET_EXPLANATION=('The AI model used its whole response token budget before finishing these update scores. '
+    'The request was sent and may be billed. Select a model that completes within Mr Patchy\'s scoring budget. '
+    'Changing the API key does not help.')
+
+
+def blocked_explanation(error):
+    """Explanation stored on every package of a blocked batch (#1162)."""
+    cause=getattr(error,'cause',None)
+    if cause==ai.MODEL_REFUSAL:return MODEL_REFUSAL_EXPLANATION+BLOCKED_SUFFIX
+    if cause==ai.TOKEN_BUDGET:return TOKEN_BUDGET_EXPLANATION+BLOCKED_SUFFIX
+    return ai_runs.safe_error(error)+BLOCKED_SUFFIX
 
 
 def blocked_by(error):
@@ -181,19 +200,41 @@ def scoring_candidates(s):
                 host, memo = entry
                 current.append((package, host, cached_identity(host, package, memo)))
         if not current:continue
-        score_state=select(UpdateScore).options(load_only(UpdateScore.id,UpdateScore.host_id,
-            UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,UpdateScore.configuration,raiseload=True))
-        scores={r.id:r for r in s.scalars(score_state.where(UpdateScore.id.in_([key for _,_,key in current])))}
-        scopes={(p.host_id,p.name) for p,_,_ in current};deferred={}
-        for row in s.scalars(score_state.where(UpdateScore.state=='deferred',
-                tuple_(UpdateScore.host_id,UpdateScore.name).in_(scopes))):
-            deferred.setdefault((row.host_id,row.name),[]).append(row)
+        fields = (UpdateScore.id, UpdateScore.host_id, UpdateScore.name, UpdateScore.state,
+                  UpdateScore.attempted, UpdateScore.next_at, UpdateScore.configuration)
+        keys = [key for _, _, key in current]
+        scopes = {(package.host_id, package.name) for package, _, _ in current}
+        exact = select(*fields, literal(False).label('scope_match')).where(UpdateScore.id.in_(keys))
+        by_scope = select(*fields, literal(True).label('scope_match')).where(
+            UpdateScore.state == 'deferred', tuple_(UpdateScore.host_id, UpdateScore.name).in_(scopes))
+        # Each branch keeps its own indexed filter. The marker preserves both
+        # memberships when the current score is also deferred.
+        score_query = select(UpdateScore, column('scope_match', Boolean)).options(
+            load_only(*fields, raiseload=True)).from_statement(exact.union_all(by_scope))
+        scores = {}
+        deferred = {}
+        for row, scope_match in s.execute(score_query):
+            if scope_match:
+                deferred.setdefault((row.host_id, row.name), []).append(row)
+            else:
+                scores[row.id] = row
         for package,host,key in current:
             yield package,host,key,scores.get(key),deferred.get((host.id,package.name),())
 
 
 def _batch_scores(s, ids):
     return {row.id:row for row in s.scalars(select(UpdateScore).where(UpdateScore.id.in_(ids)))}
+
+
+def needs_dispatch(session):
+    """Schedule enabled scoring or recovery of a previously started run."""
+    settings = config(session)
+    if settings['ai_enabled'] and settings['ai_updates_enabled']:
+        return True
+    run = ai_runs.AIRun
+    return session.scalar(select(run.id).where(
+        run.purpose == 'update_scoring', run.state == 'running',
+    ).limit(1)) is not None
 
 
 def run_one():
@@ -302,7 +343,7 @@ def run_one():
                     row.state='deferred' if deferred else 'blocked' if blocked else 'error';row.next_at=next_at
                     row.configuration=signature if blocked else ''
                     row.explanation=('Queued until shared AI eligibility; no evidence was discarded.' if deferred else
-                        ai_runs.safe_error(error)+(BLOCKED_SUFFIX if blocked else ''))
+                        blocked_explanation(error) if blocked else ai_runs.safe_error(error))
                 s.commit()
             if deferred:ai_runs.defer(run_id,next_at)
     finally:lock.release()

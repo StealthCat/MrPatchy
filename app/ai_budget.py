@@ -101,15 +101,19 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation)
 
 
-def waiting(session,now,payload=None,*,settings=None):
-    """Read-only preflight; final atomic reserve still owns spending authority."""
+def waiting(session,now,payload=None,*,settings=None,quote=None):
+    """Read current headroom, optionally using the caller's preflight quote.
+
+    Only the final atomic reserve prices and authorizes an outbound request.
+    """
     if settings is None:settings=config(session)
     enabled,_name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,settings,now)
     if not enabled:return 0
     if counted>=cap:return reset
-    if payload is not None:
+    if quote is None and payload is not None:
         quote=ai_pricing.reservation(payload)
-        if not quote['ok'] or counted+quote['amount_usd']>cap:return reset
+    if quote is not None and (not quote['ok'] or counted+quote['amount_usd']>cap):
+        return reset
     return 0
 
 
@@ -187,18 +191,33 @@ def release_unsent(identifier,reason,*,pool_timeout_call_id=None):
 
 def reconcile(identifier,values):
     if not identifier:return
+    pricing = values.get('pricing')
+    actual = None
+    if values.get('status') == 'estimated' and isinstance(pricing, dict):
+        try:
+            actual = Decimal(str(pricing.get('estimated_usd')))
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+    if actual is not None and actual.is_finite() and 0 <= actual <= Decimal('1000000'):
+        settlement = dict(status='settled', actual_usd=actual,
+            reason='Reconciled to provider-reported usage using the retained public price snapshot; not an invoice.')
+    else:
+        settlement = dict(status='uncertain',
+            reason=str(values.get('reason') or 'Provider usage or pricing was unavailable; the full reservation remains counted.')[:500])
+    ledger = BudgetEntry.__table__
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if not row or row.status not in ('sent','uncertain'):return
-            try:actual=Decimal(str((values.get('pricing') or {}).get('estimated_usd')))
-            except (InvalidOperation,TypeError,ValueError):actual=None
-            if values.get('status')=='estimated' and actual is not None and 0<=actual<=Decimal('1000000'):
-                row.status='settled';row.actual_usd=actual
-                row.reason='Reconciled to provider-reported usage using the retained public price snapshot; not an invoice.'
+            # Match the stored state exactly, including on MySQL's default collation.
+            state = ledger.c.status
+            if session.get_bind().dialect.name in ('mysql', 'mariadb'):
+                eligible = cast(state, LargeBinary).in_((b'sent', b'uncertain'))
             else:
-                row.status='uncertain';row.reason=str(values.get('reason') or 'Provider usage or pricing was unavailable; the full reservation remains counted.')[:500]
-            row.updated=time.time();session.commit()
+                eligible = state.collate('BINARY').in_(('sent', 'uncertain'))
+            result = session.execute(ledger.update().where(ledger.c.id == identifier, eligible).values(
+                **settlement, updated=time.time(),
+            ))
+            if result.rowcount == 1:
+                session.commit()
 
 
 def mark_uncertain(identifier,reason):
@@ -208,6 +227,11 @@ def mark_uncertain(identifier,reason):
             row=session.get(BudgetEntry,identifier)
             if row and row.status=='sent':
                 row.status='uncertain';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
+
+
+def _survives_reset(now,reset,amount):
+    """Match observed positive spend whose original window outlives this reset."""
+    return and_(BudgetEntry.created<=now,BudgetEntry.reset_at>reset,amount>0)
 
 
 def status(session,now=None):
@@ -220,7 +244,7 @@ def status(session,now=None):
     amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
         else_=BudgetEntry.reservation_usd)
     overlapping=(enabled and session.scalar(select(BudgetEntry.id).where(
-        BudgetEntry.reset_at>reset,BudgetEntry.created<=now,BudgetEntry.status!='released',amount>0).limit(1)) is not None)
+        BudgetEntry.status!='released',_survives_reset(now,reset,amount)).limit(1)) is not None)
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
@@ -321,9 +345,9 @@ def publish_cap_notification(session,cfg,now):
     if capped:
         if counted>=cap:
             message=('The shared daily AI spend cap of $'+_money(cap)+' ('+name+' day) has no remaining safe reservation. '
-                'New paid AI work, including triage, scoring and plans, is deferred, not discarded, until the reset at '+reset_text+
-                ' or until an administrator changes the cap or mode. Counted spend conservatively includes reserved and '
-                'uncertain charges; it is a local estimate, not a provider invoice.')
+                'Queued paid triage, scoring and plans wait for available budget. Recheck the budget at '+reset_text+'. '
+                'Spend from an earlier budget window can still count after this time. '
+                'Counted spend is a local estimate that includes reserved and uncertain charges. Provider invoices can differ.')
             notifications.publish(session,**DAILY_CAP_NOTIFICATION,
                 subject_revision='exhausted:'+name+':'+repr(float(reset))+':'+_money(cap),
                 severity='medium',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
@@ -443,7 +467,8 @@ def by_purpose(session,now=None):
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
     result={'generated_at':now,'mode':mode,'enabled':enabled,'timezone':name if enabled else None,
         'window_start':start if enabled else None,'next_reset':reset if enabled else None,
-        'call_count':0,'counted_usd':'0','groups':[],'limitations':SPEND_PURPOSE_LIMITATIONS}
+        'next_reset_authoritative':False,'call_count':0,'counted_usd':'0','groups':[],
+        'limitations':SPEND_PURPOSE_LIMITATIONS}
     if not enabled:return result
     amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
         else_=BudgetEntry.reservation_usd)
@@ -451,20 +476,22 @@ def by_purpose(session,now=None):
     def bucket(*statuses):
         return _aggregate(session,case((BudgetEntry.status.in_(statuses),amount),else_=zero))
     purpose=case((AIRun.id.is_(None),'unattributed'),(AIRun.purpose.in_(SPEND_PURPOSES),AIRun.purpose),else_='other')
+    retained_spend=func.max(case((_survives_reset(now,reset,amount),1),else_=0))
     query=(select(purpose,func.count(BudgetEntry.id),bucket('settled'),bucket('reserved'),
-        bucket('sent','uncertain'),_aggregate(session,amount))
+        bucket('sent','uncertain'),_aggregate(session,amount),retained_spend)
         .select_from(BudgetEntry).outerjoin(AIRun,AIRun.id==BudgetEntry.run_id)
         # Same predicate as _state so the groups sum to the counted total.
         .where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
         .group_by(purpose))
-    groups={};total=Decimal(0);calls=0
-    for key,count,settled,reserved,uncertain,counted in session.execute(query):
+    groups={};total=Decimal(0);calls=0;overlapping=False
+    for key,count,settled,reserved,uncertain,counted,survives_reset in session.execute(query):
         counted=Decimal(counted or 0);total+=counted;calls+=count
+        overlapping=overlapping or bool(survives_reset)
         groups[key]={'purpose':key,'call_count':count,'settled_usd':_money(Decimal(settled or 0)),
             'reserved_usd':_money(Decimal(reserved or 0)),'uncertain_usd':_money(Decimal(uncertain or 0)),
             'counted_usd':_money(counted)}
-    result.update(call_count=calls,counted_usd=_money(total),
+    result.update(call_count=calls,counted_usd=_money(total),next_reset_authoritative=not overlapping,
         groups=[groups[key] for key in SPEND_PURPOSE_ORDER if key in groups])
     return result
 

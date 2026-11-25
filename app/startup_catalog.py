@@ -156,6 +156,36 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'parse': 'metadata',
      'locations': (_loc('/etc/modprobe.d'), _loc('/run/modprobe.d'), _loc('/usr/lib/modprobe.d'),
                    _lib('/lib/modprobe.d'))},
+    # Event and boot hooks whose pure entry contracts are on main but whose files no collector reads yet (#1273).
+    # They are file metadata only until a collection feeds their contracts.
+    {'id': 'dhclient_hooks', 'label': 'ISC dhclient enter and exit hooks', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': tuple(_loc(f'/etc/dhcp/dhclient-{p}', ('debian',)) for p in
+                        ('enter-hooks', 'enter-hooks.d', 'exit-hooks', 'exit-hooks.d'))},
+    {'id': 'needrestart_hooks', 'label': 'needrestart configuration and hook scripts', 'trigger': 'event',
+     'scope': 'system', 'parse': 'metadata',
+     'locations': (_loc('/etc/needrestart/needrestart.conf', ('debian',)),
+                   *(_loc(f'/etc/needrestart/{d}', ('debian',)) for d in ('conf.d', 'hook.d', 'notify.d', 'restart.d')))},
+    {'id': 'resolvconf_hooks', 'label': 'resolvconf update hooks', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': (_loc('/etc/resolvconf/update.d', ('debian',)), _loc('/etc/resolvconf/update-libc.d', ('debian',)))},
+    {'id': 'certbot_hooks', 'label': 'certbot renewal hooks', 'trigger': 'schedule', 'scope': 'system',
+     'parse': 'metadata', 'locations': (_loc('/etc/letsencrypt/renewal-hooks'),)},
+    {'id': 'acpid_events', 'label': 'acpid event rules', 'trigger': 'event', 'scope': 'system', 'parse': 'metadata',
+     'locations': (_loc('/etc/acpi/events'),)},
+    {'id': 'apcupsd_events', 'label': 'apcupsd event scripts', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata', 'locations': (_loc('/etc/apcupsd'),)},
+    {'id': 'nut_upsmon', 'label': 'NUT upsmon notify and shutdown commands', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata', 'locations': (_loc('/etc/nut', ('debian',)), _loc('/etc/ups', ('rpm',)))},
+    {'id': 'smartd_warnings', 'label': 'smartd warning commands', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': (_loc('/etc/smartd.conf', ('debian',)), _loc('/etc/smartmontools/smartd.conf', ('rpm',)),
+                   _loc('/etc/smartmontools/run.d', ('debian',)),
+                   _loc('/etc/smartmontools/smartd_warning.d', ('debian',)))},
+    {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),
+                   _loc('/etc/supervisord.d', ('rpm',)))},
 )
 
 

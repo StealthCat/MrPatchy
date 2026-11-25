@@ -53,7 +53,9 @@ this workflow does not itself configure repository protection.
 
 Accept a worker's ready handoff and prepare one integration at a time: a single PR, or a batch of up to 8 independent ready PRs as described in AGENTS.md (Batched integration). Review actual scope
 and dependencies, merge current main into the branch without rewriting commits,
-and resolve only understood conflicts. Return substantive or ambiguous fixes to
+and resolve only understood conflicts. A conflict confined to
+`docs/SECURITY_IMPLEMENTATION.md` (legacy appended checkpoints) is resolved by keeping
+every section, existing text first; new checkpoints live in `docs/checkpoints/<issue>.md`. Return substantive or ambiguous fixes to
 the worker. Handle every README/changelog update from the PR notes, validating
 features/installation/usage against the delivered code without adding a current
 version to README. Set a version newer than current main, retaining major 1, and prepend
