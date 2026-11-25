@@ -4483,6 +4483,14 @@ change. The regression also checks expired, orphaned and live lease handling.
 Busy dispatches use one additional bounded read. Production throughput and
 independent scoring acceptance remain open.
 
+The idle probe also skips the lock when its pending or retry rows belong only
+to paused, disabled or deleted servers (#1323). It uses the same host filters
+as the locked election. Expired claims and orphaned runs still trigger recovery
+regardless of host state. A resumed server can be picked up on the next poll.
+The fixtures check four polls per held state, peer and legacy hostless
+admission, and recovery during both pause and disablement. Production impact
+remains unmeasured.
+
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
 This stacked threaded-execution increment replaces the fixed two-lease server bound
@@ -12684,6 +12692,19 @@ reads. The measured improvement is in database round trips. Production load
 time remains unmeasured. Scheduling, provider admission and response
 authorization remain outside this status change.
 
+### Automatic plan readiness snapshot — Roadmap A checkpoint #1423
+
+After checking global AI configuration, automatic plan status reads the listed
+servers' pause policies, operation and response holds, and lifecycle state in
+one statement. The database matches policy and hold identities using its
+configured collation. The per-server endpoint uses the resolved server ID
+when building the same status. Paused policies take precedence over holds,
+and held servers retain that status ahead of inactive servers.
+
+SQLite and native MySQL tests cover the read count, readiness precedence and
+five hold sources. Native MySQL also covers case aliases in saved policy or
+hold IDs and the per-server URL. The status endpoints remain read-only.
+
 ### Shared holds on automatic plan status — Roadmap A checkpoint #1249
 
 Security Coverage and Server → Security show the recorded shared AI start gates alongside
@@ -13038,6 +13059,18 @@ This is a contract increment only. The startup-awareness requirement is still in
 - persistence, UI, provenance and AI classification.
 
 There is no schema, API, authentication or response-authorization change.
+
+### Notification-center deep link — worker checkpoint #1168 (roadmap J)
+
+The #835 checkpoint recorded that the notification center's filters were not in its deep link, so a reload, a copied link or Back reset them. They are now part of the `#notifications` hash.
+
+- **Address:** `#notifications?severity=high&source=scanner&host=<server id>&status=active&unread=1&dismissed=1&page=2`. Defaults are omitted, so the unfiltered first page stays `#notifications`.
+- **History:** Apply, Clear, Previous and Next each add a history entry, so Back/Forward restore the earlier filters, form state and page. The change renders quietly: the current list stays until the new page arrives. Apply with unchanged filters only re-queries. The bell's **View notification center** link and the toast link still open the unfiltered center.
+- **Validation of the hash:** a severity outside the five levels, a source that does not match the existing source pattern, a server that is not in the viewer's server list, an unknown status, `unread`/`dismissed` values other than `1`, and a page that is not 1–10000 are dropped. The hash is then rewritten in canonical form with `replaceState`. A page past the end of the current results opens the last page.
+- **Load race fixed:** on main, opening the center while the shell's live refresh started (sign-in, reload or a link) could leave **Gathering your workspace** on screen. The refresh superseded the center's first request before the list existed and then had nowhere to draw. The refresh now waits until the center has drawn its page.
+- **Unchanged:** the API, schema, roles, per-account read/dismiss state, the bell, unread count, SSE/polling and response authorization. Filtering never acknowledges, resolves or reopens anything. Navigating to the bare `#notifications` address now opens the unfiltered center, where it previously kept the session's last filters.
+- **Validation:** the new `tests/ui_notifications_deep_link.cjs` fails on main `e05bf1b` twice over: at the first open (the load race) and, with only the race fix applied, at the Apply hash assertion. It passes on the branch. It covers Apply, Clear, Next and Previous, Back/Forward with form state, a reload of a fully filtered link, invalid and injected hash values, a page past the end, and no horizontal scroll at 320, 768 and 1440 px. `tests/ui_notifications.cjs` now expects the filtered address after Apply.
+- **Remaining J work:** a filter-wide "mark all matching" is still intentionally not offered (#835 rationale).
 
 ### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
 
@@ -13633,6 +13666,21 @@ snmpd runs configured programs whenever an SNMP manager reads, or for writable e
   `-c FILE[,FILE...]` is now modelled: the last `-c` wins, and its absolute files are read with the snmpd handlers after both types, or before them with a leading `-`. A relative `-c` name, `-C`, `-Y` and `--token=value` stay blocking. `evaluate` still takes its order on trust, so its results carry `read_order_not_derived`.
 - **Validation (increment 2):** 10 more tests (28 in total), traced from `read_config.c`. The amd64 library path and `/var/lib/snmp` are the Debian configure values, and have not yet been checked against a live install.
 - **Remaining (#1327):** model `-C`, derive the type registration order, and run differential validation against the packaged snmpd. Agent collection, a catalog entry, package provenance, persistence, UI and AI classification also remain.
+
+### NRPE command contract — worker checkpoint #1335 (roadmap F)
+
+- **Outcome:** `app/nrpe_commands.py` is a pure, I/O-free contract. From captured `nrpe.cfg` text, the files it includes and the `include_dir` listings, it reports which `command[NAME]` definitions the Nagios NRPE daemon runs when an allowed client asks for `NAME`. For each it gives the defining file and line, any overridden definitions, the `command_prefix`-prefixed `/bin/sh -c` command line and its SHA-256, `$ARGn$` macros, whether `dont_blame_nrpe=1` accepts client arguments, and the account: `nrpe_user`/`nrpe_group` in daemon mode (with a non-root starting account as fallback), or the inetd account. When the effective user or group would still be root, nrpe's `check_privileges` exits, so the contract reports that nrpe does not start rather than commands running as root.
+- **Semantics:** nrpe 4.1.0 `src/nrpe.c` (`read_config_file`, `read_config_dir`, `add_command`, `find_command`, `process_macros`, `my_system`, `drop_privileges`, `check_privileges`):
+  - lines are read in `fgets` chunks of 2046 bytes, with `strtok` name and value splitting;
+  - `command[` anywhere in a name defines a command, and the last definition wins;
+  - `include_dir` reads regular `.cfg` files in byte order (`alphasort`, no `setlocale`), hidden files included, and recurses into non-hidden subdirectories;
+  - a parse error stops only that file, unless it is the main file, in which case nrpe refuses to start;
+  - `$` splits the command line into alternating literal and macro tokens, and a macro token starting with `ARG` selects client argument `atoi(token + 3)`;
+  - the command line holds 2047 bytes, or 2046 with `command_prefix` (`snprintf(..., sizeof - 1, ...)`);
+  - commands run through `popen` after the privilege drop. A failed drop only logs a warning, but `check_privileges` then exits if the effective UID or GID is 0, in daemon and inetd modes alike.
+- **Fail closed:** blocking gaps cover unobserved files or listings, an unobserved invocation or starting group, relative includes, include cycles, truncated paths, failed-`stat` entries, build-dependent `ssl_version=SSLv2` and out-of-range integers. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_nrpe_commands.py` (14 tests) uses vectors derived from the source. Upstream `process_macros`, `my_strsep` and the `raw_command` copy, compiled from the nrpe 4.1.0 tag, agreed with the contract on 20,300 randomized command lines (0 mismatches). The full daemon was not built.
+- **Remaining:** native collection of `nrpe.cfg` and `nrpe.d`, startup-inventory wiring, provenance and AI classification. The build flags (`--enable-command-args`), account resolution and `allowed_hosts` reachability are not observed. A SIGHUP reload re-reads the file without re-running `check_privileges`, so `nrpe_user=root` written after start can take effect until restart.
 
 ### dnsmasq script contract — worker checkpoint #1365 (roadmap F)
 
