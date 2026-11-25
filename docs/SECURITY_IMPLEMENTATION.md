@@ -3352,6 +3352,14 @@ still reads current settings after the queue lock, and the provider reservation
 remains authoritative. This reduces repeated settings reads. Production
 throughput remains unverified.
 
+Capped process triage computes one candidate quote after acquiring the host
+queue gate (#1319). It uses that quote for the whole-cap check and for the
+remaining-headroom check against the freshly read ledger. The provider
+boundary still prices the exact outbound payload and reserves atomically.
+The daily-cap and rate-plus-cap fixtures verify two pricing calls end to end:
+one at claim time and one at the provider boundary. This removes a repeated
+serialization inside the claim lock. Production throughput remains unverified.
+
 The server activity guard reads lifecycle state and revision in bounded batches
 after acquiring its existing ordered locks. Multi-server update scoring can
 check the batch in one database read without loading server inventory or
