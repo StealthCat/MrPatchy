@@ -5,12 +5,13 @@ modes. Only the provider transport and SSH are fixtures.
 """
 import json
 import time
+from contextlib import contextmanager
 
 import httpx
 import pytest
 from sqlalchemy import select
 
-from app import ai, ai_budget, ai_claims, ai_pricing, ai_retry, triage_block_notifications, worker
+from app import ai, ai_budget, ai_claims, ai_pricing, ai_retry, host_lifecycle, triage_block_notifications, worker
 from app.db import Behavior, Host, Session, Setting
 from app.security import seal
 
@@ -85,6 +86,31 @@ def ledger_count():
 
 
 @pytest.mark.parametrize('mode', ['daily_cap', 'rate_and_daily'])
+def test_claim_quotes_once_and_provider_still_reserves_its_exact_payload(admin, monkeypatch, ssh, mode):
+    configure(ai_control_mode=mode, ai_rate_per_hour=3600)
+    add_host('host-a', BIG)
+    provider = Provider()
+    monkeypatch.setattr(ai.transport, 'post', provider)
+    reservation = ai_pricing.reservation
+    quoted = []
+
+    def observe(payload, *args, **kwargs):
+        quoted.append((ai_claims.current.get() is not None, payload))
+        return reservation(payload, *args, **kwargs)
+
+    monkeypatch.setattr(ai_pricing, 'reservation', observe)
+    worker.investigate_one()
+
+    assert [inside_run for inside_run, _ in quoted] == [False, True]
+    assert [quoted[-1][1]] == provider.bodies
+    assert state('subject-host-a')[0] == 'low'
+    with Session() as s:
+        row = s.scalars(select(ai_budget.BudgetEntry)).one()
+        assert row.status == 'settled'
+        assert row.reservation_usd == reservation(provider.bodies[0])['amount_usd']
+
+
+@pytest.mark.parametrize('mode', ['daily_cap', 'rate_and_daily'])
 def test_subject_quote_above_whole_cap_does_not_stall_other_hosts(admin, monkeypatch, ssh, mode):
     big, small = quote(BIG), quote(SMALL)
     assert small < big
@@ -135,6 +161,31 @@ def test_ordinary_exhaustion_still_defers_the_fleet_without_blocking(admin, monk
     assert provider.kinds() == []
     verdict, retry = state('subject-host-a')
     assert verdict == 'pending' and retry is None
+
+
+def test_host_queue_gate_rereads_headroom_after_the_fleet_preflight(admin, monkeypatch):
+    small = quote(SMALL)
+    configure(ai_daily_cap_usd=float(small * 3 / 2))
+    add_host('host-a', SMALL)
+    activity = host_lifecycle.activity
+
+    @contextmanager
+    def commit_after_initial_preflight(hosts, kind):
+        with activity(hosts, kind):
+            assert kind == 'queue'
+            with Session() as s:
+                s.add(ai_budget.BudgetEntry(
+                    id='competing-call', status='uncertain', created=time.time(),
+                    reset_at=time.time() + 3600, reservation_usd=small, timezone='UTC',
+                    model=MODEL, pricing_version='fixture', pricing_source='fixture',
+                ))
+                s.commit()
+            yield
+
+    monkeypatch.setattr(host_lifecycle, 'activity', commit_after_initial_preflight)
+    assert ai_claims.acquire() is None
+    assert state('subject-host-a') == ('pending', None)
+    assert ledger_count() == 1
 
 
 def test_model_change_or_explicit_retry_readmits_an_over_cap_subject(admin, monkeypatch, ssh):
