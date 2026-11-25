@@ -316,7 +316,9 @@ def automatic_candidate(row):
 def automatic_candidate_sql():
     """SQL form of ``automatic_candidate`` for bounded reads (#922): a missing engine is not YARA."""
     engine=Incident.evidence[('scan_context','engine')].as_string()
-    return or_(engine.is_(None),engine!='YARA')
+    # Match Python's exact string comparison even under a folding SQL collation.
+    yara='YARA'.encode('ascii').hex().upper()
+    return or_(engine.is_(None),func.hex(engine)!=yara)
 
 
 def auto_plan_tick(now=None):
@@ -343,15 +345,10 @@ def auto_plan_tick(now=None):
             from .operations import host_quarantined
             enabled=[host for host in enabled if not host_quarantined(s,host)]
             if not enabled:return
-            query=select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),*awaiting_auto_plan()).order_by(Incident.updated,Incident.id)
-            # YARA incidents are never planned automatically, so page past them instead of letting them fill a fixed window.
-            rows=[];offset=0
-            while len(rows)<100:
-                batch=list(s.scalars(query.limit(100).offset(offset)))
-                rows+=[r for r in batch if automatic_candidate(r)]
-                if len(batch)<100:break
-                offset+=100
-            candidates=rows[:100]
+            candidates=s.execute(select(Incident.id,Incident.host_id,Incident.scan_id).where(
+                Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),
+                *awaiting_auto_plan(),automatic_candidate_sql())
+                .order_by(Incident.updated,Incident.id).limit(100)).all()
             if not candidates:return
             occupied=select(Job.id).where(
                 Job.host_id==Incident.host_id,Job.action.in_(['security-plan','startup-plan']),
