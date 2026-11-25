@@ -12994,6 +12994,31 @@ Every CPython start without `-S` imports `site`, including root services. `site`
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_python_site_hooks.py` has 20 tests and cannot run on main, where the module does not exist. A parametrized test runs the real `site.addsitedir` from the local python3.11, 3.12 and 3.13 against one fixture tree. It compares the executed lines, their order and the added `sys.path` entries, including the 3.13-only form-feed split. Six mutations are each caught: case-insensitive names, universal newlines on 3.13, indented or space-less `import` treated as code, unsorted order, dropping `after_code`, and treating non-ASCII bytes as exact on 3.12. Treating a dot-named `.pth` as skipped on 3.11 or 3.12 is also caught.
 - **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against `dpkg` ownership of the shipped `.pth` files and `/etc/python3.X/sitecustomize.py`, RPM-family layouts, and UI.
+### systemd generator contract — worker checkpoint #1151 (roadmap F)
+
+This is a contract increment only. The startup-awareness requirement is still incomplete. The startup catalog lists `systemd_generators` locations, but nothing resolved which generators systemd actually runs. Generators run before any unit is loaded, at every boot and at every `daemon-reload` (including the reloads package installs trigger). A same-named file in `/etc/systemd` or `/run/systemd` replaces or masks a vendor generator. `app/systemd_generators.py` is a pure, versioned contract for this. It takes supplied directory-entry metadata, performs no I/O and never reads a generator's contents.
+
+- **Source.** The rules were read in the systemd sources for v249, v252, v255, v256, v257 and v258: `generator_binary_paths()`/`env_generator_binary_paths()`, `files_add()` in `conf-files.c`, `execute_directories()`, `manager_run_generators()`/`manager_run_environment_generators()`, `null_or_empty()`/`stat_may_be_dev_null()` and `hidden_or_backup_file()`. A version outside v249–v258, or an unobserved version, is a blocking gap.
+- **Kinds and directories.** There are four kinds: system, user, system-environment and user-environment generators. Each searches `/run/systemd/<kind>`, `/etc/systemd/<kind>`, `/usr/local/lib/systemd/<kind>` and then the compiled-in directory, highest priority first. Only `system-generators` uses `<libexecdir>` (`/lib/systemd` on split-usr). An unknown split-usr layout is a blocking `libexec_dir_unknown` gap for system generators only.
+- **Entry rules.**
+  - Hidden and backup names are skipped.
+  - The first directory that yields a name wins, and lower same-named entries are reported as `overridden`.
+  - A mask is an empty regular file, or anything that resolves to a character device (including a device node placed directly in the directory). A mask hides the name in every lower directory. From v258, a dangling symlink whose text is `/dev/null` is also a mask.
+  - An unresolvable, non-regular or non-executable entry is skipped **without** claiming the name, so a lower same-named generator still runs.
+  - Ownership and writability are observations, not skips. So are `/run` placement and overriding a lower entry.
+- **Invocation.** Unit generators start in byte order and run in parallel with the normal, early and late output directories as arguments. Exit codes are ignored, and the build default timeout is 90 s. Environment generators run serially in the same order. System kinds run as root, and user kinds run as each user with a `systemd --user` manager.
+- **Fail closed.** Blocking gaps set `complete` to false: an unobserved, unreadable, truncated or contradictory directory, malformed or duplicate entries, missing metadata, an unobserved symlink target and over-limit input. A generator below a directory that was not fully observed is `higher_directory_unobserved`, never `runs`. A lower entry shadowed by an undetermined one is `shadow_undetermined`; a malformed entry with a valid name is itself undetermined, so it still shadows lower same-name entries, and a malformed entry without a usable name makes every lower generator `higher_directory_unobserved`. `origin` is always `not_assessed`, and no result is a safety verdict.
+- **Validation.** `tests/test_systemd_generators.py` (32 tests) includes a layout built on a real directory with `lstat`/`stat`. Nine mutations are each caught: skipped entries that shadow, reversed priority, no character-device mask, an ignored unobserved higher directory, the v258 threshold, an ignored split-usr layout, no undetermined shadowing, no execute-bit check, and parallel environment generators.
+
+**Not covered:**
+- agent collection;
+- adding the `/run` and environment-generator directories to the catalog's `systemd_generators` locations (a baseline-affecting change left for a later slice);
+- `SYSTEMD_*GENERATOR_PATH` overrides;
+- initrd generators;
+- which users have a user manager;
+- persistence, UI, provenance and AI classification.
+
+There is no schema, API, authentication or response-authorization change.
 
 ### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
 
