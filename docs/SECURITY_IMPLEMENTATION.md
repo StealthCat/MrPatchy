@@ -13885,3 +13885,22 @@ pm-utils `pm-action` (`pm-suspend`, `pm-hibernate`, `pm-suspend-hybrid`) runs ev
 - **Validation:** `tests/test_ifplugd_actions.py` has 41 tests. A source re-review against `ifplugd.c` and `run-parts.c` added the signal-option precedence (kill, resume, info, suspend), the `-n` and `-I` toggles and the failure handling above. Two differentials run against real binaries: 40 random `action.d` trees against `run-parts --test` (`LC_ALL=C`), and 3,000 random argv lists against glibc `getopt_long` compiled with ifplugd's option tables.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** sourcing `/etc/default/ifplugd`, including the init script's `A=$(eval echo \$\{ARGS_${IF1}\})`, which applies `echo` escapes and `-n`, globbing and a bad-substitution fallback to `ARGS` for names that are not valid variable names. Also remaining: `INTERFACES=auto|all` and the udev `HOTPLUG_INTERFACES` agent path, agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### TCP wrappers command contract — worker checkpoint #1390 (roadmap F)
+
+Every libwrap-linked service (`tcpd` started from inetd or xinetd, or a daemon linked against `libwrap0`) reads `/etc/hosts.allow` and `/etc/hosts.deny` on each connection. With the language extensions that Debian and Ubuntu build in (`-DPROCESS_OPTIONS -DACLEXEC`), an entry such as `ALL : ALL : spawn (/tmp/x %h) &` runs `/bin/sh -c` as the daemon's own user on every matching connection. The startup inventory did not model these files.
+
+- **Change:** the pure `app/tcp_wrappers.py` takes the captured state and text of both files. It returns every `spawn`, `twist` and `aclexec` command with its file and line, its daemon and client lists, the `%` expansions it uses, its effect, the options before it that can refuse at runtime, and whether an earlier entry makes it unreachable. It performs no I/O and never runs a command.
+- **Fidelity:** the contract follows `tcp-wrappers_7.6.q` with the 35 patches of Debian/Ubuntu `7.6.q-33`:
+  - `table_match()` stops at the first match, and `hosts.deny` is consulted only after `hosts.allow` has no match.
+  - `xgets()` handles backslash continuation and the 2048-byte logical line. A logical line that does not fit, or that has no final newline, stops the rest of the file, and that includes a too-long comment.
+  - `#` starts a comment only in column 0.
+  - `split_at()` is bracket-aware.
+  - `process_options()` runs options in order: `\:` unescaping, ASCII case-insensitive keywords, and the value and must-be-last errors that abort later options after earlier commands have already run.
+  - `percent_x()` handles the expansion letters, including the patched `%r`/`%R`.
+- **Identity finding:** the Debian `initgroups` patch, taken from Red Hat, inverts the `dry_run` test. `user` and `group` therefore change identity only in `tcpdchk`/`tcpdmatch` dry runs, never in a real daemon. Every command is reported as running as the daemon process's user, and any preceding `user`/`group` options are listed as `identity_options_ignored`.
+- **Shadowing is never overclaimed:** a later entry counts as shadowed only by an earlier entry in the same file whose daemon and client lists each contain `ALL` and no `EXCEPT`. An unconditional `hosts.allow` entry shadows `hosts.deny` only when neither it nor any earlier allow entry names `aclexec`. A non-zero `aclexec` exit unmatches the entry, and the process-wide `aclexec_matched` flag persists until a later `aclexec` succeeds. Line lengths are counted in UTF-8 bytes, as `fgets()` counts them. The match functions never `tcpd_jump()`, so this rule cannot be cut short.
+- **Fail closed:** unobserved or non-regular files and NUL bytes are gaps, and over-limit or malformed observations raise `Invalid`. The result lists what it does not model: which daemons link libwrap, per-request matching, netgroup/DNS/ident lookups, runtime account and option-value lookups, `twist` in a resident process, and the contents of the commands.
+- **Validation:** `tests/test_tcp_wrappers.py` (37 tests). The model was checked line by line against the patched source. No differential against a compiled libwrap has been run.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection, a catalog entry, package provenance (`libwrap0`/`tcpd`), persistence, UI and AI classification.
