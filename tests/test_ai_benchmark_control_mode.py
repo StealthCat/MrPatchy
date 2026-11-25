@@ -109,6 +109,14 @@ def test_default_run_records_the_legacy_mode_it_applied():
     report_ = _benchmark(1)
     assert report_['ai_control_mode'] == 'legacy'
     assert report_['provider_calls'] == 6 and report_['errors'] == 0
+    assert not {'budget_reservation', 'budget_reconciliation'} & report_['stages'].keys()
+
+
+def assert_budget_timings(sample):
+    for stage in ('budget_reservation', 'budget_reconciliation'):
+        timing = sample['stages'][stage]
+        assert timing['count'] == sample['provider_calls'] == sample['fixture_budget']['settled_calls']
+        assert 0 <= timing['p50_ms'] <= timing['p95_ms'] <= sample['elapsed_seconds'] * 1000 + 1
 
 
 def test_unthrottled_serial_and_parallel_pair_is_equivalent_and_keeps_the_workload():
@@ -161,10 +169,12 @@ def test_daily_cap_serial_and_parallel_settle_all_calls_without_changing_the_wor
         assert item['provider_calls'] == 6 and item['stages']['ssh_evidence']['count'] == 2
         assert item['fixture_budget'] == {**capped_budget(), 'settled_calls': 6, 'settled_microusd': 120}
         assert 'no paid API calls' in item['cost_status']
+        assert_budget_timings(item)
     result = compare(serial, parallel)
     assert result['capability_equivalent'] is True
     assert result['capability']['fixture_budget'] == serial['fixture_budget']
     uncapped = _benchmark(1, '--control-mode', 'unthrottled', *layout)
+    assert not {'budget_reservation', 'budget_reconciliation'} & uncapped['stages'].keys()
     assert uncapped['workload_fingerprint'] == parallel['workload_fingerprint']
     with pytest.raises(ComparisonError, match='ai_control_mode differs'):
         compare(uncapped, parallel)
@@ -230,13 +240,18 @@ def test_serial_and_parallel_fixtures_wait_for_real_paced_starts(mode, custom_ra
         pacing = sample['fixture_rate']
         assert pacing['starts_per_hour'] == effective_rate and pacing['admitted_starts'] == 4
         assert 0 < pacing['dispatch_wait_seconds'] <= sample['elapsed_seconds']
+        executor_wait = sample['stages']['executor_wait']
+        assert executor_wait['count'] == 4
+        assert 0 <= executor_wait['p50_ms'] <= executor_wait['p95_ms'] < 3600 * 1000 / effective_rate
         assert sample['elapsed_seconds'] >= round(3 * 3600 / effective_rate, 3)
         assert sample['completed_subjects'] == 4 and sample['errors'] == 0
         assert sample['provider_calls'] == 6 and sample['stages']['ssh_evidence']['count'] == 2
         if mode == 'rate_and_daily':
             assert sample['fixture_budget']['settled_calls'] == 6
+            assert_budget_timings(sample)
         else:
             assert 'fixture_budget' not in sample
+            assert not {'budget_reservation', 'budget_reconciliation'} & sample['stages'].keys()
     result = compare(serial, parallel)
     assert result['capability_equivalent'] is True
     for side, sample in (('baseline', serial), ('candidate', parallel)):
