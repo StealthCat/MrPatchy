@@ -12612,6 +12612,12 @@ This delivers the "configurable advance-warning window before an end date" item 
 
 ### Shared AI start gates on AI activity — worker checkpoint #914
 
+Roadmap A checkpoint #1403 bounds the legacy update-scoring admission query
+at its hourly threshold. The scoring worker retains its own lock and probes
+only recent update-scoring runs. The shared status view still reports exact
+usage and retry times. Regression evidence covers the strict cutoff, purpose
+isolation and the indexed query on SQLite and MySQL.
+
 Roadmap A requires AI activity to show the blocked reason and next eligible start, not only Investigations. Before this checkpoint the admin-only **Shared AI start gates** card (#727) rendered only on `#investigations`. The fleet AI activity page listed deferred runs but did not say why new provider calls were held.
 - **Change:** the fleet `#ai-logs` page adds the same card for administrators, after the AI worker status card and before the timing and known-good panels and run filters. It reuses `GET /api/settings/ai-control-status` and the existing renderer, including legacy per-purpose allowances, the fixed limitations and **Refresh start gates**. `loadAiControlGates` now takes the view it belongs to, so a response that arrives after the administrator leaves either page is discarded.
 - **Unchanged:** the API, schema, roles, admission, reservations and response authorization. Viewers are still routed away from `#ai-logs` and never request the snapshot. Per-server AI tabs do not show the card, because the snapshot is fleet-wide.
