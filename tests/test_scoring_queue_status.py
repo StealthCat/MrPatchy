@@ -4,11 +4,11 @@ import time
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, event, select
 from test_operations import login_as
 
 from app import ai, ai_runs, scoring_queue_status, update_scores
-from app.db import Host, Package, Session, Setting, config
+from app.db import Host, Package, Session, Setting, config, engine
 from app.security import seal
 
 STATUS = '/api/update-scores/status'
@@ -207,6 +207,55 @@ def test_admin_endpoint_reports_counts_without_private_data(admin):
     assert body['counts']['eligible'] == 4
     # The exact-identity pass runs only on this endpoint, not on every Settings load.
     assert 'ai_scoring_queue' not in admin.get('/api/settings').json()
+
+
+@pytest.mark.parametrize('key_present', [True, False])
+def test_queue_state_and_blocked_counts_use_one_saved_key(admin, key_present):
+    seed()
+    with Session() as session:
+        saved_key = session.get(Setting, 'openai_key').value
+        if not key_present:
+            session.execute(delete(Setting).where(Setting.key == 'openai_key'))
+            session.commit()
+
+    reads = []
+    sqlite = engine.dialect.name == 'sqlite'
+
+    def observe(_connection, _cursor, statement, _parameters, context, _many):
+        if not statement.lstrip().startswith('SELECT') or 'FROM settings' not in statement:
+            return
+        if not any('openai_key' in row.values() for row in context.compiled_parameters):
+            return
+        reads.append(statement)
+        if sqlite and len(reads) == 1:
+            # Change the stored key after the first read. This response must
+            # use the same key observation for both the counts and the badge.
+            with Session() as writer:
+                if key_present:
+                    writer.execute(delete(Setting).where(Setting.key == 'openai_key'))
+                else:
+                    writer.add(Setting(key='openai_key', value=saved_key))
+                writer.commit()
+
+    event.listen(engine, 'after_cursor_execute', observe)
+    try:
+        reply = admin.get(STATUS)
+    finally:
+        event.remove(engine, 'after_cursor_execute', observe)
+    assert reply.status_code == 200
+    result = reply.json()
+    assert (result['scheduler'], result['counts']['blocked']) == (
+        ('enabled', 1) if key_present else ('not_configured', 0)
+    )
+    assert len(reads) == 1
+
+    if sqlite:
+        refreshed = admin.get(STATUS)
+        assert refreshed.status_code == 200
+        result = refreshed.json()
+        assert (result['scheduler'], result['counts']['blocked']) == (
+            ('not_configured', 0) if key_present else ('enabled', 1)
+        )
 
 
 @pytest.mark.parametrize('changes, state', [({'ai_enabled': False}, 'ai_disabled'),
