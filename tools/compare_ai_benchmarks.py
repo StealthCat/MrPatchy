@@ -109,6 +109,20 @@ def _validate_derived_throughput(runs, elapsed, throughput, label):
             f'{label}.runs / {label}.elapsed_seconds')
 
 
+def _compare_connections(baseline, candidate):
+    connection_delta = None
+    if baseline is not None and candidate is not None:
+        connection_delta = _delta(baseline['connections'], candidate['connections'])
+    return {
+        'baseline': baseline,
+        'candidate': candidate,
+        'connection_delta': connection_delta,
+        'scope': 'Connections count distinct loopback HTTP peers that served a request. '
+                 'Each request after the first on a peer counts as reuse. '
+                 'Missing measurements are null.',
+    }
+
+
 def _queue_age(report, label):
     """Return the seeded fixture queue age, which is an input, not a result.
 
@@ -183,6 +197,15 @@ def _validate(report, label):
         raise ComparisonError(f'{label}.shared_server_slots requires a shared layout across several servers')
     provider_delay = _bounded(report.get('provider_delay_ms'), f'{label}.provider_delay_ms', 1, 1000)
     provider_calls = _integer(report.get('provider_calls'), f'{label}.provider_calls', positive=True)
+    transport = None
+    if 'connections' in report:
+        connections = _integer(report['connections'], f'{label}.connections', positive=True)
+        if connections > provider_calls:
+            raise ComparisonError(f'{label}.connections exceeds provider_calls')
+        transport = {
+            'connections': connections,
+            'requests_on_reused_connections': provider_calls - connections,
+        }
     input_tokens = _integer(report.get('input_tokens'), f'{label}.input_tokens', positive=True)
     output_tokens = _integer(report.get('output_tokens'), f'{label}.output_tokens', positive=True)
     errors = _integer(report.get('errors'), f'{label}.errors')
@@ -322,6 +345,7 @@ def _validate(report, label):
         'stages': stages,
         'ai_control_mode': control_mode, 'ai_control_mode_source': control_mode_source,
         'fixture_budget': fixture_budget, 'fixture_rate': fixture_rate,
+        'transport': transport,
     }
 
 
@@ -460,6 +484,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'stage_samples': {stage: base['stages'][stage]['count'] for stage in STAGES},
             **({'fixture_budget': base['fixture_budget']} if base['fixture_budget'] is not None else {}),
         },
+        'connection_reuse': _compare_connections(base['transport'], current['transport']),
         'deltas': {
             'elapsed_seconds': _delta(base['elapsed_seconds'], current['elapsed_seconds']),
             'runs_per_second': _delta(base['runs_per_second'], current['runs_per_second']),
