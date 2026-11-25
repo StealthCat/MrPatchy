@@ -140,13 +140,15 @@ def test_mysql_mode_refuses_a_database_that_already_has_tables(empty_mysql):
 
 
 @needs_mysql
-@pytest.mark.parametrize('same_server', [False, True], ids=['cross-server', 'same-server'])
+@pytest.mark.parametrize('servers', [4, 1, 2], ids=['cross-server', 'same-server', 'shared-servers'])
 @pytest.mark.parametrize('mode', ['legacy', 'daily_cap'])
-def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql, same_server, mode):
-    workload = ['--runs', '4', '--provider-delay-ms', '250' if same_server else '40',
+def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(empty_mysql, servers, mode):
+    workload = ['--runs', '4', '--provider-delay-ms', '250' if servers < 4 else '40',
                 '--ssh-delay-ms', '1', '--retained-history-rows', '25', '--control-mode', mode]
-    if same_server:
+    if servers == 1:
         workload.append('--same-server')
+    elif servers < 4:
+        workload.extend(['--servers', str(servers)])
     reports = []
     for concurrency in (1, 4):
         result = run('--database', 'mysql', *workload, '--concurrency', str(concurrency), url=MYSQL_URL)
@@ -161,12 +163,17 @@ def test_mysql_serial_and_parallel_reports_are_equivalent_and_leave_no_tables(em
         assert report['runs'] == report['completed_subjects'] == 4
         assert report['provider_calls'] == 6 and report['errors'] == 0
         assert report['retained_history_rows'] == 25 and report['approved_subjects'] == 0
-        assert report['fixture_hosts'] == (1 if same_server else 4)
-        assert report['single_server_slots'] == (4 if same_server else None)
+        assert report['fixture_hosts'] == servers
+        assert report['single_server_slots'] == (4 if servers == 1 else None)
+        assert report.get('shared_server_slots') == (4 if 1 < servers < 4 else None)
         assert report['stages']['two_stage']['count'] == report['stages']['ssh_evidence']['count'] == 2
         if mode == 'daily_cap':
             assert report['fixture_budget']['settled_calls'] == 6
             assert report['fixture_budget']['settled_microusd'] == 120
+            for stage in ('budget_reservation', 'budget_reconciliation'):
+                assert report['stages'][stage]['count'] == 6
+        else:
+            assert not {'budget_reservation', 'budget_reconciliation'} & report['stages'].keys()
     assert serial['peak_provider_requests'] == 1
     if mode == 'legacy':
         assert parallel['peak_provider_requests'] > 1
@@ -296,6 +303,13 @@ def test_mysql_paced_serial_and_parallel_keep_followups_and_leave_no_tables(empt
         assert sample['fixture_rate']['admitted_starts'] == 2
         assert sample['fixture_rate']['starts_per_hour'] == custom_rate
         assert sample['elapsed_seconds'] >= round(3600 / custom_rate, 3)
+        assert sample['stages']['executor_wait']['count'] == 2
+        assert 0 <= sample['stages']['executor_wait']['p95_ms'] < 3600 * 1000 / custom_rate
         assert sample['provider_calls'] == 3 and sample['stages']['ssh_evidence']['count'] == 1
+        if mode == 'rate_and_daily':
+            for stage in ('budget_reservation', 'budget_reconciliation'):
+                assert sample['stages'][stage]['count'] == sample['fixture_budget']['settled_calls'] == 3
+        else:
+            assert not {'budget_reservation', 'budget_reconciliation'} & sample['stages'].keys()
         reports.append(sample)
     assert compare(*reports)['capability_equivalent'] is True
