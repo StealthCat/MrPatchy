@@ -295,3 +295,45 @@ def test_gap_list_is_capped():
 def test_malformed_observations_are_rejected(bad):
     with pytest.raises(ek.Invalid):
         ek.evaluate(bad)
+
+
+@pytest.mark.parametrize('line', ['AVOID_DAILY_AUTOCOMMITS=1#note', 'AVOID_DAILY_AUTOCOMMITS="1"#note',
+                                  "AVOID_DAILY_AUTOCOMMITS='1'#note"])
+def test_comment_without_separating_whitespace_is_part_of_the_shell_word(line):
+    # The shell keeps the literal "1#note", which does not suppress the cron job.
+    result = ek.evaluate(obs(conf={'state': 'present', 'sha256': 'd' * 64, 'text': f'VCS=git\n{line}\n'}))
+    assert result['conf']['understood'] is False
+    assert 'conf_not_understood' in codes(result)
+    assert trigger(result, 'cron_daily')['state'] == 'unknown'
+
+
+@pytest.mark.parametrize('line', ['AVOID_DAILY_AUTOCOMMITS=1 #note', 'AVOID_DAILY_AUTOCOMMITS="1"\t# note',
+                                  'AVOID_DAILY_AUTOCOMMITS=1 ', 'AVOID_DAILY_AUTOCOMMITS=1 #'])
+def test_comment_after_whitespace_is_ignored(line):
+    result = ek.evaluate(obs(conf={'state': 'present', 'sha256': 'd' * 64, 'text': f'VCS=git\n{line}\n'}))
+    assert result['conf']['values']['AVOID_DAILY_AUTOCOMMITS'] == '1'
+    assert trigger(result, 'cron_daily')['state'] == 'inactive'
+
+
+def test_comment_only_value_after_whitespace_is_empty():
+    result = ek.evaluate(obs(conf={'state': 'present', 'sha256': 'd' * 64,
+                                   'text': 'VCS=git\nAVOID_DAILY_AUTOCOMMITS= #1\n'}))
+    assert result['conf']['values']['AVOID_DAILY_AUTOCOMMITS'] == ''
+    assert trigger(result, 'cron_daily')['state'] == 'active'
+
+
+@pytest.mark.parametrize(('executable', 'state'), [(True, 'active'), (False, 'inactive'), (None, 'unknown')])
+def test_program_executable_state_gates_every_trigger(executable, state):
+    # The APT hook and /etc/etckeeper/daily both test [ -x /usr/bin/etckeeper ].
+    value = obs()
+    value['directories']['commit']['entries'] = [
+        entry for entry in value['directories']['commit']['entries']
+        if entry['name'] not in ('50vcs-commit', '99push')]
+    program = {'state': 'present', 'sha256': ek.SHIPPED_FILES[ek.PROGRAM]}
+    if executable is not None:
+        program['executable'] = executable
+    value['program'] = program
+    result = ek.evaluate(value)
+    assert {t['state'] for t in result['triggers']} == {state}
+    assert ('program_executable_unknown' in codes(result)) is (executable is None)
+    assert result['covered'] is (executable is not None)

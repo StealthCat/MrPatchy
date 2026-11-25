@@ -158,7 +158,7 @@ _SELECTED = re.compile(r'[-a-zA-Z0-9]+')
 _SELECTED_NEWLINE = re.compile(r'[-a-zA-Z0-9]+\n')
 _COMMENT = re.compile(r'[ \t]*(#.*)?')
 _ASSIGN = re.compile(r'(?P<key>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>"[^"\\$`]*"|\'[^\']*\'|[A-Za-z0-9_./:@%+,-]*)'
-                     r'[ \t]*(#.*)?')
+                     r'(?:[ \t]+(?:#.*)?)?')  # "#" starts a comment only at the start of a shell word
 
 
 class Invalid(ValueError):
@@ -467,7 +467,13 @@ def evaluate(observation: Any) -> dict[str, Any]:
         vcs_state = None
         _gap(gaps, 'vcs_unknown', detail='Whether etckeeper finds a VCS, and so runs any hook, is unknown.')
 
-    program_runs = _known(program['state'], program['state'] == 'present' and program['executable'] is not False)
+    # The APT hook and /etc/etckeeper/daily both run etckeeper only when [ -x /usr/bin/etckeeper ].
+    if program['state'] == 'present':
+        program_runs = program['executable']
+        if program_runs is None:
+            _gap(gaps, 'program_executable_unknown', path=PROGRAM)
+    else:
+        program_runs = _known(program['state'], False)
     triggers: list[dict[str, Any]] = []
 
     apt = files['apt_conf']
