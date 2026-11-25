@@ -220,6 +220,18 @@ def test_catalog_lifecycle_alert_only_applies_to_enabled_cap_modes(admin,mode,en
         assert not session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').count()
 
 
+def test_uncapped_sweep_without_catalog_notice_skips_the_catalog_read(admin, monkeypatch):
+    # Keeps the operations sweep's statement count flat when no capped alert or resolution is possible.
+    calls=[];records=[]
+    real=ai_pricing.catalog_status
+    monkeypatch.setattr(ai_pricing,'catalog_status',lambda *args,**kwargs:calls.append(1) or real(*args,**kwargs))
+    cfg={'ai_enabled':True,'ai_control_mode':'rate'}
+    with Session() as session:
+        operations._pricing_catalog_alert(session,cfg,lambda *args,**kwargs:records.append(args),ai_pricing.EXPIRES_AT)
+        assert not calls and not records
+        assert not session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').count()
+
+
 def test_daily_cap_reservation_is_atomic_and_reports_reset(admin, monkeypatch):
     quote=ai_pricing.reservation(payload())['amount_usd']
     configure(cap=quote+Decimal('0.000001'))
