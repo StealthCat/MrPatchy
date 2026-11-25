@@ -6,6 +6,8 @@ module.exports=async(page,capture)=>{
   let calls=0,release,requestStarted;const purposes=[];
   const held=new Promise(resolve=>release=resolve),started=new Promise(resolve=>requestStarted=resolve);
   const populated={purpose:'triage',sampled_runs:3,runs_without_samples:1,discarded_events:2,events_truncated:true,event_limit:2048,stages:{
+    claim_lock:{samples:2,errors:0,p50_ms:1,p95_ms:2},
+    claim_lock_hold:{samples:2,errors:0,p50_ms:3,p95_ms:4},
     provider:{samples:3,errors:1,p50_ms:0,p95_ms:12.345},
     ssh_evidence:{samples:0,errors:0,p50_ms:null,p95_ms:null}
   }};
@@ -38,6 +40,10 @@ module.exports=async(page,capture)=>{
     assert.equal(await panel.getByRole('table').isVisible(),false);
     await panel.getByRole('button',{name:'Refresh timing summary'}).click();
     await panel.getByRole('row',{name:/provider/}).waitFor();
+    for(const [name,expected] of [['claim lock',['2','0','1','2']],['claim lock hold',['2','0','3','4']]]){
+      const row=panel.getByRole('row').filter({has:page.getByRole('rowheader',{name,exact:true})});
+      assert.deepEqual(await row.getByRole('cell').allTextContents(),expected);
+    }
     assert.deepEqual(await panel.getByRole('row',{name:/provider/}).getByRole('cell').allTextContents(),['3','1','0','12.345']);
     assert.deepEqual(await panel.getByRole('row',{name:/ssh evidence/}).getByRole('cell').allTextContents(),['0','0','—','—']);
     assert.match(await panel.getByRole('status').textContent(),/3 runs sampled.*1 without valid samples.*2 malformed events discarded.*2,048 timing events/);
