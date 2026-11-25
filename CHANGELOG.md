@@ -1,3 +1,16 @@
+## 1.98.3 — 2026-11-25
+
+1. [PR #1452](https://github.com/StealthCat/MrPatchy/pull/1452): When an administrator clears provider backoff, the cleared investigation retry waits are released in one update instead of row by row, with less database work on a large queue. Compatibility: no schema or API change. Fixes #1451.
+2. [PR #1486](https://github.com/StealthCat/MrPatchy/pull/1486): Provider admission and triage preflight read only the active shared provider backoff deadline instead of the whole record. Wait and review behavior are unchanged. Compatibility: no schema or API change. Fixes #1485.
+3. [PR #1470](https://github.com/StealthCat/MrPatchy/pull/1470): The reservation for a provider request that was definitely never sent is returned with one locked ledger write, with less shared budget lock work. Compatibility: no schema or configuration change. Refs #1469.
+4. [PR #1404](https://github.com/StealthCat/MrPatchy/pull/1404): The legacy update-scoring allowance query is bounded at its admission threshold. The configured limit and retry timing are unchanged. Compatibility: no schema or API change. Fixes #1403.
+5. [PR #1342](https://github.com/StealthCat/MrPatchy/pull/1342): Equivalent serial and parallel triage benchmark comparisons now report observed provider connection reuse. Compatibility: developer tooling only. Fixes #1341.
+6. [PR #1322](https://github.com/StealthCat/MrPatchy/pull/1322): Matched AI triage fixture comparisons show executor wait, claim-lock wait and claim-lock hold side by side, in an optional `queue_timing` block. Each side shows its count and p50/p95, and deltas appear only when both sides measured the stage. Compatibility: developer tooling only. Tracks #1321.
+7. [PR #1330](https://github.com/StealthCat/MrPatchy/pull/1330): Revalidating an advisory update-scoring reply scans installed RPM inventory once per server instead of once per returned package, limited to the reply's package names and architectures. Version ordering, fallback and score identities are unchanged. Compatibility: no schema or API change. Tracks #1329.
+8. [PR #1332](https://github.com/StealthCat/MrPatchy/pull/1332): The update-scoring scheduler and the scoring queue summary share one ordered candidate-page query that reads only the ten package fields used for scoring and pagination. Compatibility: no API, schema, UI, scheduling-order, auth, AI-policy or response-authorization change. Tracks #1331.
+
+Integrated together through batch [PR #1537](https://github.com/StealthCat/MrPatchy/pull/1537). This source update does not publish a Docker image.
+
 ## 1.98.2 — 2026-11-25
 
 1. [PR #1515](https://github.com/StealthCat/MrPatchy/pull/1515): CI: when a newer head is pushed to a pull request, its superseded CodeQL runs are now cancelled, matching Validate Mr Patchy. Scheduled and main analyses are unchanged. Compatibility: CI only. Fixes #1514.
