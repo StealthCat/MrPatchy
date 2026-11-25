@@ -4,7 +4,7 @@ module.exports=async(page,capture)=>{
  const limitations=['Amounts are local public-price estimates and conservative reservations, not provider invoices.',
   'Attribution follows each call\'s link to retained AI run history.<img src=x onerror=window.__purposeInjected=true>'];
  const capped={generated_at:1793404800,mode:'daily_cap',enabled:true,timezone:'UTC<img src=x onerror=window.__purposeInjected=true>',
-  window_start:1793404800,next_reset:1793491200,call_count:6,counted_usd:'1.636',limitations,groups:[
+  window_start:1793404800,next_reset:1793491200,next_reset_authoritative:true,call_count:6,counted_usd:'1.636',limitations,groups:[
    {purpose:'triage',call_count:3,settled_usd:'0.125',reserved_usd:'0.2',uncertain_usd:'0.3',counted_usd:'0.625'},
    {purpose:'update_scoring',call_count:1,settled_usd:'0',reserved_usd:'0',uncertain_usd:'0.4',counted_usd:'0.4'},
    {purpose:'<img src=x onerror=window.__purposeInjected=true>',call_count:1,settled_usd:'0',reserved_usd:'0',uncertain_usd:'0',counted_usd:'0.5'},
@@ -16,7 +16,7 @@ module.exports=async(page,capture)=>{
   {status:503,json:{detail:'Spend fixture temporarily unavailable.'}},
   {json:{...capped,mode:'rate',enabled:false,timezone:null,window_start:null,next_reset:null,call_count:0,counted_usd:'0',groups:[]}},
   {json:{...capped,timezone:'UTC',call_count:0,counted_usd:'0',groups:[]}},
-  {json:split},
+  {json:{...split,next_reset_authoritative:false}},
  ];
  let reads=0;
  const handler=route=>route.fulfill(replies[Math.min(reads++,replies.length-1)]);
@@ -35,7 +35,7 @@ module.exports=async(page,capture)=>{
    ['Not attributed (run history pruned or no run)','1','$0.05','$0.03','$0','$0.111'],
   ]);
   assert.deepEqual(await card.locator('tfoot tr').evaluate(row=>[...row.cells].map(cell=>cell.textContent)),['All activity','6','','$1.636']);
-  assert.match(await card.textContent(),/Budget window resets .* · UTC<img/s);
+  assert.match(await card.textContent(),/Budget window resets .* \(local time\) · Budget timezone UTC<img/s);
   assert.match(await card.textContent(),/not provider invoices/);
   assert.match(await card.textContent(),/read-only: it does not change admission, reservations or the cap/);
   assert.equal(await card.locator('img[src=x]').count(),0);
@@ -53,6 +53,10 @@ module.exports=async(page,capture)=>{
   assert.match(await card.textContent(),/not provider invoices/);
   await refresh.click();
   await card.locator('table').waitFor();
+  assert.match(await card.textContent(),/Budget recheck at .* \(local time\) · Budget timezone UTC<img/s);
+  assert.match(await card.textContent(),/Spend from an earlier budget window may still count after this time\./);
+  assert.doesNotMatch(await card.textContent(),/Budget window resets/);
+  assert.equal(await card.locator('img[src=x]').count(),0);
   assert.equal(await refresh.isEnabled(),true);
   assert.equal(reads,5);
   await card.getByRole('columnheader',{name:'Unreconciled usage'}).waitFor();
