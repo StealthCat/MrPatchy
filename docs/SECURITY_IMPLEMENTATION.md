@@ -13117,3 +13117,33 @@ cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` f
 - **Not modeled:** whether cloud-init is installed or enabled, `cloud_final_modules` membership, a non-default `cloud_dir`, semaphore state, user-data `scripts_user` and `scripts_vendor`, and script contents.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### Apache httpd piped-log contract — Roadmap F checkpoint #1502
+
+- **Outcome:** `app/apache_piped_logs.py` is a pure contract with no I/O. It takes the captured httpd configuration: the main file, every file an `Include`/`IncludeOptional` matched, the observed `-D` defines and the start environment (for example Debian's `envvars`). It reports which programs httpd starts as piped loggers, meaning `CustomLog`, `TransferLog`, `GlobalLog` and `ErrorLog` targets that begin with `|`. For each one it gives the server (main or `<VirtualHost …>`), the direct argv or the `/bin/sh -c` string, the resolved executable, the working directory (the final `ServerRoot`), any `env=`/`expr=` log condition and the enclosing unevaluated conditions. httpd documents that piped loggers inherit the parent's user, normally root, and `User`/`Group` do not apply to them.
+- **Semantics:** taken from httpd 2.4.62 and APR 1.7.5 source.
+  - `ap_cfg_getline`: line continuation and trimming. `#` starts a comment only at the beginning of a line.
+  - `ap_resolve_env`: the whole line is expanded, with `Define` taking precedence over the environment.
+  - `ap_getword_conf`: quoting and escapes.
+  - `Include`: resolved against the `ServerRoot` in force when it is read, with matches in sorted order.
+  - `<IfDefine>`: decided from `-D`, `Define` and `UnDefine`, and false sections are skipped unparsed.
+  - `ap_open_piped_log`/`open_error_log`: `|`, `||`, `|$` and `||$`.
+  - `apr_tokenize_to_argv`: quotes group only at a word start and backslashes are removed. Shell mode joins the words with single spaces.
+  - `execv`: no `PATH` search.
+  - Each access-log directive opens its own logger. Only the last `ErrorLog` of a server counts, and a virtual host whose `ErrorLog` repeats an earlier server's exact string shares that logger.
+- **Fails closed:** each of these is a blocking gap:
+  - unobserved includes or files, and a non-optional include that matches nothing;
+  - include loops or excessive depth;
+  - unbalanced or malformed sections, and nested `<VirtualHost>`;
+  - log directives in contexts httpd rejects (`<Directory>`, `<Location>`, `<If>`, …, or `GlobalLog` in a virtual host), and wrong argument counts;
+  - unresolved variables, or variables defined only inside unevaluated conditions, used in relevant directives;
+  - a conditional `ServerRoot`, and a conditional `ErrorLog` override;
+  - `<Macro>`/`Use`;
+  - empty pipes, NUL bytes, and over-limit or malformed input.
+  
+  A virtual-host `ErrorLog` that matches a *conditional* earlier one is reported (`may_share_with`) rather than assumed shared.
+- **Other mechanisms:** `RewriteMap prg:`, `ExtFilterDefine`, `SSLPassPhraseDialog exec:` and `SSLRandomSeed exec:` are listed under `other_programs` as `not_modelled`.
+- **Validation:** `tests/test_apache_piped_logs.py` has 49 tests, counting parameter cases. They cover Debian and RHEL layouts, every pipe prefix, APR tokenizer edge cases, shell joining, log conditions, `ErrorLog` last-wins and sharing, `<IfDefine>`/`Define`/`UnDefine`, variable precedence, continuation and comment rules, `ServerRoot` changes, the fail-closed gaps and other-program listing.
+- **Not modeled:** evaluation of `<IfModule>`/`<IfFile>`/`<IfDirective>`/`<IfSection>`/`<IfVersion>`, which are reported as conditions; whether `mod_log_config` is loaded; the user httpd itself starts as; program existence; and the programs' own behaviour.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** a differential run against a real httpd, agent collection of the inputs, a catalog entry, package provenance, UI and AI classification.
