@@ -3866,6 +3866,31 @@ and that a sent call may still be billable. From code reading, not tested here: 
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
 
+### Daily-cap admission failover when the admitting process dies — milestone 4 acceptance #1285
+
+Milestone 4 acceptance for **failover** of capped admission. Every capped reservation
+is admitted under the fleet-wide `ai-shared-budget` lock (a file lock on SQLite, a
+`GET_LOCK` named lock on MySQL). `tests/test_ai_budget_failover_acceptance.py` runs the
+real `ai_budget.reserve()` in a child process, stops it while it holds that lock,
+checks that the lock is really held, kills the child with `SIGKILL` and lets the test
+process take over admission. Nothing clears the lock by hand.
+
+- **Killed before commit.** The reservation row was added but not committed. The
+  lock is released with the dead process, the ledger has no row from it, and the
+  successor's reservation is the only counted spend.
+- **Killed after commit, before the lock is released.** The dead process's `reserved`
+  row stays counted. With headroom for one reservation the successor is refused with
+  the policy wait, the dead row's reset as `budget_wait_until`, and no new row. This
+  turns the earlier code-reading note (process death between `reserve` and
+  `mark_sent` leaves a counted `reserved` row) into tested behavior.
+- **Headroom remains.** With room for two reservations the successor admits beside the
+  dead row, both count, and a third is refused.
+
+Mutation check: excluding `reserved` rows from counted spend in `ai_budget._state`
+fails all three tests. No defect found and no runtime change. The SQLite run is local;
+MySQL runs through the CI shards. Controller/coordinator failover, a database failover
+mid-admission and before/after production performance remain open.
+
 ### Lease loss across the daily-cap reset — milestone 4 acceptance #1277
 
 `tests/test_ai_budget_lease_reset_acceptance.py` combines the #992 lease-loss
