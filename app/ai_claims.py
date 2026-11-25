@@ -260,7 +260,9 @@ def acquire(owner=None):
     lock=Lock('ai-triage')
     lock_started=perf_counter()
     if not lock.acquire():return None
-    claim_lock_wait=perf_counter()-lock_started
+    lock_acquired = perf_counter()
+    claim_lock_wait = lock_acquired - lock_started
+    lease = None
     try:
         with Session() as s:
             now=time.time();reconcile(s,now);s.commit()
@@ -305,8 +307,11 @@ def acquire(owner=None):
                     if not host_id:return None
                     row=_oldest(s,host_id,signature,now)
                     if not row:return None
-                lease=_admit(s,row,cfg,secret,owner,signature,now,free_only,claim_lock_wait)
-                if lease is not _UNFUNDED:return lease
+                admitted=_admit(s,row,cfg,secret,owner,signature,now,free_only,claim_lock_wait)
+                if admitted is not _UNFUNDED:
+                    # Only a real lease carries the measured lock hold time.
+                    lease=admitted
+                    return lease
                 # The paid subject stays queued, untouched. Its host queue gate
                 # is already released; any hit is rechecked under its own gate.
                 s.rollback();free_only=True
@@ -314,7 +319,10 @@ def acquire(owner=None):
                         known_good.Entry.active.is_(True),known_good.Entry.model==cfg['ai_model'].strip()).limit(1)) is None:
                     return None
             return None
-    finally:lock.release()
+    finally:
+        if lease is not None:
+            lease.claim_lock_hold = perf_counter() - lock_acquired
+        lock.release()
 
 
 # Sentinel: the elected paid subject's own quote does not fit the remaining
