@@ -4483,6 +4483,14 @@ change. The regression also checks expired, orphaned and live lease handling.
 Busy dispatches use one additional bounded read. Production throughput and
 independent scoring acceptance remain open.
 
+The idle probe also skips the lock when its pending or retry rows belong only
+to paused, disabled or deleted servers (#1323). It uses the same host filters
+as the locked election. Expired claims and orphaned runs still trigger recovery
+regardless of host state. A resumed server can be picked up on the next poll.
+The fixtures check four polls per held state, peer and legacy hostless
+admission, and recovery during both pause and disablement. Production impact
+remains unmeasured.
+
 ### Configurable per-server process-triage occupancy — worker checkpoint #383
 
 This stacked threaded-execution increment replaces the fixed two-lease server bound
