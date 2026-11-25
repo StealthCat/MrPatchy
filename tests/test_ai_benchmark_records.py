@@ -46,6 +46,15 @@ def test_retained_pair_is_capability_equivalent_and_matches_recorded_comparison(
     serial, parallel = _pair(workload)
     result = compare_ai_benchmarks.compare(
         serial, parallel, f'{workload}-serial.json', f'{workload}-parallel.json')
+    # The original comparison predates this metric. Validate the added output
+    # against the unmodified source reports, then compare the historical fields.
+    reuse = result.pop('connection_reuse')
+    for name, report in (('baseline', serial), ('candidate', parallel)):
+        assert reuse[name] == {
+            'connections': report['connections'],
+            'requests_on_reused_connections': report['provider_calls'] - report['connections'],
+        }
+    assert reuse['connection_delta']['absolute'] == parallel['connections'] - serial['connections']
     assert result == _load(f'{workload}-comparison.json')
     assert result['capability_equivalent'] is True
     assert result['fixture_only'] is True

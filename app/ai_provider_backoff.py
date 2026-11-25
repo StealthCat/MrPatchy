@@ -4,7 +4,7 @@ import hmac
 import random
 import time
 
-from sqlalchemy import String, Double, Integer, Text, or_, select
+from sqlalchemy import String, Double, Integer, Text, LargeBinary, and_, case, cast, or_, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -44,23 +44,29 @@ class ProviderBackoff(Base):
     reason: Mapped[str]=mapped_column(Text,default='')
 
 
+def _active_deadline(session, now):
+    return session.scalar(select(ProviderBackoff.blocked_until).where(
+        ProviderBackoff.id == 'global', ProviderBackoff.blocked_until > now,
+    ))
+
+
 def admit(now=None):
     """Fail before budget/rate admission while a shared provider floor is active."""
     from .ai import AIError
-    now=time.time() if now is None else now
+
+    now = time.time() if now is None else now
     with Session() as session:
-        row=session.get(ProviderBackoff,'global')
-        if row and row.blocked_until>now:
-            error=AIError('Shared provider backoff is waiting for retry eligibility. No provider request was sent.',
-                policy_wait=True,retry_after=row.blocked_until-now)
-            error.provider_wait_until=row.blocked_until
+        deadline = _active_deadline(session, now)
+        if deadline is not None:
+            error = AIError('Shared provider backoff is waiting for retry eligibility. No provider request was sent.',
+                            policy_wait=True, retry_after=deadline - now)
+            error.provider_wait_until = deadline
             raise error
 
 
-def waiting(session,now):
+def waiting(session, now):
     """Read-only: the instant the shared provider floor lifts, or 0."""
-    row=session.get(ProviderBackoff,'global')
-    return row.blocked_until if row and row.blocked_until>now else 0
+    return _active_deadline(session, now) or 0
 
 
 def failed(error,now=None):
@@ -143,17 +149,27 @@ def clear(now=None,expected_revision=None):
 
 def revoke_item_waits(now):
     from .ai_retry import TriageRetry
-    from sqlalchemy import select
-    with Lock('ai-triage'),Session() as session:
-        rows=session.scalars(select(TriageRetry).where(TriageRetry.provider_until>now)).all()
-        for retry in rows:
-            # A later next_at belongs to the local retry gate, not the provider
-            # floor. Compare before clearing the saved provider deadline.
-            if retry.state=='deferred' and now<retry.next_at<=retry.provider_until:
-                retry.next_at=now
-            retry.provider_until=0
+
+    # Keep the former exact state comparison under a case-insensitive DB
+    # collation. A later retry time still belongs to the local retry gate.
+    provider_only = and_(
+        cast(TriageRetry.state, LargeBinary) == b'deferred',
+        TriageRetry.next_at > now,
+        TriageRetry.next_at <= TriageRetry.provider_until,
+    )
+    # MySQL applies assignments in order. Read the old floor before zeroing it.
+    statement = (
+        update(TriageRetry).where(TriageRetry.provider_until > now)
+        .ordered_values(
+            (TriageRetry.next_at, case((provider_only, now), else_=TriageRetry.next_at)),
+            (TriageRetry.provider_until, 0),
+        )
+        .execution_options(synchronize_session=False)
+    )
+    with Lock('ai-triage'), Session() as session:
+        changed = session.execute(statement).rowcount
         session.commit()
-        return bool(rows)
+    return changed > 0
 
 
 def status(session,now=None):

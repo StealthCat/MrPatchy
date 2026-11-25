@@ -109,6 +109,20 @@ def _validate_derived_throughput(runs, elapsed, throughput, label):
             f'{label}.runs / {label}.elapsed_seconds')
 
 
+def _compare_connections(baseline, candidate):
+    connection_delta = None
+    if baseline is not None and candidate is not None:
+        connection_delta = _delta(baseline['connections'], candidate['connections'])
+    return {
+        'baseline': baseline,
+        'candidate': candidate,
+        'connection_delta': connection_delta,
+        'scope': 'Connections count distinct loopback HTTP peers that served a request. '
+                 'Each request after the first on a peer counts as reuse. '
+                 'Missing measurements are null.',
+    }
+
+
 def _queue_age(report, label):
     """Return the seeded fixture queue age, which is an input, not a result.
 
@@ -183,6 +197,15 @@ def _validate(report, label):
         raise ComparisonError(f'{label}.shared_server_slots requires a shared layout across several servers')
     provider_delay = _bounded(report.get('provider_delay_ms'), f'{label}.provider_delay_ms', 1, 1000)
     provider_calls = _integer(report.get('provider_calls'), f'{label}.provider_calls', positive=True)
+    transport = None
+    if 'connections' in report:
+        connections = _integer(report['connections'], f'{label}.connections', positive=True)
+        if connections > provider_calls:
+            raise ComparisonError(f'{label}.connections exceeds provider_calls')
+        transport = {
+            'connections': connections,
+            'requests_on_reused_connections': provider_calls - connections,
+        }
     input_tokens = _integer(report.get('input_tokens'), f'{label}.input_tokens', positive=True)
     output_tokens = _integer(report.get('output_tokens'), f'{label}.output_tokens', positive=True)
     errors = _integer(report.get('errors'), f'{label}.errors')
@@ -322,6 +345,7 @@ def _validate(report, label):
         'stages': stages,
         'ai_control_mode': control_mode, 'ai_control_mode_source': control_mode_source,
         'fixture_budget': fixture_budget, 'fixture_rate': fixture_rate,
+        'transport': transport,
     }
 
 
@@ -382,6 +406,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
     if base['fixture_rate'] is not None:
         if base['fixture_rate']['starts_per_hour'] != current['fixture_rate']['starts_per_hour']:
             raise ComparisonError('capability mismatch: fixture_rate.starts_per_hour differs')
+    queue_timing = _compare_queue_timings(baseline, candidate, base, current)
     controls = (
         'database', 'runs', 'fixture_hosts', 'single_server_slots', 'shared_server_slots',
         'provider_delay_ms', 'ssh_delay_ms', 'persistence_delay_ms',
@@ -412,6 +437,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
         }}
            if baseline_budget is not None or candidate_budget is not None else {}),
         'fixture_only': True,
+        **({'queue_timing': queue_timing} if queue_timing else {}),
         'capability_equivalent': True,
         'baseline': {
             'name': baseline_name, 'execution': base['execution'],
@@ -460,6 +486,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'stage_samples': {stage: base['stages'][stage]['count'] for stage in STAGES},
             **({'fixture_budget': base['fixture_budget']} if base['fixture_budget'] is not None else {}),
         },
+        'connection_reuse': _compare_connections(base['transport'], current['transport']),
         'deltas': {
             'elapsed_seconds': _delta(base['elapsed_seconds'], current['elapsed_seconds']),
             'runs_per_second': _delta(base['runs_per_second'], current['runs_per_second']),
@@ -485,6 +512,56 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'control_mode': 'Both reports ran under the same AI control mode; a legacy report predates explicit mode selection.',
         },
     }
+
+
+QUEUE_TIMING_GROUPS = {
+    'executor_wait': 'stages',
+    'claim_lock': 'persisted_stages',
+    'claim_lock_hold': 'persisted_stages',
+}
+
+
+def _has_new_queue_timing(report):
+    persisted = report.get('persisted_stages')
+    return ('executor_wait' in report['stages'] or
+            isinstance(persisted, dict) and 'claim_lock_hold' in persisted)
+
+
+def _queue_timings(report, normalized, label):
+    # Elapsed seconds and stage milliseconds are each rounded to three decimals.
+    max_ms = round(normalized['elapsed_seconds'] * 1000, 3) + 0.501
+    timings = {}
+    for stage, group in QUEUE_TIMING_GROUPS.items():
+        values = report.get(group, {})
+        if not isinstance(values, dict):
+            raise ComparisonError(f'{label}.{group} must be an object')
+        if stage not in values:
+            continue
+        field = f'{label}.{group}.{stage}'
+        summary = _summary(values[stage], field, max_ms)
+        if summary['count'] != normalized['runs']:
+            raise ComparisonError(f'{field}.count must match runs')
+        timings[stage] = summary
+    return timings
+
+
+def _compare_queue_timings(baseline, candidate, base, current):
+    if not (_has_new_queue_timing(baseline) or _has_new_queue_timing(candidate)):
+        return {}
+    before = _queue_timings(baseline, base, 'baseline')
+    after = _queue_timings(candidate, current, 'candidate')
+    comparison = {}
+    for stage in QUEUE_TIMING_GROUPS:
+        left, right = before.get(stage), after.get(stage)
+        if left is None and right is None:
+            continue
+        comparison[stage] = {
+            'baseline': left,
+            'candidate': right,
+            'p50_ms': _delta(left['p50_ms'], right['p50_ms']) if left and right else None,
+            'p95_ms': _delta(left['p95_ms'], right['p95_ms']) if left and right else None,
+        }
+    return comparison
 
 
 def _provider_transport(report, label, provider_calls):

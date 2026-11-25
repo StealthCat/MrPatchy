@@ -2255,6 +2255,13 @@ server records. Existing pause and lifecycle filters still govern eligibility.
 This reduces data fetched per scoring pass. Candidate hashing and measured
 production throughput remain open.
 
+The scheduler and read-only scoring queue also share a package-page projection
+(#1331). It selects fields used for exact scoring evidence and ordering. It
+excludes repository-origin text and the separate repository-priority field.
+A 450-candidate fixture retained all ordered exact identities across both
+paths while reducing each page from twelve selected fields to ten with no
+lazy package reads. Production throughput remains open.
+
 The update-scoring memo uses the distribution and package-manager fields
 shared with the scoring payload, plus installed RPM inventory when applicable.
 Repository file text, raw APT status and unrelated OS fields no longer evict
@@ -2264,6 +2271,14 @@ after relevant version, distribution or package-manager changes. Existing
 score keys and provider payloads are preserved. The worker still reads stored
 inventory, fingerprints the RPM list and walks eligible candidates. Production
 throughput and the broader parallel-scoring milestone remain open.
+
+When a scoring reply is persisted, the worker builds one fresh RPM version
+index per affected server for the batch's package names and architectures
+(#1329). It retains the exact identity, version fallback and stale-result
+checks. A five-package fixture reduced post-reply inventory scans from five
+to one. It retained the exact outbound evidence and superseded only the
+score whose installed RPM evidence changed. Production throughput remains
+unmeasured.
 
 At the 256-server memo bound, overflow servers use a pass-local memo and
 retained servers stay warm across scoring passes. An exhausted pass releases
@@ -3729,6 +3744,16 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+#### Conditional release of definitely unsent reservations — Roadmap A checkpoint #1469
+
+The release transaction now updates the indexed reservation under the shared
+budget lock without first reading it. Before transmission, only a reserved row
+matches. A local connection-pool timeout may release a sent row only when its
+receipt exactly matches, including the empty receipt used outside a tracked run.
+SQLite and MySQL use exact comparisons for both fields. Potentially incurred
+charges stay counted, and the release reason and time remain in the ledger.
+Fleet throughput and the wider shared-admission milestones remain open.
+
 ### Unknown pricing and usage under a daily cap — worker checkpoint #994
 
 Milestone 4 acceptance for **unknown pricing/usage**.
@@ -4320,6 +4345,16 @@ Use the same history size, run count and delays for a serial/parallel pair.
 The fixture still checks the same provider, SSH evidence and completion workload.
 Native MySQL and production throughput acceptance remain open.
 
+### Compare executor and claim-lock timings — Roadmap A checkpoint #1321
+
+The fixture comparator's optional `queue_timing` block displays the per-side
+sample count and p50/p95 for executor wait, claim-lock wait and claim-lock hold.
+It compares a stage only when both reports measured it and requires one
+bounded timing sample per run. Historical pairs without executor wait or lock
+hold keep their existing comparison shape. The workload equivalence checks
+still apply. These fixture timings help locate admission overhead. Production
+performance remains open.
+
 ### Same-server process-triage benchmark (issue #654)
 
 The disposable benchmark can seed distinct process observations on one server.
@@ -4580,6 +4615,16 @@ a newer provider failure and a reset already committed by another worker.
 Acceptance covers the normal provider response path and both races on SQLite
 and MySQL. The reviewed administrator clear action and the shared admission
 checks continue to apply. Production throughput remains open in Roadmap A.
+
+### Bulk release of provider retry waits - Roadmap A checkpoint #1451
+
+After a reviewed provider-backoff clear, the existing triage lock protects one
+database update of all active provider wait markers. The update only advances
+a deferred retry time governed by that marker and preserves later local waits,
+other retry states, and attempt data. The reviewed action, audit and outbound
+admission checks use their existing paths. On a 1,200-row fixture, main reads and
+updates 900 affected rows individually through the ORM. The worker branch uses
+one update. Roadmap A remains incomplete.
 
 ### Reviewed shared provider-backoff reset — worker checkpoint #552
 
@@ -12058,6 +12103,20 @@ and cap headroom. Production speeds and exhausted-cap throughput are outside
 this checkpoint.
 
 
+### Compare provider connection reuse — Roadmap A checkpoint #1341
+
+The serial/parallel comparator now reports the distinct loopback HTTP peers
+that served provider calls, the requests after the first per peer and the
+connection-count change. This lets benchmark readers see whether an equivalent
+parallel workload opened more connections while retaining the same provider
+calls, token totals and workload fingerprint. Counts outside one through the
+number of calls are rejected. Earlier reports without a connection count show
+an unavailable measurement and can still be compared.
+
+The evidence covers the disposable HTTP fixture. It measures neither TLS
+handshake time nor production connection reuse. Matched production transport
+and throughput measurements remain open.
+
 ### Choose the rate for paced triage benchmarks — Roadmap A checkpoint #1253
 
 In `rate` and `rate_and_daily` fixture modes, pass the same `--rate-per-hour` to
@@ -12591,6 +12650,12 @@ This delivers the "configurable advance-warning window before an end date" item 
 - **Remaining (#341):** Ubuntu Pro entitlement discovery, RPM/vendor catalog coverage, catalog refresh and signing, the migration queue and plans, fleet filters and reports, and real-target acceptance.
 
 ### Shared AI start gates on AI activity — worker checkpoint #914
+
+Roadmap A checkpoint #1403 bounds the legacy update-scoring admission query
+at its hourly threshold. The scoring worker retains its own lock and probes
+only recent update-scoring runs. The shared status view still reports exact
+usage and retry times. Regression evidence covers the strict cutoff, purpose
+isolation and the indexed query on SQLite and MySQL.
 
 Roadmap A requires AI activity to show the blocked reason and next eligible start, not only Investigations. Before this checkpoint the admin-only **Shared AI start gates** card (#727) rendered only on `#investigations`. The fleet AI activity page listed deferred runs but did not say why new provider calls were held.
 - **Change:** the fleet `#ai-logs` page adds the same card for administrators, after the AI worker status card and before the timing and known-good panels and run filters. It reuses `GET /api/settings/ai-control-status` and the existing renderer, including legacy per-purpose allowances, the fixed limitations and **Refresh start gates**. `loadAiControlGates` now takes the view it belongs to, so a response that arrives after the administrator leaves either page is discarded.
@@ -14223,3 +14288,15 @@ per run. At four investigation slots, the median paired elapsed difference was
 (range −6.349 to −5.913 s). These ranges describe the disposable fixture runs.
 Roadmap A still needs exact integrated-head reruns and production-equivalent
 benchmark evidence.
+
+### Provider deadline projection — Roadmap A checkpoint #1485
+
+Provider admission and the triage preflight read the active global provider
+deadline through a single-column query. The database filters expired deadlines,
+including the exact expiry boundary, before handing a result to the worker.
+
+The five projection regressions cover missing, expired, boundary and active
+holds, plus a normal triage investigation and its provider admission check.
+They measure five projected columns on current main and one on the revised
+paths. The admin status still includes the reason and review revision. Fleet
+throughput and exact integrated-head measurements remain open.
