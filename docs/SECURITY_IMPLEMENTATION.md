@@ -4482,6 +4482,13 @@ claim or orphaned running triage run, the dispatch ends without taking the lock.
 Otherwise a fresh session under the lock follows the existing recovery and
 claim path. Work arriving after an idle read remains queued for the next poll.
 
+A pending or retry row with a live claim is also skipped by the idle probe
+(#1325). Four fully leased polls acquired four locks on main and zero with
+this change. A new peer subject still takes the lock and claims normally.
+Expired claims and orphaned runs still trigger the existing recovery path.
+This measures avoided lock acquisitions in a fixture. Production throughput
+remains open.
+
 Four idle dispatches took four admission locks on the base and zero after the
 change. The regression also checks expired, orphaned and live lease handling.
 Busy dispatches use one additional bounded read. Production throughput and
