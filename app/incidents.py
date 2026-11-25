@@ -316,7 +316,9 @@ def automatic_candidate(row):
 def automatic_candidate_sql():
     """SQL form of ``automatic_candidate`` for bounded reads (#922): a missing engine is not YARA."""
     engine=Incident.evidence[('scan_context','engine')].as_string()
-    return or_(engine.is_(None),engine!='YARA')
+    # Match Python's exact string comparison even under a folding SQL collation.
+    yara='YARA'.encode('ascii').hex().upper()
+    return or_(engine.is_(None),func.hex(engine)!=yara)
 
 
 def auto_plan_tick(now=None):
@@ -331,8 +333,10 @@ def auto_plan_tick(now=None):
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not s.get(Setting,'openai_key'):return
             remaining=10
             if cfg['ai_control_mode']=='legacy':
-                recent=s.scalar(select(func.count()).select_from(Job).where(Job.action.in_(['security-plan','startup-plan']),Job.created>now-3600))
-                remaining-=recent
+                # Exact below the allowance, saturated once the tick cannot queue more.
+                recent=(select(Job.created).where(Job.action.in_(('security-plan','startup-plan')),
+                    Job.created>now-3600).limit(remaining).subquery())
+                remaining-=s.scalar(select(func.count()).select_from(recent))
             if remaining<=0:return
             policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
             from . import ai_policy
@@ -344,15 +348,10 @@ def auto_plan_tick(now=None):
             # Older incidents on an occupied server must leave room for
             # available servers in the bounded candidate window.
             enabled = select(Host.id).where(Host.id.in_(enabled), ~_active_plan_for_host(Host.id))
-            query=select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),*awaiting_auto_plan()).order_by(Incident.updated,Incident.id)
-            # YARA incidents are never planned automatically, so page past them instead of letting them fill a fixed window.
-            rows=[];offset=0
-            while len(rows)<100:
-                batch=list(s.scalars(query.limit(100).offset(offset)))
-                rows+=[r for r in batch if automatic_candidate(r)]
-                if len(batch)<100:break
-                offset+=100
-            candidates=rows[:100]
+            candidates=s.execute(select(Incident.id,Incident.host_id,Incident.scan_id).where(
+                Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),
+                *awaiting_auto_plan(),automatic_candidate_sql())
+                .order_by(Incident.updated,Incident.id).limit(100)).all()
             if not candidates:return
             occupied=_active_plan_for_host(Incident.host_id)
             eligibility={incident_host:(canonical_host,has_active_plan) for incident_host,canonical_host,has_active_plan in s.execute(
