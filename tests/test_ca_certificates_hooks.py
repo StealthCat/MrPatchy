@@ -10,6 +10,7 @@ from app import ca_certificates_hooks as ch
 
 SCRIPT = {'type': 'file', 'mode': 0o755, 'noexec': False}
 HOOKS = ch.HOOKS_DIR
+VERSION = '20260816ubuntu0.24.04.2'
 
 
 def _listing(*entries, **kw):
@@ -19,6 +20,7 @@ def _listing(*entries, **kw):
 def _run(hooks_dir=None, **kw):
     kw.setdefault('family', 'debian')
     kw.setdefault('ca_certificates_installed', True)
+    kw.setdefault('ca_certificates_version', VERSION)
     if hooks_dir is None:
         hooks_dir = _listing(dict(SCRIPT, name='jks-keystore'))
     return ch.assess(hooks_dir, **kw)
@@ -50,6 +52,19 @@ def test_hooks_run_as_root_in_byte_order_with_invocation_details():
     assert any('update-ca-certificates-fresh' in t for t in hooks['triggers'])
     assert all(s['reason'] == ch.REASONS['runs'] for s in hooks['scripts'])
     assert result['origin'] == 'not_assessed' and 'not a safety verdict' in result['not_a_verdict']
+
+
+def test_hook_argv_follows_the_package_version():
+    # 20260816ubuntu0.24.04.1 runs each hook with no argument even on --fresh runs.
+    old = _run(ca_certificates_version='20260816ubuntu0.24.04.1')
+    assert old['hooks']['hook_argv'] == ('HOOK',)
+    assert old['complete'] is True and old['gaps'] == []
+    for version in (None, '20250419', 7):
+        result = _run(ca_certificates_version=version)
+        assert result['hooks']['hook_argv'] == ch.HOOK_ARGV_VERSION_DEPENDENT
+        assert _codes(result) == {'hook_argv_version_dependent'}
+        # The set and order of hooks is still resolved, so the gap does not block completeness.
+        assert result['complete'] is True and result['hooks']['run_order'] == [f'{HOOKS}/jks-keystore']
 
 
 def test_name_type_mode_and_mount_rules():
@@ -127,7 +142,8 @@ def test_applicability():
     (_listing({'name': 'a', 'type': 'symlink', 'target': {'type': 'file'}}), 'metadata_missing'),
 ])
 def test_blocking_gaps_fail_closed(hooks_dir, code):
-    result = ch.assess(hooks_dir, family='debian', ca_certificates_installed=True)
+    result = ch.assess(hooks_dir, family='debian', ca_certificates_installed=True,
+                       ca_certificates_version=VERSION)
     assert code in _codes(result)
     assert code in ch.BLOCKING
     assert result['complete'] is False
@@ -168,6 +184,16 @@ def test_input_is_not_mutated_and_result_has_no_response_authority():
 # Differential against the real update-ca-certificates and run-parts.
 
 _BINARY = shutil.which('update-ca-certificates')
+
+
+def _installed_version():
+    try:
+        return subprocess.run(['dpkg-query', '-W', '-f=${Version}', 'ca-certificates'], capture_output=True,
+                              text=True, check=True).stdout.strip() or None
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
 _CERTS = sorted(glob.glob('/usr/share/ca-certificates/mozilla/*.crt'))[:2]
 real = pytest.mark.skipif(not (_BINARY and shutil.which('run-parts') and shutil.which('openssl')
                                and len(_CERTS) == 2 and os.geteuid() == 0),
@@ -241,11 +267,15 @@ def test_differential_against_real_update_ca_certificates(tmp_path, extra):
             calls[-1]['stdin'].append(line)
 
     listing = _listing(*(_meta(str(p)) for p in hooks.iterdir()))
-    result = ch.assess(listing, family='debian', ca_certificates_installed=True)
+    installed = _installed_version()
+    result = ch.assess(listing, family='debian', ca_certificates_installed=True, ca_certificates_version=installed)
     assert result['complete'] is True
     contract_runs = [s['name'] for s in result['hooks']['scripts'] if s['outcome'] == 'runs']
     assert [c['name'] for c in calls] == contract_runs == ['A_first', 'Mid-1', 'fails', 'linked', 'zz-last']
-    expected_argv = '--fresh' if extra else ''
+    argv = result['hooks']['hook_argv']
+    if argv == ch.HOOK_ARGV_VERSION_DEPENDENT:
+        pytest.skip(f'hook argv of ca-certificates {installed!r} is not modeled')
+    expected_argv = '--fresh' if extra and '[--fresh]' in argv else ''
     added = f'+{etc}/{names[0][:-4]}.pem'
     removed = f'-{etc}/{removed_pem}'
     for call in calls:

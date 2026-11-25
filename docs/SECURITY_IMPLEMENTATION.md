@@ -12911,10 +12911,17 @@ contract. From entry metadata for `/etc/ca-certificates/update.d`, it reports:
   runs as root during ordinary package installs and upgrades.
 - **Source of the semantics:** the shipped `/usr/sbin/update-ca-certificates`,
   the postinst and the triggers file from Ubuntu 24.04 `ca-certificates`
-  20260816ubuntu0.24.04.2, plus debianutils `run-parts`.
+  20260816ubuntu0.24.04.1 and 20260816ubuntu0.24.04.2, plus debianutils
+  `run-parts`.
   - After a `[ -d HOOKSDIR ]` test, which follows symlinks, it runs
     `eval run-parts --test -- HOOKSDIR | while read -r hook` and executes each
-    path as `"$hook" [--fresh]`.
+    listed path.
+  - Hook argv depends on the package build. 20260816ubuntu0.24.04.2 runs
+    `"$hook" [--fresh]`; 20260816ubuntu0.24.04.1 runs `"$hook"` with no
+    argument, even on a fresh run. The optional `ca_certificates_version`
+    input selects the argv. Any other or unknown version reports
+    `HOOK [--fresh on some package versions]` with a non-blocking
+    `hook_argv_version_dependent` gap.
   - Standard input is the `+PATH` added lines, then the `-PATH` removed lines.
   - Hooks run on every invocation, including when nothing changed.
   - A failing hook does not stop later ones.
@@ -12930,13 +12937,14 @@ contract. From entry metadata for `/etc/ca-certificates/update.d`, it reports:
   - an unobserved symlink target;
   - over-limit input.
 
-  Unobserved mount flags are a non-blocking gap. Unresolved entries are never
-  reported as running.
-- **Validation:** `tests/test_ca_certificates_hooks.py` has 33 tests.
+  Unobserved mount flags and a version-dependent hook argv are non-blocking
+  gaps. Unresolved entries are never reported as running.
+- **Validation:** `tests/test_ca_certificates_hooks.py` has 34 tests.
   - A differential runs the real `update-ca-certificates` against temporary
     `--certsconf`, `--certsdir`, `--etccertsdir` and `--hooksdir` trees, with
     and without `--fresh`. It compares the hooks that actually ran, their order,
-    their argv and their stdin with the contract. A failing hook, a symlinked
+    their argv and their stdin with the contract, using the argv the contract
+    reports for the installed package version. A failing hook, a symlinked
     hook, a dangling link, a FIFO, a subdirectory, a non-executable file and
     rejected names are all exercised.
   - It also checks a no-change rerun, a non-directory hook path, and

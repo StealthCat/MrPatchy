@@ -7,7 +7,7 @@ missing. It never runs anything and never reads a script's contents.
 
 Semantics come from the shipped ``/usr/sbin/update-ca-certificates`` and the
 ``ca-certificates`` postinst and triggers files (Ubuntu 24.04 package
-20260816ubuntu0.24.04.2), and debianutils ``run-parts``, not from recollection:
+20260816ubuntu0.24.04.1 and .2), and debianutils ``run-parts``, not from recollection:
 
 * The ``ca-certificates`` postinst runs ``update-ca-certificates`` on
   configure, and on its ``update-ca-certificates`` and
@@ -17,9 +17,11 @@ Semantics come from the shipped ``/usr/sbin/update-ca-certificates`` and the
   upgrades. An administrator may also run it by hand.
 * After rebuilding the bundle it runs, only when ``[ -d "$HOOKSDIR" ]``
   (symlinks followed), ``eval run-parts [--verbose] --test -- "$HOOKSDIR" |
-  while read -r hook`` and executes each listed path as ``"$hook" $FRESH_ARG``.
-  The argument is ``--fresh`` when ``--fresh``/``--default`` was given or the
-  certificates configuration was empty. Standard input carries ``+PATH`` lines
+  while read -r hook`` and executes each listed path. Hook argv depends on the
+  package build: 20260816ubuntu0.24.04.2 runs ``"$hook" $FRESH_ARG``, where the
+  argument is ``--fresh`` when ``--fresh``/``--default`` was given or the
+  certificates configuration was empty, while 20260816ubuntu0.24.04.1 runs
+  ``"$hook"`` with no argument. Other builds are reported as version-dependent. Standard input carries ``+PATH`` lines
   for added ``/etc/ssl/certs`` PEM links followed by ``-PATH`` lines for
   removed ones. Hooks run on every invocation, including when nothing was
   added or removed (empty input). A failing hook prints
@@ -42,19 +44,27 @@ from app.ifupdown_hooks import _byte_key, _stat_ok
 
 CONTRACT_VERSION = 1
 REFERENCE = {
-    'update_ca_certificates': 'ca-certificates 20260816ubuntu0.24.04.2 /usr/sbin/update-ca-certificates',
+    'update_ca_certificates': 'ca-certificates 20260816ubuntu0.24.04.1 and 20260816ubuntu0.24.04.2 '
+                              '/usr/sbin/update-ca-certificates',
     'run_parts': 'debianutils run-parts',
 }
 RUNS_AS = 'root'
 HOOKS_DIR = '/etc/ca-certificates/update.d'
 COMMAND = ('run-parts', '--test', '--', HOOKS_DIR)
 HOOK_ARGV = ('HOOK', '[--fresh]')
+# Observed hook argv per ca-certificates package version. Any other or unknown
+# version gets HOOK_ARGV_VERSION_DEPENDENT and a non-blocking gap.
+HOOK_ARGV_BY_VERSION = {
+    '20260816ubuntu0.24.04.2': HOOK_ARGV,
+    '20260816ubuntu0.24.04.1': ('HOOK',),
+}
+HOOK_ARGV_VERSION_DEPENDENT = ('HOOK', '[--fresh on some package versions]')
 HOOK_STDIN = ('+/etc/ssl/certs/NAME.pem (one line per added certificate)',
               '-/etc/ssl/certs/NAME.pem (one line per removed certificate, after all added lines)')
 TRIGGERS = (
     'ca-certificates postinst configure (package install or upgrade)',
     'dpkg trigger update-ca-certificates (a package installed or removed CA certificates)',
-    'dpkg trigger update-ca-certificates-fresh (runs hooks with --fresh)',
+    'dpkg trigger update-ca-certificates-fresh (passes --fresh to hooks on versions that forward it)',
     'manual update-ca-certificates [--fresh|--default]',
 )
 APPLICABLE_FAMILIES = frozenset({'debian'})
@@ -129,17 +139,30 @@ def _outcome(entry: dict[str, Any], path: str, gaps: list[dict[str, Any]]) -> st
     return 'runs'
 
 
-def assess(hooks_dir: Any = None, *, family: Any = None, ca_certificates_installed: Any = None) -> dict[str, Any]:
+def _hook_argv(version: Any, gaps: list[dict[str, Any]]) -> tuple[str, ...]:
+    argv = HOOK_ARGV_BY_VERSION.get(version) if isinstance(version, str) else None
+    if argv is not None:
+        return argv
+    _gap(gaps, 'hook_argv_version_dependent', None,
+         'Whether hooks receive --fresh depends on the ca-certificates version, which was '
+         + ('not observed.' if version is None else 'not one with observed hook argv.'))
+    return HOOK_ARGV_VERSION_DEPENDENT
+
+
+def assess(hooks_dir: Any = None, *, family: Any = None, ca_certificates_installed: Any = None,
+           ca_certificates_version: Any = None) -> dict[str, Any]:
     """Resolve which ``/etc/ca-certificates/update.d`` hooks run as root from captured directory metadata.
 
     ``hooks_dir`` is ``{'state': 'listed', 'truncated': bool, 'entries': [{'name', 'type':
     'file'|'directory'|'other'|'symlink', 'mode', 'noexec', 'target'}]}`` or a ``state`` of ``absent``,
     ``unreadable`` or ``not_directory`` (the directory test follows symlinks, so ``listed`` covers a symlinked
     directory). A symlink entry's ``target`` is the followed metadata, or ``None`` when it cannot be followed.
+    ``ca_certificates_version`` is the installed package version; it selects the reported hook argv.
     """
     gaps: list[dict[str, Any]] = []
     hooks: dict[str, Any] = {
-        'directory': HOOKS_DIR, 'state': 'not_observed', 'command': COMMAND, 'hook_argv': HOOK_ARGV,
+        'directory': HOOKS_DIR, 'state': 'not_observed', 'command': COMMAND,
+        'hook_argv': _hook_argv(ca_certificates_version, gaps),
         'hook_stdin': HOOK_STDIN, 'stops_on_failure': False, 'triggers': TRIGGERS, 'scripts': [], 'run_order': [],
     }
     result: dict[str, Any] = {
