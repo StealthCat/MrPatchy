@@ -23,7 +23,7 @@ request and changes no schema, admission, reservation, retry or authorization.
 """
 import time
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import load_only
 
 from . import ai_policy, ai_retry, host_lifecycle, update_scores
