@@ -13603,6 +13603,7 @@ LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-sc
 - **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.
+
 ### keepalived script contract — worker checkpoint #1307 (roadmap F, in progress)
 
 keepalived runs administrator-configured programs on VRRP state changes, health checks, LVS events and at startup and shutdown. They run as root, or as `script_user` / `keepalived_script`.
@@ -13692,3 +13693,29 @@ snmpd runs configured programs whenever an SNMP manager reads, or for writable e
 - **Fail closed:** blocking gaps cover unobserved files or listings, an unobserved invocation or starting group, relative includes, include cycles, truncated paths, failed-`stat` entries, build-dependent `ssl_version=SSLv2` and out-of-range integers. `origin` is `not_assessed`, and no result is a safety verdict.
 - **Validation:** `tests/test_nrpe_commands.py` (14 tests) uses vectors derived from the source. Upstream `process_macros`, `my_strsep` and the `raw_command` copy, compiled from the nrpe 4.1.0 tag, agreed with the contract on 20,300 randomized command lines (0 mismatches). The full daemon was not built.
 - **Remaining:** native collection of `nrpe.cfg` and `nrpe.d`, startup-inventory wiring, provenance and AI classification. The build flags (`--enable-command-args`), account resolution and `allowed_hosts` reachability are not observed. A SIGHUP reload re-reads the file without re-running `check_privileges`, so `nrpe_user=root` written after start can take effect until restart.
+
+### Postfix master.cf service contract — worker checkpoint #1338 (roadmap F)
+
+Postfix `master(8)` reads `master.cf` at startup and on every `postfix reload`. It starts each service listed there as root, from `$daemon_directory`. The `pipe(8)` and `spawn(8)` services then run the external command given by `argv=` as the `user=` account, which is the usual way to attach content filters and mail-triggered scripts. The startup inventory did not model this path.
+
+- **Change:** the pure `app/postfix_master.py` takes captured `master.cf` text, captured `main.cf` parameter values and an optional `/etc/services` port map. It returns each service master starts: name, type, flags, wakeup, maxproc, the program and the argument vector master builds, whether the daemon keeps root or drops to the mail owner, and any earlier entries the service overrides. For `pipe` and `spawn` it also returns the external `argv=` command, its SHA-256, its `${...}` macros and the `user=`/group account, or the daemon refusal that keeps the command from running. It performs no I/O and never runs a command.
+- **Fidelity (Postfix 3.8.6):** follows the rules in `readllines`, `get_master_ent` and `master_config`:
+  - continuation lines, with comment lines dropped inside them;
+  - `master_service_disable` matching, plus empty `inet_protocols`, applied before any other validation;
+  - `-` defaults, `y`/`n`, `atoi` and conditional `?` wakeup;
+  - the compatibility-level `chroot` default;
+  - `{}` grouping;
+  - last-entry-wins by type and canonical endpoint;
+  - master's own `-l`/`-z`/`-n`/`-t`/`-u`/`-c`/`-o stress=` arguments.
+
+  `pipe`/`spawn` attributes are parsed after `single_server`'s `getopt("+cdDi:lm:n:o:r:s:St:uvVz")`, following `get_service_attr`. The result is `config_error`, with no services, only for the refusals the module models exactly.
+- **Fail closed:** the result is incomplete when:
+  - `master.cf` or `main.cf` is unobserved;
+  - a needed parameter requires `$` expansion;
+  - the build-specific `daemon_directory` is missing;
+  - two inet entries might name the same endpoint only through unobserved name or port resolution;
+  - the input has invalid UTF-8, NUL bytes, is over the size limit, or holds out-of-range integers.
+
+  Some validations are not modelled: host name syntax and resolution, `inet_interfaces`, account and numeric-ID lookups, and command existence. They can only stop master or the daemon, so the result over-reports and says so. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_postfix_master.py` has 13 tests with vectors derived from the source. There is no live differential against a running Postfix yet.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
