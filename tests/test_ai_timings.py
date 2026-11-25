@@ -2,11 +2,11 @@ import json
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from sqlalchemy import select
+from sqlalchemy import event, select
 import httpx
 import pytest
 from app import ai,ai_runs,worker
-from app.db import Session,Host,Behavior,Setting
+from app.db import Session,Host,Behavior,Setting,engine
 from app.security import seal
 
 
@@ -199,6 +199,48 @@ def test_timing_summary_samples_only_the_selected_activity(admin):
 
     for purpose in ('', 'connection_test', 'worker', 'TRIAGE', 'update_scoring '):
         assert admin.get('/api/ai/triage/timings', params={'purpose': purpose}).status_code == 400
+
+
+@pytest.mark.parametrize('purpose', ['triage', 'update_scoring'])
+def test_timing_summary_keeps_selected_runs_and_events_on_one_snapshot(admin, purpose):
+    with Session() as session:
+        session.add_all([
+            ai_runs.AIRun(id='timed', purpose=purpose, state='complete', started=1, finished=2),
+            ai_runs.AIRun(id='untimed', purpose=purpose, state='complete', started=2, finished=3),
+            ai_runs.AIEvent(run_id='timed', stage='timing_provider',
+                            message='provider: 25.000 ms; outcome=complete'),
+        ])
+        session.commit()
+    reads = []
+    sqlite = engine.dialect.name == 'sqlite'
+
+    def observe(_connection, _cursor, statement, _parameters, _context, _many):
+        if not statement.lstrip().startswith(('SELECT', 'WITH')):
+            return
+        if 'FROM ai_runs' not in statement and 'FROM ai_events' not in statement:
+            return
+        reads.append(statement)
+        if sqlite and len(reads) == 1:
+            # Retention commits after the initial read starts. A second SQLite
+            # read would see neither the sampled runs nor their timing events.
+            with Session() as writer:
+                ai_runs.prune_history(writer, 10)
+                writer.commit()
+
+    event.listen(engine, 'after_cursor_execute', observe)
+    try:
+        response = admin.get('/api/ai/triage/timings', params={'purpose': purpose, 'limit': 2})
+    finally:
+        event.remove(engine, 'after_cursor_execute', observe)
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary['sampled_runs'] == 2
+    assert summary['runs_without_samples'] == 1
+    assert summary['stages']['provider']['samples'] == 1
+    assert len(reads) == 1
+    if sqlite:
+        later = admin.get('/api/ai/triage/timings', params={'purpose': purpose}).json()
+        assert later['sampled_runs'] == 0
 
 
 def test_timing_summary_rejects_unknown_purpose():

@@ -324,8 +324,11 @@ def main():
     parser.add_argument('--follow-up-runs', type=int,
                         help='number of investigations requesting follow-up evidence (default: every second run)')
     parser.add_argument('--concurrency', type=int, default=1)
-    parser.add_argument('--same-server', action='store_true',
+    layout = parser.add_mutually_exclusive_group()
+    layout.add_argument('--same-server', action='store_true',
                         help='place distinct subjects on one server using its maximum supported slots')
+    layout.add_argument('--servers', type=int,
+                        help='distribute subjects across this many fixture servers (default: one per run)')
     parser.add_argument('--provider-delay-ms', type=int, default=20)
     parser.add_argument('--persistence-delay-ms', type=int, default=0)
     parser.add_argument('--ssh-delay-ms', type=int, default=10,
@@ -345,6 +348,11 @@ def main():
                              f'the {MYSQL_URL_ENV} environment variable; its tables are removed afterwards')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
+    servers = args.runs if args.servers is None else args.servers
+    if args.same_server:
+        servers = 1
+    if not 1 <= servers <= args.runs:
+        parser.error('--servers must be between 1 and --runs')
     paced = args.control_mode in PACED_MODES
     rate = DEFAULT_FIXTURE_RATE_PER_HOUR if args.rate_per_hour is None else args.rate_per_hour
     if args.rate_per_hour is not None and not paced:
@@ -397,9 +405,10 @@ def main():
         if args.database == 'mysql':
             from app.db import Base
             claim.metadata = Base.metadata
-        single_server_slots = ai_policy.MAX_CONCURRENCY if args.same_server else None
-        if single_server_slots is not None and args.concurrency > single_server_slots:
-            parser.error(f'--same-server requires --concurrency at most {single_server_slots}')
+        per_server_slots = ai_policy.MAX_CONCURRENCY if servers < args.runs else None
+        if per_server_slots is not None and args.concurrency > per_server_slots:
+            option = '--same-server' if args.same_server else '--servers'
+            parser.error(f'{option} requires --concurrency at most {per_server_slots}')
         init()
         capped = args.control_mode in ai_pricing.CAP_MODES
         if capped:
@@ -490,7 +499,7 @@ def main():
         worker._assess_behavior = admission
         try:
             subjects = [f'fixture-{index}' for index in range(args.runs)]
-            expected_hosts = {subject: f'fixture-host-{0 if args.same_server else index}'
+            expected_hosts = {subject: f'fixture-host-{index % servers}'
                               for index, subject in enumerate(subjects)}
             with Session() as s:
                 settings = {'ai_enabled': True, 'ai_model': FIXTURE_MODEL, 'ai_hourly_limit': 100,
@@ -503,9 +512,9 @@ def main():
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
                 for host_id in dict.fromkeys(expected_hosts.values()):
                     s.add(Host(id=host_id,name='Fixture only',address='192.0.2.1',fingerprint=''))
-                if single_server_slots is not None:
-                    s.add(Setting(key=ai_policy.PREFIX+'fixture-host-0',
-                                  value={'concurrency_limit': single_server_slots}))
+                    if per_server_slots is not None:
+                        s.add(Setting(key=ai_policy.PREFIX+host_id,
+                                      value={'concurrency_limit': per_server_slots}))
                 if args.retained_history_rows:
                     history_time = time.time() - args.queue_age_seconds - 3600
                     s.execute(insert(Behavior), [
@@ -516,7 +525,7 @@ def main():
                 first_seen=time.time()-args.queue_age_seconds
                 for index, subject in enumerate(subjects):
                     evidence = {'executable':'/fixture/artifact','sha256':'a'*64,'identity_verified':True,'two_stage':index in follow_up_indices}
-                    if args.same_server:
+                    if per_server_slots is not None:
                         evidence['uid'] = str(1000 + index)
                     s.add(Behavior(id=subject,host_id=expected_hosts[subject],first_seen=first_seen+index*.0001,
                                    evidence=evidence))
@@ -594,7 +603,9 @@ def main():
                 ordered=sorted(values)
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
             report = json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
-                'fixture_hosts':len(set(observed_hosts.values())), 'single_server_slots':single_server_slots,
+                'fixture_hosts':len(set(observed_hosts.values())),
+                'single_server_slots':per_server_slots if servers == 1 else None,
+                **({'shared_server_slots':per_server_slots} if 1 < servers < args.runs else {}),
                 'peak_provider_requests':peak_provider_requests,
                 'database':args.database, 'database_version':database_version,
                 'retained_history_rows':retained_history_rows,'connections':len(connections),
