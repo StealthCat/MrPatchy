@@ -12650,6 +12650,20 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 - **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
 - **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
 
+### Bounded fleet automatic plan policy reads — Roadmap A checkpoint #1429
+
+Fleet automatic plan status reads policy rows in pages of at most 512, ordered
+by server name and ID. It stops once it sees the first opted-in server beyond
+the displayed limit. Sparse opt-ins can require more pages. Previous opt-in
+truthiness, server order, truncated counts and the admin-only API still apply.
+If a concurrent rename moves a server past the cursor, its first listed
+identity and display name are used for the response.
+
+Controller initialization adds a server index on deletion state, name and ID
+to support the cursor query on fresh or existing databases. The tests cover
+repeat initialization, sparse policies, tied names, and exact versus truncated
+listings on SQLite and MySQL.
+
 ### Batch fleet automatic AI plan job status — Roadmap A checkpoint #1205
 
 The automatic AI plan status reads the active plan and latest automatic attempt
@@ -13059,6 +13073,18 @@ This is a contract increment only. The startup-awareness requirement is still in
 - persistence, UI, provenance and AI classification.
 
 There is no schema, API, authentication or response-authorization change.
+### Refusal and token-budget wording for blocked update scores — worker checkpoint #1162
+
+Roadmap A: this follows up the #1158 "Remaining" line, which said update scoring kept its old failure text after process triage learned to name a model refusal and `max_output_tokens` exhaustion.
+
+- **Problem:** update scoring stored the triage-oriented diagnostic plus `BLOCKED_SUFFIX` on every package in a blocked batch. A refusal therefore read "Review this observation manually; no safety assessment was accepted", implied a key change might help, and never said the request reached the provider. The token-budget case also suggested a key change and omitted billing.
+- **Change:** `update_scores.blocked_explanation()` maps cause `model_refusal` and cause `token_budget` to scoring-specific text, followed by the unchanged `BLOCKED_SUFFIX`.
+  - Both texts say the request was sent and may be billed, and that changing the API key does not help.
+  - The refusal text says a different model may score the updates. The token-budget text says to select a model that completes within the scoring budget.
+  - Every other blocked cause keeps `safe_error(error) + BLOCKED_SUFFIX` byte-for-byte. Provider-supplied refusal text is never stored.
+- **Unchanged:** the `blocked` state, the stored configuration signature and eligibility (a model or key change still re-admits), deferral, transient handling, the hourly error retry, admission, reservations, the `ai-scoring` blocked notification and count, the administrator retry, schema, API, roles and response authorization.
+- **Validation:** `tests/test_update_score_block_causes.py` drives the real `update_scores.run_one()` path with only the provider transport as a fixture. Restoring main's call site fails the two cause tests and leaves the six invariant guards passing: invalid output, other incomplete responses, rejected key, blocked count, model-change re-admission and key-change re-admission. 185 scoring/retry tests pass.
+- **Remaining:** advisory security plans keep their existing failure wording.
 
 ### Notification-center deep link — worker checkpoint #1168 (roadmap J)
 
@@ -13591,6 +13617,7 @@ LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-sc
 - **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.
+
 ### keepalived script contract — worker checkpoint #1307 (roadmap F, in progress)
 
 keepalived runs administrator-configured programs on VRRP state changes, health checks, LVS events and at startup and shutdown. They run as root, or as `script_user` / `keepalived_script`.
@@ -13680,3 +13707,29 @@ snmpd runs configured programs whenever an SNMP manager reads, or for writable e
 - **Fail closed:** blocking gaps cover unobserved files or listings, an unobserved invocation or starting group, relative includes, include cycles, truncated paths, failed-`stat` entries, build-dependent `ssl_version=SSLv2` and out-of-range integers. `origin` is `not_assessed`, and no result is a safety verdict.
 - **Validation:** `tests/test_nrpe_commands.py` (14 tests) uses vectors derived from the source. Upstream `process_macros`, `my_strsep` and the `raw_command` copy, compiled from the nrpe 4.1.0 tag, agreed with the contract on 20,300 randomized command lines (0 mismatches). The full daemon was not built.
 - **Remaining:** native collection of `nrpe.cfg` and `nrpe.d`, startup-inventory wiring, provenance and AI classification. The build flags (`--enable-command-args`), account resolution and `allowed_hosts` reachability are not observed. A SIGHUP reload re-reads the file without re-running `check_privileges`, so `nrpe_user=root` written after start can take effect until restart.
+
+### Postfix master.cf service contract — worker checkpoint #1338 (roadmap F)
+
+Postfix `master(8)` reads `master.cf` at startup and on every `postfix reload`. It starts each service listed there as root, from `$daemon_directory`. The `pipe(8)` and `spawn(8)` services then run the external command given by `argv=` as the `user=` account, which is the usual way to attach content filters and mail-triggered scripts. The startup inventory did not model this path.
+
+- **Change:** the pure `app/postfix_master.py` takes captured `master.cf` text, captured `main.cf` parameter values and an optional `/etc/services` port map. It returns each service master starts: name, type, flags, wakeup, maxproc, the program and the argument vector master builds, whether the daemon keeps root or drops to the mail owner, and any earlier entries the service overrides. For `pipe` and `spawn` it also returns the external `argv=` command, its SHA-256, its `${...}` macros and the `user=`/group account, or the daemon refusal that keeps the command from running. It performs no I/O and never runs a command.
+- **Fidelity (Postfix 3.8.6):** follows the rules in `readllines`, `get_master_ent` and `master_config`:
+  - continuation lines, with comment lines dropped inside them;
+  - `master_service_disable` matching, plus empty `inet_protocols`, applied before any other validation;
+  - `-` defaults, `y`/`n`, `atoi` and conditional `?` wakeup;
+  - the compatibility-level `chroot` default;
+  - `{}` grouping;
+  - last-entry-wins by type and canonical endpoint;
+  - master's own `-l`/`-z`/`-n`/`-t`/`-u`/`-c`/`-o stress=` arguments.
+
+  `pipe`/`spawn` attributes are parsed after `single_server`'s `getopt("+cdDi:lm:n:o:r:s:St:uvVz")`, following `get_service_attr`. The result is `config_error`, with no services, only for the refusals the module models exactly.
+- **Fail closed:** the result is incomplete when:
+  - `master.cf` or `main.cf` is unobserved;
+  - a needed parameter requires `$` expansion;
+  - the build-specific `daemon_directory` is missing;
+  - two inet entries might name the same endpoint only through unobserved name or port resolution;
+  - the input has invalid UTF-8, NUL bytes, is over the size limit, or holds out-of-range integers.
+
+  Some validations are not modelled: host name syntax and resolution, `inet_interfaces`, account and numeric-ID lookups, and command existence. They can only stop master or the daemon, so the result over-reports and says so. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_postfix_master.py` has 13 tests with vectors derived from the source. There is no live differential against a running Postfix yet.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
