@@ -66,10 +66,23 @@ def _window(session, column, conditions, limit, now):
     return used, used >= limit, None if timestamp is None else float(timestamp) + WINDOW_SECONDS
 
 
+def legacy_triage_allowance(session, limit, now):
+    """Return usage, the combined hold, and the earliest time both counters clear."""
+    from .ai_runs import AIRun
+    from .db import Behavior
+
+    # ai_claims.acquire refuses while either counter has reached the limit.
+    attempts = _window(session, Behavior.attempted, (), limit, now)
+    runs = _window(session, AIRun.started, (AIRun.purpose == 'triage',), limit, now)
+    openings = [opens_at for _, blocked, opens_at in (attempts, runs) if blocked]
+    next_at = max(openings) if openings and None not in openings else None
+    return max(attempts[0], runs[0]), bool(openings), next_at
+
+
 def _legacy_purpose_limits(session, settings, now):
     """Return the hidden legacy hourly allowances as counts and timestamps only."""
     from .ai_runs import AIRun
-    from .db import Behavior, Job
+    from .db import Job
 
     def entry(purpose, limit, used, blocked, next_at, state=None):
         return {'purpose': purpose, 'limit': limit, 'used': used,
@@ -77,13 +90,8 @@ def _legacy_purpose_limits(session, settings, now):
                 'next_at': next_at if blocked else None}
 
     limit = settings['ai_hourly_limit']
-    # ai_claims.acquire refuses while either counter has reached the limit.
-    attempts = _window(session, Behavior.attempted, (), limit, now)
-    runs = _window(session, AIRun.started, (AIRun.purpose == 'triage',), limit, now)
-    blocked = attempts[1] or runs[1]
-    opens = [item[2] for item in (attempts, runs) if item[1]]
-    triage_next = None if not blocked or None in opens else max(opens)
-    limits = [entry('triage', limit, max(attempts[0], runs[0]), blocked, triage_next)]
+    used, blocked, next_at = legacy_triage_allowance(session, limit, now)
+    limits = [entry('triage', limit, used, blocked, next_at)]
 
     limit = settings['ai_update_hourly_limit']
     used, blocked, next_at = _window(session, AIRun.started, (AIRun.purpose == 'update_scoring',), limit, now)

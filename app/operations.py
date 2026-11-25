@@ -187,6 +187,9 @@ OPERATIONAL_NOTIFICATIONS={
     # Notification-only (no outbox Alert): the 120-second `stale` alert flaps, so the bell
     # only reports telemetry silence that has persisted for TELEMETRY_LOST_SECONDS.
     'telemetry lost':('telemetry-lost','high','agent'),
+    # Notification-only (no outbox Alert): resource_attention_notifications mirrors the agent's
+    # advisory low-disk/inode/memory and clock-sync codes with fixed text and hysteresis (#1257).
+    'resource attention':('resource-attention','medium','agent'),
 }
 # Administrators can change the threshold in Settings -> Patch policy (#948). Values are
 # whole minutes; a missing or invalid stored value falls back to the 15-minute default.
@@ -303,6 +306,8 @@ def collect_alerts(now=None,observing_since=None):
         settings={row.key:row for row in s.scalars(select(Setting).where(Setting.key.in_([prefix+owner for owner in ids for prefix in ('agent-status:','persistence-baseline:')])))} if ids else {}
         from . import agent_integrity_notifications
         agent_integrity_notifications.publish(hosts,now,lambda *args:_operational_notification(s,*args),published)
+        from . import resource_attention_notifications
+        resource_attention_notifications.publish(s,hosts,now,lambda *args:_operational_notification(s,*args),published)
         lost_minutes=telemetry_lost_minutes(cfg);lost_seconds=lost_minutes*60;lost_message=telemetry_lost_message(lost_minutes)
         for host in hosts:
             if not host_lifecycle.active(host):
@@ -366,7 +371,7 @@ def collect_alerts(now=None,observing_since=None):
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')
         # In-app only: the raw integrity alert carries endpoint text; publish fixed controller-classified wording.
         from . import integrity_sweep_notifications
-        try:integrity_sweep_notifications.publish(s,hosts,now)
+        try:integrity_sweep_notifications.publish(s,hosts,now,cfg)
         except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
         # In-app only: scheduled malware-scan coverage has no SMTP/webhook alert.
         from . import scan_coverage_notifications

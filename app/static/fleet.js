@@ -174,26 +174,32 @@ function aiAdmissionControl(status){
 // Shared AI start gates (#727): renders the administrator-only control snapshot
 // from /api/settings/ai-control-status (#546). Display-only; never a promise that
 // a specific call will start.
-const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',credential:'Saved API key unreadable',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
+const AI_GATE_LABELS={disabled:'Central AI disabled',configuration:'Configuration incomplete',credential:'Saved API key unreadable',pricing:'Verified pricing unavailable',provider_backoff:'Shared provider backoff',rate_throttle:'Smooth-rate throttle',daily_cap:'Daily spend cap'};
+const aiGateTime=value=>Number.isFinite(value)&&value>0?date(value):null;
+function aiGateItems(blockers){
+ return blockers.map(blocker=>{
+  const code=typeof blocker?.code==='string'?blocker.code:'unknown';
+  const next=aiGateTime(blocker?.next_at),recheck=aiGateTime(blocker?.recheck_at);
+  const timing=next?`Next eligible ${next}`:recheck?`Recheck at ${recheck}. This is not a promised start`:'No scheduled end. An administrator must change this';
+  return `<li><strong>${esc(AI_GATE_LABELS[code]||code.replaceAll('_',' '))}</strong> · ${esc(blocker?.message||'')}<br><small>${esc(timing)}.</small></li>`;
+ }).join('');
+}
+function hasAiGateSnapshot(snapshot){
+ return snapshot&&!snapshot.unavailable&&typeof snapshot.can_start_now==='boolean'&&Array.isArray(snapshot.blockers);
+}
 function aiControlGates(snapshot){
- const when=value=>Number.isFinite(value)&&value>0?date(value):null;
  const head=state=>`<div class="card-head"><h2 id="ai-control-gates-title">Shared AI start gates</h2>${badge(state)}</div>`;
- if(!snapshot||snapshot.unavailable||typeof snapshot.can_start_now!=='boolean'||!Array.isArray(snapshot.blockers)){
+ if(!hasAiGateSnapshot(snapshot)){
   return head('unavailable')+`<p class="notice" role="status">Shared AI start gates are unavailable right now. The rest of the queue status is unaffected, and an unavailable snapshot never means AI work may start.</p><div class="actions"><button type="button" data-ai-control-retry>Retry start gates</button></div>`;
  }
  const limitations=Array.isArray(snapshot.limitations)&&snapshot.limitations.length?`<ul class="help">${snapshot.limitations.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'';
  const refresh=`<div class="actions"><button type="button" data-ai-control-retry>Refresh start gates</button></div>`;
- const purposes=aiPurposeLimits(snapshot.purpose_limits,when);
+ const purposes=aiPurposeLimits(snapshot.purpose_limits,aiGateTime);
  if(snapshot.can_start_now&&!snapshot.blockers.length){
   return head('open')+`<p>All shared global gates are open now. Queued work can start when a worker slot is free, subject to the remaining checks below.</p>${purposes}${limitations}${refresh}`;
  }
- const items=snapshot.blockers.map(blocker=>{
-  const code=typeof blocker?.code==='string'?blocker.code:'unknown';
-  const next=when(blocker?.next_at),recheck=when(blocker?.recheck_at);
-  const timing=next?`Next eligible ${next}`:recheck?`Recheck at ${recheck}. This is not a promised start`:'No scheduled end. An administrator must change this';
-  return `<li><strong>${esc(AI_GATE_LABELS[code]||code.replaceAll('_',' '))}</strong> · ${esc(blocker?.message||'')}<br><small>${esc(timing)}.</small></li>`;
- }).join('');
- const nextStart=when(snapshot.next_start_at);
+ const items=aiGateItems(snapshot.blockers);
+ const nextStart=aiGateTime(snapshot.next_start_at);
  const summary=nextStart?`<p><strong>Next eligible start:</strong> ${nextStart}. This is the latest time among the blocking gates. Work may still wait after it.</p>`:`<p><strong>No automatic next start.</strong> At least one hold has no scheduled end, or its time is only a recheck boundary.</p>`;
  return head('blocked')+`<p>New AI provider calls are held by ${snapshot.blockers.length} shared ${snapshot.blockers.length===1?'gate':'gates'}. Queued work stays queued until the gates open.</p><ul>${items}</ul>${summary}${purposes}${limitations}${refresh}`;
 }
@@ -549,7 +555,7 @@ async function users(revision=renderRevision){
 
 async function fleetSecurityCoverage(revision){
  const root=$('#content');let offset=0,query='',ticket=0;
- root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>'+(isAdmin()?'<section class="card" id="fleet-auto-plans" aria-labelledby="fleet-auto-plans-title"><h2 id="fleet-auto-plans-title">Automatic AI plans across the fleet</h2><div class="fleet-auto-plans-body"></div></section>':'');
+ root.innerHTML=heading('Security coverage','Recorded scanner coverage across your fleet. Each engine stands on its own.')+'<section class="card"><p class="notice">Recorded results describe bounded scans, not a clean server or complete protection. This page reads stored data and does not contact targets.</p><form id="coverage-search"><label>Server name<input name="q" maxlength="200" type="search" placeholder="Find a server"></label><button>Find servers</button></form><div id="coverage-results" aria-live="polite"></div><div class="actions"><button id="coverage-prev">Previous servers</button><button id="coverage-next">Next servers</button><button id="coverage-refresh">Refresh coverage</button></div></section><section class="card" id="fleet-exposure" aria-labelledby="fleet-exposure-title"><h2 id="fleet-exposure-title">Open CVE exposure across the fleet</h2><div class="fleet-exposure-body"></div></section>'+(isAdmin()?'<section class="card" id="fleet-auto-plans" aria-labelledby="fleet-auto-plans-title"><h2 id="fleet-auto-plans-title">Automatic AI plans across the fleet</h2><div class="fleet-auto-plans-body"></div><div class="fleet-auto-plan-retry" hidden></div></section>':'');
  const current=()=>currentView(revision,'security')&&root.isConnected;
  const load=async()=>{const turn=++ticket;try{
   const data=await api('/security/coverage?offset='+offset+'&q='+encodeURIComponent(query));if(!current()||turn!==ticket)return;
@@ -558,7 +564,7 @@ async function fleetSecurityCoverage(revision){
   root.querySelector('#coverage-results').innerHTML='<p>'+data.summary.servers+' servers on this page · '+data.summary.disabled+' disabled · '+data.summary.open_incidents+' open or acknowledged scanner incidents</p>'+data.items.map(h=>'<article class="card"><div class="card-head"><h2>'+esc(h.name)+'</h2><a class="button" href="'+serverLink(h.id,'security')+'">Review server security</a></div><p>'+badge(h.enabled?'enabled':'disabled')+' · Last contact '+date(h.last_seen)+' · '+h.open_incidents+' open incidents · ClamAV age limit '+h.expected_hours+' hours · YARA age limit 24 hours</p>'+(!h.enabled?'<p class="notice">Management is disabled. These results are historical; collection is suspended.</p>':'')+'<div class="server-grid">'+engine('ClamAV',h.engines.ClamAV)+engine('YARA',h.engines.YARA)+'</div></article>').join('')+(data.items.length?'':'<p>No matching managed servers.</p>');
   root.querySelector('#coverage-prev').disabled=!offset;root.querySelector('#coverage-next').disabled=!data.more;
  }catch(error){if(current()&&turn===ticket)root.querySelector('#coverage-results').innerHTML=PatchyUI.error('Unable to load coverage',esc(error.message));}};
- root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root),fleetAutoPlans(revision,root)]);
+ root.querySelector('#coverage-search').onsubmit=e=>{e.preventDefault();query=new FormData(e.currentTarget).get('q').trim();offset=0;load();};root.querySelector('#coverage-prev').onclick=()=>{offset=Math.max(0,offset-50);load();};root.querySelector('#coverage-next').onclick=()=>{offset+=50;load();};root.querySelector('#coverage-refresh').onclick=load;await Promise.all([load(),fleetExposure(revision,root),fleetAutoPlans(revision,root),fleetAutoPlanRetry(revision,root)]);
 }
 
 // Stored advisory-scan ledger only (#911): version applicability, never exploitation evidence, a clean-host verdict
@@ -609,11 +615,38 @@ async function fleetAutoPlans(revision,root){
  const load=async()=>{
   const turn=++ticket,current=()=>turn===ticket&&body.isConnected&&currentView(revision,'security');
   body.innerHTML='<p role="status">Loading automatic AI plan status…</p>';
-  try{const data=await api('/security/auto-plan-status');if(!current())return;body.innerHTML=fleetAutoPlansContent(data);}
+  try{
+   const data=await api('/security/auto-plan-status');if(!current())return;
+   body.innerHTML=fleetAutoPlansContent(data);
+   loadAutomaticPlanGates(body,data?.pacing?.mode,current);
+  }
   catch(error){if(!current())return;body.innerHTML='<div class="notice" role="alert"><p>Automatic AI plan status is unavailable right now. This never means a plan will start; pause, holds and shared start gates still apply. The rest of this page is unaffected.</p><button type="button" class="fleet-auto-plans-refresh">Retry automatic plan status</button></div>';}
   body.querySelectorAll('.fleet-auto-plans-refresh').forEach(button=>button.onclick=load);
  };
  await load();
+}
+const AUTO_PLAN_SHARED_MODES=['rate','daily_cap','rate_and_daily','unthrottled'];
+function automaticPlanGateSlot(mode,announce=false){
+ if(!AUTO_PLAN_SHARED_MODES.includes(mode))return '';
+ return `<div class="help" data-auto-plan-gates${announce?' role="status"':''}>Loading shared AI start gates…</div>`;
+}
+async function loadAutomaticPlanGates(root,mode,current){
+ const slot=root.querySelector('[data-auto-plan-gates]');
+ if(!slot||!isAdmin())return;
+ let snapshot;try{snapshot=await api('/settings/ai-control-status');}catch{snapshot=null;}
+ if(!slot.isConnected||!current()||!isAdmin())return;
+ if(!hasAiGateSnapshot(snapshot)||snapshot.mode!==mode||snapshot.can_start_now!==(snapshot.blockers.length===0)){
+  slot.textContent='Shared AI start gates are unavailable right now. Plan readiness still depends on the shared controls.';
+  return;
+ }
+ const otherChecks='Worker capacity, server readiness and plan-specific checks still apply.';
+ if(snapshot.can_start_now){
+  slot.textContent='The recorded shared AI start gates are open. '+otherChecks;
+  return;
+ }
+ const next=aiGateTime(snapshot.next_start_at);
+ const timing=next?`Next shared eligibility ${esc(next)}.`:'No scheduled shared start. Check the individual holds below.';
+ slot.innerHTML=`<p>Shared AI start gates are holding new provider calls. ${timing} ${otherChecks}</p><ul>${aiGateItems(snapshot.blockers)}</ul>`;
 }
 const FLEET_AUTO_PLAN_STATES={off:['Off','disabled'],ai_disabled:['AI disabled','disabled'],not_configured:['Needs model and key','medium'],paused:['AI paused','medium'],held:['Response hold','medium'],inactive:['Server disabled','disabled'],ready:['Ready','low']};
 function fleetAutoPlansContent(data){
@@ -625,7 +658,7 @@ function fleetAutoPlansContent(data){
  if(!data||typeof data!=='object'||!Array.isArray(data.items)||!data.totals||!data.pacing)return '<div class="notice" role="status"><p>Automatic AI plan status is unavailable in this response. This never means a plan will start.</p></div>'+limits+refresh;
  const t=data.totals,p=data.pacing;
  const pacing=p.mode==='legacy'?'Legacy fleet allowance: '+count(p.used)+' of '+count(p.limit)+' plan requests used this hour'+(typeof p.next_at==='number'?' · next free '+esc(time(p.next_at)):'')+'.':'No plan-specific hourly limit; the shared AI start gates (rate throttle, daily cap, provider backoff) pace each plan.';
- const summary='<div class="status-facts" role="status"><span><strong>'+count(t.servers)+'</strong>Servers opted in</span><span><strong>'+count(t.ready)+'</strong>Ready</span><span><strong>'+count(t.awaiting)+(t.awaiting_truncated?'+':'')+'</strong>Incidents awaiting an attempt</span><span><strong>'+count(t.active_plans)+'</strong>Plan jobs queued or running</span></div><p class="help">'+pacing+'</p>';
+ const summary='<div class="status-facts" role="status"><span><strong>'+count(t.servers)+'</strong>Servers opted in</span><span><strong>'+count(t.ready)+'</strong>Ready</span><span><strong>'+count(t.awaiting)+(t.awaiting_truncated?'+':'')+'</strong>Incidents awaiting an attempt</span><span><strong>'+count(t.active_plans)+'</strong>Plan jobs queued or running</span></div><p class="help">'+pacing+'</p>'+automaticPlanGateSlot(p.mode,true);
  const truncated=data.truncated===true?'<div class="notice">Only the first '+count(data.items.length)+' opted-in servers are shown, ordered by name. The totals count the listed servers only.</div>':'';
  if(!data.items.length)return summary+'<p>No server has automatic AI plans enabled. Turn them on from a server\'s Security tab.</p>'+limits+refresh;
  const rows=data.items.map(raw=>{
@@ -640,6 +673,29 @@ function fleetAutoPlansContent(data){
   return '<li><div>'+host+' <span class="badge '+state[1]+'">'+esc(state[0])+'</span></div><div class="help">'+facts.join(' · ')+'</div></li>';
  }).join('');
  return summary+truncated+'<ul class="fleet-auto-plans-list">'+rows+'</ul>'+limits+refresh;
+}
+
+// Fleet-wide release of failed automatic AI plan attempts (#1251). Admin-only; counts active servers only.
+// Releasing sends no provider request: the automatic schedule retries each incident through the same gates.
+async function fleetAutoPlanRetry(revision,root){
+ const box=root.querySelector('.fleet-auto-plan-retry');if(!box||!isAdmin())return;let ticket=0;
+ const load=async()=>{
+  const turn=++ticket,current=()=>turn===ticket&&box.isConnected&&currentView(revision,'security')&&isAdmin();
+  let data;try{data=await api('/security/auto-plan-failed');}catch{data=null;}
+  if(!current())return;
+  const failed=data&&Number.isSafeInteger(data.failed)&&data.failed>0?data.failed:0;
+  if(!failed){box.hidden=true;box.innerHTML='';return;}
+  box.innerHTML=`<p><strong>${esc(failed.toLocaleString())} open incident${failed===1?'':'s'}</strong> across enabled servers ${failed===1?'had its':'had their'} automatic AI plan attempt fail and will not be tried again automatically.</p><p class="help">Fix the cause first, such as the saved key, model or provider quota; the failed operations in Activity show the error. Retrying sends no provider request now: it lets the automatic schedule try each incident once more, one plan per server at a time, and AI pause, response holds and the shared AI start gates still apply. Disabled servers are not included.</p><div class="actions"><button type="button" class="fleet-auto-plan-retry-run">Retry failed automatic plans</button></div>`;
+  box.hidden=false;
+  box.querySelector('.fleet-auto-plan-retry-run').onclick=async e=>{const b=e.currentTarget;b.disabled=true;
+   try{const r=await api('/security/auto-plan-failed/retry','POST');if(!current())return;
+    const released=Number.isSafeInteger(r?.released)?r.released:0,left=Number.isSafeInteger(r?.remaining)?r.remaining:0;
+    toast(released?`Released ${released.toLocaleString()} failed automatic plan attempt${released===1?'':'s'} for retry${left?`; ${left.toLocaleString()} still waiting, run it again`:''}`:'Nothing was released; the attempts may have changed');
+    box.closest('#fleet-auto-plans')?.querySelector('.fleet-auto-plans-refresh')?.click();
+    load();}
+   catch(error){if(current())toast(error.message);}finally{if(b.isConnected)b.disabled=false;}};
+ };
+ await load();
 }
 
 async function aiRunPage(revision,context,base,parts){

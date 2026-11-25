@@ -14,7 +14,9 @@ def test_status_reads_running_stage_and_latest_diagnostic_together(admin, state,
     now = time.time()
     with Session() as session:
         session.add_all([
-            Setting(key='config', value={'ai_enabled': True, 'ai_model': 'fixture'}),
+            Setting(key='config', value={
+                'ai_enabled': True, 'ai_model': 'fixture', 'ai_control_mode': 'legacy',
+            }),
             Setting(key='openai_key', value={'encrypted': 'fixture'}),
             Setting(key='worker:heartbeat', value={'seen': now}),
             ai_runs.AIRun(id='running-old', purpose='triage', started=now - 40, stage='older stage'),
@@ -30,7 +32,7 @@ def test_status_reads_running_stage_and_latest_diagnostic_together(admin, state,
 
     def capture(conn, cursor, statement, parameters, context, executemany):
         query = statement.lower()
-        if 'from ai_runs' in query and 'order by ai_runs.started desc' in query:
+        if 'from ai_runs' in query and ('ai_runs.stage' in query or 'ai_runs.message' in query):
             detail_reads.append(query)
 
     event.listen(engine, 'before_cursor_execute', capture)
@@ -46,6 +48,7 @@ def test_status_reads_running_stage_and_latest_diagnostic_together(admin, state,
     assert status['last_error'] == expected_error
     assert len(detail_reads) == 1
     assert 'union all' in detail_reads[0]
+    assert detail_reads[0].count('order by ai_runs.started desc') == 2
     assert 'ai_runs.subject' not in detail_reads[0]
     assert 'ai_runs.model' not in detail_reads[0]
 
