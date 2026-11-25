@@ -2672,6 +2672,18 @@ transport is a fixture.
   `tests/test_known_good.py`, not through this worker path. Production hit
   rates are not measured.
 
+### Provider retry deadlines on investigation cards — Roadmap A checkpoint #1130
+
+After a saved model or API key change, an individual blocked investigation or
+exhausted interrupted attempt displays a timed provider wait until its retained
+Retry-After expires. The card then shows retry eligibility without a stale
+deadline. The retained attempt history, active and paused overrides, and all
+provider and manual retry checks still apply.
+
+The acceptance cases cover both retained failure states, their deadline
+boundary, the investigation list, and refusal of manual retry before expiry.
+Independent scoring admission and matched production throughput remain open.
+
 ### Retry blocked process investigations — worker checkpoint #934
 
 Before this checkpoint a non-transient provider failure, such as a rejected key, exhausted quota or unsupported model, blocked every affected investigation. The `ai-triage`/`configuration-blocked` notification asked administrators to "explicitly retry", but the only retry was the per-card **Retry investigation** button. Update scoring already had **Retry blocked scores** (#815).
@@ -2870,6 +2882,16 @@ matching `secret.key`), `operations.collect_alerts()` publishes one admin-only
   describes possible provider-side causes alongside this one. Saving the key
   again changes the retry signature, which makes them eligible again. Blocked
   update-scoring and advisory-plan work remains uncovered.
+
+Worker checkpoint #1311 adds an administrator-only repair notice for malformed
+per-server AI policies. Operational alert collection checks active servers while
+central AI is enabled. A malformed policy that holds the server's AI work causes
+one in-app event linked to that server's Security tab. An intentional pause uses
+its existing coverage notification. Healthy, missing and intentionally paused
+policies do not trigger a repair notice. Repeated observations stay on one
+revision. Repair, disabling AI or leaving active management resolves it, and a
+recurrence appears unread. The event carries fixed text and the server identity.
+It does not send a provider request or change SMTP, webhook or response state.
 
 Worker checkpoint #739 adds an advance warning to the daily-cap producer. While
 counted spend in an enabled cap mode is at least a fixed 80% of the cap but
@@ -3196,9 +3218,12 @@ Worker checkpoint #1154 keeps the triage contention fixtures within one configur
   - Every other subject was refused before a run started, or is deferred to the
     window reset with no retry attempt used. None is blocked.
   - A second round in the same window sends nothing more.
-- **Preflight bypassed:** the same holds when the claim-time budget preflight
-  admits everything. All ten workers claim work, and the authoritative
-  reservation alone holds the cap.
+- **Preflights bypassed (#1295):** all ten contenders reach authoritative
+  reservation when the advisory claim-time budget and rate checks are
+  bypassed. Runtime reservation and rate admission still run. In
+  `rate_and_daily`, one worker starts after the first provider call has used
+  the rate slot, so coverage of the contended reservation does not depend on
+  which worker runs first.
 - **`rate_and_daily`:** checked with room for one call, because the rate gate
   also spaces admissions.
 - **Processes:** four fresh OS processes with two threads each share one cap.
@@ -3472,6 +3497,23 @@ in-flight cases fail. No defect was found and runtime code is unchanged. CI runs
 the file on SQLite and on the MySQL shards. Draining a worker inside a
 separate-machine deployment is still covered only by the planned roadmap G
 remote-worker acceptance.
+
+### Scheduler coordinator loss under a daily spend cap — milestone 4 acceptance #1289
+
+`tests/test_ai_budget_coordinator_failover.py` starts a disposable process that
+owns the real scheduler lock. A registered follower runs the worker dispatch
+loop, performs a capped investigation and leaves update scoring for the
+coordinator. After the lock owner dies, the same follower becomes coordinator
+and dispatches the queued score against the same ledger window.
+
+With headroom, the score gets its own settled receipt alongside the first
+unreconciled reservation. A tighter fixture cap fits either request on its own.
+The earlier reservation then defers the score to the reset and the ledger still
+contains only the triage charge. Dispatch is deterministic within the test and
+provider replies are fixtures. SQLite and MySQL check the same lock-owner loss
+contract. Database writer failover and multi-host deployment acceptance remain
+open.
+
 ### Server AI pause and global AI disable under a daily cap — worker checkpoint #998
 
 `tests/test_ai_budget_pause_acceptance.py` covers part of milestone 4's
@@ -3631,6 +3673,17 @@ Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one U
 - **tz database revisions:** the zones that change at local midnight revise their rules often. Those cases locate their days from the installed tz database and skip when it has none; the long-standing zones must always produce both.
 - **Remaining in milestone 4:** multi-process and multi-worker admission races at the reset, failover, lease loss and drain, settings changes during admission, and before/after production performance.
 
+### Daily-cap admission races at the reset — worker checkpoint #1275
+
+Milestone 4 acceptance for **multi-process and multi-worker admission races at the reset**. #984 crossed the reset with one caller at a time, and #1012 raced callers inside one window. `tests/test_ai_budget_reset_race_acceptance.py` races the authoritative `ai_budget.reserve()` admission across the boundary itself. It adds evidence only; no runtime behavior changes.
+
+- **Threads at the reset instant:** the old window is exhausted and still holds a sent-but-unanswered call, an uncertain call and an unsent reservation. Ten threads reserve at the reset in UTC, Asia/Kolkata and America/New_York. Exactly K calls are admitted into the new window (the cap is K calls plus half a call). Every refused caller gets a policy wait ending at the following reset. The old window's rows keep their `reset_at` and statuses and use none of the new headroom.
+- **Callers straddling the reset:** threads 1 ms or 0.75 s before the reset (or workers whose clocks lag by that much) race interleaved threads the same distance after it. The old window admits only its one remaining call, and a refused pre-reset caller waits only until the reset it observed. The new window admits exactly K. A further test fills the new window first and then admits a lagging caller into the old window's remaining headroom.
+- **Late receipt during the race:** an old-window call that settles cheaply, or turns uncertain, while new-window callers race stays in its own window. A cheap settlement frees only old-window headroom, and new-window admission is still exactly K.
+- **Fresh processes:** four child processes with three threads each, at and shortly after the reset, share the database and admit exactly K distinct calls in total.
+- **Evidence:** 13 tests, run on SQLite locally and on MySQL by the CI shards. Removing the shared budget lock fails all 13. Counting only rows whose `reset_at` is still ahead fails 12. Treating a row whose `reset_at` equals the current time as still open fails 3. Counting a row created exactly at the reset in the old window fails 3. Reporting a refused caller's wait from the wrong reset fails 11. Dropping the `reset_at` clause (counting by creation time alone) passes, as expected: that clause keeps spend counted across a timezone change, not across this boundary.
+- **Unchanged:** no defect was found. Failover, lease loss during the reset and before/after production performance remain open in milestone 4.
+
 ### Legacy per-purpose allowances in the shared start gates — worker checkpoint #860
 
 Installations still on `legacy` control mode now see their hidden hourly
@@ -3785,6 +3838,42 @@ and that a sent call may still be billable. From code reading, not tested here: 
 `mark_sent` leaves a `reserved` row counted until its window closes. That is
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
+
+### Lease loss across the daily-cap reset — milestone 4 acceptance #1277
+
+`tests/test_ai_budget_lease_reset_acceptance.py` combines the #992 lease-loss
+fixtures with the calendar-day reset. Each window's cap has room for exactly one
+conservative reservation. A capped call is reserved and sent in one window, the
+clock passes the reset, and the worker's lease then expires. The late outcome is
+either an answer (`answer`) or a lost connection (`failure`).
+
+- **Admission.** The successor for the same subject is admitted against the new
+  window. That is possible only because the lost call's still-`sent` ceiling is not
+  counted there. Each row keeps the `reset_at` it was admitted under.
+- **Late outcome.** The late outcome is reconciled into the lost call's own row
+  without moving it.
+  - An answer settles at its actual cost.
+  - A failure becomes `uncertain`. Its full ceiling stays counted in the old window
+    of `ai_budget.history()`, and the reset never releases it.
+- **New window unchanged.** The next window's cap is set to exactly one
+  reservation ceiling. In both cases the new window's counted spend and next
+  eligibility are identical before and after the late outcome. A distinct second
+  subject is not claimed, reserved or sent, either before or after it, so it
+  defers to the following reset.
+- **Stale run rejected.** Only the successor's assessment is accepted, and the lost
+  run stays `interrupted`.
+
+**Mutation evidence:**
+
+| Mutation | Result |
+|---|---|
+| Settlement or `mark_uncertain` rewrites `reset_at` to the current window | Both variants fail |
+| A late uncertain row past its reset is released | The `failure` variant fails |
+| Rows are counted regardless of their own window | Both variants fail: the successor is deferred |
+| Preflight and reserve ignore spend already counted in the window | Both variants fail: the second subject is sent |
+
+No defect was found and there is no runtime change. Failover and before/after
+production performance remain open.
 
 ### Non-expanding legacy migration proposal — worker checkpoint #879 (fixes #878)
 
@@ -4027,6 +4116,19 @@ unthrottled by Mr Patchy, or legacy attempts against the legacy hourly limit.
 Previously it always advertised the legacy investigation limit, which only
 applies in legacy mode. This is display-only: admission, spend, pause, lifecycle
 and authorization behavior are unchanged. A browser regression covers every mode.
+
+### Compare daily ledger timings — Roadmap A checkpoint #1305
+
+`tools/compare_ai_benchmarks.py` adds a `budget_timings` section when either
+capped fixture report includes ledger timings. It verifies both reservation
+and reconciliation timings on each measured side, including one sample per
+settled provider call and finite ordered durations within the run elapsed
+time. A complete pair includes p50/p95 deltas. For a mixed pair the historical
+side and the deltas are null. A pair of older reports keeps its existing
+comparison shape. Uncapped reports cannot supply capped ledger timings.
+
+Workload equivalence checks still apply before comparisons. These measurements
+cover the disposable fixture ledger and leave production throughput open.
 
 ### SSH evidence delay in the triage benchmark — worker checkpoint #524
 
@@ -12762,6 +12864,18 @@ The dnf-plugins-core `post-transaction-actions` plugin makes root run shell comm
 - **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
 - **Validation:** `tests/test_dnf_actions.py` has 30 tests. The module does not exist on main, so they cannot run there. A randomized test runs the plugin's own `_parse_actions` logic with the real `glob` on 300 fixture directories, built with comment, colon, case, whitespace, `\r`, `\f` and U+2028 edge cases, and requires identical actions. Ten mutations are each caught: per-part stripping, hidden-file eligibility, `splitlines()` instead of `readlines()`, `;` comments, case-insensitive keys, no quote trimming, a case-insensitive state, a normalized `actiondir` glob, missing NUL handling, and installation precedence.
 - **Remaining:** agent collection, a DNF 5 actions contract, a catalog parse-level update after collection, and UI.
+
+### Interrupted package scoring in AI Activity — Roadmap A checkpoint #1115
+
+The scoring queue summary shows an exact current package attempt as waiting to
+retry when worker recovery has recorded its linked scoring run as interrupted.
+It reports the existing one-hour eligibility boundary. A live, missing or older
+run link cannot supply evidence of interruption for the current attempt.
+
+The regression compares counts before and after the retry boundary and verifies
+that reading the summary leaves the score intact. If the worker stops before
+linking its run, the summary has no run state for that attempt. Independent
+scoring admission and native fleet throughput acceptance remain open.
 
 ### Triage benchmark persistence evidence — Roadmap A checkpoint #1186
 
