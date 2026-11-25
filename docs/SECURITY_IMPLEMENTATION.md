@@ -13408,3 +13408,14 @@ LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-sc
 - **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### procmail rcfile execution contract — worker checkpoint #1507 (roadmap F)
+
+Procmail is often the local delivery agent, started by Postfix `mailbox_command`, a `~/.forward` `"|procmail"` entry or the MTA. Every delivered message can then make `/etc/procmailrc` and the recipient's `~/.procmailrc` start programs, with no login. The startup inventory did not model them.
+
+- **Change:** the pure `app/procmail_rc.py` takes the captured text of one rcfile, its kind (`global` or `user`), the recipient and whether procmail started privileged. It returns each program procmail may start: `|` pipe actions, `f` filters, `VAR=|cmd` captures, `?` condition programs, backticks and `TRAP`. For each it gives the guarding recipe and block depth, whether it goes through `$SHELL` and the user it runs as. It also lists forwards and the `INCLUDERC`/`SWITCHRC` files it does not follow. It performs no I/O and never runs a command.
+- **Fidelity:** it follows procmail 3.24 `procmail.c` `mainloop`, `misc.c` `conditions`, `goodies.c` `readparse`/`metaparse`, `variables.c` `DROPPRIVS`/`renvint` and the `config.h` defaults (`RECFLAGS`, `SHELLMETAS`). The global rcfile runs as root after a privileged start until a truthy `DROPPRIVS`. A conditional or expanded `DROPPRIVS` makes later entries `unknown`.
+- **Fail closed:** missing or oversized input, an unclosed block, an unterminated backtick or quote, a legacy counted header, a blank line before the first condition (without `A a E e`) and a `$` condition that expands a variable all set `complete: false` with a named gap. `origin` is `not_assessed`.
+- **Validation:** `tests/test_procmail_rc.py` (46 tests). The rules were checked against the procmail 3.24 source. No differential test runs the real binary, because running a downloaded procmail binary was not permitted in this environment.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of `/etc/procmailrc` and `~/.procmailrc`, linking with the `.forward` (#1489) and Postfix `mailbox_command` evidence, following `INCLUDERC`/`SWITCHRC`, a catalog entry, package provenance, persistence, UI and AI classification.
