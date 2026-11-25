@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import select
 from test_operations import login_as
 
-from app import ai, scoring_queue_status, update_scores
+from app import ai, ai_runs, scoring_queue_status, update_scores
 from app.db import Host, Package, Session, Setting, config
 from app.security import seal
 
@@ -83,6 +83,39 @@ def test_retry_wait_reports_the_hourly_retry_boundary(admin):
             row.next_at = now + 7200
         s.commit()
     assert summary(now)['next_eligible_at'] == pytest.approx(now - 600 + 3600)
+
+
+def test_interrupted_scoring_attempt_enters_retry_wait_without_mutating_scores(admin):
+    now = seed()
+    attempted = now - 30
+    with Session() as s:
+        for row in s.scalars(select(update_scores.UpdateScore).where(
+                update_scores.UpdateScore.state.in_(('error', 'deferred')))):
+            row.state = 'complete'
+        interrupted = s.scalar(select(update_scores.UpdateScore).where(update_scores.UpdateScore.host_id == 'running'))
+        interrupted.run_id = 'interrupted'
+        s.add(ai_runs.AIRun(id='interrupted', purpose='update_scoring', state='interrupted',
+                           started=attempted + 1, finished=attempted + 2))
+        s.add(ai_runs.AIRun(id='live', purpose='update_scoring', started=attempted + 1))
+        for host, run_id, started in (('ready', 'live', attempted), ('fresh', 'interrupted', attempted + 3),
+                                      ('paused', '', attempted), ('expired', '', attempted)):
+            package = s.get(Package, host + ':secret-package')
+            s.merge(update_scores.UpdateScore(
+                id=update_scores.identity(s.get(Host, host), package), host_id=host, name=package.name,
+                installed='1', candidate='2', state='running', attempted=started, run_id=run_id))
+        interrupted_id = interrupted.id
+        s.commit()
+
+    result = summary(now)
+    assert result['counts']['retry_wait'] == 1
+    assert result['counts']['running'] == 3
+    assert result['next_eligible_at'] == pytest.approx(attempted + 3600)
+    expired = summary(attempted + 3600)
+    assert expired['counts']['retry_wait'] == 0
+    assert expired['counts']['eligible'] == result['counts']['eligible'] + 3
+    with Session() as s:
+        row = s.get(update_scores.UpdateScore, interrupted_id)
+        assert (row.state, row.run_id, row.attempted) == ('running', 'interrupted', attempted)
 
 
 def test_eligible_updates_are_exactly_the_ones_the_scheduler_sends(admin, monkeypatch):

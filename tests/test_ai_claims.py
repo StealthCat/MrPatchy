@@ -475,6 +475,10 @@ if lease:
 def test_scheduler_bounds_slots_alternates_purposes_and_drains(admin,monkeypatch,capacity,shutdown):
     from concurrent.futures import Future
     from app import persistence,response_monitor,service_monitor,execution_scans
+    with Session() as session:
+        session.merge(Setting(key='config', value={'ai_enabled': True, 'ai_updates_enabled': True,
+                                                   'ai_model': 'fixture-model'}))
+        session.commit()
     monkeypatch.setenv('MRPATCHY_AI_CONCURRENCY',str(capacity))
     for module in (worker.scheduling,worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
         monkeypatch.setattr(module,'tick' if module is worker.scheduling else 'schedule_tick',lambda *a:None)

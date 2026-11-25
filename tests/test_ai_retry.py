@@ -51,6 +51,48 @@ def test_http_date_and_past_retry_after(monkeypatch):
     assert ai.retry_after(response(headers={'retry-after':formatdate(now-100,usegmt=True)}))==0
 
 
+@pytest.mark.parametrize('state', ['blocked', 'interrupted'])
+def test_observation_explains_retained_provider_floor_after_configuration_change(state):
+    floor = 2_000_000_000
+    retry = ai_retry.TriageRetry(
+        subject='subject', configuration='old', state=state, attempts=ai_retry.MAX_ATTEMPTS,
+        provider_until=floor, next_at=floor + 3600, reason='Previous configuration failure.',
+    )
+    held = ai_retry.summary(retry, 'new', floor - 1)
+    assert (held['state'], held['next_at'], held['attempts']) == ('deferred', floor, ai_retry.MAX_ATTEMPTS)
+    assert 'provider Retry-After' in held['reason']
+    due = ai_retry.summary(retry, 'new', floor)
+    assert (due['state'], due['next_at'], due['attempts']) == ('ready', 0, ai_retry.MAX_ATTEMPTS)
+    assert ai_retry.summary(retry, 'old', floor)['state'] == 'blocked'
+    assert (retry.state, retry.next_at) == (state, floor + 3600)
+
+
+def test_investigation_list_uses_provider_floor_after_model_change(admin):
+    setup()
+    floor = time.time() + 120
+    with Session() as s:
+        s.get(Behavior, 'subject').verdict = 'error'
+        s.add(ai_retry.TriageRetry(
+            subject='subject', configuration=ai_retry.configuration(s), state='blocked',
+            attempts=ai_retry.MAX_ATTEMPTS, provider_until=floor, next_at=floor + 3600,
+            reason='Previous configuration failure.',
+        ))
+        cfg = s.get(Setting, 'config')
+        cfg.value = {**cfg.value, 'ai_model': 'new-model'}
+        s.commit()
+
+    reply = admin.get('/api/investigations')
+    assert reply.status_code == 200
+    shown = reply.json()[0]['retry']
+    assert shown['state'] == 'deferred' and shown['next_at'] == pytest.approx(floor)
+    assert 'provider Retry-After' in shown['reason']
+    assert admin.post('/api/investigations/subject/retry').status_code == 409
+    with Session() as s:
+        s.add(Setting(key='server-ai:host', value={'paused': True}))
+        s.commit()
+    assert admin.get('/api/investigations').json()[0]['retry']['state'] == 'paused'
+
+
 def test_durable_deferral_restart_manual_floor_receipts_and_success(admin,monkeypatch):
     setup();calls=[]
     monkeypatch.setattr(ai.transport,'post',lambda *a,**k:calls.append(1) or response(headers={'retry-after':'120'}))
