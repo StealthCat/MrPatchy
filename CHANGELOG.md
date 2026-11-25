@@ -1,3 +1,13 @@
+## 1.91.0 — 2026-11-25
+
+1. [PR #1145](https://github.com/StealthCat/MrPatchy/pull/1145): A pure Roadmap F contract resolves which Python `.pth` import lines and `sitecustomize`/`usercustomize` modules run at every Debian python3.11–3.13 start, and in what order. Unknown, locale-dependent or patch-dependent inputs are explicit coverage gaps. Compatibility: new module only, with no runtime callers. Closes #1144.
+2. [PR #1287](https://github.com/StealthCat/MrPatchy/pull/1287): Acceptance tests cover daily-cap admission when the process holding the shared budget lock is killed before or after committing its reservation. Compatibility: tests and roadmap notes only. Closes #1285.
+3. [PR #1292](https://github.com/StealthCat/MrPatchy/pull/1292): When a new fleet known-good candidate is published while the shared provider start gate is closed, the free-hit rotation sweeps from the oldest eligible subject up to its saved cursor, so an older, newly reusable subject is claimed before a newer one, with zero provider calls. Probes stay bounded per pass and the cursor never moves back. The coordinator added the worker's proposed roadmap checkpoint. Compatibility: no schema, API, UI, role or response-authorization change. Fixes #1291.
+4. [PR #1308](https://github.com/StealthCat/MrPatchy/pull/1308): Pure keepalived 2.2.8 primitives resolve, from captured `keepalived.conf` text, which programs the parent, VRRP and checker processes run, with their argv, user and source block; unmodelled preprocessing and structure fail closed. Compatibility: new module only, not yet wired into collection or the UI. Fixes #1307.
+5. [PR #1410](https://github.com/StealthCat/MrPatchy/pull/1410): Automatic-plan selection skips excluded candidates before loading eligible incident identifiers. Compatibility: no API, schema or authorization change. Fixes #1409.
+
+Integrated together through batch [PR #1506](https://github.com/StealthCat/MrPatchy/pull/1506). This source update does not publish a Docker image.
+
 ## 1.90.0 — 2026-11-25
 
 1. [PR #1137](https://github.com/StealthCat/MrPatchy/pull/1137): A pure Roadmap F contract resolves which `/etc/grub.d` scripts and `/etc/default/grub` files `grub-mkconfig` runs or sources as root when GRUB configuration is regenerated. Compatibility: new module, not yet wired into collection or the UI. Closes #1136.
