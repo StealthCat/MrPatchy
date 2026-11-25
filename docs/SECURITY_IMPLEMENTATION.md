@@ -12708,7 +12708,15 @@ The #1030 checkpoint bounded closed-gate admission to the 50 oldest eligible sub
 - **Scope of the cursor:** it is per process and in memory. Admission runs under the distributed `ai-triage` lock, so passes in one process never overlap. Several processes each rotate independently. A restart starts again from the oldest subject. No schema change.
 - **Unchanged:** at most `FREE_HIT_SCAN` probes per admission; the pause, lifecycle, saturation, claim, retry, Refresh and revocation filters; the re-check under the host queue gate; and every paid subject's deferral with no claim, run, reservation or provider call. While the gate is open, election is unchanged. No API, UI, role or response-authorization change.
 - **Validation:** three tests in `tests/test_known_good_daily_cap_hit.py`. Two fail on main `9f972053`: a hit behind a full window of 50 older paid subjects, and a wrap that reaches a new hit older than the cursor. The third, a stale cursor, is a control.
-- **Remaining:** after a pass without a hit, a hit that appears before the cursor waits for the wrap, so it may be claimed after a newer hit. MySQL was not run locally.
+- **Remaining:** ~~after a pass without a hit, a hit that appears before the cursor waits for the wrap, so it may be claimed after a newer hit.~~ Addressed for newly published candidates by the #1291 worker checkpoint below. MySQL was not run locally.
+
+### Free-hit rotation restart after a new candidate — worker checkpoint #1291 (roadmap A/B)
+
+- **Change:** `_free_hit()` records the fleet candidate row count with its cursor. When a later closed-gate pass sees more rows, the following passes sweep from the oldest eligible subject up to the cursor, `FREE_HIT_SCAN` probes per pass, before the rotation resumes after it. A newly published candidate that turns older subjects into exact hits is therefore claimed oldest-first, wherever they sit behind the cursor. The cursor never moves back; another publication restarts the sweep. Revocation never restarts the rotation.
+- **Unchanged:** the probe bound, filters, host-gate re-check, paid-subject deferral, schema, API, UI, roles and response authorization.
+- **Validation:** `tests/test_known_good_daily_cap_hit.py` covers oldest-first after publication within and beyond the first window, a publication during a sweep, and no rewind; they fail on main `c3ce48da`. A revocation control passes on both.
+- **Remaining:** hits that appear without a new candidate still wait for the wrap.
+
 ### dhclient hook contract — worker checkpoint #1063 (roadmap F)
 
 ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
