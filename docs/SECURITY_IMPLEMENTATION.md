@@ -4329,6 +4329,15 @@ a failed write, an invalid response and a refusal. Existing plan state,
 evidence, manual approval and provider accounting retain their behavior.
 Production throughput and release-plan timings remain separate.
 
+### Consistent timing samples during retention - Roadmap A checkpoint #1449
+
+The timing summary selects the bounded run and event samples in one database
+statement for process triage and update scoring. A concurrent retention pass
+can remove both from the next response. It no longer makes a single response
+count a pruned run as missing a timing sample. The summary preserves the
+existing run and event limits, newest-event order, malformed-event counts,
+redaction and access checks. Roadmap A remains incomplete.
+
 ### Retained process-triage timing sample — worker checkpoint #522
 
 The administrator-only `GET /api/ai/triage/timings` endpoint summarizes the most
