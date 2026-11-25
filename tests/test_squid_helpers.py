@@ -210,3 +210,21 @@ def test_result_is_not_a_verdict():
     assert result['note'] == sh.NOT_A_VERDICT
     assert result['reference'] == {'squid': '6.10'}
     assert result['unobserved']
+
+
+def test_vector_matching_a_native_squid_run():
+    # Launched with Ubuntu's squid 6.14 as root, using argv-recording helpers. The four helpers started as uid
+    # proxy with exactly these argv.
+    n = '/var/tmp/sqnat'
+    text = (f'cache_effective_user proxy\n# comment\nurl_rewrite_program {n}/rw one \\\n# skipped comment\n   two\n'
+            f"redirect_program three 'four five' x#y #gone\nif false\nif true\nstore_id_program {n}/sid leaked\n"
+            f'endif\nendif\nauth_param basic program {n}/auth old\n'
+            f'auth_param basic program {n}/auth new "t\\\\tab"\n'
+            f'external_acl_type grp ttl=5 children-startup=1 %SRC %>{{Host}} {n}/ext -p\n'
+            'url_rewrite_children 5 startup=1\r junk\n')
+    result = run(text)
+    assert [h['argv'] for h in result['helpers']] == [
+        ['(rw)', 'one', 'two', 'three', 'four five', 'x#y'], ['(sid)', 'leaked'], ['(auth)', 'new', 't\\tab'],
+        ['(ext)', '-p']]
+    assert result['run_as']['user'] == 'proxy'
+    assert result['complete'] is True
