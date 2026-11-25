@@ -14,8 +14,10 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar
+from copy import deepcopy
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
@@ -30,10 +32,22 @@ DEFAULT_FIXTURE_RATE_PER_HOUR = 1000
 MAX_FIXTURE_PACING_SECONDS = 300
 PACED_MODES = ('rate', 'rate_and_daily')
 PERSISTENCE_TIMING = re.compile(r'([a-z ]+): ([0-9]{1,16}\.[0-9]{3}) ms; outcome=(complete|error)')
+FIXTURE_RESULT = {
+    'risk': 'low', 'explanation': 'Synthetic complete assessment',
+    'recommended_checks': 'None', 'requested_checks': [],
+}
+FIXTURE_FOLLOW_UP = {
+    'identity_verified': True, 'sha256': 'a' * 64,
+    'executable': {'path': '/fixture/artifact', 'verified': True},
+}
 
 
 class BenchmarkTimingError(ValueError):
     """The disposable workload did not retain complete timing evidence."""
+
+class BenchmarkAssessmentError(ValueError):
+    """The disposable workload did not retain its expected assessments."""
+
 
 
 class DatabaseRefused(Exception):
@@ -159,11 +173,12 @@ def claim_empty_mysql(url):
             'another benchmark run holds the benchmark MySQL database; wait for it to finish (nothing was changed)')
     return MySQLClaim(engine, connection, lock_name, version)
 
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+
 def workload_fingerprint(provider_requests, ssh_requests):
     """Hash the observed synthetic requests independently of dispatch order."""
-    def canonical(value):
-        return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False)
-
     provider = []
     for request in provider_requests:
         evidence = json.loads(request['input'])
@@ -202,6 +217,52 @@ def collect_persisted_timings(events, expected_persistence):
         if missing:
             raise BenchmarkTimingError(f'{stage}: missing {len(missing)} timing sample(s)')
     return samples
+
+
+def assessment_coverage(assessments, observations, runs, follow_up_subjects, ai, provider_requests):
+    """Verify the retained result and input trail after the timed workload."""
+    observations_by_subject = {row.id: row for row in observations}
+    runs_by_subject = {run.subject: run for run in runs}
+    seen = set()
+    saved_evidence = Counter()
+    policy = ai.investigation_policy()
+    for assessment in assessments:
+        subject = assessment.subject
+        observation = observations_by_subject.get(subject)
+        run = runs_by_subject.get(subject)
+        if observation is None or run is None:
+            raise BenchmarkAssessmentError('Assessment persistence: unexpected subject.')
+        if subject in seen:
+            raise BenchmarkAssessmentError('Assessment persistence: duplicate subject.')
+        seen.add(subject)
+        if (assessment.run_id, assessment.host_id, assessment.source, assessment.model) != (
+                run.id, observation.host_id, 'ai', FIXTURE_MODEL):
+            raise BenchmarkAssessmentError('Assessment persistence: run, host, source or model differs.')
+        evidence = observation.evidence
+        if (not isinstance(evidence, dict) or assessment.result != FIXTURE_RESULT
+                or assessment.snapshot != evidence):
+            raise BenchmarkAssessmentError('Assessment persistence: final result or evidence snapshot differs.')
+
+        initial = {key: value for key, value in evidence.items() if key != 'investigation'}
+        expected_inputs = [{'evidence': ai.investigation_input(initial), 'policy': policy}]
+        if subject in follow_up_subjects:
+            follow_up = evidence.get('investigation')
+            if not isinstance(follow_up, dict) or follow_up.get('details') != FIXTURE_FOLLOW_UP:
+                raise BenchmarkAssessmentError('Assessment persistence: expected follow-up evidence is missing or changed.')
+            expected_inputs.append({'evidence': ai.investigation_input(evidence), 'policy': policy})
+        elif 'investigation' in evidence:
+            raise BenchmarkAssessmentError('Assessment persistence: unexpected follow-up evidence.')
+        if assessment.inputs != expected_inputs:
+            raise BenchmarkAssessmentError('Assessment persistence: retained AI input stages differ.')
+        saved_evidence.update(canonical(stage['evidence']) for stage in assessment.inputs)
+
+    if missing := observations_by_subject.keys() - seen:
+        raise BenchmarkAssessmentError(f'Assessment persistence: missing {len(missing)} assessment(s).')
+    sent_evidence = Counter(canonical(json.loads(request['input'])) for request in provider_requests)
+    if saved_evidence != sent_evidence:
+        raise BenchmarkAssessmentError('Assessment persistence: retained evidence differs from provider requests.')
+    return {'subjects': len(seen), 'input_stages': sum(saved_evidence.values()),
+            'follow_up_subjects': len(follow_up_subjects)}
 
 
 def capped_fixture_summary(session, budget_entry, receipts, settings):
@@ -251,7 +312,7 @@ def dispatch_paced(pool, run_one, runs, session_factory, admission_model):
                     raise BenchmarkTimingError('Paced fixture did not observe the previous durable start.')
                 time.sleep(0.02)
             wait_seconds += time.perf_counter() - started
-        futures.append(pool.submit(run_one, index))
+        futures.append(pool.submit(run_one, time.perf_counter()))
     for future in futures:
         future.result()
     return wait_seconds
@@ -263,8 +324,11 @@ def main():
     parser.add_argument('--follow-up-runs', type=int,
                         help='number of investigations requesting follow-up evidence (default: every second run)')
     parser.add_argument('--concurrency', type=int, default=1)
-    parser.add_argument('--same-server', action='store_true',
+    layout = parser.add_mutually_exclusive_group()
+    layout.add_argument('--same-server', action='store_true',
                         help='place distinct subjects on one server using its maximum supported slots')
+    layout.add_argument('--servers', type=int,
+                        help='distribute subjects across this many fixture servers (default: one per run)')
     parser.add_argument('--provider-delay-ms', type=int, default=20)
     parser.add_argument('--persistence-delay-ms', type=int, default=0)
     parser.add_argument('--ssh-delay-ms', type=int, default=10,
@@ -284,6 +348,11 @@ def main():
                              f'the {MYSQL_URL_ENV} environment variable; its tables are removed afterwards')
     args = parser.parse_args()
     if not 2 <= args.runs <= 20: parser.error('--runs must be between 2 and 20')
+    servers = args.runs if args.servers is None else args.servers
+    if args.same_server:
+        servers = 1
+    if not 1 <= servers <= args.runs:
+        parser.error('--servers must be between 1 and --runs')
     paced = args.control_mode in PACED_MODES
     rate = DEFAULT_FIXTURE_RATE_PER_HOUR if args.rate_per_hour is None else args.rate_per_hour
     if args.rate_per_hour is not None and not paced:
@@ -330,15 +399,16 @@ def main():
         for name in list(os.environ):
             if name.lower().endswith('_proxy'):os.environ.pop(name)
         from sqlalchemy import insert
-        from app import ai, ai_admission, ai_budget, ai_policy, ai_pricing, worker, ai_runs
+        from app import ai, ai_admission, ai_assessments, ai_budget, ai_policy, ai_pricing, worker, ai_runs
         from app.db import init, Session, Host, Setting, Behavior, engine, config
         from app.security import seal
         if args.database == 'mysql':
             from app.db import Base
             claim.metadata = Base.metadata
-        single_server_slots = ai_policy.MAX_CONCURRENCY if args.same_server else None
-        if single_server_slots is not None and args.concurrency > single_server_slots:
-            parser.error(f'--same-server requires --concurrency at most {single_server_slots}')
+        per_server_slots = ai_policy.MAX_CONCURRENCY if servers < args.runs else None
+        if per_server_slots is not None and args.concurrency > per_server_slots:
+            option = '--same-server' if args.same_server else '--servers'
+            parser.error(f'{option} requires --concurrency at most {per_server_slots}')
         init()
         capped = args.control_mode in ai_pricing.CAP_MODES
         if capped:
@@ -349,7 +419,13 @@ def main():
                 VERSION=FIXTURE_PRICE_VERSION, SOURCE='Disposable loopback benchmark',
                 VERIFIED_AT=now - 1, EXPIRES_AT=now + 86_400,
             ))
-        requests = []; ssh_requests = []; connections = set(); samples = {k: [] for k in ('run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission', 'queue_age', 'receipt_persistence', 'usage_persistence')}
+        requests = []
+        ssh_requests = []
+        connections = set()
+        samples = {k: [] for k in (
+            'run', 'one_stage', 'two_stage', 'provider', 'ssh_evidence', 'admission',
+            'queue_age', 'executor_wait', 'receipt_persistence', 'usage_persistence',
+        )}
         provider_lock = threading.Lock()
         active_provider_requests = peak_provider_requests = 0
 
@@ -368,7 +444,7 @@ def main():
                     peak_provider_requests = max(peak_provider_requests, active_provider_requests)
                 try:
                     evidence = json.loads(payload['input']); time.sleep(args.provider_delay_ms/1000)
-                    result = {'risk':'low','explanation':'Synthetic complete assessment','recommended_checks':'None',
+                    result = {**FIXTURE_RESULT,
                               'requested_checks':['executable'] if evidence['two_stage'] and 'investigation' not in evidence else []}
                     response = {'status':'completed','output':[{'content':[{'type':'output_text','text':json.dumps(result)}]}],
                                 'usage':{'input_tokens':100,'output_tokens':20,'output_tokens_details':{'reasoning_tokens':5}}}
@@ -391,23 +467,28 @@ def main():
             try:return original(*a,**kw)
             finally:samples['provider'].append((time.perf_counter()-started)*1000)
         ai._request = measured
-        def wrap_stage(name,fn):
+        def wrap_stage(name,fn,*,delay_ms=0):
             def wrapped(*a,**kw):
                 started=time.perf_counter()
                 try:
-                    if args.persistence_delay_ms:time.sleep(args.persistence_delay_ms/1000)
+                    if delay_ms:time.sleep(delay_ms/1000)
                     return fn(*a,**kw)
                 finally:samples[name].append((time.perf_counter()-started)*1000)
             return wrapped
         for name in ('request_started','record_usage'):
             stage='receipt_persistence' if name=='request_started' else 'usage_persistence'
-            setattr(ai_runs,name,wrap_stage(stage,getattr(ai_runs,name)))
+            setattr(ai_runs,name,wrap_stage(stage,getattr(ai_runs,name),delay_ms=args.persistence_delay_ms))
+        budget_stages = {'reserve': 'budget_reservation', 'reconcile': 'budget_reconciliation'}
+        if capped:
+            for name, stage in budget_stages.items():
+                samples[stage] = []
+                cleanup.enter_context(patch.object(ai_budget, name, wrap_stage(stage, getattr(ai_budget, name))))
         def ssh_fixture(*a, **kw):
             started=time.perf_counter(); time.sleep(args.ssh_delay_ms / 1000)
             samples['ssh_evidence'].append((time.perf_counter()-started)*1000)
             _, request = a
             ssh_requests.append(request)
-            return {'identity_verified':True,'sha256':'a'*64,'executable':{'path':'/fixture/artifact','verified':True}}
+            return deepcopy(FIXTURE_FOLLOW_UP)
         worker.ssh.call = ssh_fixture
         original_assess = worker._assess_behavior
         def admission(s,row,*a):
@@ -418,7 +499,7 @@ def main():
         worker._assess_behavior = admission
         try:
             subjects = [f'fixture-{index}' for index in range(args.runs)]
-            expected_hosts = {subject: f'fixture-host-{0 if args.same_server else index}'
+            expected_hosts = {subject: f'fixture-host-{index % servers}'
                               for index, subject in enumerate(subjects)}
             with Session() as s:
                 settings = {'ai_enabled': True, 'ai_model': FIXTURE_MODEL, 'ai_hourly_limit': 100,
@@ -431,9 +512,9 @@ def main():
                 s.add(Setting(key='openai_key',value={'encrypted':seal('fixture-key')}))
                 for host_id in dict.fromkeys(expected_hosts.values()):
                     s.add(Host(id=host_id,name='Fixture only',address='192.0.2.1',fingerprint=''))
-                if single_server_slots is not None:
-                    s.add(Setting(key=ai_policy.PREFIX+'fixture-host-0',
-                                  value={'concurrency_limit': single_server_slots}))
+                    if per_server_slots is not None:
+                        s.add(Setting(key=ai_policy.PREFIX+host_id,
+                                      value={'concurrency_limit': per_server_slots}))
                 if args.retained_history_rows:
                     history_time = time.time() - args.queue_age_seconds - 3600
                     s.execute(insert(Behavior), [
@@ -444,14 +525,16 @@ def main():
                 first_seen=time.time()-args.queue_age_seconds
                 for index, subject in enumerate(subjects):
                     evidence = {'executable':'/fixture/artifact','sha256':'a'*64,'identity_verified':True,'two_stage':index in follow_up_indices}
-                    if args.same_server:
+                    if per_server_slots is not None:
                         evidence['uid'] = str(1000 + index)
                     s.add(Behavior(id=subject,host_id=expected_hosts[subject],first_seen=first_seen+index*.0001,
                                    evidence=evidence))
                 s.commit()
             started=time.perf_counter()
-            def run_one(index):
-                token=begin.set(time.perf_counter())
+            def run_one(submitted_at):
+                started_at = time.perf_counter()
+                samples['executor_wait'].append((started_at - submitted_at) * 1000)
+                token = begin.set(started_at)
                 try:
                     worker.investigate_one();duration=(time.perf_counter()-begin.get())*1000
                     samples['run'].append(duration);samples['two_stage' if two_stage.get() else 'one_stage'].append(duration)
@@ -460,7 +543,9 @@ def main():
                 if paced:
                     wait_seconds = dispatch_paced(pool, run_one, args.runs, Session, ai_admission.Admission)
                 else:
-                    list(pool.map(run_one, range(args.runs)))
+                    futures = [pool.submit(run_one, time.perf_counter()) for _ in range(args.runs)]
+                    for future in futures:
+                        future.result()
             elapsed=time.perf_counter()-started
             with Session() as s:
                 rows=s.query(Behavior).filter(Behavior.id.in_(subjects)).all()
@@ -483,6 +568,10 @@ def main():
                 control_mode = settings['ai_control_mode']
                 assert control_mode == args.control_mode, control_mode
                 fixture_budget = capped_fixture_summary(s, ai_budget.BudgetEntry, receipts, settings) if capped else None
+                if capped:
+                    for stage in budget_stages.values():
+                        if len(samples[stage]) != len(requests):
+                            raise BenchmarkTimingError(f'{stage}: expected one timing sample per settled provider call.')
                 fixture_rate = None
                 if paced:
                     if settings['ai_rate_per_hour'] != rate:
@@ -496,6 +585,9 @@ def main():
                         'dispatch_wait_seconds': round(wait_seconds, 3),
                     }
                 follow_up_subjects = {subjects[index] for index in follow_up_indices}
+                retained_assessments = assessment_coverage(
+                    s.query(ai_assessments.Assessment).all(), rows, runs, follow_up_subjects, ai, requests,
+                )
                 expected_persistence = {
                     'result_persistence': {run.id for run in runs},
                     'evidence_persistence': {run.id for run in runs if run.subject in follow_up_subjects},
@@ -511,12 +603,15 @@ def main():
                 ordered=sorted(values)
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
             report = json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
-                'fixture_hosts':len(set(observed_hosts.values())), 'single_server_slots':single_server_slots,
+                'fixture_hosts':len(set(observed_hosts.values())),
+                'single_server_slots':per_server_slots if servers == 1 else None,
+                **({'shared_server_slots':per_server_slots} if 1 < servers < args.runs else {}),
                 'peak_provider_requests':peak_provider_requests,
                 'database':args.database, 'database_version':database_version,
                 'retained_history_rows':retained_history_rows,'connections':len(connections),
                 'elapsed_seconds':round(elapsed,3),'runs_per_second':round(args.runs/elapsed,3),
                 'workload_fingerprint':workload_fingerprint(requests,ssh_requests),
+                'persisted_assessments':retained_assessments,
                 'ai_control_mode':control_mode,
                 **({'fixture_budget': fixture_budget} if capped else {}),
                 **({'fixture_rate': fixture_rate} if paced else {}),
@@ -536,5 +631,5 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (DatabaseRefused, BenchmarkTimingError) as refusal:
+    except (DatabaseRefused, BenchmarkTimingError, BenchmarkAssessmentError) as refusal:
         sys.exit(str(refusal))

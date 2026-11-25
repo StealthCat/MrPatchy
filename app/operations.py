@@ -7,6 +7,7 @@ import time
 import httpx
 from sqlalchemy import String,Text,Double,select,func
 from sqlalchemy.orm import Mapped,mapped_column
+from . import ai_policy_repair_notifications
 from . import ai_budget,ai_control_migration,ai_credential_notifications,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
 from .db import Base,Session,Setting,Host,Package,Job,config
 from .security import unseal
@@ -270,6 +271,7 @@ def collect_alerts(now=None,observing_since=None):
                 except ValueError:logging.getLogger(__name__).warning('Skipped in-app notification for %s alert on %s',kind,host_id)
         # In-app only: an unusable saved key stops every paid AI path before sending.
         ai_credential_notifications.publish(s,cfg,now)
+        ai_policy_repair_notifications.publish(s,cfg,now)
         ai_budget.publish_unpriced_model_notification(s,cfg,now)
         _pricing_catalog_alert(s,cfg,record,now)
         ai_budget.publish_cap_notification(s,cfg,now)
@@ -371,7 +373,7 @@ def collect_alerts(now=None,observing_since=None):
                 if count:record(host,'overdue',str(count)+' packages passed their deadline')
         # In-app only: the raw integrity alert carries endpoint text; publish fixed controller-classified wording.
         from . import integrity_sweep_notifications
-        try:integrity_sweep_notifications.publish(s,hosts,now)
+        try:integrity_sweep_notifications.publish(s,hosts,now,cfg)
         except ValueError:logging.getLogger(__name__).warning('Skipped in-app hash-sweep notifications')
         # In-app only: scheduled malware-scan coverage has no SMTP/webhook alert.
         from . import scan_coverage_notifications
