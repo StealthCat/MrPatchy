@@ -13862,3 +13862,13 @@ pm-utils `pm-action` (`pm-suspend`, `pm-hibernate`, `pm-suspend-hybrid`) runs ev
 - **Validation:** `tests/test_pm_utils_hooks.py` (19 tests), including a differential that runs the upstream `_run_hooks`/`hook_ok`/`_run_hook` functions under dash on 120 random root-owned/user-owned, executable/non-executable, directory, symlink and dangling-link trees in both directions, with 0 mismatches. Four rule mutations are each caught.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the listings, startup-catalog wiring, package provenance, UI and AI classification.
+
+### watchdog daemon program contract — worker checkpoint #1369 (roadmap F)
+
+`app/watchdog_programs.py` is a pure, versioned, I/O-free roadmap F contract. Its inputs are `/etc/watchdog.conf` text, the `watchdog_options` value from `/etc/default/watchdog` and `stat`-following entry metadata for the effective `test-directory`. It reports which programs the `watchdog` daemon runs as root on every check interval: each `test-binary` (V0, argv `[path]`), each owner-readable and owner-executable regular file in `test-directory` (V1, `[path, "test"]` and `[path, "repair", "<errcode>", path]`) and the `repair-binary` (`[repair, "<errcode>", "<object>"]`).
+
+- **Fidelity:** transcribed from watchdog 5.16 `src/configfile.c`, `src/read-conf.c`, `src/test_binary.c`, `src/watchdog.c` and `src/run-as-child.c`, and the Debian/Ubuntu `5.16-2` `debian/rules` and `watchdog.service`. It covers C white space (space, tab, CR, LF, backspace only), NUL truncation, first-`=` splitting, no inline comments, last-assignment-wins with blank reset for `repair-binary`/`test-directory`, PATH_MAX, hidden-name skipping and the fatal `interval <= 0` and missing-config paths.
+- **Fail closed:** unobserved or unmodelled `watchdog_options` (including `-c`), an unobserved or unreadable config or directory, an incomplete listing, too many entries, malformed input and relative paths are blocking gaps.
+- **Validation:** `tests/test_watchdog_programs.py` (18 unit tests). It also has an opt-in differential that compiles upstream `configfile.c`/`read-conf.c` with a stub harness (`WATCHDOG_SRC=<watchdog-5.16 tree>`). That differential has **not yet been run**: the authoring sandbox refused to execute the compiled upstream code.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** run the differential, agent collection, a catalog entry, package provenance, persistence, UI and AI classification.
