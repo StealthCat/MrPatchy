@@ -94,7 +94,7 @@ module.exports=async(page,capture)=>{
   assert.match(await bell.getAttribute('aria-label'),/1 unread/);
   await capture('notification-center-desktop',false);
   const locationHash=await page.evaluate(()=>location.hash);
-  assert.equal(locationHash,'#notifications');
+  assert.equal(locationHash,'#notifications?source=scanner&dismissed=1','applied filters are kept in the deep link (#1168)');
   await page.evaluate(()=>{location.hash='#overview';});
   await page.getByRole('heading',{name:'A healthier fleet starts here.'}).waitFor();
 
