@@ -12841,6 +12841,16 @@ The #1030 checkpoint bounded closed-gate admission to the 50 oldest eligible sub
 - **Validation:** `tests/test_known_good_daily_cap_hit.py` covers oldest-first after publication within and beyond the first window, a publication during a sweep, and no rewind; they fail on main `c3ce48da`. A revocation control passes on both.
 - **Remaining:** hits that appear without a new candidate still wait for the wrap.
 
+### Free exact hits past an unfundable paid head — worker checkpoint #1490 (roadmap A/B)
+
+The #1030 and #1241 checkpoints only use the free-hit probe while a shared start gate is closed. If the daily cap still has a positive balance smaller than one reservation, the fleet gate stays open. The oldest paid subject was then elected and its own quote was refused, and `acquire()` returned without probing. An exact hit on another server waited for the reset.
+
+- **Change:** the admission body under the host queue gate moved unchanged into `ai_claims._admit()`. It returns a private `_UNFUNDED` sentinel in one case only: a valid quote that is not over the whole cap, refused by `ai_budget.waiting(s, now, payload)`, for a subject with no exact hit. Nothing is written, and that server's queue gate is released on return. `acquire()` then rolls back its read snapshot, repeats the "any active candidate" check and runs one bounded `_free_hit()` election with the same filters. The chosen hit is rechecked under its own queue gate. Each admission runs at most two elections.
+- **Unchanged:** the over-cap block and its reason, the unshareable-evidence error, ordinary paid admission when the quote fits, Re-triage bypass, revocation, pause, lifecycle and saturation filters, and every ledger and provider boundary. No schema, API, UI, role or response-authorization change.
+- **Validation:** five tests in `tests/test_known_good_daily_cap_hit.py`. The issue's reproduction (positive but insufficient headroom) fails on main `67424e53` and passes on the fix. Four controls pass both before and after: a paused hit stays held, a Re-triage stays held, a fitting paid head is still admitted first, and an over-cap head is still blocked. Locally on SQLite, 1055 tests passed across the 81 modules that touch claims, triage, known-good or the budget. An independent review ran the targeted MySQL 8.4.13 cases.
+- **Integration note:** pending #1320 (quote reuse) and #1386 (narrow candidate projection) change the same admission body, which now lives in `_admit()`. #1292 adds tests to the same file. Compose them rather than batching them blindly.
+- **Remaining:** the fallback probes at most `FREE_HIT_SCAN` subjects per admission using the existing rotating cursor, as in #1241.
+
 ### dhclient hook contract — worker checkpoint #1063 (roadmap F)
 
 ISC `dhclient-script` on Debian and Ubuntu sources `/etc/dhcp/dhclient-enter-hooks` and `dhclient-enter-hooks.d` before it handles each DHCP event, and `dhclient-exit-hooks` and `dhclient-exit-hooks.d` when it finishes. These are root shell code that runs on every lease event, and a hook needs no executable bit. Neither the startup catalog nor any contract covered them.
