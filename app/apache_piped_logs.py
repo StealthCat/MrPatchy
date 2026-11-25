@@ -78,6 +78,7 @@ _PER_REQUEST = frozenset({'<if', '<elseif', '<else'})
 _LOGS = frozenset({'customlog', 'globallog', 'transferlog', 'errorlog'})
 _VAR = re.compile(r'\$\{([^}]*)\}')
 _WILDCARD = re.compile(r'[*?\[]')
+_SPACE = ' \t\n\v\f\r'  # apr_isspace in the C locale
 
 
 def _gap(gaps: list[dict[str, Any]], code: str, where: dict[str, Any] | None = None, detail: str = '') -> None:
@@ -117,7 +118,7 @@ def config_lines(text: str) -> list[tuple[int, str]]:
 def getword_conf(line: str) -> tuple[str, str]:
     """Return (word, rest) like ap_getword_conf; the rest has leading white space skipped."""
     i, n = 0, len(line)
-    while i < n and line[i].isspace():
+    while i < n and line[i] in _SPACE:
         i += 1
     if i >= n:
         return '', ''
@@ -136,14 +137,14 @@ def getword_conf(line: str) -> tuple[str, str]:
             j += 1
     else:
         j = i
-        while j < n and not line[j].isspace():
+        while j < n and not line[j] in _SPACE:
             if line[j] == '\\' and j + 1 < n and line[j + 1] == '\\':
                 out.append('\\')
                 j += 2
             else:
                 out.append(line[j])
                 j += 1
-    while j < n and line[j].isspace():
+    while j < n and line[j] in _SPACE:
         j += 1
     return ''.join(out), line[j:]
 

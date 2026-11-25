@@ -13143,7 +13143,7 @@ cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` f
   
   A virtual-host `ErrorLog` that matches a *conditional* earlier one is reported (`may_share_with`) rather than assumed shared.
 - **Other mechanisms:** `RewriteMap prg:`, `ExtFilterDefine`, `SSLPassPhraseDialog exec:` and `SSLRandomSeed exec:` are listed under `other_programs` as `not_modelled`.
-- **Validation:** `tests/test_apache_piped_logs.py` has 49 tests, counting parameter cases. They cover Debian and RHEL layouts, every pipe prefix, APR tokenizer edge cases, shell joining, log conditions, `ErrorLog` last-wins and sharing, `<IfDefine>`/`Define`/`UnDefine`, variable precedence, continuation and comment rules, `ServerRoot` changes, the fail-closed gaps and other-program listing.
+- **Validation:** `tests/test_apache_piped_logs.py` has 50 tests, counting parameter cases. They cover Debian and RHEL layouts, every pipe prefix, APR tokenizer edge cases, shell joining, log conditions, `ErrorLog` last-wins and sharing, `<IfDefine>`/`Define`/`UnDefine`, variable precedence, continuation and comment rules, `ServerRoot` changes, the fail-closed gaps and other-program listing.
 - **Not modeled:** evaluation of `<IfModule>`/`<IfFile>`/`<IfDirective>`/`<IfSection>`/`<IfVersion>`, which are reported as conditions; whether `mod_log_config` is loaded; the user httpd itself starts as; program existence; and the programs' own behaviour.
 - **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
 - **Remaining:** a differential run against a real httpd, agent collection of the inputs, a catalog entry, package provenance, UI and AI classification.

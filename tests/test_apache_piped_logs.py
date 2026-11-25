@@ -254,3 +254,9 @@ def test_vhost_error_log_matching_a_conditional_main_log_is_still_reported():
     assert [(p['server'], p.get('may_share_with')) for p in result['programs']] == [
         ('main', None), ('<VirtualHost a>', 'main')]
     assert result['programs'][0]['conditions'] == ['<IfModule x>'] and result['shared_error_logs'] == []
+
+
+def test_only_ascii_white_space_separates_config_words():
+    result = run('CustomLog |/bin/x\u00a0common\n')
+    assert 'arguments_malformed' in codes(result)
+    assert apl.getword_conf('a\u2003b c') == ('a\u2003b', 'c')
