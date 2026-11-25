@@ -13039,6 +13039,18 @@ This is a contract increment only. The startup-awareness requirement is still in
 
 There is no schema, API, authentication or response-authorization change.
 
+### Notification-center deep link — worker checkpoint #1168 (roadmap J)
+
+The #835 checkpoint recorded that the notification center's filters were not in its deep link, so a reload, a copied link or Back reset them. They are now part of the `#notifications` hash.
+
+- **Address:** `#notifications?severity=high&source=scanner&host=<server id>&status=active&unread=1&dismissed=1&page=2`. Defaults are omitted, so the unfiltered first page stays `#notifications`.
+- **History:** Apply, Clear, Previous and Next each add a history entry, so Back/Forward restore the earlier filters, form state and page. The change renders quietly: the current list stays until the new page arrives. Apply with unchanged filters only re-queries. The bell's **View notification center** link and the toast link still open the unfiltered center.
+- **Validation of the hash:** a severity outside the five levels, a source that does not match the existing source pattern, a server that is not in the viewer's server list, an unknown status, `unread`/`dismissed` values other than `1`, and a page that is not 1–10000 are dropped. The hash is then rewritten in canonical form with `replaceState`. A page past the end of the current results opens the last page.
+- **Load race fixed:** on main, opening the center while the shell's live refresh started (sign-in, reload or a link) could leave **Gathering your workspace** on screen. The refresh superseded the center's first request before the list existed and then had nowhere to draw. The refresh now waits until the center has drawn its page.
+- **Unchanged:** the API, schema, roles, per-account read/dismiss state, the bell, unread count, SSE/polling and response authorization. Filtering never acknowledges, resolves or reopens anything. Navigating to the bare `#notifications` address now opens the unfiltered center, where it previously kept the session's last filters.
+- **Validation:** the new `tests/ui_notifications_deep_link.cjs` fails on main `e05bf1b` twice over: at the first open (the load race) and, with only the race fix applied, at the Apply hash assertion. It passes on the branch. It covers Apply, Clear, Next and Previous, Back/Forward with form state, a reload of a fully filtered link, invalid and injected hash values, a page past the end, and no horizontal scroll at 320, 768 and 1440 px. `tests/ui_notifications.cjs` now expects the filtered address after Apply.
+- **Remaining J work:** a filter-wide "mark all matching" is still intentionally not offered (#835 rationale).
+
 ### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
 
 `grub-mkconfig` (`grub2-mkconfig` on RPM families) runs as root whenever the GRUB configuration is regenerated. That includes `update-grub`, GRUB's maintainer scripts and, on Debian and Ubuntu, every kernel install or removal through `/etc/kernel/postinst.d/zz-update-grub`. Each run sources `/etc/default/grub` (and, on Debian, `/etc/default/grub.d/*.cfg`) as shell, then runs the executable scripts in `/etc/grub.d`, whose output becomes `grub.cfg`. Neither the startup catalog nor any contract covered this root execution path.
