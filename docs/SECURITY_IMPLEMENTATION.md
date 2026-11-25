@@ -2788,6 +2788,17 @@ Automatic AI plans make one attempt per incident scan. Before this checkpoint, w
 - **Validation:** `tests/test_auto_plan_retry.py` (11 tests) fails on main `c86141a` and passes after; removing the `awaiting_auto_plan` change fails the re-plan test. `tests/ui_auto_plan_retry.cjs` covers the action, a partial batch, the refresh, zero/malformed/failed counts, the operator role and no horizontal scroll at 320, 768 and 1440 px.
 - **Remaining:** startup-change plans are never automatic and are not covered. There is no fleet-wide release.
 
+#### Automatic plan response-hold reads — Roadmap A checkpoint #1416
+
+The automatic incident plan tick checks operation, service-watch, quarantine,
+publication and process-response holds for opted-in, resumed servers in one
+statement per batch of at most 500 server IDs. Hold checks match server IDs
+using the database collation. The planning tick applies every hold, and queued
+plans still go through the existing execution-time checks.
+
+The worker regression measures hold-related reads and verifies enqueue results
+on SQLite and native MySQL. Fleet throughput measurement remains open.
+
 #### Fleet-wide release of failed automatic plans — worker checkpoint #1251
 
 - **Problem:** after fixing a fleet-wide cause (a rejected key, unsupported model or exhausted quota), an administrator had to open each opted-in server's Security tab to release its failed automatic attempts (#1036).
