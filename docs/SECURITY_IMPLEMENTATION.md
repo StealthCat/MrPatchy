@@ -27,6 +27,10 @@ Only the coordinator merges and verifies fully delivered issues close. Read
 for ownership, handoff, transition and the copyable coordinator prompt. Historical
 delivery records below describe the policy in force when they were written.
 
+From 2026-11-25, new roadmap and delivery checkpoints are recorded one file per issue
+in [docs/checkpoints/](checkpoints/README.md) rather than appended here (issue #1523).
+The sections below remain the history up to that date.
+
 ### Retry eligibility after a saved AI configuration change — Roadmap A checkpoint #1124
 
 Fleet AI Activity and the per-server triage queue now show a timed provider
@@ -4477,6 +4481,13 @@ admission lock. If there is no unapproved pending or error observation, expired
 claim or orphaned running triage run, the dispatch ends without taking the lock.
 Otherwise a fresh session under the lock follows the existing recovery and
 claim path. Work arriving after an idle read remains queued for the next poll.
+
+A pending or retry row with a live claim is also skipped by the idle probe
+(#1325). Four fully leased polls acquired four locks on main and zero with
+this change. A new peer subject still takes the lock and claims normally.
+Expired claims and orphaned runs still trigger the existing recovery path.
+This measures avoided lock acquisitions in a fixture. Production throughput
+remains open.
 
 Four idle dispatches took four admission locks on the base and zero after the
 change. The regression also checks expired, orphaned and live lease handling.
@@ -12650,6 +12661,20 @@ This closes the #922 limitation that automatic AI plan status was readable only 
 - **Unchanged:** the payload holds only codes, counts, job states, timestamps and server names: no incident evidence, paths, plan text, job output or key material. The read sends no provider request and writes nothing. Tick behavior, admission, schema, roles and response authorization are unchanged, and plans remain manual-only.
 - **Limitation:** each listed server costs a few small indexed queries, so a full 100-server page performs on the order of several hundred reads. It is a point-in-time view. Startup-change plans, which are never automatic, are not listed.
 
+### Bounded fleet automatic plan policy reads — Roadmap A checkpoint #1429
+
+Fleet automatic plan status reads policy rows in pages of at most 512, ordered
+by server name and ID. It stops once it sees the first opted-in server beyond
+the displayed limit. Sparse opt-ins can require more pages. Previous opt-in
+truthiness, server order, truncated counts and the admin-only API still apply.
+If a concurrent rename moves a server past the cursor, its first listed
+identity and display name are used for the response.
+
+Controller initialization adds a server index on deletion state, name and ID
+to support the cursor query on fresh or existing databases. The tests cover
+repeat initialization, sparse policies, tied names, and exact versus truncated
+listings on SQLite and MySQL.
+
 ### Batch fleet automatic AI plan job status — Roadmap A checkpoint #1205
 
 The automatic AI plan status reads the active plan and latest automatic attempt
@@ -13059,6 +13084,18 @@ This is a contract increment only. The startup-awareness requirement is still in
 - persistence, UI, provenance and AI classification.
 
 There is no schema, API, authentication or response-authorization change.
+### Refusal and token-budget wording for blocked update scores — worker checkpoint #1162
+
+Roadmap A: this follows up the #1158 "Remaining" line, which said update scoring kept its old failure text after process triage learned to name a model refusal and `max_output_tokens` exhaustion.
+
+- **Problem:** update scoring stored the triage-oriented diagnostic plus `BLOCKED_SUFFIX` on every package in a blocked batch. A refusal therefore read "Review this observation manually; no safety assessment was accepted", implied a key change might help, and never said the request reached the provider. The token-budget case also suggested a key change and omitted billing.
+- **Change:** `update_scores.blocked_explanation()` maps cause `model_refusal` and cause `token_budget` to scoring-specific text, followed by the unchanged `BLOCKED_SUFFIX`.
+  - Both texts say the request was sent and may be billed, and that changing the API key does not help.
+  - The refusal text says a different model may score the updates. The token-budget text says to select a model that completes within the scoring budget.
+  - Every other blocked cause keeps `safe_error(error) + BLOCKED_SUFFIX` byte-for-byte. Provider-supplied refusal text is never stored.
+- **Unchanged:** the `blocked` state, the stored configuration signature and eligibility (a model or key change still re-admits), deferral, transient handling, the hourly error retry, admission, reservations, the `ai-scoring` blocked notification and count, the administrator retry, schema, API, roles and response authorization.
+- **Validation:** `tests/test_update_score_block_causes.py` drives the real `update_scores.run_one()` path with only the provider transport as a fixture. Restoring main's call site fails the two cause tests and leaves the six invariant guards passing: invalid output, other incomplete responses, rejected key, blocked count, model-change re-admission and key-change re-admission. 185 scoring/retry tests pass.
+- **Remaining:** advisory security plans keep their existing failure wording.
 
 ### Notification-center deep link — worker checkpoint #1168 (roadmap J)
 
@@ -13591,6 +13628,7 @@ LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-sc
 - **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.
+
 ### keepalived script contract — worker checkpoint #1307 (roadmap F, in progress)
 
 keepalived runs administrator-configured programs on VRRP state changes, health checks, LVS events and at startup and shutdown. They run as root, or as `script_user` / `keepalived_script`.
@@ -13680,3 +13718,147 @@ snmpd runs configured programs whenever an SNMP manager reads, or for writable e
 - **Fail closed:** blocking gaps cover unobserved files or listings, an unobserved invocation or starting group, relative includes, include cycles, truncated paths, failed-`stat` entries, build-dependent `ssl_version=SSLv2` and out-of-range integers. `origin` is `not_assessed`, and no result is a safety verdict.
 - **Validation:** `tests/test_nrpe_commands.py` (14 tests) uses vectors derived from the source. Upstream `process_macros`, `my_strsep` and the `raw_command` copy, compiled from the nrpe 4.1.0 tag, agreed with the contract on 20,300 randomized command lines (0 mismatches). The full daemon was not built.
 - **Remaining:** native collection of `nrpe.cfg` and `nrpe.d`, startup-inventory wiring, provenance and AI classification. The build flags (`--enable-command-args`), account resolution and `allowed_hosts` reachability are not observed. A SIGHUP reload re-reads the file without re-running `check_privileges`, so `nrpe_user=root` written after start can take effect until restart.
+
+### Postfix master.cf service contract — worker checkpoint #1338 (roadmap F)
+
+Postfix `master(8)` reads `master.cf` at startup and on every `postfix reload`. It starts each service listed there as root, from `$daemon_directory`. The `pipe(8)` and `spawn(8)` services then run the external command given by `argv=` as the `user=` account, which is the usual way to attach content filters and mail-triggered scripts. The startup inventory did not model this path.
+
+- **Change:** the pure `app/postfix_master.py` takes captured `master.cf` text, captured `main.cf` parameter values and an optional `/etc/services` port map. It returns each service master starts: name, type, flags, wakeup, maxproc, the program and the argument vector master builds, whether the daemon keeps root or drops to the mail owner, and any earlier entries the service overrides. For `pipe` and `spawn` it also returns the external `argv=` command, its SHA-256, its `${...}` macros and the `user=`/group account, or the daemon refusal that keeps the command from running. It performs no I/O and never runs a command.
+- **Fidelity (Postfix 3.8.6):** follows the rules in `readllines`, `get_master_ent` and `master_config`:
+  - continuation lines, with comment lines dropped inside them;
+  - `master_service_disable` matching, plus empty `inet_protocols`, applied before any other validation;
+  - `-` defaults, `y`/`n`, `atoi` and conditional `?` wakeup;
+  - the compatibility-level `chroot` default;
+  - `{}` grouping;
+  - last-entry-wins by type and canonical endpoint;
+  - master's own `-l`/`-z`/`-n`/`-t`/`-u`/`-c`/`-o stress=` arguments.
+
+  `pipe`/`spawn` attributes are parsed after `single_server`'s `getopt("+cdDi:lm:n:o:r:s:St:uvVz")`, following `get_service_attr`. The result is `config_error`, with no services, only for the refusals the module models exactly.
+- **Fail closed:** the result is incomplete when:
+  - `master.cf` or `main.cf` is unobserved;
+  - a needed parameter requires `$` expansion;
+  - the build-specific `daemon_directory` is missing;
+  - two inet entries might name the same endpoint only through unobserved name or port resolution;
+  - the input has invalid UTF-8, NUL bytes, is over the size limit, or holds out-of-range integers.
+
+  Some validations are not modelled: host name syntax and resolution, `inet_interfaces`, account and numeric-ID lookups, and command existence. They can only stop master or the daemon, so the result over-reports and says so. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_postfix_master.py` has 13 tests with vectors derived from the source. There is no live differential against a running Postfix yet.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+
+### wg-quick hook contract — worker checkpoint #1343 (roadmap F)
+
+Every enabled `wg-quick@NAME.service` runs `wg-quick up NAME` as root at boot and `wg-quick down NAME` when it stops. `wg-quick` evaluates each `[Interface]` `PreUp`, `PostUp`, `PreDown` and `PostDown` value from `/etc/wireguard/NAME.conf` as bash source, using `(eval "$hook")` after it replaces `%i`. The startup inventory did not model these hook lines as a persistence location.
+
+- **Change:** the pure module `app/wg_quick_hooks.py` takes captured `/etc/wireguard` listing metadata and file text, the OS family, the wireguard-tools installation state and, optionally, the enabled `wg-quick@` instances. For each interface file it returns every hook's phase, order, source line, command text after `%i` substitution and SHA-256, plus whether the interface comes up at boot. A separate list gives the up hooks that run at boot. It performs no I/O and never runs a command.
+- **Fidelity:** it reproduces wireguard-tools v1.0.20210914 `parse_options` and `execute_hooks`:
+  - interface-name and `.conf` file-name validation;
+  - ASCII-only case-insensitive keys and `[Interface]` sections, with repeated sections accumulating;
+  - a cut at the first `#` anywhere on a line, so `echo "#x"` is truncated;
+  - a split at the first `=`, where a line with no `=` uses its whole text as both key and value;
+  - C-locale whitespace trimming;
+  - a final line without a newline;
+  - `SaveConfig` values that make `wg-quick` exit before any hook runs.
+
+  Hook keys outside `[Interface]` are listed as misplaced and are not run.
+- **Fail closed:** the following make the result incomplete:
+  - an unobserved family, installation state, listing or file text;
+  - an unreadable file;
+  - NUL bytes, which bash `read` drops;
+  - malformed or over-limit input;
+  - an enabled instance that names a path rather than an interface.
+
+  Unobserved enablement leaves `at_boot` as `unknown`. `wg setconf` validation of the rest of the file is not modeled. When `wg setconf` fails, `PreUp` has already run and `PostUp` does not run, so `PostUp` may be over-reported, and the result says so. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_wg_quick_hooks.py` (9 tests). A differential harness ran the real v1.0.20210914 `parse_options` and the `%i` substitution from `execute_hooks` under bash 5.2 on 4,300 random configurations. These covered sections, case, comments, whitespace, CRLF, missing `=`, `SaveConfig` values and interface names. The harness compared each config's hook lists and `SaveConfig` result with the contract: 0 disagreements.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and enabled instances, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### sshd command contract — worker checkpoint #1357 (roadmap F)
+
+sshd runs `AuthorizedKeysCommand` and `AuthorizedPrincipalsCommand` on authentication attempts as their configured command users, and `ForceCommand` and `Subsystem` commands as the authenticating user. The startup inventory did not model these login-triggered commands.
+
+- **Change:** the pure `app/sshd_commands.py` takes captured `sshd_config` text and captured `Include` glob matches and returns each startup-effective command with its source line, argv, run-as user, `%` tokens and whether it runs, plus every non-`all` `Match` block that sets a command, with its unevaluated criteria and the values that apply when it is the first matching block. It performs no I/O and never runs a command.
+- **Fidelity:** it follows upstream OpenSSH 9.2p1 and 9.6p1 `servconf.c`, `misc.c`, `auth2-pubkey.c` and `sshd.c`: keyword splitting, first-value-wins, `Include` relative to `/etc/ssh` with sorted matches and Match-state restore, startup-only `Match all`, per-connection Match re-reading, directives not allowed in `Match`, the absolute-path check, 9.2p1's `AuthorizedPrincipalsCommand` gate on `AuthorizedKeysCommand`, 9.6p1's Subsystem-in-Match merge, and the startup refusal of a command without its user.
+- **Fail closed:** an unobserved file or glob result, `~` includes, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. Unknown keywords are reported as a non-blocking gap because distribution patches add keywords. Unmodeled value validation can only stop sshd, so the result over-reports. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_sshd_commands.py` (18 tests). A differential harness ran 6,000 random configurations with includes, `Match` blocks and invalid lines against Ubuntu 24.04's `sshd -T` (OpenSSH 9.6p1). Startup acceptance and the effective authentication, force and subsystem values agreed in all but two configurations. In both, a matched `Match all` Subsystem replaced Ubuntu's global subsystem list, while this module keeps upstream's merge and over-reports the global subsystems.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files and glob results, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### Zabbix agent UserParameter contract — worker checkpoint (roadmap F)
+
+`zabbix_agentd` starts at boot and runs every configured `UserParameter` command through `/bin/sh -c` whenever a Zabbix server or proxy requests that item key. It runs as `User` (default `zabbix`), or as root with `AllowRoot=1`. `AllowKey`/`DenyKey` and the deprecated `EnableRemoteCommands` decide whether the server may run arbitrary `system.run` commands. The startup inventory did not model these server-triggered commands.
+
+- **Change:** the pure `app/zabbix_user_parameters.py` takes captured configuration bytes, captured `Include` directory listings in `readdir` order and confirmed-absent paths. It returns each registered key with its source line, command, argv, working directory, flexible `$1`–`$9` use and unsafe-parameter setting, the run-as user, and the `system.run` access rules. It performs no I/O and never runs a command.
+- **Fidelity:** it follows Zabbix 6.0.14 `cfg.c`, `zabbix_agentd.c`, `zbxconf.c` and `sysinfo.c`, as described in the module docstring. That covers the 2048-byte `fgets` limit, trimming, exact-case names, `Include` file/directory/`*`-pattern rules with unsorted `readdir` order and the ten-level limit, last-value-wins scalars, 0–1 integer checks, first-comma splitting, key syntax and duplicate-key refusal.
+- **Loadable modules:** each `LoadModule` is reported with its source line and resolved path (absolute as given, otherwise under the last `LoadModulePath`, truncated to 2047 bytes like `zbx_snprintf`). It is `dlopen`-ed at agent start, after the privilege drop and before UserParameters, so its native code runs as the reported run-as user. An empty name stops the agent. A relative name with no `LoadModulePath` (the distribution-specific compiled-in default) or a non-absolute resolved path is a blocking gap. Whether `dlopen`, the API version check or `zbx_module_init` succeeds is not modeled.
+- **Fail closed:** unobserved files or listings, relative includes, invalid UTF-8, NUL bytes and over-limit input make the result incomplete. Parsing continues past an unobserved include, so a later modeled refusal is still reported. Built-in key collisions, unknown parameter names and access-rule pattern validation are not modeled, so the result can only over-report. `origin` is `not_assessed`.
+- **Validation:** `tests/test_zabbix_user_parameters.py` (19 tests). No differential against a real agent yet, because `zabbix-agent` was not installable in the worker environment.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** a differential against the real agent (`zabbix_agentd -p`/`-t`), agent collection, a catalog entry, package provenance, persistence, UI and AI classification. `zabbix_agent2` is out of scope.
+
+### OpenVPN script and plugin contract — worker checkpoint #1361 (roadmap F)
+
+Each `openvpn@`, `openvpn-server@` and `openvpn-client@` unit starts one root OpenVPN daemon from a configuration under `/etc/openvpn`. That configuration names programs OpenVPN runs on tunnel, routing, address and client events, and the plugins it loads into the root process. The startup inventory did not model these configurations as a persistence location.
+
+- **Change:** the pure `app/openvpn_scripts.py` takes the packaged unit arguments (`unit_arguments()`), captured configuration files and the working directory. It returns:
+  - each `up`, `down`, `ipchange`, `route-up`, `route-pre-down`, `client-connect`, `client-disconnect`, `client-crresponse`, `learn-address`, `tls-verify`, `tls-crypt-v2-verify` and `auth-user-pass-verify` program, with its event, argv, resolved executable and SHA-256;
+  - the effective `script-security` level and whether it permits each script (the packaged `openvpn-server@` and `openvpn-client@` units keep the default level 1, which refuses user scripts; the legacy `openvpn@` unit passes 2);
+  - whether `auth-user-pass-verify via-env` receives the password;
+  - the identities each script may run as (root, plus the `user`/`group` identity after the privilege drop);
+  - each `plugin` module, which loads as root regardless of `script-security`, including the arguments the down-root plugin runs as root.
+
+  It performs no I/O and never runs a command.
+- **Fidelity:** it follows the OpenVPN 2.6.19 option reader: command-line arguments in order, nested `config` to 10 levels, fatal lines of 256 bytes or more, the UTF-8 BOM, `parse_line` quoting, escapes, comments and its 16-parameter limit, `--` prefixes, inline `<tag>` blocks and their end tag, immediate `cd`, later-wins script overrides, `,` substitution for `ipchange` and `tls-verify`, `argv_parse_cmd` splitting and the plugin library path rules. It reports `config_error`, with no scripts, only for the refusals it models exactly.
+- **Relaxed option errors:** a `setenv opt` prefix is stripped and the rest of the line is read as a normal option, on the command line and in files. So `setenv opt up /x` registers an `up` script, and `setenv opt plugin`, `cd`, `config`, `user` and `script-security` take effect too. After that prefix, after `setenv FORWARD_COMPATIBLE 1`, and for names listed by `ignore-unknown-option`, OpenVPN only warns about a missing or extra parameter on a modelled option and ignores the line. The result lists those lines under `warnings` (`option_ignored`). Other refusals, such as too many script arguments or a missing `via-env`/`via-file`, stay fatal. An inline flag such as `<up-restart>` is an unrecognized option, as upstream treats it.
+- **Fail closed:** an unobserved file, `config stdin`, invalid UTF-8, NUL bytes, over-limit input and `chroot` make the result incomplete. The following can only stop OpenVPN, so the result over-reports in those cases and says so:
+  - unknown or invalid options it does not model;
+  - a missing or non-executable script;
+  - a failed `cd`;
+  - a server-only script without `--mode server`.
+
+  `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_openvpn_scripts.py` (46 tests). A harness compiled from the unmodified OpenVPN 2.6.19 `parse_line` source tokenized 40,000 random lines, with 0 disagreements against the Python tokenizer.
+  - A differential ran the packaged Ubuntu 24.04 `openvpn` 2.6.19 binary at `--verb 4` on 2,400 random configurations. They mixed `setenv opt` prefixes, `FORWARD_COMPATIBLE`, `ignore-unknown-option`, script, identity, `cd` and `script-security` lines with varying arity.
+  - The result had 0 false negatives or script/identity mismatches. The only differences were over-reports where OpenVPN stopped on an invalid `setenv` line, which this contract does not model.
+  - The same corpus gave 35 mismatches on the previously reviewed head.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:**
+  - agent collection of the unit instances, configuration files and working directories;
+  - a catalog entry, package provenance, persistence, UI and AI classification.
+
+### dnsmasq script contract — worker checkpoint #1365 (roadmap F)
+
+dnsmasq runs `dhcp-script` and `dhcp-luascript` on every DHCP lease event, and also on ARP changes with `script-arp` and TFTP transfers with `enable-tftp`. It also runs any `conf-script` command through `/bin/sh -c` as root while it reads its configuration. These come from the main file, `conf-file` includes and `conf-dir` directories (Debian passes `-7 /etc/dnsmasq.d,.dpkg-dist,.dpkg-old,.dpkg-new`). The startup inventory did not model any of them.
+
+- **Change:** the pure `app/dnsmasq_scripts.py` takes the daemon's captured argv, configuration texts with device and inode, and `conf-dir` listings. It returns each program dnsmasq would run, its source file and line, the events that activate it and the user it runs as. It also returns the files read, in order, and why every other file was skipped. It performs no I/O and never runs a command.
+- **Fidelity:** the rules follow dnsmasq 2.92 `read_opts`, `one_file`, `read_file`, `one_opt` (`conf-dir`, `dhcp-script`, `dhcp-luascript`, `dhcp-scriptuser`), `dnsmasq.c` and `helper.c`:
+  - getopt order;
+  - the first `-C` is read last;
+  - quotes, escapes and comments after whitespace;
+  - `conf-dir` filters and `strcmp` order;
+  - files are deduplicated by device and inode;
+  - single-value repeats are refused, and a file value overrides the command line;
+  - the script user is applied only when a `dhcp-range` exists, and `no-daemon` keeps root.
+
+  The table of 194 long options and the `OPTSTRING` are generated from `option.c`.
+- **Fail closed:** the following make the result incomplete:
+  - unobserved argv, files, identities or directory entries;
+  - `conf-script` output and stdin configuration;
+  - abbreviated long options;
+  - over-long lines and over-limit input;
+  - Lua scripts when the build's Lua support is unknown.
+
+  A configuration dnsmasq refuses is reported as `refused`, with its reason. Values of unrelated options and the existence of the `dhcp-scriptuser` account are not checked, so the result can only over-report. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_dnsmasq_scripts.py` has 31 tests, and six rule mutations are each caught. No executable differential against a built dnsmasq was run in this slice.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** collection of argv, files and listings, startup-catalog wiring and UI.
+
+### pm-utils hook contract — worker checkpoint #1367 (roadmap F)
+
+pm-utils `pm-action` (`pm-suspend`, `pm-hibernate`, `pm-suspend-hybrid`) runs every `sleep.d` hook as root before sleep and again, in reverse order, on wake. `pm-powersave` runs every `power.d` hook on AC/battery changes. Both source `/etc/pm/config.d` shell files as root. The startup inventory did not model any of them.
+
+- **Change:** the pure `app/pm_utils_hooks.py` takes captured listings of `/etc/pm/{sleep,power,config,pm-suspend.config,pm-powersave.config}.d` and `<libdir>/{sleep,power}.d` (entry name, lstat type, and owner/mode/type after following symlinks). It returns, for each program and phase, the hooks visited in order with their arguments and outcome, the programs that run as root, and the configuration files sourced. It performs no I/O and never runs a hook.
+- **Fidelity:** pm-utils 1.4.1 `_run_hooks`, `hook_ok` and `_run_hook`: the `*[!~]` glob, the `[ -O ]` root-owner filter, `LC_COLLATE=C` `sort | uniq` (`sort -r` on wake), the `/etc/pm` copy chosen by `[ -f ]` even when only the library copy is root-owned (`selected_not_root_owned`), `$hook` keeping its previous value when neither copy is a regular file (`repeats_previous`), and `[ -x ]`. Arguments follow `pm-action` and `pm-powersave`.
+- **Fail closed:** unobserved listings or targets, invalid entries, over-limit listings, names that unquoted `echo` would alter (whitespace, glob characters, backslashes, a leading `-`) and any present `config.d` file (sourced shell that can change directories or `HOOK_BLACKLIST`) make the result incomplete. Runtime `disable_hook` markers, the blacklist and aborting hook failures can only remove hooks, so a complete result is an upper bound. Assumes euid 0 and `LC_ALL` unset or C. The library's own `defaults`, `functions` and `module.d` files are outside this slice. `origin` is `not_assessed`, and no result is a safety verdict.
+- **Validation:** `tests/test_pm_utils_hooks.py` (19 tests), including a differential that runs the upstream `_run_hooks`/`hook_ok`/`_run_hook` functions under dash on 120 random root-owned/user-owned, executable/non-executable, directory, symlink and dangling-link trees in both directions, with 0 mismatches. Four rule mutations are each caught.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the listings, startup-catalog wiring, package provenance, UI and AI classification.
