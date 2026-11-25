@@ -309,9 +309,9 @@ def publish_cap_notification(session,cfg,now):
     if capped:
         if counted>=cap:
             message=('The shared daily AI spend cap of $'+_money(cap)+' ('+name+' day) has no remaining safe reservation. '
-                'New paid AI work, including triage, scoring and plans, is deferred, not discarded, until the reset at '+reset_text+
-                ' or until an administrator changes the cap or mode. Counted spend conservatively includes reserved and '
-                'uncertain charges; it is a local estimate, not a provider invoice.')
+                'Queued paid triage, scoring and plans wait for available budget. Recheck the budget at '+reset_text+'. '
+                'Spend from an earlier budget window can still count after this time. '
+                'Counted spend is a local estimate that includes reserved and uncertain charges. Provider invoices can differ.')
             notifications.publish(session,**DAILY_CAP_NOTIFICATION,
                 subject_revision='exhausted:'+name+':'+repr(float(reset))+':'+_money(cap),
                 severity='medium',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
@@ -431,7 +431,8 @@ def by_purpose(session,now=None):
     name=cfg['ai_budget_timezone'];start,reset=_window(now,name)
     result={'generated_at':now,'mode':mode,'enabled':enabled,'timezone':name if enabled else None,
         'window_start':start if enabled else None,'next_reset':reset if enabled else None,
-        'call_count':0,'counted_usd':'0','groups':[],'limitations':SPEND_PURPOSE_LIMITATIONS}
+        'next_reset_authoritative':False,'call_count':0,'counted_usd':'0','groups':[],
+        'limitations':SPEND_PURPOSE_LIMITATIONS}
     if not enabled:return result
     amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
         else_=BudgetEntry.reservation_usd)
@@ -439,20 +440,22 @@ def by_purpose(session,now=None):
     def bucket(*statuses):
         return _aggregate(session,case((BudgetEntry.status.in_(statuses),amount),else_=zero))
     purpose=case((AIRun.id.is_(None),'unattributed'),(AIRun.purpose.in_(SPEND_PURPOSES),AIRun.purpose),else_='other')
+    retained_spend=func.max(case((_survives_reset(now,reset,amount),1),else_=0))
     query=(select(purpose,func.count(BudgetEntry.id),bucket('settled'),bucket('reserved'),
-        bucket('sent','uncertain'),_aggregate(session,amount))
+        bucket('sent','uncertain'),_aggregate(session,amount),retained_spend)
         .select_from(BudgetEntry).outerjoin(AIRun,AIRun.id==BudgetEntry.run_id)
         # Same predicate as _state so the groups sum to the counted total.
         .where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
         .group_by(purpose))
-    groups={};total=Decimal(0);calls=0
-    for key,count,settled,reserved,uncertain,counted in session.execute(query):
+    groups={};total=Decimal(0);calls=0;overlapping=False
+    for key,count,settled,reserved,uncertain,counted,survives_reset in session.execute(query):
         counted=Decimal(counted or 0);total+=counted;calls+=count
+        overlapping=overlapping or bool(survives_reset)
         groups[key]={'purpose':key,'call_count':count,'settled_usd':_money(Decimal(settled or 0)),
             'reserved_usd':_money(Decimal(reserved or 0)),'uncertain_usd':_money(Decimal(uncertain or 0)),
             'counted_usd':_money(counted)}
-    result.update(call_count=calls,counted_usd=_money(total),
+    result.update(call_count=calls,counted_usd=_money(total),next_reset_authoritative=not overlapping,
         groups=[groups[key] for key in SPEND_PURPOSE_ORDER if key in groups])
     return result
 
