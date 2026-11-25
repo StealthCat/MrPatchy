@@ -9,6 +9,7 @@
     "execution": "serial",
     "fixture_hosts": 1,
     "name": "same-server-serial.json",
+    "peak_provider_requests": 1,
     "persistence_delay_ms": 5,
     "persistence_delay_source": "report",
     "provider_delay_ms": 25,
@@ -30,6 +31,7 @@
     "execution": "parallel",
     "fixture_hosts": 1,
     "name": "same-server-parallel.json",
+    "peak_provider_requests": 4,
     "persistence_delay_ms": 5,
     "persistence_delay_source": "report",
     "provider_delay_ms": 25,
@@ -231,6 +233,7 @@
     "cost": "Cost status is preserved from each report; unavailable cost is never treated as zero or a provider invoice.",
     "database": "Both reports measured the same database backend; server versions are informational and may differ.",
     "latency": "Negative elapsed/stage deltas indicate lower fixture latency.",
+    "provider_overlap": "Recorded peak simultaneous fixture provider requests. One means no overlap was observed; null means the input omitted the measurement.",
     "scope": "Disposable loopback fixture only; this comparison does not establish production performance.",
     "throughput": "Positive throughput deltas indicate higher fixture throughput."
   },
