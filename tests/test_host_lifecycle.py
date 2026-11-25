@@ -4,7 +4,7 @@ import time
 import uuid
 from types import SimpleNamespace
 import pytest
-from sqlalchemy import select,create_engine,text
+from sqlalchemy import select,create_engine,inspect,text
 from sqlalchemy.orm import Session as DatabaseSession
 from app import host_lifecycle as lifecycle,worker,ssh,incidents,persistence,response_monitor,service_monitor,scheduling,operations,ai,update_scores,coordination
 from app.db import Session,Host,Job,Setting,Package,Behavior,Audit,engine
@@ -267,12 +267,15 @@ def test_existing_host_schema_is_upgraded_idempotently(tmp_path,monkeypatch):
     db.Base.metadata.create_all(legacy)
     with DatabaseSession(legacy) as s:s.add(Host(id='legacy',name='Legacy',address='192.0.2.1',fingerprint=''));s.commit()
     with legacy.begin() as connection:
+        # The legacy hosts table predates both the lifecycle columns and this index.
+        connection.execute(text('DROP INDEX ix_hosts_deleted_name_id'))
         for column in ('enabled','deleted_at','lifecycle_revision'):connection.execute(text('ALTER TABLE hosts DROP COLUMN '+column))
     monkeypatch.setattr(db,'engine',legacy)
     db.init();db.init()
     with legacy.connect() as connection:
         row=connection.execute(text('SELECT enabled,deleted_at,lifecycle_revision FROM hosts WHERE id=\'legacy\'')).one()
         assert row==(1,0,'')
+        assert 'ix_hosts_deleted_name_id' in {index['name'] for index in inspect(connection).get_indexes('hosts')}
     legacy.dispose()
 
 
