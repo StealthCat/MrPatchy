@@ -242,25 +242,37 @@ def test_complete_current_scores_still_supersede_changed_deferred_history(admin,
         assert sum(r.state=='superseded' and r.next_at==0 for r in rows)==450
 
 
-def test_scoring_candidate_queries_only_load_scheduling_fields(admin):
-    seed(450)
-    score_reads=[]
-    def observe(conn,cursor,statement,parameters,context,executemany):
+@pytest.mark.parametrize('state', ['complete', 'deferred'])
+def test_scoring_candidate_page_reads_exact_and_deferred_together(admin, state):
+    package_ids = seed(450, state)
+    score_reads = []
+
+    def observe(conn, cursor, statement, parameters, context, executemany):
         if statement.startswith('SELECT update_scores.'):
-            score_reads.append(statement.partition('\n')[0].strip())
+            score_reads.append(statement)
 
-    with Session() as s:
-        event.listen(engine,'before_cursor_execute',observe)
+    with Session() as session:
+        event.listen(engine, 'before_cursor_execute', observe)
         try:
-            candidates=list(update_scores.scoring_candidates(s))
+            candidates = list(update_scores.scoring_candidates(session))
         finally:
-            event.remove(engine,'before_cursor_execute',observe)
-        assert len(score_reads)==6,score_reads
-        fields=('id','host_id','name','state','attempted','next_at','configuration')
-        projection='SELECT '+', '.join('update_scores.'+field for field in fields)
-        assert all(statement==projection for statement in score_reads),score_reads[0]
-        assert len(candidates)==450 and all(row.state=='complete' for _,_,_,row,_ in candidates)
+            event.remove(engine, 'before_cursor_execute', observe)
 
+        assert len(score_reads) == 3
+        fields = ('id', 'host_id', 'name', 'state', 'attempted', 'next_at', 'configuration')
+        projection = 'SELECT ' + ', '.join('update_scores.' + field for field in fields)
+        for statement in score_reads:
+            first, second = statement.split(' UNION ALL ')
+            for branch in (first, second):
+                assert branch.partition(' AS scope_match')[0].rsplit(', ', 1)[0] == projection
+
+        assert [package.id for package, *_ in candidates] == package_ids
+        for _, _, key, row, deferred in candidates:
+            assert row.id == key and row.state == state
+            if state == 'deferred':
+                assert deferred == [row]
+            else:
+                assert not deferred
 
 @pytest.mark.parametrize('count,completed',[(513,505),(1000,0)])
 def test_new_candidates_after_multiple_completed_chunks_keep_oldest_order_and_batch_limit(admin,monkeypatch,count,completed):

@@ -6,6 +6,7 @@ import time
 from typing import NamedTuple
 from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
+from sqlalchemy import Boolean, column, literal
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy, ai_retry
@@ -199,13 +200,24 @@ def scoring_candidates(s):
                 host, memo = entry
                 current.append((package, host, cached_identity(host, package, memo)))
         if not current:continue
-        score_state=select(UpdateScore).options(load_only(UpdateScore.id,UpdateScore.host_id,
-            UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,UpdateScore.configuration,raiseload=True))
-        scores={r.id:r for r in s.scalars(score_state.where(UpdateScore.id.in_([key for _,_,key in current])))}
-        scopes={(p.host_id,p.name) for p,_,_ in current};deferred={}
-        for row in s.scalars(score_state.where(UpdateScore.state=='deferred',
-                tuple_(UpdateScore.host_id,UpdateScore.name).in_(scopes))):
-            deferred.setdefault((row.host_id,row.name),[]).append(row)
+        fields = (UpdateScore.id, UpdateScore.host_id, UpdateScore.name, UpdateScore.state,
+                  UpdateScore.attempted, UpdateScore.next_at, UpdateScore.configuration)
+        keys = [key for _, _, key in current]
+        scopes = {(package.host_id, package.name) for package, _, _ in current}
+        exact = select(*fields, literal(False).label('scope_match')).where(UpdateScore.id.in_(keys))
+        by_scope = select(*fields, literal(True).label('scope_match')).where(
+            UpdateScore.state == 'deferred', tuple_(UpdateScore.host_id, UpdateScore.name).in_(scopes))
+        # Each branch keeps its own indexed filter. The marker preserves both
+        # memberships when the current score is also deferred.
+        score_query = select(UpdateScore, column('scope_match', Boolean)).options(
+            load_only(*fields, raiseload=True)).from_statement(exact.union_all(by_scope))
+        scores = {}
+        deferred = {}
+        for row, scope_match in s.execute(score_query):
+            if scope_match:
+                deferred.setdefault((row.host_id, row.name), []).append(row)
+            else:
+                scores[row.id] = row
         for package,host,key in current:
             yield package,host,key,scores.get(key),deferred.get((host.id,package.name),())
 

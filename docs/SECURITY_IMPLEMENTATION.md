@@ -2402,6 +2402,16 @@ The regression verifies rollback when the score write fails and confirms
 successful scoring at the original eligibility boundary. A crash before
 linking the run and independent scoring admission remain open.
 
+### One score-state read per scoring page - Roadmap A checkpoint #1445
+
+Update scoring loads exact current scores and deferred score history in one
+statement per populated package page. The branches keep their existing index
+predicates and project only scheduling fields. A current deferred score can
+still appear in both sets, and a deferred row for changed evidence retains its
+supersession path. Main takes six score reads for three fixture pages. This
+increment takes three. Validate both index paths, page order, retry and stale
+history behavior on SQLite and MySQL. Roadmap A remains incomplete.
+
 ### Deferred scoring eligibility in fleet status — Roadmap A checkpoint #1142
 
 The fleet status distinguishes deferred scores eligible now from the earliest
@@ -3758,6 +3768,17 @@ sent reservation and the already saved usage diagnostic. A failure before
 reply parsing or a database outage can still leave a counted sent reservation.
 The wider Roadmap A acceptance remains open.
 
+
+#### Conditional settlement of capped provider receipts — Roadmap A checkpoint #1473
+
+The provider receipt path settles an exact sent or uncertain reservation with
+one indexed write under the shared budget lock. The pricing decision is prepared
+before acquiring that lock. Unavailable and invalid estimates, including
+non-finite amounts, retain the full conservative charge. A later valid estimate
+can settle an uncertain reservation. Reconciliation leaves finalized rows intact.
+The same tests drive the normal provider path on SQLite and MySQL. Fleet
+throughput and the remaining shared spend-control milestones stay open.
+
 ### Daily cap reset across DST days and midnight — worker checkpoint #984
 
 Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one UTC day and one timezone change. `tests/test_ai_budget_reset_acceptance.py` adds acceptance evidence only; no runtime behavior changes.
@@ -4337,6 +4358,15 @@ Median throughput rose from 1.562 to 3.630 subjects per second in that fixture.
 At that checkpoint the CLI had no MySQL mode; worker checkpoint #976 below adds
 one. Matched production measurements remain open.
 
+Roadmap A checkpoint #1397 supports matched implementation measurements at a
+fixed concurrency. Generate reports in the baseline and candidate checkouts
+with the same benchmark flags on the same database version, and keep the source
+commit identity with each report. Use
+`python tools/compare_ai_benchmarks.py --fixed-concurrency main.json candidate.json`
+to check equivalence and report fixture latency and throughput deltas. The
+default comparison still requires different concurrency. Production performance
+remains a separate acceptance step.
+
 ### Daily ledger timings in capped triage fixtures — Roadmap A checkpoint #1302
 
 Capped fixture reports include `stages.budget_reservation` and
@@ -4539,6 +4569,17 @@ state. This depends on #379 / PR #380 and does not complete cross-purpose priori
 aging, provider-specific quotas, native complete-context collection, full supported
 multi-controller failover or the overall faster-AI program. Exact-head SQLite/MySQL,
 browser, full-suite and coordinator integration checks remain required.
+
+### Provider success clears eligible backoff with one locked write — worker checkpoint #1467
+
+A provider success checks for eligible shared backoff with its usual read-only
+probe. When there is a recovery to record, the distributed lock encloses one
+conditional update. The update applies the same predicates again, preserving
+a newer provider failure and a reset already committed by another worker.
+
+Acceptance covers the normal provider response path and both races on SQLite
+and MySQL. The reviewed administrator clear action and the shared admission
+checks continue to apply. Production throughput remains open in Roadmap A.
 
 ### Reviewed shared provider-backoff reset — worker checkpoint #552
 
@@ -10407,6 +10448,18 @@ workers start. No target-helper/agent update, Docker publication, Git tag or sch
 change is included.
 
 
+### Queued AI plan waits during dispatch — Roadmap A checkpoint #1426
+
+A worker dispatch scan remembers server IDs whose due incident, startup or
+release plan must wait for global AI enablement or a saved server resume. Due
+plans on the same stored server ID reuse that wait within the scan. Ordinary
+jobs still follow their normal checks, and the next scan reads the policy
+again. The worker still checks policy before provider calls.
+
+The dispatch regression covers paused and malformed policies, an unrelated
+eligible server, ordinary work on a paused server and a subsequent saved
+resume. It measures two policy reads across 24 waiting jobs on two servers.
+
 ## v1.35.0 — Durable incident/startup advisory-plan deferral
 
 Issue-first reconciliation read merged v1.34.0 main, repository instructions, this
@@ -14136,3 +14189,37 @@ Procmail is often the local delivery agent, started by Postfix `mailbox_command`
 - **Fail closed:** gaps cover unknown or incomplete listings, unknown kinds or execute bits (including `/usr/bin/etckeeper`'s), trailing-newline names, Perl-versus-shell order differences when Perl presence is unknown, conf files with anything but literal assignments, hook-directory redirection, changed program/APT/cron/daily/unit files, unknown timer enablement or VCS, version drift, and the VCS hooks that shipped `commit.d/50vcs-commit` and `99push` run through `git commit`/`git push`. No result is a safety verdict, and `authorizes_response` is always false.
 - **Validation:** `tests/test_etckeeper_hooks.py` (43 tests). One test runs the exact `lsscripts` Perl body from `/usr/bin/etckeeper` against a temporary directory and checks the contract's selection and order against it.
 - **Remaining:** native collection, startup-catalog and inventory wiring, provenance and AI classification; the `etckeeper-dnf` plugin on RPM systems; resolving `.git/hooks` and `core.hooksPath`.
+
+### Repeated paired triage benchmarks — Roadmap A checkpoint #1483
+
+Use the existing disposable fixture to record at least three independent serial
+and parallel pairs under the same database version, AI controls, workload and
+concurrency settings. Keep the pairs in capture order and alternate which
+configuration runs first when possible.
+
+```bash
+python tools/compare_ai_benchmark_series.py \
+  --pair serial-1.json parallel-1.json \
+  --pair serial-2.json parallel-2.json \
+  --pair serial-3.json parallel-3.json
+```
+
+The command checks each pair with the existing comparator, requires stable
+controls and workloads across repeats, and refuses a reused report even if its
+JSON formatting changed. It records each elapsed and throughput difference and
+the median and range of the paired differences, along with the stage latency
+differences where samples exist. When the pair comparator reports observed
+provider overlap, the series keeps that measurement per pair. Differences in
+observed overlap do not invalidate otherwise matching runs. The series also
+includes executor wait, claim-lock wait and claim-lock hold when the pair
+comparator supplies timings for both reports. Each optional stage states how
+many pairs contributed, and one-sided observations contribute no delta. The
+existing one-pair tool remains available.
+
+A local check with three independent pairs per backend retained eight completed
+investigations, 12 simulated provider calls and four simulated SSH follow-ups
+per run. At four investigation slots, the median paired elapsed difference was
+−3.385 s on SQLite 3.50.4 (range −3.413 to −2.410 s) and −6.151 s on MySQL 8.4.13
+(range −6.349 to −5.913 s). These ranges describe the disposable fixture runs.
+Roadmap A still needs exact integrated-head reruns and production-equivalent
+benchmark evidence.
