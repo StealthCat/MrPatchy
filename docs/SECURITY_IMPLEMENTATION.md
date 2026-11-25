@@ -12847,6 +12847,28 @@ incrond runs a command whenever an inotify event fires on a path named in an inc
 - **Validation:** `tests/test_incron_tables.py` has 14 tests and cannot run on main, where the module does not exist. Three mutations are each caught: loading dot-named system tables, a single-toggle (working) escape in the tokenizer, and last-value-wins configuration. The tokenizer and parsing rules were ported by reading the source. Compiling the upstream source against the tests was not possible in the worker environment.
 - **Remaining:** collection wiring into the startup inventory, a startup catalog entry, provenance against the incron package's shipped files, and UI.
 
+### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
+
+`grub-mkconfig` (`grub2-mkconfig` on RPM families) runs as root whenever the GRUB configuration is regenerated. That includes `update-grub`, GRUB's maintainer scripts and, on Debian and Ubuntu, every kernel install or removal through `/etc/kernel/postinst.d/zz-update-grub`. Each run sources `/etc/default/grub` (and, on Debian, `/etc/default/grub.d/*.cfg`) as shell, then runs the executable scripts in `/etc/grub.d`, whose output becomes `grub.cfg`. Neither the startup catalog nor any contract covered this root execution path.
+
+- **Change:** a new pure module, `app/grub_mkconfig.py`. From captured directory listings, entry types, mode bits and symlink-target observations, it reports which files are sourced, which scripts run and in which order, and why the other entries do not run.
+- **Reference:** GRUB 2.06/2.12 `util/grub-mkconfig.in` and `grub-mkconfig_lib.in`, checked against `grub-common` 2.12-1ubuntu7.3.
+  - `/etc/default/grub` is sourced when `test -f` succeeds. On Debian, each `/etc/default/grub.d/*.cfg` that passes `-e` is then sourced in glob order. A `.cfg` path that exists but is not a regular file is reported as a non-blocking `source_non_file` shell error.
+  - A script is skipped when its name ends in `~` or is `#…#`.
+  - `grub_file_is_not_garbage` requires `test -f`, so symlinks are followed. It rejects `*.dpkg-*`, `*.rpmsave`, `*.rpmnew`, `README*` and `*.sig`.
+  - For root, `test -x` succeeds when any execute bit is set.
+  - The glob skips dot-names. dash (Debian `/bin/sh`) orders it by bytes. bash (RPM `/bin/sh`) uses locale collation, so the order is flagged `order_locale_dependent` whenever punctuation-insensitive, case-folded collation could reorder the names.
+- **Gaps, never reported as covered:** an unknown family; an unobserved, unreadable or mismatched listing; an unobserved entry type, mode, symlink target or `/etc/default/grub`; malformed or duplicate entries; and the 1024-entry cap.
+- **Unobserved, stated in every result:**
+  - script and sourced-file contents, and each script's interpreter;
+  - mount options, ACLs and security modules that can make `test -x` fail;
+  - wrapper or distribution changes to the directories;
+  - a sourced file that ends the run early;
+  - which events regenerate the configuration on the host.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_grub_mkconfig.py` has 16 tests. One copies the reference sourcing and script loop verbatim and runs it under `/bin/sh` against a fixture tree, comparing which files are sourced and run and in what order. Four mutations are each caught: matching dot-names, requiring the owner execute bit, treating a lone `#` as an autosave file, and treating bash glob order as certain.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the GRUB packages' shipped scripts, and UI.
+
 ### Observed provider overlap in fixture comparisons (#1092, roadmap A)
 
 Comparison reports show each input's peak simultaneous fixture provider requests
