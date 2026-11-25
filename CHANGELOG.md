@@ -1,3 +1,16 @@
+## 1.90.0 — 2026-11-25
+
+1. [PR #1137](https://github.com/StealthCat/MrPatchy/pull/1137): A pure Roadmap F contract resolves which `/etc/grub.d` scripts and `/etc/default/grub` files `grub-mkconfig` runs or sources as root when GRUB configuration is regenerated. Compatibility: new module, not yet wired into collection or the UI. Closes #1136.
+2. [PR #1284](https://github.com/StealthCat/MrPatchy/pull/1284): On Refresh, the spend-by-activity card labels a non-authoritative budget boundary as a recheck and explains carryover. Compatibility: the administrator activity endpoint adds `next_reset_authoritative`, derived in the existing grouped read; older replies keep their previous label; no schema or admission change. Fixes #1283.
+3. [PR #1354](https://github.com/StealthCat/MrPatchy/pull/1354): Runtime dependencies are updated to fastapi 0.165.0, SQLAlchemy 2.1.9, python-multipart 0.0.34 and Authlib 1.9.9, with the hashed `requirements.lock` regenerated. This supersedes Dependabot PRs #1346, #1347, #1348 and #1350. Compatibility: dependency versions only. Closes #1353.
+4. [PR #1394](https://github.com/StealthCat/MrPatchy/pull/1394): AI triage benchmarks compare serial and parallel workloads distributed across several fixture servers. Compatibility: benchmark tooling and tests only. Fixes #1393.
+5. [PR #1408](https://github.com/StealthCat/MrPatchy/pull/1408): The legacy automatic-plan allowance reads its history only up to the hourly allowance, reducing database work while preserving queued job counts. Compatibility: no API, schema or authorization change. Fixes #1407.
+6. [PR #1442](https://github.com/StealthCat/MrPatchy/pull/1442): Fleet AI status finds the newest triage and worker diagnostic with one bounded lookup per purpose instead of scanning retained history. Compatibility: same response shape. Fixes #1441.
+7. [PR #1450](https://github.com/StealthCat/MrPatchy/pull/1450): AI timing summaries read runs and events from one database snapshot, so they stay consistent when old diagnostics are pruned during a refresh. The fixture median latency of this diagnostic read rose slightly as a trade-off. Compatibility: same response shape. Fixes #1449.
+8. [PR #1464](https://github.com/StealthCat/MrPatchy/pull/1464): A pure tcsh/csh startup-file contract reports which `/etc/csh.*` files and `~/.tcshrc`, `~/.cshrc`, `~/.login`, `~/.cshdirs` and `~/.logout` a session sources, in which order, with explicit gaps. Compatibility: new module, not yet wired into collection or the UI. Closes #1463.
+
+Integrated together through batch [PR #1505](https://github.com/StealthCat/MrPatchy/pull/1505). This source update does not publish a Docker image.
+
 ## 1.89.0 — 2026-11-25
 
 1. [PR #1133](https://github.com/StealthCat/MrPatchy/pull/1133): A pure Roadmap F contract resolves which incron table entries run which commands, as which user, on which inotify events, following incron 0.5.12 rules. Compatibility: new module, not yet wired into collection or the UI. Closes #1132.

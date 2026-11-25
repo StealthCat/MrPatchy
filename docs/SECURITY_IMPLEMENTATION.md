@@ -2281,6 +2281,12 @@ triage or worker diagnostic in one database snapshot, projecting only the fields
 used by the status response. This reduces a polling round trip. Production
 throughput and the full faster-AI acceptance milestones remain open.
 
+[#1441](https://github.com/StealthCat/MrPatchy/issues/1441) bounds the latest
+diagnostic lookup to the newest triage and worker candidates using the existing
+purpose/start index. It orders those two candidates by start time and run ID
+before reading diagnostic text. The newest diagnostic and running triage stage
+still share one status statement. This is a local database performance increment.
+
 Investigation lease validation checks the current claim before fetching host or
 behavior evidence. A live lease reads only the host lifecycle fields and still
 checks the full behavior evidence, owner, configuration and expiry. Focused
@@ -3622,6 +3628,17 @@ connection tests. The groups sum to the counted total in the budget status.
   per-activity caps are not provided. Amounts remain local public-price
   estimates, not provider invoices. The wider roadmap A acceptance remains open.
 
+Worker checkpoint #1283 adds `next_reset_authoritative` to the activity snapshot.
+The grouped query checks whether any positive, observed spend will still count
+after the configured boundary. It uses the same predicate as the saved-budget
+snapshot and reads the ledger once. The activity card shows a recheck and
+explains carryover when the flag is false. Each Refresh uses its own snapshot.
+The date uses browser-local time and labels the budget timezone separately.
+The API regressions cover a real retained earlier window, released and zero-cost
+rows, unobserved spend, and authoritative, empty and uncapped windows. The
+browser regression refreshes from a reset to a recheck and verifies the same
+activity totals and escaped text.
+
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
 The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
@@ -4195,6 +4212,15 @@ python tools/benchmark_ai.py --same-server --runs 8 --concurrency 4 --provider-d
 python tools/compare_ai_benchmarks.py serial.json parallel.json
 ```
 
+Roadmap A checkpoint #1393 adds a balanced mixed workload. Run the benchmark
+with `--runs 8 --servers 3` at concurrency 1 and 4 to measure the same eight
+investigations across three servers. The report verifies the retained subject
+assignments and records the per-server slot limit so the comparator rejects
+different layouts or limits. Shared layouts cap benchmark concurrency at that
+limit so a temporarily full server cannot leave a submitted fixture unprocessed.
+Existing one-server and one-server-per-subject reports remain comparable under
+their existing controls. These measurements cover disposable fixtures.
+
 The benchmark checks that every persisted run belongs to the expected subject
 and server, with a receipt for every provider call. Reports record the observed
 server count, the single-server slot limit, and peak simultaneous loopback
@@ -4302,6 +4328,15 @@ format. Worker fixtures exercise both plan types through a successful write,
 a failed write, an invalid response and a refusal. Existing plan state,
 evidence, manual approval and provider accounting retain their behavior.
 Production throughput and release-plan timings remain separate.
+
+### Consistent timing samples during retention - Roadmap A checkpoint #1449
+
+The timing summary selects the bounded run and event samples in one database
+statement for process triage and update scoring. A concurrent retention pass
+can remove both from the next response. It no longer makes a single response
+count a pruned run as missing a timing sample. The summary preserves the
+existing run and event limits, newest-event order, malformed-event counts,
+redaction and access checks. Roadmap A remains incomplete.
 
 ### Retained process-triage timing sample — worker checkpoint #522
 
@@ -12594,6 +12629,13 @@ The notification center adds a **Status** filter (All statuses / Active / Resolv
 - **Remaining J work:** filters are not yet reflected in the notification-center deep link, so the status filter, like the existing filters, resets on reload.
 ### Daily-cap window in the Investigations worker status — worker checkpoint #876
 
+Roadmap A checkpoint #1407 caps the legacy automatic-plan tick's history read
+at its ten-job allowance. The count stays exact below the cap and a saturated
+window still queues no plans. The worker applies the same incident/startup
+action filter and strict one-hour cutoff. Status reads continue to show full
+counts and retry deadlines. The real tick regression verifies empty, nearly
+full, full and overfilled windows on SQLite and MySQL.
+
 The admin-only **AI worker status** card on Investigations now shows the full daily-cap window from the existing `budget` object of `GET /api/investigation-status`. It previously showed only counted, remaining and uncertain spend.
 - **Amounts:** cap, counted, settled, reserved, uncertain and remaining. Counted includes settled, reserved and uncertain charges. Reserved covers admitted calls that are not yet reconciled.
 - **Reconciliation:** when transmitted calls await a usage receipt, the card shows their count and the oldest reservation time, and notes that their full ceiling stays counted until reconciliation. When the count is 0, nothing is added.
@@ -12871,6 +12913,28 @@ This is a contract increment only. The startup-awareness requirement is still in
 - persistence, UI, provenance and AI classification.
 
 There is no schema, API, authentication or response-authorization change.
+
+### grub-mkconfig contract — worker checkpoint #1136 (roadmap F)
+
+`grub-mkconfig` (`grub2-mkconfig` on RPM families) runs as root whenever the GRUB configuration is regenerated. That includes `update-grub`, GRUB's maintainer scripts and, on Debian and Ubuntu, every kernel install or removal through `/etc/kernel/postinst.d/zz-update-grub`. Each run sources `/etc/default/grub` (and, on Debian, `/etc/default/grub.d/*.cfg`) as shell, then runs the executable scripts in `/etc/grub.d`, whose output becomes `grub.cfg`. Neither the startup catalog nor any contract covered this root execution path.
+
+- **Change:** a new pure module, `app/grub_mkconfig.py`. From captured directory listings, entry types, mode bits and symlink-target observations, it reports which files are sourced, which scripts run and in which order, and why the other entries do not run.
+- **Reference:** GRUB 2.06/2.12 `util/grub-mkconfig.in` and `grub-mkconfig_lib.in`, checked against `grub-common` 2.12-1ubuntu7.3.
+  - `/etc/default/grub` is sourced when `test -f` succeeds. On Debian, each `/etc/default/grub.d/*.cfg` that passes `-e` is then sourced in glob order. A `.cfg` path that exists but is not a regular file is reported as a non-blocking `source_non_file` shell error.
+  - A script is skipped when its name ends in `~` or is `#…#`.
+  - `grub_file_is_not_garbage` requires `test -f`, so symlinks are followed. It rejects `*.dpkg-*`, `*.rpmsave`, `*.rpmnew`, `README*` and `*.sig`.
+  - For root, `test -x` succeeds when any execute bit is set.
+  - The glob skips dot-names. dash (Debian `/bin/sh`) orders it by bytes. bash (RPM `/bin/sh`) uses locale collation, so the order is flagged `order_locale_dependent` whenever punctuation-insensitive, case-folded collation could reorder the names.
+- **Gaps, never reported as covered:** an unknown family; an unobserved, unreadable or mismatched listing; an unobserved entry type, mode, symlink target or `/etc/default/grub`; malformed or duplicate entries; and the 1024-entry cap.
+- **Unobserved, stated in every result:**
+  - script and sourced-file contents, and each script's interpreter;
+  - mount options, ACLs and security modules that can make `test -x` fail;
+  - wrapper or distribution changes to the directories;
+  - a sourced file that ends the run early;
+  - which events regenerate the configuration on the host.
+- **Unchanged:** there is no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`, and no record is labelled safe.
+- **Validation:** `tests/test_grub_mkconfig.py` has 16 tests. One copies the reference sourcing and script loop verbatim and runs it under `/bin/sh` against a fixture tree, comparing which files are sourced and run and in what order. Four mutations are each caught: matching dot-names, requiring the owner execute bit, treating a lone `#` as an autosave file, and treating bash glob order as certain.
+- **Remaining:** collection wiring into the startup inventory, a catalog entry, provenance against the GRUB packages' shipped scripts, and UI.
 
 ### Observed provider overlap in fixture comparisons (#1092, roadmap A)
 
