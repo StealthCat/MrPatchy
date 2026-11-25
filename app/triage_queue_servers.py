@@ -39,8 +39,7 @@ LIMITATIONS = (
      'decide when an investigation starts, and nothing starts on a paused server until it is resumed.'),
     ('"Active leases" counts every unexpired claim on the server, as admission does. It can exceed "active" '
      'while an investigation that was approved or resolved in the meantime is still finishing.'),
-    ('Pause is read as the fleet status reads it. A manually corrupted per-server AI policy is not shown as '
-     'paused here although provider calls for that server are refused.'),
+    'A server with an invalid saved AI policy stays paused until an administrator repairs it.',
     ('The breakdown is a point-in-time read. The AI worker or a collector running at the same time can change '
      'the counts immediately afterwards.'),
 )
@@ -65,15 +64,17 @@ def status(session, now=None, limit=MAX_SERVERS):
     placed = case((~unclaimed, 'active'), (ready, 'eligible'), (blocked, 'blocked'), else_='retry_wait')
     pending = func.count()
     scope = ai_runs._pending_behavior_scope()
+    # The window counts the grouped servers before LIMIT, from the page's snapshot.
     rows = session.execute(select(
+        func.count().over().label('servers_with_backlog'),
         Behavior.host_id, pending, *(_counted(placed == name) for name in ('active', 'eligible', 'blocked', 'retry_wait')),
         func.min(Behavior.first_seen), func.min(case((and_(placed == 'retry_wait', wake > now), wake))),
         func.max(case((Behavior.host_id.in_(ai_policy.paused_ids()), 1), else_=0)),
     ).select_from(Behavior).outerjoin(retry, retry.subject == Behavior.id)
         .outerjoin(claim, and_(claim.subject == Behavior.id, claim.expires > now)).where(*scope)
         .group_by(Behavior.host_id).order_by(pending.desc(), Behavior.host_id).limit(limit)).all()
-    total = session.scalar(select(func.count(func.distinct(Behavior.host_id))).where(*scope)) or 0
-    identifiers = [row[0] for row in rows]
+    total = rows[0].servers_with_backlog if rows else 0
+    identifiers = [row.host_id for row in rows]
     names = dict(session.execute(select(Host.id, Host.name).where(Host.id.in_(identifiers))).all())
     policies = {row.key[len(ai_policy.PREFIX):]: row.value for row in session.scalars(select(Setting).where(
         Setting.key.in_([ai_policy.PREFIX + identifier for identifier in identifiers])))}
@@ -83,9 +84,11 @@ def status(session, now=None, limit=MAX_SERVERS):
     leases = dict(session.execute(select(claim.host_id, func.count(claim.subject)).where(
         claim.host_id.in_(identifiers), claim.expires > now).group_by(claim.host_id)).all())
     servers = []
-    for host_id, count, active, eligible, held, retry_wait, oldest, next_retry, paused in rows:
+    for _, host_id, count, active, eligible, held, retry_wait, oldest, next_retry, paused in rows:
         policy = policies.get(host_id)
-        allowed = ai_policy.investigation_limit_value(policy if isinstance(policy, dict) else {})
+        # Match admission (ai_claims.acquire): a stored non-object policy is the
+        # fail-closed minimum, and only a missing policy uses the default.
+        allowed = ai_policy.investigation_limit_value(policy if host_id in policies else {})
         servers.append({
             'host_id': host_id, 'name': names.get(host_id, ''), 'pending': count, 'active': active,
             'eligible': eligible, 'blocked': held, 'retry_wait': retry_wait, 'paused': bool(paused),

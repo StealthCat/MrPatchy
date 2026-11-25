@@ -24,7 +24,7 @@ authorization are unchanged and plans remain manual-only.
 """
 import time
 
-from sqlalchemy import literal, select
+from sqlalchemy import JSON, func, literal, select, type_coerce, union_all
 from sqlalchemy.orm import aliased
 
 from . import ai_control_status, ai_policy, host_lifecycle, incidents
@@ -37,33 +37,75 @@ PLAN_ACTIONS = ('security-plan', 'startup-plan')
 STATES = ('off', 'ai_disabled', 'not_configured', 'paused', 'held', 'inactive', 'ready')
 
 
-def _state(session, host_id, policy, cfg):
-    if not policy.get('auto_ai_plan'):
-        return 'off'
+def _readiness(session, host_ids, cfg):
+    """Classify the listed, opted-in servers without per-server database reads."""
+    if not host_ids:
+        return {}
     if not cfg['ai_enabled']:
-        return 'ai_disabled'
-    if not cfg['ai_model'] or session.get(Setting, 'openai_key') is None:
-        return 'not_configured'
-    if ai_policy.status(session, host_id)['paused']:
-        return 'paused'
-    from .operations import host_quarantined
-    if host_quarantined(session, host_id):
-        return 'held'
-    if session.scalar(host_lifecycle.active_ids().where(Host.id == host_id)) is None:
-        return 'inactive'
-    return 'ready'
+        return dict.fromkeys(host_ids, 'ai_disabled')
+    if not cfg['ai_model'] or session.scalar(select(Setting.key).where(Setting.key == 'openai_key')) is None:
+        return dict.fromkeys(host_ids, 'not_configured')
+
+    keys = {host_id: ai_policy.PREFIX + host_id for host_id in host_ids}
+    policies = dict(session.execute(
+        select(Setting.key, Setting.value).where(Setting.key.in_(keys.values()))
+    ).all())
+    paused = {
+        host_id for host_id, key in keys.items()
+        if ai_policy.stored_paused(policies.get(key), present=key in policies)
+    }
+    from .operations import quarantined_hosts
+    held = quarantined_hosts(session, [host_id for host_id in host_ids if host_id not in paused])
+    unchecked = [host_id for host_id in host_ids if host_id not in paused and host_id not in held]
+    active = set(session.scalars(host_lifecycle.active_ids().where(Host.id.in_(unchecked)))) if unchecked else set()
+    states = dict.fromkeys(host_ids, 'inactive')
+    states.update(dict.fromkeys(active, 'ready'))
+    states.update(dict.fromkeys(held, 'held'))
+    states.update(dict.fromkeys(paused, 'paused'))
+    return states
 
 
-def _awaiting(session, host_id):
-    query = (select(incidents.Incident.updated)
-             .where(incidents.Incident.host_id == host_id, *incidents.awaiting_auto_plan(),
-                    incidents.automatic_candidate_sql())
-             .order_by(incidents.Incident.updated, incidents.Incident.id)
-             .limit(AWAITING_LIMIT + 1))
-    rows = list(session.scalars(query))
-    truncated = len(rows) > AWAITING_LIMIT
-    rows = rows[:AWAITING_LIMIT]
-    return len(rows), truncated, (float(rows[0]) if rows else None)
+def _awaiting_candidates(host_id):
+    incident = incidents.Incident
+    return (
+        select(incident.updated)
+        .where(incident.host_id == host_id, *incidents.awaiting_auto_plan(),
+               incidents.automatic_candidate_sql())
+        .order_by(incident.updated, incident.id)
+        .limit(AWAITING_LIMIT + 1)
+    )
+
+
+def _awaiting_query(host_ids, *, outer_references):
+    # Cap the rows fed to each aggregate and include one extra match to detect truncation.
+    if not outer_references:
+        # MySQL before 8.0.14 cannot correlate a derived table. Each union
+        # arm keeps the same limit without referring to an outer query.
+        arms = []
+        for host_id in host_ids:
+            bounded = _awaiting_candidates(host_id).subquery()
+            arms.append(select(literal(host_id), func.count(), func.min(bounded.c.updated)))
+        return union_all(*arms) if len(arms) > 1 else arms[0]
+
+    bounded = _awaiting_candidates(Host.id).correlate(Host).subquery()
+    # Aggregate count and oldest in one bounded scan, returning both in a scalar.
+    summary = select(func.json_array(func.count(), func.min(bounded.c.updated))).scalar_subquery()
+    return select(Host.id, type_coerce(summary, JSON)).where(Host.id.in_(host_ids))
+
+
+def _awaiting(session, host_ids):
+    """Read capped counts and oldest matching timestamps in one statement."""
+    if not host_ids:
+        return {}
+    dialect = session.connection().dialect
+    outer_references = dialect.name != 'mysql' or dialect.server_version_info >= (8, 0, 14)
+    rows = session.execute(_awaiting_query(host_ids, outer_references=outer_references))
+    values = ((host_id, *summary) for host_id, summary in rows) if outer_references else rows
+    return {
+        host_id: (min(found, AWAITING_LIMIT), found > AWAITING_LIMIT,
+                  float(first) if first is not None else None)
+        for host_id, found, first in values
+    }
 
 
 def _job(state, created):
@@ -109,12 +151,12 @@ def _pacing(session, cfg, now):
     return {'mode': cfg['ai_control_mode'], 'limit': None, 'used': None, 'remaining': None, 'next_at': None}
 
 
-def _host(session, host_id, policy, cfg, jobs):
-    awaiting, truncated, oldest = _awaiting(session, host_id)
+def _host(host_id, state, jobs, summaries):
+    awaiting, truncated, oldest = summaries.get(host_id, (0, False, None))
     active, latest = jobs.get(host_id, (None, None))
     return {
-        'enabled': bool(policy.get('auto_ai_plan')),
-        'state': _state(session, host_id, policy, cfg),
+        'enabled': state != 'off',
+        'state': state,
         'awaiting': awaiting,
         'awaiting_truncated': truncated,
         'oldest_awaiting_since': oldest,
@@ -127,10 +169,12 @@ def status(session, host_id, now=None):
     """Return this server's automatic AI plan status in the caller's session. Read-only."""
     now = time.time() if now is None else now
     cfg = config(session)
-    row = session.get(Setting, 'security-policy:' + host_id)
+    row = session.get(Setting, POLICY_PREFIX + host_id)
     policy = row.value if row and isinstance(row.value, dict) else {}
     jobs = _plan_jobs(session, [host_id])
-    return {'generated_at': now, **_host(session, host_id, policy, cfg, jobs), 'pacing': _pacing(session, cfg, now)}
+    state = _readiness(session, [host_id], cfg)[host_id] if policy.get('auto_ai_plan') else 'off'
+    summaries = _awaiting(session, [host_id])
+    return {'generated_at': now, **_host(host_id, state, jobs, summaries), 'pacing': _pacing(session, cfg, now)}
 
 
 def fleet(session, now=None):
@@ -147,12 +191,15 @@ def fleet(session, now=None):
         .join(Setting, Setting.key == literal(POLICY_PREFIX) + Host.id)
         .where(Host.deleted_at == 0)
         .order_by(Host.name, Host.id)).all()
-    opted = [(host_id, name, value) for host_id, name, value in hosts
+    opted = [(host_id, name) for host_id, name, value in hosts
              if isinstance(value, dict) and value.get('auto_ai_plan')]
     listed = opted[:FLEET_LIMIT]
-    jobs = _plan_jobs(session, [host_id for host_id, _, _ in listed])
-    items = [{'host_id': host_id, 'host_name': name, **_host(session, host_id, value, cfg, jobs)}
-             for host_id, name, value in listed]
+    host_ids = [host_id for host_id, _ in listed]
+    jobs = _plan_jobs(session, host_ids)
+    states = _readiness(session, host_ids, cfg)
+    summaries = _awaiting(session, host_ids)
+    items = [{'host_id': host_id, 'host_name': name, **_host(host_id, states[host_id], jobs, summaries)}
+             for host_id, name in listed]
     return {
         'generated_at': now,
         'items': items,
