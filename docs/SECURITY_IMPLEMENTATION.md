@@ -3729,6 +3729,16 @@ charges when the provider outcome is unknown. The existing transient backoff sti
 applies. This is a partial shared-controls increment. Cross-worker failover and
 end-to-end spend and throughput acceptance remain open.
 
+#### Conditional release of definitely unsent reservations — Roadmap A checkpoint #1469
+
+The release transaction now updates the indexed reservation under the shared
+budget lock without first reading it. Before transmission, only a reserved row
+matches. A local connection-pool timeout may release a sent row only when its
+receipt exactly matches, including the empty receipt used outside a tracked run.
+SQLite and MySQL use exact comparisons for both fields. Potentially incurred
+charges stay counted, and the release reason and time remain in the ledger.
+Fleet throughput and the wider shared-admission milestones remain open.
+
 ### Unknown pricing and usage under a daily cap — worker checkpoint #994
 
 Milestone 4 acceptance for **unknown pricing/usage**.
