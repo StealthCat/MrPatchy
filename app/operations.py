@@ -5,7 +5,7 @@ import json
 import logging
 import time
 import httpx
-from sqlalchemy import String,Text,Double,select,func
+from sqlalchemy import String,Text,Double,select,func,or_
 from sqlalchemy.orm import Mapped,mapped_column
 from . import ai_policy_repair_notifications
 from . import ai_budget,ai_control_migration,ai_credential_notifications,ai_pricing,budget_headroom_notifications,host_lifecycle,notifications,scoring_block_notifications,triage_block_notifications
@@ -109,6 +109,15 @@ def unheld_hosts(s, host_ids):
 
 def _recovery_flags(row):
     return {name:bool(row and row.value.get(name)) for name in ('reboot','rollback')}
+
+
+def host_hold_exists(host_id):
+    """SQL expression for any operation or response hold, with no exemptions."""
+    return or_(*(
+        select(column).where(column == host_id, condition).exists()
+        for column, condition in _hold_sources()
+    ))
+
 
 def recovery_policy(s,host_id):
     return _recovery_flags(s.get(Setting,'recovery:'+host_id))
