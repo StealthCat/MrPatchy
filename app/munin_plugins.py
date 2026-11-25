@@ -96,6 +96,12 @@ MAX_PLUGINS = 4096
 MAX_ARGV = 64
 MAX_ARGV_WORD = 4096
 MAX_LINE_NOTES = 256
+# Linux NAME_MAX. A longer directory entry cannot exist, so it is malformed input.
+MAX_NAME = 255
+# Matching-work bounds for _perl_regex (see its docstring).
+MAX_REGEX_REPEATS = 2
+MAX_REGEX_ALTERNATIONS = 6
+MAX_REGEX_COUNT = 255
 
 # Values of these variables decide which code a plugin runs, so they are
 # reported. Every other env.* value is withheld.
@@ -153,11 +159,25 @@ def _perl_regex(fragment: str) -> re.Pattern | None:
     The subset covers literals, ``.``, anchors, alternation, plain groups,
     ``? * +`` and ``{n,m}`` quantifiers, bracket classes without POSIX names and
     the escapes below. Anything else is unmodeled and returns ``None``.
+
+    The subset is also bounded so Python's backtracking engine cannot be driven
+    into super-polynomial work by captured text: a quantifier may only follow a
+    single-character atom (never a group or another quantifier, apart from one
+    lazy ``?``), at most ``MAX_REGEX_REPEATS`` variable quantifiers and
+    ``MAX_REGEX_ALTERNATIONS`` ``|`` branches appear, and counted repeats stay
+    at or below ``MAX_REGEX_COUNT``. Subjects are names of at most
+    ``MAX_NAME`` bytes, so one search costs at most about
+    ``MAX_NAME ** (MAX_REGEX_REPEATS + 1) * 2 ** MAX_REGEX_ALTERNATIONS`` steps.
     """
     if len(fragment) > 1024:
         return None
     i = 0
     in_class = False
+    repeats = 0
+    # True when the previous token is an atom a quantifier may follow.
+    atom = False
+    if fragment.count('|') > MAX_REGEX_ALTERNATIONS:
+        return None
     while i < len(fragment):
         ch = fragment[i]
         if ord(ch) > 0x7e or ord(ch) < 0x20:
@@ -169,12 +189,38 @@ def _perl_regex(fragment: str) -> re.Pattern | None:
             if not (nxt in 'wdsWDS' or (not nxt.isalnum() and nxt != '_')):
                 return None
             i += 2
+            atom = not in_class
             continue
         if in_class:
             if ch == '[' and fragment[i + 1:i + 2] in (':', '.', '='):
                 return None
             if ch == ']':
                 in_class = False
+                atom = True
+        elif ch in '*+?{':
+            if not atom:
+                return None
+            if ch == '{':
+                counted = re.match(r'\{([0-9]{1,3})(,([0-9]{0,3}))?\}', fragment[i:])
+                if counted is None:
+                    return None
+                low = int(counted.group(1))
+                high = counted.group(3)
+                if low > MAX_REGEX_COUNT or (high and int(high) > MAX_REGEX_COUNT):
+                    return None
+                variable = counted.group(2) is not None and high != counted.group(1)
+                i += len(counted.group(0))
+            else:
+                variable = True
+                i += 1
+            if variable:
+                repeats += 1
+                if repeats > MAX_REGEX_REPEATS:
+                    return None
+            if fragment[i:i + 1] == '?':
+                i += 1
+            atom = False
+            continue
         elif ch == '[':
             in_class = True
             # A leading ] or ^] is a literal in both dialects.
@@ -187,9 +233,10 @@ def _perl_regex(fragment: str) -> re.Pattern | None:
         elif ch == '$' and i + 1 < len(fragment) and fragment[i + 1] not in '|)':
             # Perl interpolates $name and $) in a pattern built from text.
             return None
-        elif ch in '@#' or ch == ' ':
-            # Literal in both dialects without /x; allowed.
-            pass
+        # Inside a class nothing is quantifiable yet. Outside, a group is not
+        # an atom here (grouped repetition is unbounded work), and anchors and
+        # alternation take no quantifier either.
+        atom = not in_class and ch not in '()|^$'
         i += 1
     if in_class:
         return None
@@ -197,6 +244,16 @@ def _perl_regex(fragment: str) -> re.Pattern | None:
         return re.compile(fragment, re.A)
     except (re.error, OverflowError, RecursionError):
         return None
+
+
+def _bad_name(name: Any) -> bool:
+    """True for a directory entry no Linux filesystem can return."""
+    if not isinstance(name, str) or '\0' in name or '/' in name:
+        return True
+    try:
+        return len(name.encode('utf-8')) > MAX_NAME
+    except UnicodeEncodeError:
+        return True
 
 
 def _decode(value: Any, code: str, gaps: list, limit: int = MAX_TEXT) -> str | None:
@@ -218,7 +275,13 @@ def _decode(value: Any, code: str, gaps: list, limit: int = MAX_TEXT) -> str | N
     if '\0' in value:
         gaps.append({'code': f'{code}_nul' if code == 'config' else f'{code}_invalid'})
         return None
-    if len(value.encode('utf-8')) > limit:
+    try:
+        size = len(value.encode('utf-8'))
+    except UnicodeEncodeError:
+        # A decoded string with an unpaired surrogate is not file content.
+        gaps.append({'code': f'{code}_invalid'})
+        return None
+    if size > limit:
         gaps.append({'code': f'{code}_too_large'})
         return None
     return value
@@ -592,7 +655,7 @@ def assess(node_conf: Any, plugin_conf: Mapping[str, Any] | None,
     runnable: list[str] = []
     for name in sorted(plugins):
         info = plugins[name]
-        if (not isinstance(name, str) or '\0' in name or '/' in name or not isinstance(info, Mapping)
+        if (_bad_name(name) or not isinstance(info, Mapping)
                 or not isinstance(info.get('regular'), bool) or not isinstance(info.get('executable'), bool)):
             gaps.append({'code': 'plugins_invalid'})
             return finish()
@@ -630,7 +693,7 @@ def assess(node_conf: Any, plugin_conf: Mapping[str, Any] | None,
         gaps.append({'code': 'plugin_conf_invalid'})
         return finish()
     for name in sorted(plugin_conf):
-        if not isinstance(name, str) or '\0' in name or '/' in name:
+        if _bad_name(name):
             gaps.append({'code': 'plugin_conf_invalid'})
             return finish()
         if not _CONF_NAME.fullmatch(name):

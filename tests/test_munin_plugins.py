@@ -282,3 +282,50 @@ def test_perl_regex_subset():
         assert mp._perl_regex(ok) is not None, ok
     for bad in ('(?i)x', r'\Qx', '$foo', '[[:alpha:]]', 'a**', r'\1', '[abc', 'café'):
         assert mp._perl_regex(bad) is None, bad
+
+
+def test_unpaired_surrogates_are_invalid_input_not_a_crash():
+    # Review of b9e9aef: these raised UnicodeEncodeError in the UTF-8 size check.
+    r = run(node=NODE_CONF + '# \ud800\n')
+    assert not r['complete'] and r['gaps'][0]['code'] == 'config_invalid'
+    r = run(conf={'munin-node': DEBIAN_CONF + '# \udfff\n'})
+    assert not r['complete']
+    assert {'code': 'plugin_conf_invalid', 'file': 'munin-node'} in r['gaps']
+    assert r['plugin_conf_files'][0]['status'] == 'unresolved'
+    assert run(plugins={'cpu\ud800': EXE})['gaps'][0]['code'] == 'plugins_invalid'
+    assert run(conf={'a\ud800': ''})['gaps'][0]['code'] == 'plugin_conf_invalid'
+
+
+def test_names_longer_than_name_max_are_invalid():
+    assert run(plugins={'a' * (mp.MAX_NAME + 1): EXE})['gaps'][0]['code'] == 'plugins_invalid'
+    assert run(conf={'a' * (mp.MAX_NAME + 1): ''})['gaps'][0]['code'] == 'plugin_conf_invalid'
+    assert run(plugins={'a' * mp.MAX_NAME: EXE})['complete']
+
+
+def test_perl_regex_subset_is_bounded():
+    for ok in ('^if_.*', 'a+b*', 'a{3}b{2}c{1,2}', 'a*?b', '(ab|cd|ef)x', r'\w+_\d+$', 'a{2,}'):
+        assert mp._perl_regex(ok) is not None, ok
+    for bad in ('(a+)+$', '(a|aa)*', '(ab){2,9}', 'a*b*c*', 'a{1,999}', 'a{,3}', 'a{2',
+                '|'.join('abcdefgh'), '^*', '(*a)', '[a]{1,2}{3}'):
+        assert mp._perl_regex(bad) is None, bad
+
+
+def test_worst_case_bounded_regexes_finish_quickly_on_name_max_subjects():
+    import time
+    # Accepted patterns that maximise backtracking under the bounds.
+    worst = ['.*.*x', 'a*a*b', '(a|a)(a|a)(a|a)(a|a)(a|a)(a|a)a*a*b', r'\w+\w+!',
+             'a{0,255}a{0,255}b']
+    names = ['a' * mp.MAX_NAME, '_' * mp.MAX_NAME]
+    start = time.perf_counter()
+    for fragment in worst:
+        pattern = mp._perl_regex(fragment)
+        assert pattern is not None, fragment
+        for name in names:
+            assert pattern.search(name) is None
+    assert time.perf_counter() - start < 5
+
+
+def test_wildcard_with_grouped_repetition_is_unmodeled():
+    r = run(conf={'a': '[(a+)+*]\nuser root\n'})
+    assert not r['complete']
+    assert {'code': 'regex_unmodeled', 'section': '(a+)+*'} in r['gaps']
