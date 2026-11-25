@@ -360,8 +360,8 @@ def auto_plan_tick(now=None):
             if remaining<=0:return
             enabled=_auto_plan_enabled_hosts(s)
             if not enabled:return
-            from .operations import host_quarantined
-            enabled=[host for host in enabled if not host_quarantined(s,host)]
+            from .operations import unheld_hosts
+            enabled=unheld_hosts(s,enabled)
             if not enabled:return
             candidates=s.execute(select(Incident.id,Incident.host_id,Incident.scan_id).where(
                 Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),
