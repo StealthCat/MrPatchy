@@ -305,9 +305,9 @@ def publish_cap_notification(session,cfg,now):
     if capped:
         if counted>=cap:
             message=('The shared daily AI spend cap of $'+_money(cap)+' ('+name+' day) has no remaining safe reservation. '
-                'New paid AI work, including triage, scoring and plans, is deferred, not discarded, until the reset at '+reset_text+
-                ' or until an administrator changes the cap or mode. Counted spend conservatively includes reserved and '
-                'uncertain charges; it is a local estimate, not a provider invoice.')
+                'Queued paid triage, scoring and plans wait for available budget. Recheck the budget at '+reset_text+'. '
+                'Spend from an earlier budget window can still count after this time. '
+                'Counted spend is a local estimate that includes reserved and uncertain charges. Provider invoices can differ.')
             notifications.publish(session,**DAILY_CAP_NOTIFICATION,
                 subject_revision='exhausted:'+name+':'+repr(float(reset))+':'+_money(cap),
                 severity='medium',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
