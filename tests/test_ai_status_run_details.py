@@ -48,7 +48,8 @@ def test_status_reads_running_stage_and_latest_diagnostic_together(admin, state,
     assert status['last_error'] == expected_error
     assert len(detail_reads) == 1
     assert 'union all' in detail_reads[0]
-    assert detail_reads[0].count('order by ai_runs.started desc') == 2
+    assert detail_reads[0].count('order by ai_runs.started desc') == 3
+    assert detail_reads[0].count('ai_runs.purpose =') == 3
     assert 'ai_runs.subject' not in detail_reads[0]
     assert 'ai_runs.model' not in detail_reads[0]
 
@@ -61,3 +62,16 @@ def test_status_has_empty_run_details_when_no_matching_history(admin):
 
     assert status['last_run'] is None
     assert status['last_error'] == ''
+
+
+def test_latest_diagnostic_breaks_timestamp_ties_by_run_id(admin):
+    with Session() as session:
+        session.add_all([
+            ai_runs.AIRun(id='first-triage', purpose='triage', started=123, state='complete'),
+            ai_runs.AIRun(id='worker', purpose='worker', started=123, state='complete'),
+            ai_runs.AIRun(id='z-last-triage', purpose='triage', started=123,
+                         state='error', message='Latest diagnostic'),
+            ai_runs.AIRun(id='newer-unrelated', purpose='update_scoring', started=124),
+        ])
+        session.commit()
+        assert ai_runs._status_run_details(session) == (None, 'z-last-triage', 'Latest diagnostic')
