@@ -4050,6 +4050,13 @@ lifecycle, role and response authorization are unchanged.
 **Compatibility:** API clients that save expanding controls must preview first
 and resend the save with the returned confirmation.
 
+Roadmap A checkpoint #1409 filters exact YARA incidents before the automatic
+plan tick's candidate limit. The worker reads incident, host and scan IDs in
+one oldest-first window. The shared SQL predicate compares the engine label
+byte-for-byte on SQLite and MySQL, keeping missing engine data and other labels
+consistent with the prior worker rule. An older excluded backlog regression
+verifies the narrower query and identical enqueue decisions.
+
 ### Per-server automatic AI plan status — worker checkpoint #922
 
 The scan-policy toggle for automatic AI plans always said "at most ten plan
