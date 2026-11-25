@@ -3743,6 +3743,21 @@ Milestone 4 acceptance for **unknown pricing/usage**.
   them, and quoting an unpriceable request at zero fails 12.
 - **Unchanged:** no runtime change; no defect was found. Other milestone 4 items
   and measured throughput remain open.
+### Ledger settlement after a diagnostic write failure — worker checkpoint #1465
+
+Once Mr Patchy parses a provider reply, the same usage estimate drives its
+diagnostic receipt and its independent daily-cap ledger. If the diagnostic
+receipt update fails, the ledger still attempts reconciliation. A priced
+reply settles to the estimate and returns any unused reservation to the cap.
+An unpriceable reply keeps the full reservation marked uncertain.
+
+Acceptance injects a diagnostic table write failure after the provider reply
+on SQLite and MySQL. It verifies the ledger, the next budget admission, and
+the recorded failed AI run. A failed ledger update keeps the conservative
+sent reservation and the already saved usage diagnostic. A failure before
+reply parsing or a database outage can still leave a counted sent reservation.
+The wider Roadmap A acceptance remains open.
+
 ### Daily cap reset across DST days and midnight — worker checkpoint #984
 
 Milestone 4 asks for "midnight/DST/reset" validation. Earlier tests pinned one UTC day and one timezone change. `tests/test_ai_budget_reset_acceptance.py` adds acceptance evidence only; no runtime behavior changes.
@@ -12026,6 +12041,20 @@ full SQLite/MySQL/browser checks and fresh code scanning remain required before
 this checkpoint is delivered.
 
 
+### Automatic plan candidate availability — Roadmap A checkpoint #1419
+
+The automatic planning tick excludes servers with queued or running incident
+or startup plans before taking its 100-incident window. Older incidents on an
+occupied server can fill that window, so applying the occupancy check before
+the limit allows other servers to queue work in the same tick. The query uses
+database host identity matching. The later occupancy lookup and existing
+within-tick, lifecycle and worker execution checks still apply.
+
+The SQLite and native MySQL regression uses 110 older incidents on two
+occupied servers and verifies that the two available servers are queued in
+oldest-first order. Fairness among independently available servers with large
+incident backlogs remains open.
+
 ### Batched automatic security-plan eligibility — worker checkpoint #592
 
 This bounded faster-AI increment shortens the database work performed while holding
@@ -13617,7 +13646,6 @@ cloud-init's `scripts_per_boot`, `scripts_per_instance` and `scripts_per_once` f
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the three directories, a catalog entry, package provenance, persistence, UI and AI classification.
 
-
 ### LightDM seat-script contract — worker checkpoint #1301 (roadmap F)
 
 LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-script`, `session-setup-script` and `session-cleanup-script` as root at every display start and stop, greeter start, user login and logout. They are set in `lightdm.conf`, in `lightdm.conf.d` drop-ins under the XDG data and config directories, and in per-seat `[Seat:<glob>]` sections. The startup inventory did not model them.
@@ -14015,3 +14043,86 @@ libvirt runs `/etc/libvirt/hooks/<driver>` and every executable entry of `/etc/l
 
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** a differential harness against a real Postfix `local(8)` and agent collection of homes and `postconf`. Also a catalog entry, provenance, persistence, UI and AI classification.
+
+### munin-node plugin contract — Roadmap F checkpoint #1498
+
+- **Outcome:** `app/munin_plugins.py` is a pure contract with no I/O. Its inputs are the captured `munin-node.conf`, the regular files in `/etc/munin/plugin-conf.d`, the `/etc/munin/plugins` listing (regular/executable after following symlinks) and the observed `munin-node` argv. It reports which plugins munin-node runs when a master connects and, for each one:
+  - the account and groups it runs as, and which section or default set them;
+  - the argv munin-node execs for `fetch` and `config`, including `command` with `%c`, a `PATH` lookup, and a Perl one-word `exec` that goes through `/bin/sh -c`;
+  - the effective `PATH` and the execution-affecting `env.*` variables.
+- **Semantics:** taken from munin 2.0.75 `Munin::Node::{Config,Service,OS,Server}`, `Munin::Common::Config` and `sbin/munin-node`, with Debian build defaults (`nobody`/`munin`, `/etc/munin`):
+  - Comments are stripped unless escaped (`\#`), and lines are trimmed. A plugin-conf.d line reading `0`, and a `[0]` section, are false in Perl and are handled as Perl handles them.
+  - plugin-conf.d files load in sorted order with munin's filename, hidden-file and `ignore_file` filters. A malformed line, an unknown key, `env NAME=value`, or a key before any section drops the rest of that file and keeps what was already read. Later files replace earlier keys, and env merges per variable.
+  - Wildcard sections (`prefix*`, `*suffix`) are Perl regexes. They are applied in descending string order and never replace keys already set by an exact section or an earlier wildcard.
+  - Plugins must be regular executables, with names in `[-\w@.:]`, not hidden, not ending in `.conf` and not matched by `ignore_file`. The weird-character rule runs before `ignore_file`.
+  - A plugin runs as its `user`, else `default_plugin_user`/`default_client_user`, else `nobody`. A daemon that is not root runs every plugin as itself. `munin-node.conf` names that are not munin or Net::Server settings become strings in the service table, and sections, wildcards or plugins with those names fail as Perl fails.
+- **Fails closed:** each of these is a blocking gap:
+  - unobserved inputs, NUL bytes, text that is not UTF-8, and over-limit or malformed input;
+  - an argv that is not modeled (abbreviated, single-dash or case-changed options) or that exits (`--help`, `--version`, a missing or unexpected argument);
+  - a `--config` path other than the captured one;
+  - a fatal `munin-node.conf` line;
+  - a daemon `user` that is missing, ambiguous or unresolvable;
+  - paranoia without per-path permission evidence;
+  - `ignore_file` or wildcard regexes outside the modeled Perl subset;
+  - filenames containing a newline.
+- **Redaction:** values of `env.*` variables outside the execution-affecting set (`PATH`, loader, interpreter, shell-startup and `MUNIN_LIBDIR` variables) are withheld. For example, `env.password` is reported by name only.
+- **Validation:** `tests/test_munin_plugins.py` has 25 tests. They cover Debian's shipped `munin-node.conf` and plugin-conf.d excerpts, wildcard precedence, file aborts, Perl truthiness, command and shell expansion, listing filters, paranoia, name collisions, argv handling, the regex subset and redaction. After review, unpaired surrogates in decoded text or names are invalid input rather than a crash, names over Linux `NAME_MAX` (255 bytes) are invalid, and the Perl regex subset is bounded: no quantified group or stacked quantifier, at most 2 variable quantifiers, 6 `|` branches and counted repeats of 255. A test times worst-case accepted patterns on 255-byte names.
+- **Not modeled:** group existence (the contract can over-report a plugin that fails before it runs, but it does not under-report), Net::Server's own parsing beyond a single plain `user` line, `munin-run`, `munin-async` spooling, per-plugin `timeout`/`host_name` and the plugins' own code.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** a differential run against munin's Perl modules, agent collection of the three inputs, a catalog entry, package provenance, UI and AI classification.
+
+### Apache httpd piped-log contract — Roadmap F checkpoint #1502
+
+- **Outcome:** `app/apache_piped_logs.py` is a pure contract with no I/O. It takes the captured httpd configuration: the main file, every file an `Include`/`IncludeOptional` matched, the observed `-D` defines and the start environment (for example Debian's `envvars`). It reports which programs httpd starts as piped loggers, meaning `CustomLog`, `TransferLog`, `GlobalLog` and `ErrorLog` targets that begin with `|`. For each one it gives the server (main or `<VirtualHost …>`), the direct argv or the `/bin/sh -c` string, the resolved executable, the working directory (the final `ServerRoot`), any `env=`/`expr=` log condition and the enclosing unevaluated conditions. httpd documents that piped loggers inherit the parent's user, normally root, and `User`/`Group` do not apply to them.
+- **Semantics:** taken from httpd 2.4.62 and APR 1.7.5 source.
+  - `ap_cfg_getline`: line continuation and trimming. `#` starts a comment only at the beginning of a line.
+  - `ap_resolve_env`: the whole line is expanded, with `Define` taking precedence over the environment.
+  - `ap_getword_conf`: quoting and escapes.
+  - `Include`: resolved against the `ServerRoot` in force when it is read, with matches in sorted order.
+  - `<IfDefine>`: decided from `-D`, `Define` and `UnDefine`, and false sections are skipped unparsed.
+  - `ap_open_piped_log`/`open_error_log`: `|`, `||`, `|$` and `||$`.
+  - `apr_tokenize_to_argv`: quotes group only at a word start and backslashes are removed. Shell mode joins the words with single spaces.
+  - `execv`: no `PATH` search.
+  - Each access-log directive opens its own logger. Only the last `ErrorLog` of a server counts, and a virtual host whose `ErrorLog` repeats an earlier server's exact string shares that logger.
+- **Fails closed:** each of these is a blocking gap:
+  - unobserved includes or files, and a non-optional include that matches nothing;
+  - include loops or excessive depth;
+  - unbalanced or malformed sections, and nested `<VirtualHost>`;
+  - log directives in contexts httpd rejects (`<Directory>`, `<Location>`, `<If>`, …, or `GlobalLog` in a virtual host), and wrong argument counts;
+  - unresolved variables, or variables defined only inside unevaluated conditions, used in relevant directives;
+  - a conditional `ServerRoot`, and a conditional `ErrorLog` override;
+  - `<Macro>`/`Use`;
+  - empty pipes, NUL bytes, and over-limit or malformed input.
+  
+  A virtual-host `ErrorLog` that matches a *conditional* earlier one is reported (`may_share_with`) rather than assumed shared.
+- **Other mechanisms:** `RewriteMap prg:`, `ExtFilterDefine`, `SSLPassPhraseDialog exec:` and `SSLRandomSeed exec:` are listed under `other_programs` as `not_modelled`.
+- **Validation:** `tests/test_apache_piped_logs.py` has 50 tests, counting parameter cases. They cover Debian and RHEL layouts, every pipe prefix, APR tokenizer edge cases, shell joining, log conditions, `ErrorLog` last-wins and sharing, `<IfDefine>`/`Define`/`UnDefine`, variable precedence, continuation and comment rules, `ServerRoot` changes, the fail-closed gaps and other-program listing.
+- **Not modeled:** evaluation of `<IfModule>`/`<IfFile>`/`<IfDirective>`/`<IfSection>`/`<IfVersion>`, which are reported as conditions; whether `mod_log_config` is loaded; the user httpd itself starts as; program existence; and the programs' own behaviour.
+- **Unchanged:** no collection, schema, route, UI, AI, role or response-authorization change. `origin` is always `not_assessed`.
+- **Remaining:** a differential run against a real httpd, agent collection of the inputs, a catalog entry, package provenance, UI and AI classification.
+
+### procmail rcfile execution contract — worker checkpoint #1507 (roadmap F)
+
+Procmail is often the local delivery agent, started by Postfix `mailbox_command`, a `~/.forward` `"|procmail"` entry or the MTA. Every delivered message can then make `/etc/procmailrc` and the recipient's `~/.procmailrc` start programs, with no login. The startup inventory did not model them.
+
+- **Change:** the pure `app/procmail_rc.py` takes the captured text of one rcfile, its kind (`global` or `user`), the recipient and whether procmail started privileged. It returns each program procmail may start: `|` pipe actions, `f` filters, `VAR=|cmd` captures, `?` condition programs, backticks and `TRAP`. For each it gives the guarding recipe and block depth, whether it goes through `$SHELL` and the user it runs as. It also lists forwards and the `INCLUDERC`/`SWITCHRC` files it does not follow. It performs no I/O and never runs a command.
+- **Fidelity:** it follows procmail 3.24 `procmail.c` `mainloop`, `misc.c` `conditions`, `goodies.c` `readparse`/`metaparse`, `variables.c` `DROPPRIVS`/`renvint` and the `config.h` defaults (`RECFLAGS`, `SHELLMETAS`). The global rcfile runs as root after a privileged start until a truthy `DROPPRIVS`. A conditional or expanded `DROPPRIVS` makes later entries `unknown`.
+- **Fail closed:** missing or oversized input, an unclosed block, an unterminated backtick or quote, a legacy counted header, a blank line before the first condition (without `A a E e`) and a `$` condition that expands a variable all set `complete: false` with a named gap. `origin` is `not_assessed`.
+- **Validation:** `tests/test_procmail_rc.py` (46 tests). The rules were checked against the procmail 3.24 source. No differential test runs the real binary, because running a downloaded procmail binary was not permitted in this environment.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of `/etc/procmailrc` and `~/.procmailrc`, linking with the `.forward` (#1489) and Postfix `mailbox_command` evidence, following `INCLUDERC`/`SWITCHRC`, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### etckeeper hook contract — worker checkpoint #1517 (roadmap F)
+
+- **Delivered:** `app/etckeeper_hooks.py` is a pure contract that says which `/etc/etckeeper/<command>.d` scripts run as root, in which order, and from which trigger: the APT `DPkg::Pre-Invoke`/`DPkg::Post-Invoke` hooks in `05etckeeper` (`pre-install`, `post-install`), `/etc/cron.daily/etckeeper`, and `etckeeper.timer` → `etckeeper.service` → `/etc/etckeeper/daily` (`unclean`, then `commit`). Nested commands are followed only through unchanged shipped scripts (`pre-install` → `list-installed`, `unclean`, `commit`; `post-install` → `unclean`, `list-installed`, `commit`). Each script is `shipped_unchanged`, `shipped_modified`, `custom` or `unverified`.
+- **Semantics:** pinned to Ubuntu `etckeeper 1.18.20-2` with SHA-256 of the program, hooks, cron job and units:
+  - `etckeeper.conf` is sourced as root shell before the hook directory is chosen, and can redirect `ETCKEEPER_CONF_DIR`/`ETCKEEPER_DIR`;
+  - a command exits before any script when its `.d` directory is missing or no VCS is configured or detected;
+  - `lsscripts` selects `glob "$dir/*"` names matching `[-a-zA-Z0-9]+` that are not directories and are `-x`. With `LANG=C`, Perl's File::Glob orders case-folded names, then bytes; the no-Perl `/bin/sh` fallback uses dash byte order;
+  - scripts run under `set -e`, so a failure stops the rest of that command;
+  - the cron job honours `AVOID_DAILY_AUTOCOMMITS="1"` (after sourcing the conf); `etckeeper.service` does not.
+  - the APT hooks and `/etc/etckeeper/daily` run etckeeper only when `[ -x /usr/bin/etckeeper ]`, so an unknown execute bit leaves every trigger unknown;
+  - in the conf, `#` starts a comment only after whitespace: `AVOID_DAILY_AUTOCOMMITS=1#note` keeps the literal `1#note` and is reported as not understood.
+- **Fail closed:** gaps cover unknown or incomplete listings, unknown kinds or execute bits (including `/usr/bin/etckeeper`'s), trailing-newline names, Perl-versus-shell order differences when Perl presence is unknown, conf files with anything but literal assignments, hook-directory redirection, changed program/APT/cron/daily/unit files, unknown timer enablement or VCS, version drift, and the VCS hooks that shipped `commit.d/50vcs-commit` and `99push` run through `git commit`/`git push`. No result is a safety verdict, and `authorizes_response` is always false.
+- **Validation:** `tests/test_etckeeper_hooks.py` (43 tests). One test runs the exact `lsscripts` Perl body from `/usr/bin/etckeeper` against a temporary directory and checks the contract's selection and order against it.
+- **Remaining:** native collection, startup-catalog and inventory wiring, provenance and AI classification; the `etckeeper-dnf` plugin on RPM systems; resolving `.git/hooks` and `core.hooksPath`.
