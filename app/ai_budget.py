@@ -6,7 +6,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, LargeBinary, Numeric, and_, case, cast, func, or_, select
+from sqlalchemy import String, Text, Double, LargeBinary, Numeric, and_, case, cast, func, or_, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -75,6 +75,7 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
     unreconciled_count=0
     oldest_reservation=None
+    overlapping=False
     if enabled:
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
         # MySQL performs the sum in native DECIMAL without a float intermediate.
@@ -85,10 +86,14 @@ def _state(session,cfg,now,*,include_reconciliation=False):
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
         if include_reconciliation:
             bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
-            detail=query.add_columns(bucket,func.count(),func.min(BudgetEntry.created)).group_by(bucket)
-            for value,key,call_count,oldest in session.execute(detail):
+            # Carryover is a subset of the counted rows. Computing it in this query
+            # keeps the reset guidance on the same snapshot as the displayed spend.
+            detail=query.add_columns(bucket,func.count(),func.min(BudgetEntry.created),
+                func.max(case((_survives_reset(now,reset,amount),1),else_=0))).group_by(bucket)
+            for value,key,call_count,oldest,survives_reset in session.execute(detail):
                 total=Decimal(value or 0);counted+=total
                 if key in groups:groups[key]=total
+                overlapping=overlapping or bool(survives_reset)
                 if key in ('sent','uncertain'):
                     unreconciled_count+=call_count
                     if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
@@ -99,7 +104,7 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
-    return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation)
+    return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation,overlapping)
 
 
 def waiting(session,now,payload=None,*,settings=None,quote=None):
@@ -152,10 +157,26 @@ def mark_sent(identifier,call_id):
     if not identifier:return
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if not row or row.status!='reserved':raise RuntimeError('AI budget reservation changed before provider transmission')
-            row.status='sent';row.call_id=call_id or '';row.updated=time.time()
-            row.reason='Provider transmission began; the reserved ceiling remains counted until reconciliation.'
+            ledger = BudgetEntry.__table__
+            # Preserve the exact Python status check with MySQL's case-insensitive text collation.
+            status = ledger.c.status
+            if session.get_bind().dialect.name == 'mysql':
+                reserved = cast(status, LargeBinary) == b'reserved'
+            else:
+                reserved = status.collate('BINARY') == 'reserved'
+            changed = session.execute(
+                update(ledger).where(
+                    ledger.c.id == identifier,
+                    reserved,
+                ).values(
+                    status='sent',
+                    call_id=call_id or '',
+                    updated=time.time(),
+                    reason='Provider transmission began; the reserved ceiling remains counted until reconciliation.',
+                )
+            )
+            if changed.rowcount != 1:
+                raise RuntimeError('AI budget reservation changed before provider transmission')
             session.commit()
 
 
@@ -240,14 +261,7 @@ def status(session, now=None, *, settings=None):
     now = time.time() if now is None else now
     cfg = config(session) if settings is None else settings
     enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
-    unreconciled_count,oldest=reconciliation
-    # A timezone change can leave a previously admitted window open beyond the
-    # configured reset.  In that case the configured boundary is useful for a
-    # recheck, but it cannot promise that recorded headroom will be available.
-    amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
-        else_=BudgetEntry.reservation_usd)
-    overlapping=(enabled and session.scalar(select(BudgetEntry.id).where(
-        BudgetEntry.status!='released',_survives_reset(now,reset,amount)).limit(1)) is not None)
+    unreconciled_count,oldest,overlapping=reconciliation
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']

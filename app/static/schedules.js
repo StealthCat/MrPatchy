@@ -27,12 +27,15 @@ async function schedules(revision=renderRevision){
    $('#calendar-title').textContent=scheduleDate.toLocaleDateString([],{month:'long',year:'numeric',...(scheduleView==='day'?{day:'numeric'}:{})});
    const eventCard=e=>`<div class="calendar-event ${esc(e.trigger)}"><strong>${clock(e.start)} · ${esc(e.title)}</strong><small>${e.trigger==='regular'?e.servers+' servers':esc(hostName(e.host_id))+' · '+e.trigger} · start by ${clock(e.end)}</small><small>${Object.entries(e.states).map(([state,n])=>esc(state)+': '+n).join(' · ')||'Planned'}${e.timezone?' · '+esc(e.timezone):''}</small></div>`;
    if(scheduleView==='month'){
-    let html='<div class="calendar-month">'+['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d=>`<div class="calendar-weekday">${d}</div>`).join('');
+    // Rows remain Monday–Sunday weeks; columns are displayed Sat, Mon–Fri, Sun (#1540).
+    const order=[5,0,1,2,3,4,6],names=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    let html='<div class="calendar-month">'+order.map(i=>`<div class="calendar-weekday">${names[i].slice(0,3)}</div>`).join(''),week=[];
     for(let day=new Date(start);day<end;day.setDate(day.getDate()+1)){
-     const key=localDay(day),items=events.filter(e=>localDay(e.start*1000)===key);
-     html+=`<div class="calendar-cell ${day.getMonth()!==scheduleDate.getMonth()?'outside':''} ${key===localDay(new Date())?'today':''}"><button class="calendar-day" data-day="${key}" aria-label="Hourly schedule for ${key}">${day.getDate()}</button>${items.slice(0,3).map(eventCard).join('')}${items.length>3?`<button class="quiet" data-day="${key}">+${items.length-3} more</button>`:''}</div>`;
+     const key=localDay(day),items=events.filter(e=>localDay(e.start*1000)===key),name=names[(day.getDay()+6)%7];
+     week.push(`<div class="calendar-cell ${day.getMonth()!==scheduleDate.getMonth()?'outside':''} ${key===localDay(new Date())?'today':''}" data-weekday="${name}"><button class="calendar-day" data-day="${key}" aria-label="Hourly schedule for ${name} ${key}">${day.getDate()}</button>${items.slice(0,3).map(eventCard).join('')}${items.length>3?`<button class="quiet" data-day="${key}" aria-label="${items.length-3} more on ${name} ${key}">+${items.length-3} more</button>`:''}</div>`);
+     if(week.length===7){html+=order.map(i=>week[i]).join('');week=[];}
     }
-    calendar.innerHTML=html+'</div>';
+    calendar.innerHTML=html+week.join('')+'</div>';
     calendar.querySelectorAll('[data-day]').forEach(b=>b.onclick=()=>{scheduleDate=new Date(b.dataset.day+'T12:00:00');scheduleView='day';view.value='day';picker.value=b.dataset.day;load();});
    }else{
     // Real elapsed hours preserve both repeated fall-back hours and omit spring-forward gaps.
