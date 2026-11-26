@@ -397,13 +397,15 @@ def assess(files: dict[str, dict[str, Any]] | None, *, config_file: str,
             if not result['data_directory']:
                 gap('relative_path_without_directory', path=path)
                 return True
-            absolute = posixpath.join(result['data_directory'], path)
+            absolute = posixpath.normpath(posixpath.join(result['data_directory'], path))
         else:
-            absolute = posixpath.join(posixpath.dirname(calling), path)
+            # AbsoluteConfigLocation: relative paths are joined and canonicalized.
+            absolute = posixpath.normpath(posixpath.join(posixpath.dirname(calling), path))
         if calling is not None and absolute == calling:
             error('configuration_file_recursion', calling, calling_line, path=absolute)
             return False
-        if len(result['files_read']) >= MAX_FILES:
+        opened[0] += 1
+        if opened[0] > MAX_FILES:
             gap('file_limit_reached', limit=MAX_FILES, path=absolute)
             return True
         observed = files.get(absolute)
@@ -442,7 +444,8 @@ def assess(files: dict[str, dict[str, Any]] | None, *, config_file: str,
         if not path.strip(' \t\r\n'):
             error('empty_configuration_directory_name', calling, calling_line)
             return False
-        absolute = path if path.startswith('/') else posixpath.join(posixpath.dirname(calling), path)
+        absolute = path if path.startswith('/') else posixpath.normpath(
+            posixpath.join(posixpath.dirname(calling), path))
         observed = directories.get(absolute)
         state = observed.get('state') if isinstance(observed, dict) else None
         if state in ('absent', 'unreadable'):
@@ -530,6 +533,7 @@ def assess(files: dict[str, dict[str, Any]] | None, *, config_file: str,
 
     # First pass: the main file only, to find data_directory (errors are reported by the
     # second pass, which rereads the same files).
+    opened = [0]  # files opened in the current pass, bounded by MAX_FILES
     first: list[dict[str, Any]] = []
     errors_before = list(result['errors'])
     gaps_before = list(gaps)
@@ -558,6 +562,7 @@ def assess(files: dict[str, dict[str, Any]] | None, *, config_file: str,
     result['data_directory'] = data_directory
 
     items: list[dict[str, Any]] = []
+    opened[0] = 0
     main_ok = parse_file(config_file, True, None, None, 0, items, True)
     if main_ok and data_directory:
         auto = posixpath.join(data_directory, AUTO_CONF)

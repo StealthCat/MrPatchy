@@ -125,6 +125,19 @@ class NativeIncludeTest(unittest.TestCase):
         self.assertEqual(effective(result), 'b')  # strcmp order: B.conf, a.conf, b.conf
         self.assertEqual(result['files_read'][1:], [d + '/B.conf', d + '/a.conf', d + '/b.conf'])
 
+    def test_relative_paths_are_canonicalized(self):
+        result = run(HEAD + "include 'sub/../x.conf'\n", {ETC + '/x.conf': "archive_command = 'x'\n"})
+        self.assertEqual((effective(result), result['complete']), ('x', True))
+        self.assertTrue(run(HEAD + "include './postgresql.conf'\n")['has_errors'])
+
+    def test_include_fan_out_is_bounded(self):
+        d = ETC + '/d'
+        entries = [{'name': 'f%03d.conf' % i, 'kind': 'file'} for i in range(300)]
+        extra = {d + '/' + e['name']: "archive_command = '%s'\n" % e['name'] for e in entries}
+        result = run(HEAD + "include_dir 'd'\n", extra, dirs={d: {'state': 'present', 'entries': entries}})
+        self.assertIn('file_limit_reached', [g['reason'] for g in result['gaps']])
+        self.assertLessEqual(len(result['files_read']), pc.MAX_FILES)
+
     def test_recursion_depth_and_blank_names_are_errors(self):
         self.assertTrue(run(HEAD + "include 'postgresql.conf'\n")['has_errors'])
         cycle = run(HEAD + "include 'a.conf'\n", {ETC + '/a.conf': "include 'b.conf'\n",
