@@ -25,7 +25,7 @@ case-insensitive) and ``src/p.y``:
 
 It performs no I/O and never authorizes a response action. Constructs it does
 not model (unquoted program arguments, escape sequences that ``Util_handleEscapes``
-rewrites, CR characters, unbalanced quotes, unobserved include patterns, extra
+rewrites, CR characters, NUL bytes, unbalanced quotes, unobserved include patterns, extra
 argument strings after a list) and over-limit input are explicit blocking gaps,
 and the result is never reported complete with any of them.
 """
@@ -44,7 +44,7 @@ MAX_GAPS = 32
 ARGMAX = 64  # p.y addargument: an error at ARGMAX arguments
 MONIT_INT_MAX = 2**31 - 1  # l.l converts ASCII NUMBER tokens with atoi on Linux.
 BLOCKING = frozenset({
-    'input_malformed', 'text_too_large', 'carriage_return', 'unbalanced_quotes', 'unterminated_arguments',
+    'input_malformed', 'text_too_large', 'nul_byte', 'carriage_return', 'unbalanced_quotes', 'unterminated_arguments',
     'escape_sequence', 'unquoted_arguments', 'extra_arguments', 'empty_arguments', 'too_many_arguments',
     'include_not_observed', 'include_too_deep', 'too_many_files', 'too_many_commands', 'user_option_malformed',
     'timeout_option_malformed', 'command_outside_service', 'gaps_truncated',
@@ -110,6 +110,11 @@ class _Lexer:
             return
         if len(text) > MAX_TEXT:
             _gap(self.gaps, 'text_too_large', {'file': path}, f'Over {MAX_TEXT} characters; nothing was parsed.')
+            return
+        if '\0' in text:
+            _gap(self.gaps, 'nul_byte', {'file': path}, 'monit copies words as C strings, so a NUL would cut the '
+                                                        'program it runs short of what the text shows; nothing was '
+                                                        'parsed.')
             return
         self.files += 1
         if self.files > MAX_FILES:
