@@ -41,6 +41,7 @@ class Host(Base):
     telemetry: Mapped[dict] = mapped_column(JSON, default=dict)
     baseline: Mapped[dict] = mapped_column(JSON, default=dict)
     integrity: Mapped[list] = mapped_column(JSON, default=list)
+    __table_args__ = (Index('ix_hosts_deleted_name_id', 'deleted_at', 'name', 'id'),)
 class Package(Base):
     __tablename__ = 'packages'
     id: Mapped[str] = mapped_column(String(400), primary_key=True)
@@ -112,7 +113,10 @@ class Observation(Base):
     evidence: Mapped[dict] = mapped_column(JSON)
 DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20, 'ai_updates_enabled': True, 'ai_update_hourly_limit': 20, 'ai_control_mode': 'rate', 'ai_rate_per_hour': 20, 'ai_daily_cap_usd': 10.0, 'ai_budget_timezone': 'UTC', 'ai_daily_cap_warning_percent': 80, 'history_days': 30, 'os_lifecycle_warning_days': 90}
 def config(s):
-    item = s.get(Setting, 'config')
+    return config_from_setting(s.get(Setting, 'config'))
+
+
+def config_from_setting(item):
     values=item.value if item else {}
     result={**DEFAULTS,**values}
     # Existing installations that never chose a mode read as legacy. Startup
@@ -159,13 +163,14 @@ def init():
         if 'next_at' not in job_columns:
             connection.execute(text('ALTER TABLE jobs ADD COLUMN next_at DOUBLE NOT NULL DEFAULT 0'))
         # create_all() never adds indexes to a table that already exists.
-        for model in (Job, Assessment, Behavior):
+        for model in (Host, Job, Assessment, Behavior):
             for index in model.__table__.indexes:
                 index.create(connection,checkfirst=True)
         ACTIVE_RUN_INDEX.create(connection,checkfirst=True)
         RECENT_RUN_INDEX.create(connection,checkfirst=True)
-        from .update_scores import SCORE_HISTORY_INDEX
+        from .update_scores import SCORE_HISTORY_INDEX, SCORE_RUN_HOST_INDEX
         SCORE_HISTORY_INDEX.create(connection,checkfirst=True)
+        SCORE_RUN_HOST_INDEX.create(connection,checkfirst=True)
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):

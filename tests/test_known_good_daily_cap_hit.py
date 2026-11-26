@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app import (ai, ai_admission, ai_assessments, ai_budget, ai_claims,
                  ai_provider_backoff, ai_retry, ai_runs, known_good, worker)
@@ -306,6 +306,37 @@ def probes(monkeypatch):
     return seen
 
 
+def test_mixed_verdict_window_loads_evidence_only_for_the_probes(client, provider, fresh_cursor, probes, monkeypatch):
+    monkeypatch.setattr(ai_claims, 'FREE_HIT_SCAN', 2)
+    configure()
+    exhaust()
+    subjects = [('Z-pending', 1, 'pending'), ('a-error', 1, 'error'),
+                ('later-pending', 2, 'pending'), ('later-error', 2, 'error')]
+    for subject, first_seen, _ in subjects:
+        seed(hit=False, subject=subject, first_seen=first_seen)
+    with Session() as s:
+        for subject, _, verdict in subjects:
+            row = s.get(Behavior, subject)
+            row.verdict = verdict
+            row.evidence = {**row.evidence, 'window_fixture': 'x' * 32_000}
+        s.commit()
+
+    loaded = []
+    def record_load(row, _context):
+        loaded.append(row.id)
+
+    event.listen(Behavior, 'load', record_load)
+    try:
+        worker.investigate_one()
+    finally:
+        event.remove(Behavior, 'load', record_load)
+
+    assert probes == ['Z-pending', 'a-error']
+    assert sorted(loaded) == sorted(probes)
+    assert ai_claims._free_hit_cursor == (1, 'a-error')
+    assert provider.bodies == []
+
+
 def test_a_hit_behind_a_full_window_of_older_paid_subjects_is_found(client, provider, fresh_cursor, probes):
     configure()
     exhaust()
@@ -524,3 +555,77 @@ def test_a_publication_during_a_sweep_restarts_it_from_the_oldest(
     assert reused('miss-0')
     assert probes[8:] == ['miss-0', 'miss-0']
     assert all(held('miss-%d' % index) for index in range(1, 7)) and provider.bodies == []
+
+
+# A positive balance smaller than the elected paid subject's own reservation
+# leaves every shared start gate open. The paid subject must stay queued, and an
+# exact hit elsewhere must still be reused with zero provider calls (#1490).
+
+def test_paid_head_without_headroom_does_not_block_exact_reuse(client, provider):
+    configure()
+    exhaust('4.999999')  # The default $5 cap still has $0.000001 available.
+    seed(hit=False, subject='behavior-old', host='host-three', first_seen=1)
+    seed(subject='behavior-new', host='host-two', first_seen=2)
+    with Session() as s:
+        assert not ai_budget.waiting(s, time.time())  # the fleet-wide gate stays open
+    before = ledger()
+    worker.investigate_one()
+    assert held('behavior-old')
+    assert provider.bodies == []
+    assert ledger() == before
+    assert reused('behavior-new')
+
+
+def test_paid_head_without_headroom_keeps_a_paused_hit_held(client, provider):
+    configure()
+    exhaust('4.999999')
+    seed(hit=False, subject='behavior-old', host='host-three', first_seen=1)
+    seed(subject='behavior-new', host='host-two', first_seen=2)
+    with Session() as s:
+        s.merge(Setting(key='server-ai:host-two', value={'paused': True}))
+        s.commit()
+    before = ledger()
+    worker.investigate_one()
+    assert provider.bodies == []
+    assert ledger() == before
+    assert held('behavior-old')
+    assert held('behavior-new')
+
+
+def test_paid_head_without_headroom_does_not_reuse_for_an_administrator_retriage(client, provider):
+    configure()
+    exhaust('4.999999')
+    seed(hit=False, subject='behavior-old', host='host-three', first_seen=1)
+    seed(subject='behavior-new', host='host-two', first_seen=2, refresh=True)
+    worker.investigate_one()
+    assert provider.bodies == []
+    assert held('behavior-old')
+    assert held('behavior-new')
+    with Session() as s:
+        assert s.get(ai_assessments.Refresh, 'behavior-new') is not None
+
+
+def test_paid_head_that_fits_is_still_admitted_before_a_newer_hit(client, provider):
+    configure()
+    seed(hit=False, subject='behavior-old', host='host-three', first_seen=1)
+    seed(subject='behavior-new', host='host-two', first_seen=2)
+    lease = ai_claims.acquire()
+    assert lease is not None and lease.subject == 'behavior-old'
+    assert state('behavior-old')['claims']
+    assert held('behavior-new')
+    assert provider.bodies == []
+
+
+def test_paid_head_over_the_whole_cap_is_still_blocked_with_a_reason(client, provider):
+    configure(ai_daily_cap_usd=0.000001)
+    seed(hit=False, subject='behavior-old', host='host-three', first_seen=1)
+    seed(subject='behavior-new', host='host-two', first_seen=2)
+    worker.investigate_one()
+    with Session() as s:
+        retry = s.get(ai_retry.TriageRetry, 'behavior-old')
+        assert retry is not None and retry.state == 'blocked'
+    worker.investigate_one()
+    assert provider.bodies == []
+    assert ledger() == []
+    assert held('behavior-old')
+    assert reused('behavior-new')

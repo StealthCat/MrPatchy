@@ -82,15 +82,22 @@ def prune_history(s, cutoff):
     s.execute(delete(AIRun).where(AIRun.started < cutoff, AIRun.state != 'running'))
 
 
-def run_hosts(s, run_ids):
-    grouped = {identifier: set() for identifier in run_ids}
-    if not grouped: return grouped
+def shared_run_ids(s, run_ids):
+    """Return the visible runs with score or membership links to multiple servers."""
+    if not run_ids:
+        return set()
     from .update_scores import UpdateScore
     # Score links recover some historical batches created before durable membership.
-    for model in (AIRunHost, UpdateScore):
-        for run_id, host_id in s.execute(select(model.run_id, model.host_id).where(model.run_id.in_(grouped))):
-            grouped[run_id].add(host_id)
-    return grouped
+    members = union_all(
+        select(AIRunHost.run_id, AIRunHost.host_id).where(AIRunHost.run_id.in_(run_ids)),
+        select(UpdateScore.run_id, UpdateScore.host_id).where(UpdateScore.run_id.in_(run_ids)),
+    ).subquery()
+    # Preserve exact identifier equality under case-insensitive MySQL collations.
+    return set(s.scalars(
+        select(members.c.run_id)
+        .group_by(members.c.run_id, func.hex(members.c.run_id))
+        .having(func.count(func.distinct(func.hex(members.c.host_id))) > 1)
+    ))
 
 
 # These diagnostic timings share ordinary run-history retention, not a budget or
@@ -223,15 +230,14 @@ def request_started(model):
         return receipt.id
 
 
-def record_usage(call_id, data, payload):
-    values = ai_pricing.estimate(data, payload)
-    if not call_id: return values
+def record_usage(call_id, values):
+    """Persist the computed usage estimate in the diagnostic receipt."""
+    if not call_id: return
     with Session() as s:
         row = s.get(AICall, call_id)
-        if not row: return values
+        if not row: return
         for key, value in values.items(): setattr(row, key, value)
         s.commit()
-    return values
 
 
 def call_receipts(s, run_ids):
@@ -399,7 +405,7 @@ def status(s):
                    ai_control_status, ai_provider_backoff, worker_registry)
     from .update_scores import UpdateScore
     now=time.time(); cfg=config(s)
-    signature=ai_retry.configuration(s)
+    signature=ai_retry.configuration(s, settings=cfg)
     TR=ai_retry.TriageRetry
     pending_where=_pending_behavior_scope()
     unpaused=Behavior.host_id.not_in(ai_policy.paused_ids())
@@ -424,7 +430,7 @@ def status(s):
     ).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now)).one()
     reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
-    admission=ai_admission.status(s)
+    admission=ai_admission.status(s, settings=cfg)
     legacy_blocked,legacy_next=False,None
     if admission['mode']=='legacy':
         used,legacy_blocked,legacy_next=ai_control_status.legacy_triage_allowance(s,cfg['ai_hourly_limit'],now)
@@ -433,7 +439,7 @@ def status(s):
         runs=s.scalar(select(func.count()).select_from(AIRun).where(
             AIRun.purpose=='triage',AIRun.started>now-3600))
         used=max(attempts,runs)
-    budget=ai_budget.status(s,now)
+    budget=ai_budget.status(s, now, settings=cfg)
     provider_backoff=ai_provider_backoff.status(s,now)
     scoring_scope=and_(UpdateScore.host_id==Package.host_id,UpdateScore.name==Package.name,
         UpdateScore.installed==Package.installed,UpdateScore.candidate==Package.candidate)

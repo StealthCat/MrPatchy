@@ -13,7 +13,7 @@ from decimal import Decimal
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
-from sqlalchemy import String, Double, select, func, and_, or_, union_all
+from sqlalchemy import String, Double, select, func, and_, or_, union_all, literal, bindparam
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
 from .coordination import Lock
@@ -68,16 +68,30 @@ def owner_valid(s,owner,admitting=False):
     return True
 
 
+def _recovery_query():
+    runs = ai_runs.AIRun
+    expired = select(Claim.subject.label('claim_subject'), Claim.run_id.label('run_id')).where(
+        Claim.expires <= bindparam('expiry_cutoff', type_=Double))
+    has_claim = select(Claim.subject).where(Claim.run_id == runs.id).exists()
+    orphaned = select(literal(None, String(64)), runs.id).where(
+        runs.purpose == 'triage', runs.state == 'running', ~has_claim)
+    # The expired branch already includes runs whose last claim is about to be
+    # deleted. Select only keys in each branch before loading the recovery rows.
+    recovery = union_all(expired, orphaned).subquery()
+    return (select(Claim, runs).select_from(recovery)
+            .outerjoin(Claim, Claim.subject == recovery.c.claim_subject)
+            .outerjoin(runs, runs.id == recovery.c.run_id))
+
+
+_RECOVERY_QUERY = _recovery_query()
+
+
 def reconcile(s,now):
     # Called under ai-triage. Never interrupt a different worker's live lease.
-    runs=ai_runs.AIRun
-    expired=select(Claim,runs).outerjoin(runs,runs.id==Claim.run_id).where(Claim.expires<=now)
-    for claim,run in s.execute(expired):
-        _interrupt_run(s,run);s.delete(claim)
-    s.flush()
-    live=select(Claim.run_id)
-    for run in s.scalars(select(runs).where(runs.purpose=='triage',runs.state=='running',runs.id.not_in(live))):
-        _interrupt_run(s,run)
+    for claim, run in s.execute(_RECOVERY_QUERY, {'expiry_cutoff': now}):
+        _interrupt_run(s, run)
+        if claim is not None:
+            s.delete(claim)
 
 
 def interrupt(s,run_id):
@@ -138,7 +152,7 @@ def _elect_host(s,election_filters,live_counts,signature,now):
         func.min(eligible.c.first_seen),eligible.c.host_id).limit(1))
 
 
-def _oldest(s,host_id,signature,now):
+def _oldest_subject(s,host_id,signature,now):
     # Within the elected host, keep each verdict as an equality range so the
     # admission index can skip retained completed history and satisfy
     # oldest-first ordering; the oldest member of either range is the host's
@@ -152,8 +166,8 @@ def _oldest(s,host_id,signature,now):
             *filters,Behavior.verdict==verdict).order_by(Behavior.first_seen,Behavior.id).limit(1).subquery()
         oldest.append(select(candidate.c.id,candidate.c.first_seen))
     candidates=union_all(*oldest).subquery()
-    return s.scalar(select(Behavior).join(candidates,candidates.c.id==Behavior.id).order_by(
-        candidates.c.first_seen,candidates.c.id).limit(1))
+    # The selected row is loaded with fresh evidence under the host queue gate.
+    return s.scalar(select(candidates.c.id).order_by(candidates.c.first_seen,candidates.c.id).limit(1))
 
 
 def _free_hit(s,model,election_filters):
@@ -185,13 +199,20 @@ def _free_hit(s,model,election_filters):
         return or_(Behavior.first_seen>seen,and_(Behavior.first_seen==seen,Behavior.id>subject))
 
     def window(*bounds,limit):
-        rows=[]
+        ranges=[]
         for verdict in ('pending','error'):
-            rows.extend(s.scalars(select(Behavior).outerjoin(
+            ranked=select(Behavior.id,Behavior.first_seen).outerjoin(
                 ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
                 *election_filters,*bounds,Behavior.verdict==verdict).order_by(
-                Behavior.first_seen,Behavior.id).limit(limit)))
-        return sorted(rows,key=key)[:limit]
+                    Behavior.first_seen,Behavior.id).limit(limit).subquery()
+            ranges.append(select(ranked.c.id,ranked.c.first_seen))
+        # Rank the narrow ranges together before fetching any full evidence.
+        # Python keeps the existing cross-range tie break on both databases.
+        selected=sorted(s.execute(union_all(*ranges)),key=key)[:limit]
+        subjects=[row.id for row in selected]
+        if not subjects:return []
+        rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(subjects)))}
+        return [rows[subject] for subject in subjects if subject in rows]
 
     candidates=s.scalar(select(func.count()).select_from(known_good.Entry))
     cursor=_free_hit_cursor
@@ -241,14 +262,27 @@ def _free_hit(s,model,election_filters):
     return None
 
 
+def _eligible_host_filters():
+    return (
+        Behavior.host_id.not_in(ai_policy.paused_ids()),
+        Behavior.host_id.not_in(host_lifecycle.inactive_ids()),
+    )
+
+
 def _needs_admission_lock(s, now):
     """One read probes for possible work or recovery without selecting evidence."""
-    pending = select(Behavior.id).where(Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')))
+    pending = select(Behavior.id).where(
+        Behavior.approved == False, Behavior.verdict.in_(('pending', 'error')),
+        *_eligible_host_filters(),
+    )
     expired = select(Claim.subject).where(Claim.expires <= now)
     runs = ai_runs.AIRun
     has_claim = select(Claim.subject).where(Claim.run_id == runs.id).exists()
     orphaned = select(runs.id).where(runs.purpose == 'triage', runs.state == 'running', ~has_claim)
-    return s.scalar(select(or_(pending.exists(), expired.exists(), orphaned.exists())))
+    # An in-flight investigation can still have a pending or retry verdict.
+    # Its claim already excludes it from election. Expiry is checked separately.
+    unclaimed = pending.where(Behavior.id.not_in(select(Claim.subject)))
+    return s.scalar(select(or_(unclaimed.exists(), expired.exists(), orphaned.exists())))
 
 
 def acquire(owner=None):
@@ -272,7 +306,7 @@ def acquire(owner=None):
                 recent=s.scalar(select(func.count()).select_from(Behavior).where(Behavior.attempted>now-3600))
                 count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='triage',ai_runs.AIRun.started>now-3600))
                 if max(recent,count)>=cfg['ai_hourly_limit']:return None
-            from . import ai_admission,ai_budget,ai_provider_backoff,ai_pricing,known_good
+            from . import ai_admission,ai_budget,ai_provider_backoff,known_good
             # A local exact cache hit needs no provider admission. Keep paid
             # work queued while any shared provider start gate is closed.
             free_only=bool(ai_admission.waiting(s,now,settings=cfg)
@@ -290,76 +324,101 @@ def acquire(owner=None):
                 .select_from(live_counts).outerjoin(Setting,Setting.key==ai_policy.PREFIX+live_counts.c.host_id)).all()
             saturated_hosts=[host_id for host_id,count,key,policy in occupancy
                 if count>=ai_policy.investigation_limit_value(policy if key is not None else {})]
-            election_filters=(Behavior.approved==False,Behavior.host_id.not_in(ai_policy.paused_ids()),
-                Behavior.host_id.not_in(host_lifecycle.inactive_ids()),Behavior.host_id.not_in(saturated_hosts),
+            election_filters=(Behavior.approved==False,*_eligible_host_filters(),
+                Behavior.host_id.not_in(saturated_hosts),
                 Behavior.id.not_in(select(Claim.subject)),ai_retry.eligible(signature,now))
-            if free_only:
-                row=_free_hit(s,cfg['ai_model'],election_filters)
-                if not row:return None
-                host_id=row.host_id
-            else:
-                host_id=_elect_host(s,election_filters,live_counts,signature,now)
-                if not host_id:return None
-                row=_oldest(s,host_id,signature,now)
-                if not row:return None
-            # Approval writes use this host queue gate. Re-read after acquiring
-            # it, including on MySQL repeatable-read connections.
-            subject=row.id;host_id=row.host_id
-            try:
-                with host_lifecycle.activity([host_id],'queue'):
-                    s.rollback();row=s.get(Behavior,subject)
-                    if not row or row.approved or row.verdict not in ('pending','error'):return None
-                    # Legacy/test behavior rows may predate a retained Host row;
-                    # only a present host can carry a lifecycle transition.
-                    host=s.get(Host,host_id)
-                    if host is not None and not host_lifecycle.active(host):return None
-                    if free_only:
-                        # Re-check under the host queue gate. A subsequent cache
-                        # miss still goes through paid admission at the provider boundary.
-                        if not known_good.exact_hit_available(s,row,cfg['ai_model']):return None
-                    elif cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
-                        try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
-                        except ai.AIError as error:
-                            # This subject's own evidence cannot be shared (for
-                            # example over the 64 KB limit). Record the outcome an
-                            # uncapped attempt records instead of leaving it at the
-                            # head of the queue, where it would stall every host.
-                            # Nothing is reserved or sent.
-                            ai_retry.begin(s,row,signature,now)
-                            retry=ai_retry.failed(s,row,error,now)
-                            row.verdict='error';row.attempted=now
-                            row.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(error)
-                            s.commit();return None
-                        # A subject whose own conservative reservation exceeds the
-                        # whole cap can never be admitted, even after a reset.
-                        # Block it with an explained reason instead of leaving it at
-                        # the head of the queue, where it would stall every host
-                        # (#1003). Nothing is reserved or sent; ordinary exhaustion
-                        # below still defers the whole fleet until the reset.
-                        # An exact known-good hit spends nothing, so neither refusal
-                        # holds it back (#1030).
-                        quote=ai_pricing.reservation(payload)
-                        cap=Decimal(str(cfg['ai_daily_cap_usd']))
-                        over=quote['ok'] and quote['amount_usd']>cap
-                        if ((over or ai_budget.waiting(s,now,payload)) and
-                            not known_good.exact_hit_available(s,row,cfg['ai_model'])):
-                            if over:ai_retry.over_cap(s,row,signature,quote['amount_usd'],cap);s.commit()
-                            return None
-                    row.attempted=now;ai_retry.begin(s,row,signature,now)
-                    run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
-                    s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))
-                    claim=Claim(subject=subject,host_id=host_id,token=str(uuid.uuid4()),worker_id=owner[0] if owner else 'process-'+str(os.getpid()),
-                        boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.lease_revision(row),
-                        configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
-                    s.add(claim);record_turn(s,host_id);s.commit()
-                    work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
-                    lease = Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner,claim_lock_wait)
+            # At most two elections: the normal one, then, only when the elected
+            # paid subject's own quote cannot fit a positive remaining balance,
+            # one bounded exact-hit probe. A free hit spends nothing, so an
+            # unfundable paid head must not hold it back (#1490).
+            for _ in range(2):
+                if free_only:
+                    row=_free_hit(s,cfg['ai_model'],election_filters)
+                    if not row:return None
+                    subject=row.id;host_id=row.host_id
+                else:
+                    host_id=_elect_host(s,election_filters,live_counts,signature,now)
+                    if not host_id:return None
+                    subject=_oldest_subject(s,host_id,signature,now)
+                    if subject is None:return None
+                admitted=_admit(s,subject,host_id,cfg,secret,owner,signature,now,free_only,claim_lock_wait)
+                if admitted is not _UNFUNDED:
+                    # Only a real lease carries the measured lock hold time.
+                    lease=admitted
                     return lease
-            except host_lifecycle.Inactive:return None
+                # The paid subject stays queued, untouched. Its host queue gate
+                # is already released; any hit is rechecked under its own gate.
+                s.rollback();free_only=True
+                if s.scalar(select(known_good.Entry.fingerprint).where(
+                        known_good.Entry.active.is_(True),known_good.Entry.model==cfg['ai_model'].strip()).limit(1)) is None:
+                    return None
+            return None
     finally:
         if lease is not None:
             lease.claim_lock_hold = perf_counter() - lock_acquired
         lock.release()
+
+
+# Sentinel: the elected paid subject's own quote does not fit the remaining
+# daily balance, which is still positive, and it has no exact hit.
+_UNFUNDED=object()
+
+
+def _admit(s,subject,host_id,cfg,secret,owner,signature,now,free_only,claim_lock_wait):
+    from . import ai_budget,ai_pricing,known_good
+    # Approval writes use this host queue gate. Re-read after acquiring
+    # it, including on MySQL repeatable-read connections.
+    try:
+        with host_lifecycle.activity([host_id],'queue'):
+            s.rollback();row=s.get(Behavior,subject)
+            if not row or row.approved or row.verdict not in ('pending','error'):return None
+            # Legacy/test behavior rows may predate a retained Host row;
+            # only a present host can carry a lifecycle transition.
+            lifecycle=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==host_id)).one_or_none()
+            if lifecycle is not None and not host_lifecycle.active(lifecycle):return None
+            if free_only:
+                # Re-check under the host queue gate. A subsequent cache
+                # miss still goes through paid admission at the provider boundary.
+                if not known_good.exact_hit_available(s,row,cfg['ai_model']):return None
+            elif cfg['ai_control_mode'] in ai_pricing.CAP_MODES:
+                try:payload=ai.investigation_payload(row.evidence,cfg['ai_model'])
+                except ai.AIError as error:
+                    # This subject's own evidence cannot be shared (for
+                    # example over the 64 KB limit). Record the outcome an
+                    # uncapped attempt records instead of leaving it at the
+                    # head of the queue, where it would stall every host.
+                    # Nothing is reserved or sent.
+                    ai_retry.begin(s,row,signature,now)
+                    retry=ai_retry.failed(s,row,error,now)
+                    row.verdict='error';row.attempted=now
+                    row.analysis='Investigation failed. '+retry.reason+' '+ai_runs.safe_error(error)
+                    s.commit();return None
+                # A subject whose own conservative reservation exceeds the
+                # whole cap can never be admitted, even after a reset.
+                # Block it with an explained reason instead of leaving it at
+                # the head of the queue, where it would stall every host
+                # (#1003). Nothing is reserved or sent; ordinary exhaustion
+                # below still defers the whole fleet until the reset.
+                # An exact known-good hit spends nothing, so neither refusal
+                # holds it back (#1030).
+                quote=ai_pricing.reservation(payload)
+                cap=Decimal(str(cfg['ai_daily_cap_usd']))
+                over=quote['ok'] and quote['amount_usd']>cap
+                if ((over or ai_budget.waiting(s,now,quote=quote)) and
+                    not known_good.exact_hit_available(s,row,cfg['ai_model'])):
+                    if over:ai_retry.over_cap(s,row,signature,quote['amount_usd'],cap);s.commit();return None
+                    # Leave it queued and unchanged; the caller probes for a free hit.
+                    return _UNFUNDED
+            row.attempted=now;ai_retry.begin(s,row,signature,now)
+            run=ai_runs.AIRun(id=str(uuid.uuid4()),purpose='triage',model=cfg['ai_model'],host_id=host_id,subject=subject)
+            s.add(run);s.add(ai_runs.AIRunHost(run_id=run.id,host_id=host_id))
+            claim=Claim(subject=subject,host_id=host_id,token=str(uuid.uuid4()),worker_id=owner[0] if owner else 'process-'+str(os.getpid()),
+                boot_id=owner[1] if owner else PROCESS_BOOT,run_id=run.id,revision=ai_assessments.lease_revision(row),
+                configuration=signature,created=now,renewed=now,expires=now+LEASE_SECONDS)
+            s.add(claim);record_turn(s,host_id);s.commit()
+            work=SimpleNamespace(**{key:copy.deepcopy(getattr(row,key)) for key in ('id','host_id','evidence','verdict','analysis','approved','attempted','first_seen')})
+            return Lease(claim,work,copy.deepcopy(cfg),copy.deepcopy(secret.value),owner,claim_lock_wait)
+    except host_lifecycle.Inactive:return None
 
 
 class Lease:

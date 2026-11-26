@@ -130,6 +130,47 @@ def test_cap_exhausted_between_calls_defers_without_a_second_transmission(admin,
         assert run.state=='deferred' and run.calls==1 and len(calls(s))==1
 
 
+def test_cap_deferred_followup_says_the_earlier_call_was_sent(admin,monkeypatch,ssh):
+    # #1286: only the follow-up was withheld; the first-stage call was transmitted and still counts.
+    seed(cap=first_quote()*Decimal('1.5'))
+    provider=Provider(usage=False);monkeypatch.setattr(ai.transport,'post',provider)
+    worker.investigate_one()
+    assert [first for _,first,_ in provider.sent]==[True]
+    with Session() as s:
+        retry=s.get(ai_retry.TriageRetry,'subject-0')
+        assert retry.reason==ai_retry.FOLLOW_UP_BUDGET_WAIT_REASON and retry.state=='deferred' and retry.attempts==0
+        analysis=s.get(Behavior,'subject-0').analysis
+        run=s.scalars(select(ai_runs.AIRun)).one()
+        failed=[e.message for e in s.scalars(select(ai_runs.AIEvent).where(ai_runs.AIEvent.run_id==run.id,ai_runs.AIEvent.stage=='failed'))]
+    assert ai.FOLLOW_UP_BUDGET_DIAGNOSTIC in analysis and ai_retry.FOLLOW_UP_BUDGET_WAIT_REASON in analysis
+    assert failed==[ai.FOLLOW_UP_BUDGET_DIAGNOSTIC]
+    listed=[row for row in admin.get('/api/investigations').json() if row['id']=='subject-0'][0]
+    assert listed['retry']['reason']==ai_retry.FOLLOW_UP_BUDGET_WAIT_REASON
+    for text in (analysis,listed['retry']['reason'],failed[0]):
+        assert 'no provider request was sent' not in text.lower()
+        assert 'first-stage provider call was sent' in text
+
+
+def test_cap_refusal_before_any_transmission_keeps_its_wording(admin,monkeypatch,ssh):
+    # The first subject's sent call uses the headroom; the second subject's first call
+    # then does not fit, so nothing was sent for it and the existing explanation stays.
+    seed(count=2,cap=first_quote()*Decimal('1.5'))
+    provider=Provider(usage=False);monkeypatch.setattr(ai.transport,'post',provider)
+    worker.investigate_one()
+    # Simulate headroom used between claim preflight and the atomic reservation, so
+    # the final reservation (not the preflight) refuses the second subject's first call.
+    monkeypatch.setattr(ai_budget,'waiting',lambda *args,**kwargs:0)
+    worker.investigate_one()
+    assert [first for _,first,_ in provider.sent]==[True] and len(ssh)==1
+    deferred=provider.sent[0][0]
+    with Session() as s:
+        sent_subject=s.get(ai_runs.AIRun,deferred).subject
+        retry=s.get(ai_retry.TriageRetry,({'subject-0','subject-1'}-{sent_subject}).pop())
+        assert retry.reason==ai_retry.BUDGET_WAIT_REASON and retry.state=='deferred' and retry.attempts==0
+        analysis=s.get(Behavior,retry.subject).analysis
+    assert 'No provider request was sent' in analysis and ai.FOLLOW_UP_BUDGET_DIAGNOSTIC not in analysis
+
+
 def test_deferred_followup_completes_in_the_next_window(admin,monkeypatch,ssh):
     cap=first_quote()*Decimal('1.5')
     seed(cap=cap)

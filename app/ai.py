@@ -30,6 +30,11 @@ FOLLOW_UP_EVIDENCE_SIZE='follow_up_evidence_size'
 # max_output_tokens budget before completing the JSON. Neither is a key or quota problem.
 MODEL_REFUSAL='model_refusal'
 TOKEN_BUDGET='token_budget'
+# The daily cap withheld the required follow-up after the first-stage call was
+# already sent (#1286). Only the follow-up is unsent; the earlier call can still count.
+FOLLOW_UP_BUDGET='follow_up_budget'
+FOLLOW_UP_BUDGET_DIAGNOSTIC=('The configured daily AI spend cap has no remaining safe reservation for the required follow-up, '
+    'so the follow-up request was not sent. The earlier first-stage provider call was sent, and its charge can still count toward the cap.')
 BUDGET_CONNECTION_LOST='budget_connection_lost'
 BUDGET_CONNECTION_RETRY_SECONDS=30
 
@@ -262,8 +267,12 @@ def _request(payload,key,timeout,reservation,encoded_body):
         try:data=response.json()
         except (ValueError,UnicodeDecodeError):data=None
         with ai_runs.measure('usage_persistence'):
-            values=ai_runs.record_usage(call_id,data if isinstance(data,dict) else {},payload)
-            ai_budget.reconcile(reservation,values)
+            values = ai_pricing.estimate(data if isinstance(data, dict) else {}, payload)
+            try:
+                ai_runs.record_usage(call_id, values)
+            finally:
+                # A failed diagnostic write must not keep a priced reply at its full reservation.
+                ai_budget.reconcile(reservation, values)
         response.raise_for_status()
         ai_provider_backoff.succeeded(request_started)
     except transport.ResponseTooLarge as exception:

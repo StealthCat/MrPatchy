@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import httpx
 import pytest
 from sqlalchemy import select,event
-from app import ai, ai_claims, ai_runs, ai_assessments, ai_retry, host_lifecycle, worker, worker_registry
+from app import ai, ai_claims, ai_runs, ai_assessments, ai_policy, ai_retry, host_lifecycle, worker, worker_registry
 from app.db import Session, Host, Behavior, Setting,engine
 from app.security import seal
 
@@ -69,6 +69,38 @@ def test_four_investigations_overlap_and_keep_full_capability(admin,monkeypatch,
 def ai_policy_scope():
     from app.ai_policy import scope
     return scope.get()
+
+
+@pytest.mark.parametrize('error_seen,expected', [(1, 'subject-1'), (2, 'subject-0')])
+def test_claim_loads_candidate_evidence_only_after_the_queue_gate(admin, error_seen, expected):
+    seed(count=3,same_host=True)
+    with Session() as s:
+        pending=s.get(Behavior,'subject-0')
+        error=s.get(Behavior,'subject-1')
+        deferred=s.get(Behavior,'subject-2')
+        pending.first_seen=2
+        error.first_seen=error_seen;error.verdict='error'
+        deferred.first_seen=0;deferred.attempted=time.time()
+        for subject in (pending,error):
+            subject.evidence={**subject.evidence,'local_fixture':'x'*48_000}
+        expected_evidence=s.get(Behavior,expected).evidence
+        s.commit()
+
+    evidence_queries=[]
+    def capture(_connection,_cursor,statement,*_args):
+        projection=statement.lower().split('from',1)[0]
+        if projection.lstrip().startswith('select') and 'behaviors.evidence' in projection:
+            evidence_queries.append(statement)
+
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        lease=ai_claims.acquire()
+    finally:
+        event.remove(engine,'before_cursor_execute',capture)
+    assert lease
+    with lease:
+        assert lease.subject==expected and lease.work.evidence==expected_evidence
+        assert len(evidence_queries)==1
 
 
 def test_atomic_hourly_admission_and_no_duplicate_subject(admin,monkeypatch):
@@ -248,6 +280,36 @@ def pause_policy(admin):
     })
 
 
+@pytest.mark.parametrize('host_present', (True, False))
+def test_claim_recheck_reads_only_server_lifecycle(admin, host_present):
+    seed(count=1)
+    with Session() as s:
+        host=s.get(Host,'host-0')
+        if host_present:
+            host.inventory={'retained_output':'x'*256_000}
+        else:
+            s.delete(host)
+        s.commit()
+
+    projections=[]
+    def capture(_connection,_cursor,statement,*_args):
+        sql=' '.join(statement.lower().split())
+        if sql.startswith('select hosts.') and ' from hosts where hosts.id =' in sql:
+            projections.append(sql.split(' from hosts ',1)[0])
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        lease=ai_claims.acquire()
+    finally:
+        event.remove(engine,'before_cursor_execute',capture)
+    assert lease and lease.host_id=='host-0'
+    with lease:
+        # MySQL may also lock the missing primary-key range using the
+        # activity guard's separate, narrow lifecycle projection.
+        assert projections[-1:]==['select hosts.enabled, hosts.deleted_at']
+        assert all(sql=='select hosts.id, hosts.enabled, hosts.deleted_at, hosts.lifecycle_revision'
+                   for sql in projections[:-1])
+
+
 def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeypatch):
     seed(count=1)
     queue=worker.Lock('server-queue:host-0');assert queue.acquire(False)
@@ -403,6 +465,50 @@ def test_idle_triage_polls_do_not_take_the_claim_lock(admin, monkeypatch):
     assert all(query.lstrip().upper().startswith('SELECT') for query in statements)
 
 
+def test_fully_leased_queue_skips_idle_locks_but_admits_peers_and_recovers(admin, monkeypatch):
+    seed(count=2)
+    with Session() as s:
+        s.get(Behavior, 'subject-1').verdict = 'low'
+        s.commit()
+    first = ai_claims.acquire()
+    assert first is not None and first.subject == 'subject-0'
+
+    locks = []
+    original_lock = ai_claims.Lock
+
+    def observe_lock(name):
+        locks.append(name)
+        return original_lock(name)
+
+    monkeypatch.setattr(ai_claims, 'Lock', observe_lock)
+    for _ in range(4):
+        assert ai_claims.acquire() is None
+    assert locks == []
+
+    with Session() as s:
+        assert s.get(ai_claims.Claim, first.subject).token == first.token
+        assert s.get(ai_runs.AIRun, first.run_id).state == 'running'
+        s.get(Behavior, 'subject-1').verdict = 'pending'
+        s.commit()
+    peer = ai_claims.acquire()
+    assert peer is not None and peer.subject == 'subject-1'
+    assert locks == ['ai-triage']
+
+    with Session() as s:
+        s.get(Behavior, first.subject).verdict = 'low'
+        s.get(ai_claims.Claim, first.subject).expires = 0
+        s.commit()
+    assert ai_claims.acquire() is None
+    assert locks == ['ai-triage', 'ai-triage']
+    with Session() as s:
+        assert s.get(ai_claims.Claim, first.subject) is None
+        assert s.get(ai_runs.AIRun, first.run_id).state == 'interrupted'
+        assert s.get(ai_claims.Claim, peer.subject).token == peer.token
+        assert s.get(ai_runs.AIRun, peer.run_id).state == 'running'
+    with peer:
+        pass
+
+
 @pytest.mark.parametrize('claim_state', ['expired', 'orphaned', 'live'])
 def test_idle_triage_still_recovers_abandoned_runs(admin, claim_state):
     seed(count=1)
@@ -427,6 +533,84 @@ def test_idle_triage_still_recovers_abandoned_runs(admin, claim_state):
             assert claim is None and run.state == 'interrupted'
             assert s.scalar(select(ai_runs.AIEvent.id).where(
                 ai_runs.AIEvent.run_id == run.id, ai_runs.AIEvent.stage == 'interrupted')) is not None
+
+
+@pytest.mark.parametrize('hold', ['paused', 'disabled', 'deleted'])
+def test_held_only_queue_skips_claim_lock_and_preserves_eligible_work(admin, monkeypatch, hold):
+    seed(count=2)
+    policy_key = ai_policy.PREFIX + 'host-0'
+    with Session() as s:
+        host = s.get(Host, 'host-0')
+        if hold == 'paused':
+            s.add(Setting(key=policy_key, value={'paused': True}))
+        elif hold == 'disabled':
+            host.enabled = False
+        else:
+            host.deleted_at = time.time()
+        s.get(Behavior, 'subject-1').verdict = 'low'
+        s.commit()
+
+    lock_calls = []
+    original_lock = ai_claims.Lock
+
+    def observe_lock(name):
+        lock_calls.append(name)
+        return original_lock(name)
+
+    monkeypatch.setattr(ai_claims, 'Lock', observe_lock)
+    for _ in range(4):
+        assert ai_claims.acquire() is None
+    assert lock_calls == []
+
+    with Session() as s:
+        # Legacy observations may have no retained host row.
+        if hold != 'paused':
+            s.delete(s.get(Host, 'host-1'))
+        s.get(Behavior, 'subject-1').verdict = 'pending'
+        s.commit()
+    peer = ai_claims.acquire()
+    assert peer is not None and peer.subject == 'subject-1'
+    with peer:
+        with peer.mutation() as (_session, observation):
+            observation.verdict = 'low'
+
+    if hold == 'deleted':
+        return
+    with Session() as s:
+        if hold == 'paused':
+            s.delete(s.get(Setting, policy_key))
+        else:
+            s.get(Host, 'host-0').enabled = True
+        s.commit()
+    resumed = ai_claims.acquire()
+    assert resumed is not None and resumed.subject == 'subject-0'
+    with resumed:
+        pass
+
+
+@pytest.mark.parametrize('missing_claim', [False, True], ids=['expired', 'orphaned'])
+@pytest.mark.parametrize('hold', ['paused', 'disabled'])
+def test_held_only_queue_still_recovers_abandoned_work(admin, missing_claim, hold):
+    seed(count=1)
+    lease = ai_claims.acquire()
+    assert lease is not None
+    with Session() as s:
+        if hold == 'paused':
+            s.add(Setting(key=ai_policy.PREFIX + lease.host_id, value={'paused': True}))
+        else:
+            s.get(Host, lease.host_id).enabled = False
+        claim = s.get(ai_claims.Claim, lease.subject)
+        if missing_claim:
+            s.delete(claim)
+        else:
+            claim.expires = 0
+        s.commit()
+
+    assert ai_claims.acquire() is None
+    with Session() as s:
+        assert s.get(ai_claims.Claim, lease.subject) is None
+        assert s.get(ai_runs.AIRun, lease.run_id).state == 'interrupted'
+
 
 def test_drain_blocks_new_claims_but_keeps_existing_owner_valid(admin):
     seed(count=2)

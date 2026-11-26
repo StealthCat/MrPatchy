@@ -8,11 +8,11 @@ lifecycle, authorization, or finite-concurrency controls.
 import time
 from contextvars import ContextVar
 
-from sqlalchemy import String, Double, Integer
+from sqlalchemy import String, Double, Integer, literal, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
-from .db import Base, Session, config
+from .db import Base, Session, Setting, config, config_from_setting
 
 current=ContextVar('ai_admission_scope',default=None)
 _PACED_MODES=('rate','rate_and_daily')
@@ -55,10 +55,18 @@ def _reserve_start(model):
     from .ai import AIError
     with Lock('ai-shared-admission'):
         with Session() as session:
-            # Settings may have changed while another caller held the lock.
-            settings=config(session);mode=settings['ai_control_mode']
+            # Read fresh settings and the rate deadline together after waiting for the lock.
+            # A singleton outer source retains the default case when both rows are absent.
+            keys = select(literal('config').label('settings_key'), literal('global').label('admission_id')).subquery()
+            saved, row = session.execute(
+                select(Setting, Admission).select_from(keys)
+                .outerjoin(Setting, Setting.key == keys.c.settings_key)
+                .outerjoin(Admission, Admission.id == keys.c.admission_id)
+            ).one()
+            settings = config_from_setting(saved)
+            mode = settings['ai_control_mode']
             if mode not in _PACED_MODES:return mode,None
-            now=time.time();row=session.get(Admission,'global')
+            now=time.time()
             if row and row.next_at>now:
                 raise AIError('Shared AI rate throttle is waiting for the next start. No provider request was sent.',
                     policy_wait=True,retry_after=row.next_at-now)
@@ -78,8 +86,9 @@ def waiting(session,now,*,settings=None):
     row=session.get(Admission,'global')
     return row.next_at if row and row.next_at>now else 0
 
-def status(session):
-    settings=config(session);row=session.get(Admission,'global')
+def status(session, *, settings=None):
+    settings = config(session) if settings is None else settings
+    row = session.get(Admission, 'global')
     return {'mode':settings['ai_control_mode'],'rate_per_hour':settings['ai_rate_per_hour'],
         'next_at':row.next_at if row and settings['ai_control_mode'] in ('rate','rate_and_daily') else None,
         'admitted':row.admitted if row else 0}

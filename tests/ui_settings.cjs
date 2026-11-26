@@ -155,13 +155,26 @@ module.exports=async(page,capture)=>{
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,section+' overflows at '+width);
   }
  }
+ let splitBudget=true;
  const budgetFixture=route=>route.fulfill({json:{...aiState,ai_budget:{
-  ...aiState.ai_budget,unreconciled_call_count:2,oldest_unreconciled_reservation_at:1793404800,
+  ...aiState.ai_budget,enabled:true,unreconciled_call_count:2,oldest_unreconciled_reservation_at:1793404800,
+  uncertain_usd:'0.35',sent_usd:splitBudget?'0.15':undefined,uncertain_outcome_usd:splitBudget?'0.2':undefined,
  }}});
  await page.route('**/api/settings',budgetFixture);
  try{
   await page.locator('[href="#settings/ai"]').first().click();
   await page.getByText('2 transmitted AI calls await reconciliation · Oldest reservation',{exact:false}).waitFor();
+  const split=page.getByText('Sent without reconciled usage $0.15 · Recorded uncertain outcome $0.2',{exact:false});
+  await split.waitFor();
+  for(const width of [320,768,1440]){
+   await page.setViewportSize({width,height:1000});
+   assert.equal(await split.isVisible(),true);
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  }
+  splitBudget=false;
+  await page.reload();
+  await page.getByText('2 transmitted AI calls await reconciliation · Oldest reservation',{exact:false}).waitFor();
+  assert.equal(await split.count(),0);
  }finally{await page.unroute('**/api/settings',budgetFixture);}
  await page.locator('[data-nav=settings]').click();
  await page.getByRole('heading',{name:'Set your own rhythm.'}).waitFor();

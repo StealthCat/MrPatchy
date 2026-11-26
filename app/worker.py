@@ -875,7 +875,12 @@ def _assess_active_behavior(s,row,cfg,secret):
             if follow_up and error.cause==ai.EVIDENCE_SIZE:error.cause=ai.FOLLOW_UP_EVIDENCE_SIZE
             raise
         inputs.append({'evidence':prepared,'policy':policy})
-        return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
+        try:return ai.investigate(prepared,cfg['ai_model'],unseal(secret.value['encrypted']))
+        except ai.AIError as error:
+            # Only the follow-up was withheld by the cap; the first-stage call was sent (#1286).
+            if follow_up and error.policy_wait and getattr(error,'budget_wait_until',None) is not None:
+                error.cause=ai.FOLLOW_UP_BUDGET;error.diagnostic=ai.FOLLOW_UP_BUDGET_DIAGNOSTIC
+            raise
     result=assess(row.evidence)
     checks=result.get('requested_checks',[])
     if checks:
@@ -920,9 +925,16 @@ def _assess_active_behavior(s,row,cfg,secret):
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
 
-def ai_plan_waiting(s,job):
+def ai_plan_waiting(s,job,waiting_hosts=None):
     """True for queued AI planning jobs that must wait for AI to be enabled/resumed (no retry time)."""
-    return job.action in ('release-plan','security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,job.host_id)['paused'])
+    if job.action not in ('release-plan','security-plan','startup-plan'):
+        return False
+    if waiting_hosts is not None and job.host_id in waiting_hosts:
+        return True
+    waiting = not config(s)['ai_enabled'] or ai_policy.status(s,job.host_id)['paused']
+    if waiting and waiting_hosts is not None:
+        waiting_hosts.add(job.host_id)
+    return waiting
 
 
 def loop(role="embedded"):
@@ -1047,11 +1059,13 @@ def _loop(reporter):
                         if len(active_jobs)>=capacity['jobs']:break
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
                     hold_cache={};window_cache={};closed_patch_windows=set()
+                    # Recheck each scan and never cache permission to start an AI plan.
+                    waiting_plan_hosts=set()
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.next_at<=now,Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
                         if len(active_jobs)>=capacity['jobs']: break
                         if j.host_id in busy_hosts:continue
                         if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
-                        if ai_plan_waiting(s,j):continue
+                        if ai_plan_waiting(s,j,waiting_plan_hosts):continue
                         scope=response_hold_scope(j)
                         hold_scope=(j.host_id,*scope.values())
                         if hold_scope not in hold_cache:
