@@ -99,7 +99,7 @@ def _state(session,cfg,now,*,include_reconciliation=False):
                     if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
                         oldest_reservation=oldest
         else:
-            # Admission and alert gates only need the counted total.
+            # Callers using only the counted total can skip grouping the ledger.
             counted=Decimal(session.execute(query).scalar_one() or 0)
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
@@ -277,6 +277,7 @@ def status(session, now=None, *, settings=None):
 
 DAILY_CAP_NOTIFICATION=dict(source='ai-budget',kind='daily-cap',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
 DAILY_CAP_WARNING_NOTIFICATION=dict(source='ai-budget',kind='daily-cap-warning',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
+UNCERTAIN_CHARGE_NOTIFICATION=dict(source='ai-budget',kind='uncertain-charge',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
 # Default advance-warning percent of the cap. Administrators can change it with
 # `ai_daily_cap_warning_percent` (0 turns the warning off, #810).
 DAILY_CAP_WARNING_DEFAULT_PERCENT=80
@@ -295,16 +296,27 @@ def warning_percent(cfg):
     return value
 
 
-def _resolve_notification(session,spec,reason,now):
+def _resolve_notification(session,notices,spec,reason,now):
     from . import notifications
-    from .notifications import NotificationEvent, NotificationRevision
-    event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
-        for key,value in spec.items())))
-    if event is not None:
-        current=session.get(NotificationRevision,(event.id,event.revision))
-        if current is None or current.lifecycle!='resolved':
-            notifications.publish(session,**spec,subject_revision='resolved',severity='info',reason=reason,
-                deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+    stored=notices.get(spec['kind'])
+    if stored is not None and (stored[1] is None or stored[1].lifecycle!='resolved'):
+        notifications.publish(session,**spec,subject_revision='resolved',severity='info',reason=reason,
+            deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+
+
+def _publish_uncertain_charge_notification(session, notices, active, now):
+    from . import notifications
+
+    if active:
+        notifications.publish(session, **UNCERTAIN_CHARGE_NOTIFICATION,
+            subject_revision='retained-uncertain', severity='low', deep_link='#settings/ai',
+            minimum_role='admin', now=now,
+            reason='An AI provider call ended without a confirmed charge. Its reserved amount is still counted '
+                   'toward the daily cap. Review uncertain charges in AI Settings. Counted spend is a local estimate.')
+    else:
+        _resolve_notification(session, notices, UNCERTAIN_CHARGE_NOTIFICATION,
+            'The daily cap no longer has both a counted uncertain charge and remaining headroom. '
+            'AI Settings shows the current budget.', now)
 
 
 def publish_cap_notification(session,cfg,now):
@@ -325,10 +337,26 @@ def publish_cap_notification(session,cfg,now):
     """
     from . import notifications
     from .notifications import NotificationEvent, NotificationRevision
+    # Check all three cap notices in one read even when AI or the cap has been disabled:
+    # an existing notice still needs to resolve, but an absent notice needs no write.
+    cap_kinds=(DAILY_CAP_NOTIFICATION['kind'],DAILY_CAP_WARNING_NOTIFICATION['kind'],
+        UNCERTAIN_CHARGE_NOTIFICATION['kind'])
+    existing=session.execute(select(NotificationEvent,NotificationRevision).outerjoin(
+        NotificationRevision,and_(NotificationRevision.event_id==NotificationEvent.id,
+            NotificationRevision.revision==NotificationEvent.revision)).where(
+        NotificationEvent.source==DAILY_CAP_NOTIFICATION['source'],
+        NotificationEvent.subject_type==DAILY_CAP_NOTIFICATION['subject_type'],
+        NotificationEvent.subject_id==DAILY_CAP_NOTIFICATION['subject_id'],
+        NotificationEvent.host_id=='',NotificationEvent.kind.in_(cap_kinds)))
+    notices={event.kind:(event,current) for event,current in existing}
     capped=bool(cfg.get('ai_enabled')) and cfg['ai_control_mode'] in ai_pricing.CAP_MODES
     warning=False
+    uncertain_charge = False
     if capped:
-        _enabled,name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,cfg,now)
+        _enabled,name,_start,reset,groups,counted,cap,_reconciliation=_state(
+            session,cfg,now,include_reconciliation=True)
+        # Sent reservations may still complete normally. Exhaustion already has its own notice.
+        uncertain_charge = groups['uncertain'] > 0 and counted < cap
         reset_text=datetime.fromtimestamp(reset,timezone.utc).isoformat().replace('+00:00','Z')
         percent=warning_percent(cfg)
         if percent and counted<cap and counted>=cap*Decimal(percent)/100:
@@ -338,9 +366,7 @@ def publish_cap_notification(session,cfg,now):
             # The default keeps the pre-#810 fingerprint so upgrading does not
             # republish an active warning; another threshold is a new observation.
             if percent!=DAILY_CAP_WARNING_DEFAULT_PERCENT:subject_revision+=':threshold:'+str(percent)
-            event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
-                for key,value in DAILY_CAP_WARNING_NOTIFICATION.items())))
-            current=session.get(NotificationRevision,(event.id,event.revision)) if event is not None else None
+            _event,current=notices.get(DAILY_CAP_WARNING_NOTIFICATION['kind'],(None,None))
             # The amounts are captured when spend first crosses the threshold for this
             # window and cap. The reason is part of the revision fingerprint, so an
             # active warning for the same window and cap is left unchanged rather than
@@ -356,8 +382,9 @@ def publish_cap_notification(session,cfg,now):
                 notifications.publish(session,**DAILY_CAP_WARNING_NOTIFICATION,
                     subject_revision=subject_revision,
                     severity='low',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
+    _publish_uncertain_charge_notification(session, notices, uncertain_charge, now)
     if not warning:
-        _resolve_notification(session,DAILY_CAP_WARNING_NOTIFICATION,
+        _resolve_notification(session,notices,DAILY_CAP_WARNING_NOTIFICATION,
             'Shared daily AI spend is no longer approaching the cap: the window reset, the cap, mode or warning threshold '
             'changed, AI was disabled, or the cap was reached and its own notification applies.',now)
     if capped:
@@ -370,14 +397,8 @@ def publish_cap_notification(session,cfg,now):
                 subject_revision='exhausted:'+name+':'+repr(float(reset))+':'+_money(cap),
                 severity='medium',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
             return True
-    event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
-        for key,value in DAILY_CAP_NOTIFICATION.items())))
-    if event is not None:
-        current=session.get(NotificationRevision,(event.id,event.revision))
-        if current is None or current.lifecycle!='resolved':
-            notifications.publish(session,**DAILY_CAP_NOTIFICATION,subject_revision='resolved',
-                severity='info',reason='The shared daily AI spend cap no longer blocks new paid AI work.',
-                deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+    _resolve_notification(session,notices,DAILY_CAP_NOTIFICATION,
+        'The shared daily AI spend cap no longer blocks new paid AI work.',now)
     return False
 
 
