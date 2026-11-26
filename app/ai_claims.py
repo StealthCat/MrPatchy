@@ -375,8 +375,8 @@ def _admit(s,row,cfg,secret,owner,signature,now,free_only,claim_lock_wait):
             if not row or row.approved or row.verdict not in ('pending','error'):return None
             # Legacy/test behavior rows may predate a retained Host row;
             # only a present host can carry a lifecycle transition.
-            host=s.get(Host,host_id)
-            if host is not None and not host_lifecycle.active(host):return None
+            lifecycle=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==host_id)).one_or_none()
+            if lifecycle is not None and not host_lifecycle.active(lifecycle):return None
             if free_only:
                 # Re-check under the host queue gate. A subsequent cache
                 # miss still goes through paid admission at the provider boundary.

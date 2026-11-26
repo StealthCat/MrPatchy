@@ -248,6 +248,36 @@ def pause_policy(admin):
     })
 
 
+@pytest.mark.parametrize('host_present', (True, False))
+def test_claim_recheck_reads_only_server_lifecycle(admin, host_present):
+    seed(count=1)
+    with Session() as s:
+        host=s.get(Host,'host-0')
+        if host_present:
+            host.inventory={'retained_output':'x'*256_000}
+        else:
+            s.delete(host)
+        s.commit()
+
+    projections=[]
+    def capture(_connection,_cursor,statement,*_args):
+        sql=' '.join(statement.lower().split())
+        if sql.startswith('select hosts.') and ' from hosts where hosts.id =' in sql:
+            projections.append(sql.split(' from hosts ',1)[0])
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        lease=ai_claims.acquire()
+    finally:
+        event.remove(engine,'before_cursor_execute',capture)
+    assert lease and lease.host_id=='host-0'
+    with lease:
+        # MySQL may also lock the missing primary-key range using the
+        # activity guard's separate, narrow lifecycle projection.
+        assert projections[-1:]==['select hosts.enabled, hosts.deleted_at']
+        assert all(sql=='select hosts.id, hosts.enabled, hosts.deleted_at, hosts.lifecycle_revision'
+                   for sql in projections[:-1])
+
+
 def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeypatch):
     seed(count=1)
     queue=worker.Lock('server-queue:host-0');assert queue.acquire(False)

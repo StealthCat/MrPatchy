@@ -2334,6 +2334,13 @@ regressions verify the reduced SQL and continued refusal after lifecycle or
 evidence changes. This limits recurring lease-check I/O. Production throughput
 and the wider parallel-investigation acceptance remain open.
 
+Roadmap A checkpoint #1383 projects the enabled and deletion fields in the
+post-queue-lock claim recheck. The admission fixture returned 17 host columns
+before this change and two afterward, excluding a seeded 256 KB inventory.
+A fresh snapshot still guards lifecycle changes, and historical observations
+whose host row is absent retain their existing treatment. This measures the
+claim's database projection. Production throughput remains open.
+
 Worker checkpoint #599 adds a composite approval/verdict/first-seen/identity
 index for the real process-triage admission query. Startup adds the index
 idempotently to existing databases while retaining behavior history and existing
