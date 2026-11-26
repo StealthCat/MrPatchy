@@ -916,12 +916,18 @@ function startupAnacronJobs(row){
  return `<h4>anacron jobs (${esc(tab.jobs.length)})</h4>${settings}${tab.jobs.length?`<div class="table-wrap"><table class="startup-anacron-jobs"><thead><tr><th>Line</th><th>Period</th><th>Delay</th><th>Job</th><th>Command</th></tr></thead><tbody>${tab.jobs.map(job=>`<tr><td>${esc(job.line)}</td><td>${period(job)}</td><td>${esc(job.delay_minutes)} min</td><td><code>${esc(job.identifier)}</code>${job.duplicate_of_line?`<br><small>Shares a timestamp with line ${esc(job.duplicate_of_line)}</small>`:''}</td><td><code>${esc(job.command)}</code>${job.redacted||job.command_truncated?`<br><small>${[job.redacted?'Credentials redacted':'',job.command_truncated?'Truncated':''].filter(Boolean).join(' · ')}</small>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="help">No jobs found in this file.</p>'}${notes?`<p class="help">${esc(notes)}</p>`:''}`;
 }
 
+function startupCronEnvironment(job){
+ if(!('shell' in job))return '<small>Not reported by this agent version</small>';
+ const value=(name,text,truncated)=>`<div><span>${name}</span> ${text===null?'<small>cron default, not evaluated</small>':text===''?'<small>set empty</small>':`<code>${esc(text)}</code>`}${truncated?' <small>Truncated</small>':''}</div>`;
+ return value('SHELL',job.shell,job.shell_truncated)+value('PATH',job.path,job.path_truncated);
+}
+
 function startupCronJobs(row){
  const loading=startupCronLoading(row);
  if(row.jobs_state==='not_reported')return loading+'<p class="help">Cron jobs: not reported by this agent version. Update the agent and collect a new integrity inspection.</p>';
  const cron=row.cron;if(!cron)return loading;
- const notes=[cron.unparsed?cron.unparsed+' unparsed lines':'',cron.environment?cron.environment+' environment assignments (values not exported)':'',cron.truncated?'Job limit reached; later jobs omitted':''].filter(Boolean).join(' · ');
- return `${loading}<h4>Cron jobs (${esc(cron.jobs.length)})</h4>${cron.jobs.length?`<div class="table-wrap"><table class="startup-cron-jobs"><thead><tr><th>Line</th><th>Schedule</th><th>Account</th><th>Command</th></tr></thead><tbody>${cron.jobs.map(job=>`<tr><td>${esc(job.line)}</td><td><code>${esc(job.schedule)}</code></td><td>${esc(job.account??'Unknown')}</td><td><code>${esc(job.command)}</code>${job.redacted||job.command_truncated||job.stdin?`<br><small>${[job.redacted?'Credentials redacted':'',job.command_truncated?'Truncated':'',job.stdin?'Standard input after % not shown':''].filter(Boolean).join(' · ')}</small>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="help">No jobs found in this file.</p>'}${notes?`<p class="help">${esc(notes)}</p>`:''}`;
+ const notes=[cron.unparsed?cron.unparsed+' unparsed lines':'',cron.environment?cron.environment+' environment assignments (only SHELL and PATH values are shown)':'',cron.truncated?'Job limit reached; later jobs omitted':''].filter(Boolean).join(' · ');
+ return `${loading}<h4>Cron jobs (${esc(cron.jobs.length)})</h4>${cron.jobs.length?`<div class="table-wrap"><table class="startup-cron-jobs"><thead><tr><th>Line</th><th>Schedule</th><th>Account</th><th>Command</th><th>Shell and PATH set by this file</th></tr></thead><tbody>${cron.jobs.map(job=>`<tr><td>${esc(job.line)}</td><td><code>${esc(job.schedule)}</code></td><td>${esc(job.account??'Unknown')}</td><td><code>${esc(job.command)}</code>${job.redacted||job.command_truncated||job.stdin?`<br><small>${[job.redacted?'Credentials redacted':'',job.command_truncated?'Truncated':'',job.stdin?'Standard input after % not shown':''].filter(Boolean).join(' · ')}</small>`:''}</td><td class="startup-cron-environment">${startupCronEnvironment(job)}</td></tr>`).join('')}</tbody></table></div>`:'<p class="help">No jobs found in this file.</p>'}${notes?`<p class="help">${esc(notes)}</p>`:''}`;
 }
 
 async function startupFiles(revision,context){
