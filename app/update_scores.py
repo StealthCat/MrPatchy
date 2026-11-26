@@ -323,8 +323,9 @@ def run_one():
                         ai_runs.timing('oldest_update_age', now - min(availability))
                     key=unseal(encrypted)
                     with Session() as s:
-                        scores=_batch_scores(s,ids)
-                        for identifier in ids:scores[identifier].run_id=run_id
+                        linked = s.execute(update(UpdateScore).where(UpdateScore.id.in_(ids)).values(run_id=run_id))
+                        if linked.rowcount != len(ids):
+                            raise RuntimeError('Could not link every admitted package score to its run.')
                         s.commit()
                     result=ai.request({'model':cfg['ai_model'],'store':False,'max_output_tokens':4000,'instructions':INSTRUCTIONS,
                         'input':json.dumps(batch),'text':{'format':{'type':'json_schema','name':'update_importance','strict':True,'schema':SCHEMA}}},key)
