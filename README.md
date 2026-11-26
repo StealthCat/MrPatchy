@@ -745,7 +745,9 @@ and may differ from the provider invoice.
 In capped modes, AI Settings also shows how many counted transmitted calls await
 reconciliation and the oldest retained reservation time among them. This includes
 calls from still-counted prior windows. The time is the reservation time, because the
-ledger keeps no separate transmission timestamp.
+ledger keeps no separate transmission timestamp. The same notice splits the unreconciled
+amount into sent calls still awaiting reconciled usage and calls with a recorded uncertain
+outcome; both count toward the cap.
 
 A confirmed local HTTP connection-pool timeout receives a short local retry delay
 without creating or changing the fleet-wide provider backoff. Provider and ambiguous
@@ -913,7 +915,9 @@ legacy scoring membership; unrelated runs return 404 in that context. List purpo
 and pagination are remembered separately for fleet and each server during navigation
 and refresh, clearing on reload/sign-out. Back/Forward and direct detail reloads
 work without sending AI requests. Cost estimates/partial/unavailable states retain
-their saved usage/rate limitations; shared batch cost covers the whole run.
+their saved usage/rate limitations; shared batch cost covers the whole run. A run is
+marked as a shared batch when its retained server membership, or legacy update-scoring
+links, cover more than one server.
 Historical AI views remain available under existing administrator and lifecycle
 controls. No retry, approval or target action occurs when browsing.
 

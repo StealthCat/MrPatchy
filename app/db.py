@@ -113,7 +113,10 @@ class Observation(Base):
     evidence: Mapped[dict] = mapped_column(JSON)
 DEFAULTS = {'repo_minutes': 60, 'deadlines': {'critical': 24, 'high': 72, 'normal': 168, 'low': 720}, 'ai_enabled': False, 'ai_model': '', 'ai_hourly_limit': 20, 'ai_updates_enabled': True, 'ai_update_hourly_limit': 20, 'ai_control_mode': 'rate', 'ai_rate_per_hour': 20, 'ai_daily_cap_usd': 10.0, 'ai_budget_timezone': 'UTC', 'ai_daily_cap_warning_percent': 80, 'history_days': 30, 'os_lifecycle_warning_days': 90}
 def config(s):
-    item = s.get(Setting, 'config')
+    return config_from_setting(s.get(Setting, 'config'))
+
+
+def config_from_setting(item):
     values=item.value if item else {}
     result={**DEFAULTS,**values}
     # Existing installations that never chose a mode read as legacy. Startup
@@ -165,8 +168,9 @@ def init():
                 index.create(connection,checkfirst=True)
         ACTIVE_RUN_INDEX.create(connection,checkfirst=True)
         RECENT_RUN_INDEX.create(connection,checkfirst=True)
-        from .update_scores import SCORE_HISTORY_INDEX
+        from .update_scores import SCORE_HISTORY_INDEX, SCORE_RUN_HOST_INDEX
         SCORE_HISTORY_INDEX.create(connection,checkfirst=True)
+        SCORE_RUN_HOST_INDEX.create(connection,checkfirst=True)
         # MySQL FLOAT is single precision: epoch seconds lose tens of seconds.
         # SQLite already stores these values as 64-bit REAL.
         if connection.dialect.name in ('mysql', 'mariadb'):

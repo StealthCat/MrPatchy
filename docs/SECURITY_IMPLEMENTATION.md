@@ -3451,6 +3451,16 @@ Existing deferred records keep their saved dates until their next evaluation.
 Focused cases cover both capped modes, recording on either side of reset and
 rate spacing alongside cap and provider waiters.
 
+### Read the paced rate deadline and settings together — Roadmap A checkpoint #1477
+
+Paced provider admission reloads the saved settings and rate deadline with one
+read under the existing fleet admission lock. The read uses both primary keys and
+preserves the default settings and first admission when there are no saved rows.
+It still applies settings edits made while the caller waits for the lock. Pace
+refusals preserve the saved deadline and consume no provider call. SQLite and
+MySQL tests cover grants, refusals and the adjacent configuration and contention
+cases. Fleet throughput remains open.
+
 ### Rate throttle paces smoothly and defers without a charged attempt — worker checkpoint #1021
 
 `tests/test_ai_rate_throttle_acceptance.py` covers the milestone-4 checks for the
@@ -3652,6 +3662,19 @@ and in the panel. The download uses the applied filter, not unapplied typed text
 Amounts remain local public-price estimates for comparison with provider billing
 records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
 and the wider roadmap A acceptance remain planned.
+
+### Current-window unreconciled spend breakdown — Roadmap A checkpoint #1351
+
+AI Settings now distinguishes the counted amount still marked sent without
+reconciled usage from the counted amount with a recorded uncertain outcome.
+Both come from the same current-window budget aggregate, including any
+previously admitted reservations still counted after a timezone change.
+The existing combined uncertainty value remains available. An older API without
+the split still shows the combined total and reconciliation summary.
+
+A sent row can outlive a worker and its diagnostics. The read-only
+breakdown describes ledger state. Use provider billing records to verify
+charges.
 
 ### Stale and replayed triage results under a daily cap — milestone 4 checkpoint #1005
 
@@ -3980,6 +4003,7 @@ and that a sent call may still be billable. From code reading, not tested here: 
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
 
+
 ### Daily-cap admission failover when the admitting process dies — milestone 4 acceptance #1285
 
 Milestone 4 acceptance for **failover** of capped admission. Every capped reservation
@@ -4004,6 +4028,21 @@ Mutation check: excluding `reserved` rows from counted spend in `ai_budget._stat
 fails all three tests. No defect found and no runtime change. The SQLite run is local;
 MySQL runs through the CI shards. Controller/coordinator failover, a database failover
 mid-admission and before/after production performance remain open.
+
+### Recover expired and orphaned investigations from one read — worker checkpoint #1461
+
+Triage admission reads expired claims and running investigations without a
+claim in one statement while holding the existing admission lock. The expired
+branch includes runs linked to a claim slated for deletion. The orphan branch
+matches running triage runs that already have no claim. Both branches project
+keys before loading the rows needed for recovery. Each pass supplies its own
+expiry cutoff to the shared statement.
+
+Acceptance covers a healthy admission with a live lease and a mixed recovery
+pass with expiry at the cutoff, missing runs, completed runs, repeated claims
+for one run and retained call receipts. Repeating recovery leaves one
+interruption event per recovered run. Cap accounting, claim fencing and the
+caller-owned commit continue to apply. Production throughput remains open.
 
 ### Lease loss across the daily-cap reset — milestone 4 acceptance #1277
 
@@ -8541,6 +8580,14 @@ missing records and delayed-response races, plus actual 320/768/1440 renders.
 Shared glass navigation, readable responsive facts and existing mascot illustrations
 are reused. No new artwork or operational/approval controls are introduced.
 
+Roadmap A checkpoint [#1435](https://github.com/StealthCat/MrPatchy/issues/1435)
+computes the AI history shared-batch flag in one database read for the visible
+runs. It combines durable links and legacy score links and counts distinct server
+IDs so repeated package scores for one server count once. Startup adds a covering
+index for the legacy association on SQLite and MySQL. Tests cover pagination,
+older scores, duplicate links, the index upgrade and query plans. The broader
+faster-triage roadmap remains in progress.
+
 This is a partial screen-family migration. Investigation evidence/details, other
 AI control/loading states, the remaining finite UI inventory, full remote worker
 provisioning/state/readiness/migration acceptance, deployment/GCP dashboard/node,
@@ -11619,6 +11666,12 @@ It includes sent and uncertain rows from still-counted prior windows. The
 display uses reservation time because the ledger has no separate transmission
 timestamp. No call identifiers or diagnostic evidence are needed.
 
+Roadmap A checkpoint #1389 uses one ungrouped exact spend aggregate for budget
+admission and alert gates. The grouped dashboard still reports its status and
+reconciliation breakdown. Both queries share the ledger window predicate and
+count unknown unreleased rows conservatively. Tests verify the query shape and
+nano-dollar boundary on SQLite and MySQL. Production throughput remains open.
+
 The administrator API validates a trailing 1–90 day range and performs fixed-precision
 SQL aggregation without materializing individual ledger records. Result groups are
 bounded to four persisted reset/timezone combinations per requested day (at most 360),
@@ -12941,6 +12994,13 @@ Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit
 - **Unchanged:** every subject that would call the provider keeps today's deferral, with no claim, run or reservation. The rate gate, provider backoff, pause, lifecycle, data-sharing and Refresh behavior are unchanged. If evidence changes between the probe and the worker's own lookup, the atomic `ai_budget.reserve()` still refuses the provider call, so nothing is sent or charged and the existing policy-wait deferral applies. No schema, API, UI, roles or response authorization change.
 - **Validation:** `tests/test_known_good_daily_cap_hit.py` has 8 tests. Five fail on main `c5c1504`: the exhausted cap, a quote below one reservation (the issue's reproduction), an older paid subject in front of a newer hit, pause then resume, and the probe itself. The other three pass both before and after: a paid subject, a Re-triage and a revoked candidate all stay held. The related SQLite admission, budget, claims, file-status, known-good, triage, retry, pause and worker-control selection passes (419 passed).
 - **Remaining:** ~~while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear.~~ Addressed by the #1241 worker checkpoint below. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
+
+Roadmap A/B checkpoint #1387 bounds full behavior reads in a closed-gate
+known-good probe. The pending and error index ranges return IDs and timestamps.
+Admission applies the existing mixed-range ordering before reading evidence for
+the selected window. A mixed-verdict fixture at a two-probe limit materializes
+two records where it previously loaded four. Cursor rotation, full evidence
+checks and free-only admission are retained. Production throughput remains open.
 
 ### Rotating free known-good hit probe window — worker checkpoint #1241 (roadmap A/B)
 

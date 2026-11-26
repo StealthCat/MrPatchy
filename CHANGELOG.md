@@ -1,3 +1,14 @@
+## 1.99.0 — 2026-11-26
+
+1. [PR #1352](https://github.com/StealthCat/MrPatchy/pull/1352): AI Settings now splits unreconciled spend into sent amounts awaiting reconciled usage and amounts with a recorded uncertain outcome. Both still count toward the cap. Compatibility: display only. Fixes #1351.
+2. [PR #1437](https://github.com/StealthCat/MrPatchy/pull/1437): AI run history needs fewer membership reads. The shared-batch indicator now comes from retained server membership and legacy update-scoring links. Compatibility: controller start-up adds an index for historical score-to-run associations (`checkfirst`, no migration step). Fixes #1435.
+3. [PR #1478](https://github.com/StealthCat/MrPatchy/pull/1478): The shared AI rate throttle reads the rate settings and provider deadline together under the admission lock, with fewer locked reads. Compatibility: no schema or API change. Refs #1477.
+4. [PR #1391](https://github.com/StealthCat/MrPatchy/pull/1391): Daily-cap admission and alert gates read one exact ledger total. The detailed per-status spend breakdown is still read for Settings and status. Compatibility: no schema or API change. Fixes #1389.
+5. [PR #1388](https://github.com/StealthCat/MrPatchy/pull/1388): Evidence is read only for the candidates selected for a free known-good cache probe. Compatibility: no schema or API change. Fixes #1387.
+6. [PR #1462](https://github.com/StealthCat/MrPatchy/pull/1462): Triage admission reads expired claims and orphaned running investigations in one recovery statement instead of two. Lock, recovery event, claim deletion, receipt history and commit behavior are unchanged. Compatibility: no schema, API or setting change. Fixes #1461.
+
+Integrated together through batch [PR #1543](https://github.com/StealthCat/MrPatchy/pull/1543). This source update does not publish a Docker image.
+
 ## 1.98.3 — 2026-11-25
 
 1. [PR #1452](https://github.com/StealthCat/MrPatchy/pull/1452): When an administrator clears provider backoff, the cleared investigation retry waits are released in one update instead of row by row, with less database work on a large queue. Compatibility: no schema or API change. Fixes #1451.

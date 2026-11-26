@@ -424,6 +424,8 @@ def test_settings_expose_combined_cap_and_validate_timezone(admin):
     assert state['ai_budget']['cap_usd']=='12.5'
     assert state['ai_budget']['timezone']=='America/New_York'
     assert state['ai_budget']['unreconciled_call_count']==0
+    assert state['ai_budget']['sent_usd']=='0'
+    assert state['ai_budget']['uncertain_outcome_usd']=='0'
     assert state['ai_budget']['oldest_unreconciled_reservation_at'] is None
     assert state['ai_budget']['pricing_catalog']['state']=='fresh'
     assert state['ai_budget']['pricing_catalog']['expires_at']==ai_pricing.EXPIRES_AT
@@ -485,6 +487,8 @@ def test_status_totals_use_sql_aggregates_without_loading_ledger(admin):
     assert result['settled_usd']=='0.0000009'
     assert result['reserved_usd']=='0.4'
     assert result['uncertain_usd']=='0.35'
+    assert result['sent_usd']=='0.15'
+    assert result['uncertain_outcome_usd']=='0.2'
     assert result['unreconciled_call_count']==100
     assert result['oldest_unreconciled_reservation_at']==now
     assert result['counted_usd']=='0.7500009'
@@ -514,8 +518,20 @@ def test_reconciliation_summary_keeps_still_counted_prior_windows(admin):
 
     assert result['counted_usd']=='3'
     assert result['uncertain_usd']=='2'
+    assert result['sent_usd']=='1'
+    assert result['uncertain_outcome_usd']=='1'
     assert result['unreconciled_call_count']==2
     assert result['oldest_unreconciled_reservation_at']==now-7200
+
+
+@pytest.mark.parametrize('role', ('operator', 'viewer'))
+def test_budget_reconciliation_detail_keeps_settings_admin_only(admin, role):
+    from app.identity import User
+
+    with Session() as session:
+        session.get(User, 'admin').role = role
+        session.commit()
+    assert admin.get('/api/settings').status_code == 403
 
 
 def test_unrecognized_status_rows_stay_counted_and_block_admission(admin):
