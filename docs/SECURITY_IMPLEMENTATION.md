@@ -14579,3 +14579,37 @@ A `traphandle OID|default COMMAND` line in `snmptrapd.conf` makes `snmptrapd` ru
 - **Fail-closed:** unchecked files, invalid UTF-8, NUL bytes, over-limit text or lines, `includeFile`/`includeDir`/`includeSearch`, `[section]` context switches, embedded `perl` handlers, symbolic OIDs, an unparseable `disableAuthorization` value and an unknown service user all make the result incomplete.
 - **Validation:** the focused tests pass, and a randomized differential against the real Ubuntu `snmptrapd` 5.9.4 daemon sent a v2c trap for 540 generated configurations. It found two contract bugs, both fixed: access types are case-sensitive, and a later `authCommunity` line for the same community does not change the earlier access. The final 200 runs had 0 mismatches.
 - **Remaining:** which trap OIDs select each handler, sender/view restrictions, command existence, agent collection of the files and `-c`/`SNMPCONFPATH` overrides, a startup catalog entry, provenance, persistence, UI and AI classification. Roadmap F stays incomplete.
+
+### sudo.conf plugin and path contract — worker checkpoint #1425 (roadmap F)
+
+`sudo` is setuid root. Every `sudo` and `sudoedit` invocation reads `/etc/sudo.conf` and `dlopen`s the plugins it names into the root process, so each object's constructors run as root before any policy check. `Path plugin_dir` also moves the default `sudoers.so`, so a single line can make the next `sudo` call load another object as root. `Path noexec`, `intercept` and `sesh` choose the libraries sudo preloads into commands and the helper it runs as root. The startup inventory did not model this event trigger.
+
+- **Change:** the pure `app/sudo_conf_plugins.py` takes the captured file text, whether the file exists, and the opened file's type, owner and mode. It returns:
+  - each plugin sudo would load, in load order: source line or built-in default, symbol, configured and resolved path with its SHA-256, options, type, outcome, and whether its code runs as root;
+  - each `Path` value with its source line and intended use, and the `Debug` files sudo writes as root;
+  - a `fails` status with the fatal reason when sudo would exit while loading plugins.
+
+  It performs no I/O and never runs sudo.
+- **Fidelity:** it follows `sudo_conf.c`, `parseln.c`, `strsplit.c` and `load_plugins.c` in sudo 1.9.15p5, with the Ubuntu 24.04 compiled defaults. That covers:
+  - the `sudo_secure_fd` check, which ignores a file that is not a root-owned regular file, or that is group- or world-writable;
+  - comments, line continuation and blank trimming;
+  - ASCII-only case folding;
+  - `Path` values that run to the end of the line;
+  - relative plugin paths appended to `plugin_dir` without a separator;
+  - the default `sudoers_policy`/`sudoers_audit`/`sudoers_io` fallback, and the move of `sudoers_policy` options to `sudoers_audit`;
+  - ignored duplicates, `_clone` instances, and the fatal errors for a second policy plugin, an unset `plugin_dir` and an overlong path.
+- **Fail closed:** a plugin type is reported only for the symbols sudo's own objects export at their packaged path. Any other object, including `sudoers.so` under a changed `plugin_dir`, gets a blocking `plugin_type_unresolved` gap, because a policy-type object changes which defaults load. These also make the result incomplete:
+  - an unchecked file, or an unobserved type, owner or mode. A `stat` with a missing, `None`, `bool` or non-integer `uid`/`mode`, or a missing type, counts as unobserved rather than as insecure or secure;
+  - NUL bytes, over-limit input or invalid UTF-8;
+  - more than 128 `Plugin` lines.
+
+  `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:**
+  - `tests/test_sudo_conf_plugins.py` (28 tests, including 12 partly observed `stat` cases that failed before the review fix).
+  - A ctypes differential harness ran 8,000 random files through the installed sudo 1.9.15p5 `sudo_conf_read_v1`, comparing plugins, options, line numbers, paths and debug entries. There were 0 mismatches.
+  - Against the real setuid `sudo` in a disposable container, marker constructors in test objects ran as euid 0 in four cases: a `plugin_dir` override with no `Plugin` lines, a relative path concatenated without a slash, a duplicate policy symbol from another object, and a duplicate I/O symbol. In each case sudo then failed on the missing symbol. A group-writable file was ignored, and an unset `plugin_dir` was fatal.
+  - 17 source mutations were all caught.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:**
+  - agent collection of the file and its metadata, a catalog entry, package provenance, persistence, UI and AI classification;
+  - the compiled defaults of other sudo builds (Debian 12 1.9.13p3, RPM families), which callers cannot yet supply.
