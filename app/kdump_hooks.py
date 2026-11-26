@@ -17,7 +17,8 @@ Semantics were read in kdump-utils at upstream ``7bf4714`` (``kdumpctl``,
   together with trailing whitespace. A value that starts and ends with ``"``
   loses one quote at each end.
 * ``kdumpctl`` refuses to start on an unknown or deprecated option, an empty
-  value, a repeated option or more than one dump target. A refused
+  value, a repeated option, more than one dump target or a ``dracut_args``
+  value containing more than one ``--mount``. A refused
   configuration loads no capture kernel, so no hook runs.
 * ``kdump_pre``, ``kdump_post`` and ``kdump_emergency`` are executed as one
   quoted word (``"$KDUMP_PRE"``). A value with whitespace names a file whose
@@ -39,7 +40,9 @@ Semantics were read in kdump-utils at upstream ``7bf4714`` (``kdumpctl``,
   initramfs. The glob order is assumed to be byte order, because the capture
   shell's collation is not observed.
 * ``core_collector`` runs its value word-split; its first word is the program.
-  The default is ``makedumpfile``. ``extra_bins`` are installed but never run
+  The default is ``makedumpfile -l --message-level 7 -d 31``. For any
+  collector containing ``makedumpfile`` the capture script strips ``-F``,
+  re-adds it for ssh and raw targets and appends ``--num-threads``. ``extra_bins`` are installed but never run
   by kdump itself.
 
 The contract performs no I/O, never runs a command and never authorizes a
@@ -56,7 +59,7 @@ REFERENCE = 'kdump-utils 7bf4714'
 RUNS_AS = 'root'
 CONFIG_PATH = '/etc/kdump.conf'
 HOOK_DIRS = {'pre': '/etc/kdump/pre.d', 'post': '/etc/kdump/post.d', 'emergency': '/etc/kdump/emergency.d'}
-DEFAULT_CORE_COLLECTOR = 'makedumpfile'
+DEFAULT_CORE_COLLECTOR = 'makedumpfile -l --message-level 7 -d 31'
 MAX_CONFIG_BYTES = 65536
 MAX_LINES = 2048
 MAX_ENTRIES = 512
@@ -91,12 +94,17 @@ REFUSALS = {
     'empty_value': 'kdumpctl rejects an option with an empty value and refuses to start.',
     'duplicate_option': 'kdumpctl rejects a repeated option and refuses to start.',
     'multiple_targets': 'kdumpctl rejects more than one dump target and refuses to start.',
+    'multiple_mount_targets': 'kdumpctl rejects a dracut_args value with more than one --mount and refuses to '
+                              'start.',
 }
 OBSERVATIONS = {
     'value_has_whitespace': 'The value is executed as one word, so this names a path containing whitespace and '
                             'arguments are not passed; the call fails.',
     'pre_failure_skips_dump': 'A non-zero kdump_pre exit (including a failed call) skips the vmcore dump and runs '
                               'the final action.',
+    'args_rewritten_at_capture': 'The capture script removes -F from a makedumpfile collector, adds it back for '
+                                 'ssh and raw targets and appends --num-threads on multi-CPU systems, so the '
+                                 'arguments run may differ from those shown.',
     'relative_path': 'The value is not an absolute path, so it is looked up through PATH in the capture '
                      'environment.',
     'runs_on_capture_failure': 'Emergency hooks run only when the capture service fails, before the failure '
@@ -239,7 +247,9 @@ def assess(config_text: Any, directories: Any) -> dict[str, Any]:
         else:
             code = None
             key = 'failure_action' if opt == 'default' else opt
-            if opt in DUMP_TARGETS or (opt == 'dracut_args' and '--mount' in val):
+            if opt == 'dracut_args' and val.count('--mount') > 1:
+                code = 'multiple_mount_targets'
+            elif opt in DUMP_TARGETS or (opt == 'dracut_args' and '--mount' in val):
                 targets += 1
                 if targets > 1:
                     code = 'multiple_targets'
@@ -270,8 +280,10 @@ def assess(config_text: Any, directories: Any) -> dict[str, Any]:
     for item in listings['pre']:
         if item['runs'] is not False:
             add('pre', 'pre.d', item['path'], [], 'warn', [] if item['runs'] else ['unresolved'])
-    collector = options.get('core_collector', DEFAULT_CORE_COLLECTOR).split()
-    add('dump', 'core_collector', collector[0], collector[1:], 'dump_failed')
+    collector_value = options.get('core_collector', DEFAULT_CORE_COLLECTOR)
+    collector = collector_value.split()
+    add('dump', 'core_collector', collector[0], collector[1:], 'dump_failed',
+        ['args_rewritten_at_capture'] if 'makedumpfile' in collector_value else [])
     for item in listings['post']:
         if item['runs'] is not False:
             add('post', 'post.d', item['path'], ['<dump status>'], 'warn', [] if item['runs'] else ['unresolved'])

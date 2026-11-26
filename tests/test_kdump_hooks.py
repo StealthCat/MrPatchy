@@ -1,6 +1,7 @@
 from app import kdump_hooks as kd
 
 EXE = {'type': 'file', 'mode': 0o755}
+DEFAULT_ARGS = ['-l', '--message-level', '7', '-d', '31']
 
 
 def _listing(*entries, state='listed'):
@@ -38,7 +39,7 @@ def test_order_is_kdump_pre_before_pre_d_and_post_d_before_kdump_post():
         ('pre', 'kdump_pre', '/bin/pre', []),
         ('pre', 'pre.d', '/etc/kdump/pre.d/10-a', []),
         ('pre', 'pre.d', '/etc/kdump/pre.d/20-b', []),
-        ('dump', 'core_collector', 'makedumpfile', []),
+        ('dump', 'core_collector', 'makedumpfile', DEFAULT_ARGS),
         ('post', 'post.d', '/etc/kdump/post.d/p1', ['<dump status>']),
         ('post', 'kdump_post', '/bin/post', ['<dump status>']),
         ('emergency', 'emergency.d', '/etc/kdump/emergency.d/e1', []),
@@ -58,6 +59,15 @@ def test_hook_value_with_arguments_is_one_word_and_core_collector_is_split():
     assert pre['program'] == '/usr/bin/notify --crash' and pre['args'] == []
     assert 'value_has_whitespace' in pre['observations']
     assert (dump['program'], dump['args']) == ('cp', ['--sparse=always'])
+    assert dump['observations'] == []
+
+
+def test_default_core_collector_argv_and_capture_rewrite():
+    dump = kd.assess('', _dirs())['sequence'][0]
+    assert (dump['program'], dump['args']) == ('makedumpfile', ['-l', '--message-level', '7', '-d', '31'])
+    assert dump['observations'] == ['args_rewritten_at_capture']
+    custom = kd.assess('core_collector makedumpfile -c -d 31\n', _dirs())['sequence'][0]
+    assert custom['args'] == ['-c', '-d', '31'] and 'args_rewritten_at_capture' in custom['observations']
 
 
 def test_relative_hook_and_extra_bins_are_reported():
@@ -92,6 +102,7 @@ def test_refusals_stop_everything():
         'default reboot\nfailure_action halt\n': 'duplicate_option',
         'xfs /dev/a\nnfs host:/x\n': 'multiple_targets',
         'ssh u@h\ndracut_args --mount "h:/x /m nfs defaults"\n': 'multiple_targets',
+        'dracut_args --mount "h:/x /m nfs defaults" --mount "h:/y /n nfs defaults"\n': 'multiple_mount_targets',
     }
     for text, code in cases.items():
         result = kd.assess(text + 'kdump_post /bin/post\n', _dirs(post=_listing(dict(EXE, name='p'))))
@@ -131,4 +142,4 @@ def test_contract_metadata():
     result = kd.assess('', _dirs())
     assert result['runs_as'] == 'root'
     assert result['not_a_verdict'] and result['unobserved']
-    assert _seq(result) == [('dump', 'core_collector', 'makedumpfile', [])]
+    assert _seq(result) == [('dump', 'core_collector', 'makedumpfile', DEFAULT_ARGS)]
