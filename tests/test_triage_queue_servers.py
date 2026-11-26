@@ -170,13 +170,12 @@ def test_a_non_object_policy_is_reported_as_the_admission_minimum(admin, value):
     assert quiet['host_id'] == 'quiet' and quiet['investigation_limit'] == 1
 
 
-def test_limited_page_and_exact_total_share_one_backlog_read(admin):
+def test_limited_page_total_and_capacity_share_one_backlog_read(admin):
     now = seed()
-    backlog_reads = []
+    statements = []
 
     def capture(_connection, _cursor, statement, _parameters, _context, _many):
-        if 'FROM behaviors' in statement:
-            backlog_reads.append(statement)
+        statements.append(statement)
 
     with Session() as s:
         engine = s.get_bind()
@@ -187,7 +186,13 @@ def test_limited_page_and_exact_total_share_one_backlog_read(admin):
             event.remove(engine, 'before_cursor_execute', capture)
     assert [row['host_id'] for row in result['servers']] == ['busy', 'paused']
     assert result['servers_with_backlog'] == 3 and result['truncated'] is True and result['max_servers'] == 2
-    assert len(backlog_reads) == 1
+    assert result['servers'][0]['active_leases'] == result['servers'][0]['investigation_limit'] == 1
+    assert result['servers'][1]['name'] == 'srv-paused' and result['servers'][1]['paused'] is True
+    # The other two reads build the existing model/key retry signature.
+    assert len(statements) == 3
+    assert sum('FROM behaviors' in statement for statement in statements) == 1
+    if engine.dialect.name == 'mysql':
+        assert 'FORCE INDEX FOR JOIN (ix_ai_triage_claims_host_id)' in statements[-1]
     assert breakdown(now, limit=10_000)['max_servers'] == triage_queue_servers.MAX_SERVERS
 
 
