@@ -243,7 +243,8 @@ def status(session,now=None):
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
-        'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
+        'uncertain_usd':_money(uncertain),'sent_usd':_money(groups['sent']),
+        'uncertain_outcome_usd':_money(groups['uncertain']),'remaining_usd':_money(max(Decimal(0),cap-counted)),
         'unreconciled_call_count':unreconciled_count,'oldest_unreconciled_reservation_at':oldest,
         'next_reset':reset if enabled else None,'next_reset_authoritative':enabled and not overlapping,
         'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,

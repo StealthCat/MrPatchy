@@ -200,6 +200,12 @@ function renderAISettings(data,revision,container){
    ? `${count} transmitted AI ${count===1?'call awaits':'calls await'} reconciliation · Oldest reservation ${date(budget.oldest_unreconciled_reservation_at)}`
    : 'No transmitted AI calls await reconciliation.';
   budgetNotice.append(reconciliation);
+  const amounts=[budget.sent_usd,budget.uncertain_outcome_usd];
+  if(count>0&&amounts.every(amount=>typeof amount==='string'&&/^\d+(?:\.\d{1,9})?$/.test(amount))){
+   const breakdown=document.createElement('div');
+   breakdown.textContent=`Sent without reconciled usage $${budget.sent_usd} · Recorded uncertain outcome $${budget.uncertain_outcome_usd}. Both count toward the cap.`;
+   budgetNotice.append(breakdown);
+  }
  }
  budgetNotice.insertAdjacentHTML('beforeend',`<br><strong>Price catalog ${catalog.fresh?'current':catalog.state==='expired'?'expired':'unavailable'}</strong> · ${esc(catalog.version||'unknown version')}${catalog.expires_at?' · expires '+date(catalog.expires_at):''}${!catalog.fresh&&catalog.reason?' · '+esc(catalog.reason):''}`);
  const keyForm=$('#ai-key-form'),form=$('#ai-settings-form'),select=$('#ai-model'),manual=$('#ai-model-manual');
