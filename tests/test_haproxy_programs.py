@@ -135,12 +135,178 @@ def test_sections_reset_per_file_and_programs_outside_master_worker_config():
     assert only_programs['complete'] is True and only_programs['master_worker_in_config'] is None
 
 
-def test_external_check_and_scope_are_unmodelled():
-    for line in ('    option external-check\n', '    external-check command /bin/check\n',
-                 '    no option external-check\n'):
-        assert 'external_check_unmodelled' in codes(run(GLOBAL + 'backend b\n' + line))
+def test_scope_and_unknown_directives_are_gaps():
     assert 'scope_directive' in codes(run(GLOBAL + '[scope]\n'))
     assert 'unknown_directive' in codes(run(GLOBAL + '.bogus\n'))
+
+
+# Increment 2 native run: Ubuntu 24.04 haproxy 2.8.30-0ubuntu0.24.04.2 started as root
+# with ``haproxy -W -f a.cfg -f b.cfg``. The check command recorded ``id -u``, ``id -g``,
+# ``id -G``, $PATH, $HAPROXY_PROXY_NAME and its arguments.
+EXT_A = """global
+    master-worker
+    external-check
+    insecure-fork-wanted
+    user nobody
+    group nogroup
+defaults
+    mode tcp
+    timeout connect 1s
+    timeout client 1s
+    timeout server 1s
+    timeout check 1s
+    option external-check
+    external-check command /usr/local/bin/hc-rec
+backend inherit
+    server s1 127.0.0.1:9 check inter 700
+backend relative
+    external-check path "/usr/local/bin:/bin"
+    external-check command hc-rec
+    server s2 127.0.0.2:10 check inter 700
+backend replaced
+    option httpchk
+    server s3 127.0.0.3:11 check inter 700
+listen withbind
+    bind 127.0.0.1:18081
+    server s4 127.0.0.4:12 check inter 700
+backend nocheck
+    server s5 127.0.0.5:13
+"""
+EXT_B = 'backend secondfile\n    server s6 127.0.0.6:14 check inter 700\n'
+# (proxy, PATH, argv[1:]) each recorded process reported, all as uid/gid/groups 65534.
+EXT_OBSERVED = {
+    ('inherit', '', ('NOT_USED', 'NOT_USED', '127.0.0.1', '9')),
+    ('relative', '/usr/local/bin:/bin', ('NOT_USED', 'NOT_USED', '127.0.0.2', '10')),
+    ('withbind', '', ('127.0.0.1', '18081', '127.0.0.4', '12')),
+    ('secondfile', '', ('NOT_USED', 'NOT_USED', '127.0.0.6', '14')),
+}
+
+
+def checks(result):
+    return {c['proxy']: c for c in result['external_checks']}
+
+
+def test_native_external_check_run_matches_contract():
+    result = run(('a.cfg', EXT_A), ('b.cfg', EXT_B))
+    assert result['complete'] is True and result['gaps'] == []
+    found = checks(result)
+    # "replaced" switched to httpchk, so its inherited command is ignored (HAProxy warns).
+    # "nocheck" has no server with "check"; per-server activation is not evaluated, so it is listed.
+    assert set(found) == {'inherit', 'relative', 'withbind', 'secondfile', 'nocheck'}
+    observed_proxies = {proxy for proxy, _, _ in EXT_OBSERVED}
+    for proxy, path_env, _ in EXT_OBSERVED:
+        check = found[proxy]
+        assert check['path_env'] == path_env
+        assert check['runs_as']['user'] == 'nobody' and check['runs_as']['group'] == 'nogroup'
+        assert check['runs_as']['supplementary_groups_dropped'] is True and 'user_note' not in check['runs_as']
+        assert check['fork'] == 'allowed' and check['environment'] == 'only_path_and_haproxy_variables'
+        assert len(check['argv_template']) == 5 and check['argv_template'][0] == check['command']
+    assert observed_proxies < set(found)
+    assert found['inherit']['command'] == '/usr/local/bin/hc-rec' and found['inherit']['path_lookup'] is False
+    assert found['inherit']['command_location'] == {'path': 'a.cfg', 'line': 14}  # from defaults
+    assert found['secondfile']['command_location'] == {'path': 'a.cfg', 'line': 14}  # defaults span files
+    assert found['relative']['command'] == 'hc-rec' and found['relative']['path_lookup'] is True
+    assert found['relative']['path_location'] == {'path': 'a.cfg', 'line': 18}
+    assert [s['name'] for s in found['withbind']['servers']] == ['s4']
+    assert result['external_check_global'] == {'enabled': {'path': 'a.cfg', 'line': 3}, 'preserve_env': False,
+                                               'insecure_fork_wanted': True}
+
+
+def test_native_external_check_identity_and_fork_gate():
+    # Native runs of variants of EXT_A (single file):
+    # - no user/group and no insecure-fork-wanted: checks ran as 0:0:0 (root ignores RLIMIT_NPROC 0);
+    # - user nobody, group nogroup, no insecure-fork-wanted: "Failed to fork process for external health
+    #   check (likely caused by missing 'insecure-fork-wanted')", nothing ran;
+    # - user nobody only: checks ran as 65534:0 with root's supplementary groups;
+    # - "external-check preserve-env" without master-worker: same identity and PATH.
+    no_fork = EXT_A.replace('    insecure-fork-wanted\n', '')
+    root = checks(run(no_fork.replace('    user nobody\n', '').replace('    group nogroup\n', '')))['inherit']
+    assert root['fork'] == 'allowed_for_root_worker_only' and root['runs_as']['user'] is None
+    assert root['runs_as']['supplementary_groups_dropped'] is False and 'user_note' in root['runs_as']
+    assert checks(run(no_fork))['inherit']['fork'] == 'fails_unless_user_resolves_to_root'
+    user_only = checks(run(EXT_A.replace('    group nogroup\n', '')))['inherit']['runs_as']
+    assert user_only['user'] == 'nobody' and user_only['supplementary_groups_dropped'] is False
+    preserved = run(EXT_A.replace('    external-check\n', '    external-check preserve-env\n')
+                    .replace('    master-worker\n', ''))
+    assert checks(preserved)['inherit']['environment'] == 'preserved_and_merged'
+    assert preserved['master_worker_in_config'] is None
+    later = run(EXT_A.replace('    insecure-fork-wanted\n', '    insecure-fork-wanted\n    no insecure-fork-wanted\n'))
+    assert checks(later)['inherit']['fork'] == 'fails_unless_user_resolves_to_root'
+    chroot = checks(run(EXT_A.replace('    user nobody\n', '    user nobody\n    chroot /var/lib/haproxy\n'
+                                                         '    chroot /ignored\n')))
+    assert chroot['inherit']['chroot'] == '/var/lib/haproxy'
+
+
+EXT_G = 'global\n    external-check\n'
+EXT_D = 'defaults\n    mode tcp\n'
+
+
+def test_rejected_external_check_configurations_are_blocking_gaps():
+    # Each of these makes "haproxy -c" exit 1 on the native 2.8.30 build.
+    cases = {
+        EXT_G + EXT_D + 'backend b\n    no option external-check\n': 'external_check_malformed',
+        EXT_G + 'backend b\n    option external-check\n    external-check command /bin/a\n'
+        '    default option external-check\n': 'external_check_malformed',
+        EXT_G + 'backend b\n    option external-check\n    external-check command /bin/x\n'
+        '    option external-check extra\n': 'external_check_malformed',
+        EXT_G + 'backend b\n    option external-check\n    external-check command /bin/x y\n':
+            'external_check_malformed',
+        EXT_G + 'backend b\n    option external-check\n    external-check foo /bin/x\n': 'external_check_malformed',
+        EXT_G + 'backend b\n    option external-check\n    external-check command ""\n':
+            'external_check_malformed',
+        'global\n    external-check bogus\n': 'external_check_malformed',
+        EXT_G + 'backend b\n    option external-check\n    external-check command rel\n':
+            'external_check_relative_without_path',
+        EXT_G + 'backend b\n    external-check command rel\n': 'external_check_relative_without_path',
+        EXT_G + 'defaults\n    external-check command rel\nbackend b\n    option httpchk\n':
+            'external_check_relative_without_path',
+        'global\n' + EXT_D + 'backend b\n    option external-check\n    external-check command /bin/x\n':
+            'external_check_not_enabled',
+        'global\nfrontend f\n    bind 127.0.0.1:18090\n    option external-check\n': 'external_check_not_enabled',
+        EXT_G + 'backend b\n    option external-check\n': 'external_check_without_command',
+        EXT_G + 'defaults\n    option external-check\nbackend b\n    server s 127.0.0.1:1 check\n':
+            'external_check_without_command',
+    }
+    for text, code in cases.items():
+        result = run(text)
+        assert code in codes(result), (text, result['gaps'])
+        assert result['complete'] is False
+
+
+def test_accepted_external_check_configurations():
+    # Each of these passes "haproxy -c" on the native 2.8.30 build (warnings only).
+    # A defaults section is never post-parsed, and a frontend has no servers.
+    for text in ('global\ndefaults\n    option external-check\n    external-check command rel\n',
+                 EXT_G + 'frontend f\n    bind 127.0.0.1:18090\n    option external-check\n'
+                 '    external-check command /bin/x\n'):
+        result = run(text)
+        assert result['complete'] is True and result['external_checks'] == [], (text, result['gaps'])
+    # Repeats: the last command and path win.
+    repeats = run(EXT_G + 'backend b\n    option external-check\n    external-check command /bin/a\n'
+                  '    external-check command /bin/b\n    external-check path /x\n    external-check path /y\n')
+    assert repeats['complete'] is True
+    assert (checks(repeats)['b']['command'], checks(repeats)['b']['path_env']) == ('/bin/b', '/y')
+    # A later check-type option replaces the external check, and vice versa.
+    assert checks(run(EXT_G + 'backend b\n    option external-check\n    option httpchk\n'
+                      '    external-check command /bin/a\n')) == {}
+    assert set(checks(run(EXT_G + 'backend b\n    option httpchk\n    option external-check\n'
+                          '    external-check command /bin/a\n'))) == {'b'}
+    # A new defaults section starts empty, so later proxies no longer inherit the external check.
+    fresh = run(EXT_G + 'defaults\n    option external-check\n    external-check command /bin/a\n'
+                'backend one\ndefaults\nbackend two\n')
+    assert set(checks(fresh)) == {'one'} and fresh['complete'] is True
+
+
+def test_external_check_unmodelled_inputs_fail_closed():
+    named = run(EXT_G + 'defaults d1\n    external-check command /bin/x\ndefaults\nbackend b from d1\n'
+                '    option external-check\n')
+    assert 'defaults_from_unmodelled' in codes(named) and named['complete'] is False
+    # "user root" leaves uid 0, so a second "user" would win; names are not resolved.
+    repeated = run(EXT_A.replace('    user nobody\n', '    user nobody\n    uid 0\n'))
+    assert 'global_identity_ambiguous' in codes(repeated) and repeated['complete'] is False
+    assert checks(repeated)['inherit']['runs_as']['user'] == 'nobody'
+    # Without any external check, a repeated identity does not matter to this contract.
+    assert run('global\n    user a\n    user b\n')['complete'] is True
 
 
 def test_input_limits():
