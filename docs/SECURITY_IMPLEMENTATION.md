@@ -13591,7 +13591,6 @@ LightDM runs `display-setup-script`, `display-stopped-script`, `greeter-setup-sc
 - **Validation:** `tests/test_lightdm_scripts.py` (19 tests) includes a differential test that compares the GKeyFile port with the system `libglib-2.0` through `ctypes`. It skips when that library is absent. A local run over 50,000 random files found 0 disagreements with GLib 2.80. Before the fix, that run caught the vertical-tab whitespace rule.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection of the files and listings, a catalog entry, package provenance, persistence, UI and AI classification.
-
 ### keepalived script contract — worker checkpoint #1307 (roadmap F, in progress)
 
 keepalived runs administrator-configured programs on VRRP state changes, health checks, LVS events and at startup and shutdown. They run as root, or as `script_user` / `keepalived_script`.
@@ -13681,28 +13680,3 @@ snmpd runs configured programs whenever an SNMP manager reads, or for writable e
 - **Fail closed:** blocking gaps cover unobserved files or listings, an unobserved invocation or starting group, relative includes, include cycles, truncated paths, failed-`stat` entries, build-dependent `ssl_version=SSLv2` and out-of-range integers. `origin` is `not_assessed`, and no result is a safety verdict.
 - **Validation:** `tests/test_nrpe_commands.py` (14 tests) uses vectors derived from the source. Upstream `process_macros`, `my_strsep` and the `raw_command` copy, compiled from the nrpe 4.1.0 tag, agreed with the contract on 20,300 randomized command lines (0 mismatches). The full daemon was not built.
 - **Remaining:** native collection of `nrpe.cfg` and `nrpe.d`, startup-inventory wiring, provenance and AI classification. The build flags (`--enable-command-args`), account resolution and `allowed_hosts` reachability are not observed. A SIGHUP reload re-reads the file without re-running `check_privileges`, so `nrpe_user=root` written after start can take effect until restart.
-
-### GDM display-manager script contract — worker checkpoint #1405 (roadmap F)
-
-GDM runs `<GDMCONFDIR>/{Init,PostLogin,PreSession,PostSession}/{<display>,<remote host>,Default}` as root. `GDMCONFDIR` is `/etc/gdm3` on Debian and Ubuntu, and `/etc/gdm` upstream and on Fedora. A non-zero exit from `PostLogin` or `PreSession` aborts the login. The startup inventory did not model these scripts as a root-execution persistence location.
-
-- **Change:** the pure `app/gdm_scripts.py` takes captured `stat()` observations and directory listings.
-  - `select()` returns the script GDM runs for one phase, display name and remote host. It also gives the argv, the user it runs as and the failure impact.
-  - `evaluate()` lists, for each phase, every script that could run and the display or host that selects it, plus the inert entries and why each is skipped.
-  - It does no I/O and never runs a command.
-- **Fidelity:** it follows GDM 46.2 `gdm_run_script()` with glib 2.80.
-  - Precedence is display name, then remote host (session phases only, never `Init`), then `Default`. The first regular file with any execute bit wins, as `g_file_test` decides it for root, following symlinks.
-  - An absent or empty display name (a Wayland session) makes the phase path itself the first candidate.
-  - Paths are reparsed with `g_shell_parse_argv`. The script is spawned without a shell, and on `ENOEXEC` glib falls back to `/bin/sh`.
-  - `Init` runs only for daemon-started Xorg servers (`legacy-xorg` and XDMCP displays). Program and greeter sessions run no script.
-- **Fail closed:** each of these is an explicit gap, never a covered result:
-  - an unobserved candidate or directory listing;
-  - a path that `g_shell_parse_argv` would change;
-  - a display name or host containing `/`;
-  - malformed input or input over a cap.
-- **Validation:** `tests/test_gdm_scripts.py` has 14 tests. A differential linked GDM 46.2's own `gdm_run_script` source against the real glib 2.80 and ran it as root on 3,000 random trees. The trees mixed executable, group-only and other-only execute bits, non-executable files, directories, symlinks, dangling symlinks, executable phase files, Wayland and X11 display names, and IPv6 and plain remote hosts. Spawning was replaced by printing the parsed argv. The 1,989 results reported complete had 0 disagreements. The other 1,011 had paths with blanks or quotes and were correctly reported as reparse gaps.
-- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
-- **Remaining:**
-  - collecting the directories and `custom.conf` (`WaylandEnable`, XDMCP) on the agent;
-  - a catalog entry, package provenance (`gdm3` ships `Init/Default`, `PreSession/Default` and `PostSession/Default`), persistence, UI and AI classification;
-  - a spawning differential, which would confirm the `ENOEXEC` fallback and the exit-status handling end to end.
