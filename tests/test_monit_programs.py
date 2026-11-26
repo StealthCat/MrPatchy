@@ -201,3 +201,62 @@ def test_numeric_program_options_accept_ascii_digits_with_leading_zeroes():
     assert result['complete']
     command = result['commands'][0]
     assert (command['uid'], command['gid'], command['timeout_seconds']) == (100, 33, 12)
+
+
+# Native evidence (#1611): Ubuntu 24.04 monit 1:5.33.0-2build2, recorded by the #1612 session from
+# ``monit -v -t -c FILE`` and from an ``monit -I`` exec action that logged its argv and ``id -u``.
+NATIVE_RC = ('set daemon 30\n'
+             'check process sshd with pidfile /run/sshd.pid\n'
+             "  start program = \"/usr/sbin/service ssh start 'two words' a'b'c\" as uid nobody"
+             ' with timeout 20 seconds\n'
+             '  stop program "/bin/true stop"\n'
+             '  if failed port 22 then exec "/bin/echo x" as uid nobody repeat every 3 cycles\n'
+             "check program chk with path \"/bin/ls -q 'a b'\"\n"
+             '  if status != 0 then alert\n')
+
+
+def test_native_service_commands_and_accounts():
+    result = run(NATIVE_RC)
+    assert cmds(result) == [
+        ('sshd', 'start', ['/usr/sbin/service', 'ssh', 'start', 'two words', "a'b'c"], 'nobody', None),
+        ('sshd', 'stop', ['/bin/true', 'stop'], None, None),
+        ('sshd', 'exec', ['/bin/echo', 'x'], 'nobody', None),
+        ('chk', 'check', ['/bin/ls', '-q', 'a b'], None, None),
+    ]
+    assert result['commands'][0]['timeout_seconds'] == 20
+    assert result['complete'] is True
+
+
+def test_native_exec_argv_trace():
+    result = run('check program t with path "/bin/false" # comment "x"\n'
+                 "  if status != 0 then exec \"/usr/local/bin/argv.sh a  'b c' d'e'f #h 'x\"y'\" as uid nobody\n")
+    assert cmds(result) == [('t', 'check', ['/bin/false'], None, None),
+                            ('t', 'exec', ['/usr/local/bin/argv.sh', 'a', 'b c', "d'e'f", '#h', 'x"y'],
+                             'nobody', None)]
+    assert result['complete'] is True
+
+
+def test_native_escape_rewrite_stays_a_blocking_gap():
+    # Natively, Util_handleEscapes turned '  g\tq  ' into the argument 'g<TAB>q'. That rewrite is not modelled,
+    # so the contract must not report the argument as complete.
+    result = run("check program t with path \"/bin/false\"\n"
+                 "  if status != 0 then exec \"/bin/argv.sh '  g\\tq  '\"\n")
+    assert 'escape_sequence' in codes(result) and result['complete'] is False
+
+
+@pytest.mark.parametrize('text', [
+    'check process a with pidfile /p\n  start "/bin/a\0b"\n',
+    'check process a with pidfile /p\n  start "/bin/a"\0 stop "/bin/b"\n',
+])
+def test_nul_byte_blocks_and_reports_no_truncated_program(text):
+    result = run(text)
+    assert 'nul_byte' in codes(result) and result['complete'] is False
+    assert result['commands'] == []
+
+
+def test_nul_byte_in_an_include_blocks_completion():
+    inc = {'/etc/monit/conf.d/*': [{'path': '/etc/monit/conf.d/a',
+                                    'text': 'check process a with pidfile /a\n  start "/bin/a\0x"\n'}]}
+    result = run('include /etc/monit/conf.d/*\n', inc)
+    assert {g['code']: g.get('file') for g in result['gaps']}.get('nul_byte') == '/etc/monit/conf.d/a'
+    assert result['complete'] is False and result['commands'] == []
