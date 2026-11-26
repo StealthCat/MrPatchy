@@ -1,5 +1,6 @@
 """Scoring idle fleets must use bounded SQL round trips, without changing eligibility."""
 import hashlib
+import json
 import time
 import pytest
 from sqlalchemy import event,select
@@ -39,7 +40,6 @@ def measure(monkeypatch):
 def capture_assessments(monkeypatch):
     sent=[]
     def assess(payload,key):
-        import json
         batch=json.loads(payload['input']);sent.extend(batch)
         return {'assessments':[{'id':r['id'],'score':50,'confidence':'low','explanation':'Fixture','limitations':'No advisory verification'} for r in batch]}
     monkeypatch.setattr(ai,'request',assess)
@@ -355,12 +355,28 @@ def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, mon
 
         monkeypatch.setattr(ai, 'request', reject)
 
+    provider = ai.request
+    linked_at_request = []
+
+    def check_committed_link(payload, key):
+        ids = {item['id'] for item in json.loads(payload['input'])}
+        with Session() as session:
+            run = session.scalars(select(ai_runs.AIRun)).one()
+            scores = session.scalars(select(update_scores.UpdateScore)).all()
+            linked_at_request.append((run.state, {row.id for row in scores} == ids,
+                                      {row.run_id for row in scores} == {run.id}))
+        return provider(payload, key)
+
+    monkeypatch.setattr(ai, 'request', check_committed_link)
     score_reads = []
+    link_updates = []
 
     def observe(conn, cursor, statement, parameters, context, executemany):
         query = statement.lower()
         if 'from update_scores' in query and 'where update_scores.id ' in query:
             score_reads.append(query)
+        if query.startswith('update update_scores set run_id='):
+            link_updates.append((query, executemany))
 
     event.listen(engine, 'before_cursor_execute', observe)
     try:
@@ -378,9 +394,36 @@ def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, mon
         assert {row.score for row in rows} == ({50} if outcome == 'complete' else {None})
         assert all((row.next_at > time.time()) == (outcome == 'deferred') for row in rows)
 
-    # Read exact scores for candidate admission, run linkage and outcome persistence.
-    assert len(score_reads) == 3
+    assert linked_at_request == [('running', True, True)]
+    # Read exact scores only for candidate admission and outcome persistence.
+    assert len(score_reads) == 2
     assert all('where update_scores.id in (' in query for query in score_reads)
+    [(link_update, executemany)] = link_updates
+    assert not executemany and 'where update_scores.id in (' in link_update
+
+
+def test_partial_scoring_run_link_rolls_back_before_provider(admin, monkeypatch):
+    seed(5, completed=0)
+    monkeypatch.setattr(ai, 'request', lambda *_: pytest.fail('Partially linked batch called provider'))
+
+    def omit_score(conn, cursor, statement, parameters, context, executemany):
+        if statement.lower().startswith('update update_scores set run_id='):
+            statement += " AND update_scores.name != 'pkg0002'"
+        return statement, parameters
+
+    event.listen(engine, 'before_cursor_execute', omit_score, retval=True)
+    try:
+        update_scores.run_one()
+    finally:
+        event.remove(engine, 'before_cursor_execute', omit_score)
+
+    with Session() as session:
+        run = session.scalars(select(ai_runs.AIRun)).one()
+        rows = session.scalars(select(update_scores.UpdateScore)).all()
+        assert run.state == 'error'
+        assert len(rows) == 5
+        assert {row.run_id for row in rows} == {''}
+        assert {row.state for row in rows} == {'error'}
 
 
 def test_scoring_revalidates_five_results_in_two_evidence_queries(admin, monkeypatch):

@@ -1,0 +1,180 @@
+{
+  "fixture_only": true,
+  "source_commit": "e8ad2b901c2becdb0de3379ffef3790c0953c690",
+  "execution": "serial",
+  "concurrency": 1,
+  "provider_delay_ms": 150,
+  "ssh_delay_ms": 50,
+  "persistence_delay_ms": 15,
+  "queue_age_seconds": 2,
+  "runs": 8,
+  "provider_calls": 12,
+  "fixture_hosts": 8,
+  "single_server_slots": null,
+  "peak_provider_requests": 1,
+  "database": "sqlite",
+  "database_version": "3.50.4",
+  "retained_history_rows": 1000,
+  "connections": 1,
+  "elapsed_seconds": 3.04,
+  "runs_per_second": 2.632,
+  "workload_fingerprint": {
+    "version": 1,
+    "sha256": "9014ae6c2139f0875c424df4f876c657b07fd161ce04d408227066f1c8273a89"
+  },
+  "persisted_assessments": {
+    "subjects": 8,
+    "input_stages": 12,
+    "follow_up_subjects": 4
+  },
+  "ai_control_mode": "daily_cap",
+  "fixture_budget": {
+    "pricing_version": "synthetic-v1",
+    "cap_usd": 10,
+    "timezone": "UTC",
+    "settled_calls": 12,
+    "settled_microusd": 240
+  },
+  "stages": {
+    "run": {
+      "count": 8,
+      "p50_ms": 397.072,
+      "p95_ms": 518.131
+    },
+    "one_stage": {
+      "count": 4,
+      "p50_ms": 242.07,
+      "p95_ms": 300.361
+    },
+    "two_stage": {
+      "count": 4,
+      "p50_ms": 505.521,
+      "p95_ms": 518.131
+    },
+    "provider": {
+      "count": 12,
+      "p50_ms": 198.332,
+      "p95_ms": 232.768
+    },
+    "ssh_evidence": {
+      "count": 4,
+      "p50_ms": 50.13,
+      "p95_ms": 50.31
+    },
+    "admission": {
+      "count": 8,
+      "p50_ms": 12.915,
+      "p95_ms": 33.209
+    },
+    "queue_age": {
+      "count": 8,
+      "p50_ms": 3287.473,
+      "p95_ms": 4537.579
+    },
+    "executor_wait": {
+      "count": 8,
+      "p50_ms": 1270.43,
+      "p95_ms": 2518.19
+    },
+    "receipt_persistence": {
+      "count": 12,
+      "p50_ms": 18.102,
+      "p95_ms": 20.34
+    },
+    "usage_persistence": {
+      "count": 12,
+      "p50_ms": 17.95,
+      "p95_ms": 18.696
+    },
+    "budget_reservation": {
+      "count": 12,
+      "p50_ms": 3.406,
+      "p95_ms": 5.204
+    },
+    "budget_reconciliation": {
+      "count": 12,
+      "p50_ms": 3.207,
+      "p95_ms": 4.276
+    }
+  },
+  "persisted_stages": {
+    "claim_lock": {
+      "count": 8,
+      "p50_ms": 0.265,
+      "p95_ms": 0.542
+    },
+    "claim_lock_hold": {
+      "count": 8,
+      "p50_ms": 8.642,
+      "p95_ms": 23.505
+    },
+    "admission": {
+      "count": 8,
+      "p50_ms": 12.902,
+      "p95_ms": 33.193
+    },
+    "queue_age": {
+      "count": 8,
+      "p50_ms": 3287.47,
+      "p95_ms": 4537.576
+    },
+    "file_provenance": {
+      "count": 8,
+      "p50_ms": 4.307,
+      "p95_ms": 5.0
+    },
+    "known_good_lookup": {
+      "count": 8,
+      "p50_ms": 1.807,
+      "p95_ms": 3.931
+    },
+    "provider_admission": {
+      "count": 12,
+      "p50_ms": 4.986,
+      "p95_ms": 6.836
+    },
+    "receipt_persistence": {
+      "count": 12,
+      "p50_ms": 18.104,
+      "p95_ms": 20.342
+    },
+    "provider": {
+      "count": 12,
+      "p50_ms": 151.402,
+      "p95_ms": 189.057
+    },
+    "usage_persistence": {
+      "count": 12,
+      "p50_ms": 20.907,
+      "p95_ms": 22.569
+    },
+    "result_persistence": {
+      "count": 8,
+      "p50_ms": 5.672,
+      "p95_ms": 6.853
+    },
+    "run": {
+      "count": 8,
+      "p50_ms": 370.822,
+      "p95_ms": 502.34
+    },
+    "ssh_evidence": {
+      "count": 4,
+      "p50_ms": 50.924,
+      "p95_ms": 51.137
+    },
+    "evidence_persistence": {
+      "count": 4,
+      "p50_ms": 4.58,
+      "p95_ms": 7.788
+    }
+  },
+  "input_tokens": 1200,
+  "output_tokens": 240,
+  "completed_subjects": 8,
+  "approved_subjects": 0,
+  "errors": 0,
+  "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+  "initial_fixture_queue_age_seconds": 2,
+  "notes": "Loopback provider, SSH delay, queue age and the optional receipt/usage persistence delay are synthetic; no production/TLS/database speed claim. Admission includes lock/query/run creation; run includes persistence."
+}

@@ -1,7 +1,10 @@
 # Test-only target: SSH/sudo are real; systemctl is a recorded stub.
 ARG TARGET_BASE=ubuntu:24.04
 FROM ${TARGET_BASE}
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 openssh-server sudo openssl ca-certificates yara && rm -rf /var/lib/apt/lists/*
+COPY ci-apt-update.sh /tmp/ci-apt-update.sh
+RUN sh /tmp/ci-apt-update.sh && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 openssh-server sudo openssl ca-certificates yara && \
+    rm -rf /var/lib/apt/lists/* /tmp/ci-apt-update.sh
 RUN python3 -c "import uuid,pathlib; pathlib.Path('/etc/machine-id').write_text(uuid.uuid4().hex+'\n')"
 RUN mkdir -p /run/sshd && ssh-keygen -A && printf '%s\n' 'HostKey /etc/ssh/ssh_host_ed25519_key' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'UsePAM no' 'PermitRootLogin no' 'StrictModes yes' > /etc/ssh/sshd_config
 COPY systemctl.sh /usr/bin/systemctl

@@ -61,6 +61,7 @@ def no_provider(*args, **kwargs):
 
 
 def test_each_current_update_is_classified_once_like_the_scheduler(admin, monkeypatch):
+    monkeypatch.setattr(scoring_queue_status, 'CHUNK', 2)
     monkeypatch.setattr(ai.transport, 'post', no_provider)
     now = seed()
     result = summary(now)
@@ -175,7 +176,9 @@ def test_context_change_counts_as_eligible_exactly_when_the_scheduler_rescores(a
     assert len(set(sent)) == 5 and hosts == {'ready', 'expired', 'old-block', 'fresh', 'done'}
 
 
-def test_summary_leaves_the_scheduler_memo_and_score_rows_untouched(admin):
+def test_summary_leaves_the_scheduler_memo_and_score_rows_untouched(admin, monkeypatch):
+    monkeypatch.setattr(update_scores, 'cached_identity',
+                        lambda *_: pytest.fail('One-pass status must not memoize package identities'))
     now = seed()
     with Session() as s:
         before = {row.id: (row.state, row.attempted, row.next_at) for row in s.scalars(select(update_scores.UpdateScore))}

@@ -1,12 +1,12 @@
-"""Regression for #666 and #972: MySQL shards must not be cancelled while still progressing."""
+"""Regression for #666, #972 and #1583: MySQL shards must not be cancelled while still progressing."""
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-# The #972 shard was still passing when cancelled at 30 minutes, so its full
-# runtime is only known to exceed that.
-SLOWEST_OBSERVED_MINUTES = 31
+# The #1583 jobs ran out of time at 45 minutes while pytest was active.
+# The smallest whole-minute budget that could have let them finish is 46.
+MINIMUM_OBSERVED_BUDGET_MINUTES = 46
 
 
 def _mysql_job():
@@ -16,12 +16,12 @@ def _mysql_job():
 
 def test_mysql_shards_have_headroom_over_observed_runtimes():
     job = _mysql_job()
-    # Shards usually take 12-19 minutes and passing runs were cancelled at the old
-    # 20-minute bound (#666). A slow runner then needed just over 30 minutes and
-    # was cancelled at 98% progress (#972). Keep headroom, but stay bounded.
-    assert SLOWEST_OBSERVED_MINUTES + 10 <= job["timeout-minutes"] <= 60
+    # Keep at least ten minutes of headroom over the lower bound from #1583,
+    # with a hard one-hour limit for jobs that do stall.
+    assert MINIMUM_OBSERVED_BUDGET_MINUTES + 10 <= job["timeout-minutes"] <= 60
     assert job["strategy"]["fail-fast"] is False
     assert job["strategy"]["matrix"]["shard"] == [1, 2, 3, 4]
+    assert job["env"]["MRPATCHY_TEST_SHARD"] == "${{ matrix.shard }}/4"
 
 
 def test_mysql_setup_steps_remain_individually_bounded():
