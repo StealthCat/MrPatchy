@@ -104,7 +104,7 @@ def shared_run_ids(s, run_ids):
 # cache ledger. Monotonic elapsed time never depends on host wall-clock changes.
 TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_persistence',
                  'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age',
-                 'file_provenance','known_good_lookup','claim_lock','claim_lock_hold'}
+                 'file_provenance','known_good_lookup','claim_lock','claim_lock_hold','oldest_update_age'}
 
 
 TIMING_SUMMARY_RUN_LIMIT = 100
@@ -127,7 +127,8 @@ def triage_timing_summary(s, limit, purpose='triage'):
         .limit(limit)
         .cte('sampled_timing_runs')
     )
-    stage_names = {'timing_' + stage: stage for stage in sorted(TIMING_STAGES)}
+    timing_stages = TIMING_STAGES if purpose == 'update_scoring' else TIMING_STAGES - {'oldest_update_age'}
+    stage_names = {'timing_' + stage: stage for stage in sorted(timing_stages)}
     sampled_events = (
         select(AIEvent.id, AIEvent.run_id, AIEvent.stage, func.substr(AIEvent.message, 1, 96).label('message'))
         .where(AIEvent.run_id.in_(select(sampled_runs.c.id)), AIEvent.stage.in_(tuple(stage_names)))

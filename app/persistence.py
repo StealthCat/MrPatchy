@@ -146,7 +146,8 @@ def validate(inventory):
 
 # Paths later agents added to built-in startup scope. Keep this list explicit and
 # reviewed: only these additions compare against an earlier inventory's scope.
-ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab',)
+# TCP wrappers access files (#1390): spawn/twist/aclexec run commands when libwrap daemons accept connections.
+ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 

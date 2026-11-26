@@ -170,6 +170,55 @@ def test_automatic_scoring_and_triage_skip_paused_host_without_starvation(manage
         assert s.get(Behavior,'one').attempted==0
 
 
+def test_scoring_reuses_selected_servers_for_run_scope(managed, monkeypatch):
+    import json
+    from app import update_scores
+    from app.db import Package
+    from app.security import seal
+
+    with Session() as s:
+        s.get(Setting, 'config').value = {'ai_enabled': True, 'ai_model': 'fixture'}
+        s.add(Setting(key='openai_key', value={'encrypted': seal('fixture-key')}))
+        for host, name in (('one', 'alpha'), ('one', 'beta'), ('two', 'gamma')):
+            s.add(Package(id=f'{host}:{name}', host_id=host, name=name,
+                          installed='1', candidate='2'))
+        s.commit()
+        engine = s.get_bind()
+
+    def provider(payload, key):
+        batch = json.loads(payload['input'])
+        assert {item['package'] for item in batch} == {'alpha', 'beta', 'gamma'}
+        assert all('host_id' not in item for item in batch)
+        assert set(ai_policy.scope.get()) == {'one', 'two'}
+        return {'assessments': [
+            {'id': item['id'], 'score': 40, 'confidence': 'low',
+             'explanation': 'Fixture assessment', 'limitations': 'No advisory evidence'}
+            for item in batch
+        ]}
+
+    duplicate_reads = []
+
+    def capture_host_reads(conn, cursor, statement, parameters, context, executemany):
+        sql = ' '.join(statement.lower().split())
+        if sql.startswith('select distinct update_scores.host_id'):
+            duplicate_reads.append(sql)
+
+    monkeypatch.setattr(ai, 'request', provider)
+    event.listen(engine, 'before_cursor_execute', capture_host_reads)
+    try:
+        update_scores.run_one()
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture_host_reads)
+
+    with Session() as s:
+        run_id = s.scalar(select(ai_runs.AIRun.id).where(ai_runs.AIRun.purpose == 'update_scoring'))
+        assert run_id is not None
+        assert sorted(s.scalars(select(ai_runs.AIRunHost.host_id).where(
+            ai_runs.AIRunHost.run_id == run_id))) == ['one', 'two']
+        assert list(s.scalars(select(update_scores.UpdateScore.state))) == ['complete'] * 3
+    assert duplicate_reads == []
+
+
 def test_deleted_state_is_read_only(managed):
     import time
     with Session() as s:s.get(Host,'one').deleted_at=time.time();s.commit()
