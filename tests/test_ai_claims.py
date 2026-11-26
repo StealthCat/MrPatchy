@@ -281,7 +281,7 @@ def pause_policy(admin):
 
 
 @pytest.mark.parametrize('host_present', (True, False))
-def test_claim_recheck_reads_only_server_lifecycle(admin, host_present):
+def test_claim_recheck_reads_candidate_and_only_server_lifecycle_together(admin, host_present):
     seed(count=1)
     with Session() as s:
         host=s.get(Host,'host-0')
@@ -291,11 +291,19 @@ def test_claim_recheck_reads_only_server_lifecycle(admin, host_present):
             s.delete(host)
         s.commit()
 
-    projections=[]
+    rechecks = []
+    guard_projections = []
+
     def capture(_connection,_cursor,statement,*_args):
-        sql=' '.join(statement.lower().split())
-        if sql.startswith('select hosts.') and ' from hosts where hosts.id =' in sql:
-            projections.append(sql.split(' from hosts ',1)[0])
+        sql = ' '.join(statement.lower().split())
+        projection = sql.split(' from ', 1)[0]
+        if sql.startswith('select behaviors.') and 'behaviors.evidence' in projection:
+            rechecks.append(sql)
+        elif sql.startswith('select hosts.enabled, hosts.deleted_at') and ' from hosts where hosts.id =' in sql:
+            rechecks.append(sql)
+        elif sql.startswith('select hosts.') and ' from hosts ' in sql:
+            guard_projections.append(projection)
+
     event.listen(engine,'before_cursor_execute',capture)
     try:
         lease=ai_claims.acquire()
@@ -303,11 +311,34 @@ def test_claim_recheck_reads_only_server_lifecycle(admin, host_present):
         event.remove(engine,'before_cursor_execute',capture)
     assert lease and lease.host_id=='host-0'
     with lease:
-        # MySQL may also lock the missing primary-key range using the
-        # activity guard's separate, narrow lifecycle projection.
-        assert projections[-1:]==['select hosts.enabled, hosts.deleted_at']
-        assert all(sql=='select hosts.id, hosts.enabled, hosts.deleted_at, hosts.lifecycle_revision'
-                   for sql in projections[:-1])
+        assert len(rechecks) == 1
+        assert 'left outer join hosts on hosts.id = behaviors.host_id' in rechecks[0]
+        projection = rechecks[0].split(' from ', 1)[0]
+        assert [field for field in projection.split(', ') if field.startswith('hosts.')] == [
+            'hosts.id as managed_host_id', 'hosts.enabled', 'hosts.deleted_at',
+        ]
+        # MySQL may repeat the guard's narrow read when the server row is missing.
+        assert guard_projections
+        assert all(sql == 'select hosts.id, hosts.enabled, hosts.deleted_at, hosts.lifecycle_revision'
+                   for sql in guard_projections)
+
+
+def test_claim_recheck_refuses_candidate_from_a_different_server(admin, monkeypatch):
+    seed(count=2)
+    with Session() as session:
+        session.get(Behavior, 'subject-0').first_seen = 1
+        session.get(Behavior, 'subject-1').first_seen = 2
+        session.commit()
+
+    # The selected subject must still match the server whose queue is fenced.
+    monkeypatch.setattr(ai_claims, '_oldest_subject', lambda *args: 'subject-1')
+    lease = ai_claims.acquire()
+    if lease:
+        with lease:
+            pytest.fail('The claim admitted work from a different server')
+    with Session() as session:
+        assert session.get(Behavior, 'subject-1').attempted == 0
+        assert list(session.scalars(select(ai_claims.Claim))) == []
 
 
 def test_claim_waiting_for_lifecycle_change_rechecks_disabled_host(admin,monkeypatch):

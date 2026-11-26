@@ -381,12 +381,19 @@ def _admit(s,subject,host_id,cfg,secret,owner,signature,now,free_only,claim_lock
     # it, including on MySQL repeatable-read connections.
     try:
         with host_lifecycle.activity([host_id],'queue'):
-            s.rollback();row=s.get(Behavior,subject)
-            if not row or row.approved or row.verdict not in ('pending','error'):return None
+            s.rollback()
+            # The candidate must still belong to the server whose queue we locked.
+            selected = s.execute(
+                select(Behavior, Host.id.label('managed_host_id'), Host.enabled, Host.deleted_at)
+                .outerjoin(Host, Host.id == Behavior.host_id)
+                .where(Behavior.id == subject, Behavior.host_id == host_id)
+            ).one_or_none()
+            if selected is None:return None
+            row = selected.Behavior
+            if row.approved or row.verdict not in ('pending','error'):return None
             # Legacy/test behavior rows may predate a retained Host row;
             # only a present host can carry a lifecycle transition.
-            lifecycle=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==host_id)).one_or_none()
-            if lifecycle is not None and not host_lifecycle.active(lifecycle):return None
+            if selected.managed_host_id is not None and not host_lifecycle.active(selected):return None
             if free_only:
                 # Re-check under the host queue gate. A subsequent cache
                 # miss still goes through paid admission at the provider boundary.
