@@ -3716,6 +3716,16 @@ its run is `deferred`. That wording predates this checkpoint and is unchanged
 here. MySQL-native runs, data-sharing controls, contention/fairness and measured
 performance remain open milestone-4 items.
 
+### Attribute unreconciled spend by activity — Roadmap A checkpoint #1380
+
+The current-window table breaks out the amount marked sent without reconciled
+usage and the amount with a recorded uncertain outcome for each AI activity.
+Both amounts come from the same grouped ledger read and count their existing
+conservative amounts, including carryover after a timezone change. A sent row
+can outlive a worker. The table reports accounting state and uses the existing
+combined column for older API responses. The combined API amount remains
+available for existing clients.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only

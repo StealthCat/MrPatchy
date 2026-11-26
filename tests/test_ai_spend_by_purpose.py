@@ -73,7 +73,14 @@ def test_groups_match_counted_spend_without_loading_ledger_rows(admin):
     assert data['enabled'] and data['mode'] == 'daily_cap' and data['timezone'] == 'UTC'
     assert data['next_reset'] - data['window_start'] == 86400
     assert data['next_reset_authoritative'] is True
-    assert data['groups'] == [
+    split = {row['purpose']: (row['sent_usd'], row['uncertain_outcome_usd']) for row in data['groups']}
+    assert split == {
+        'triage': ('0.3', '0'), 'update_scoring': ('0', '0.4'),
+        'security_plan': ('0', '0'), 'release_configuration': ('0', '0'),
+        'connection_test': ('0', '0'), 'other': ('0', '0'), 'unattributed': ('0', '0'),
+    }
+    assert [{key: value for key, value in row.items() if key not in ('sent_usd', 'uncertain_outcome_usd')}
+            for row in data['groups']] == [
         {'purpose': 'triage', 'call_count': 3, 'settled_usd': '0.125', 'reserved_usd': '0.2',
          'uncertain_usd': '0.3', 'counted_usd': '0.625'},
         {'purpose': 'update_scoring', 'call_count': 1, 'settled_usd': '0', 'reserved_usd': '0',
@@ -108,17 +115,23 @@ def test_window_kept_open_by_a_timezone_change_is_still_attributed(admin):
     with Session() as session:
         session.add(ai_runs.AIRun(id='run-old-window', purpose='update_scoring', model='m', state='complete'))
         # Admitted before today's window under a reset that has not happened yet.
-        session.add(_entry('carried', 'run-old-window', 'settled', '1', Decimal('0.25'),
-                           created=reset - 86400 - 60, reset=reset + 3600))
+        session.add_all([
+            _entry('carried-sent', 'run-old-window', 'sent', '0.25',
+                   created=reset - 86400 - 60, reset=reset + 3600),
+            _entry('carried-uncertain', 'run-old-window', 'uncertain', '0.1',
+                   created=reset - 86400 - 60, reset=reset + 3600),
+        ])
         session.commit()
         status = ai_budget.status(session, now)
         data = ai_budget.by_purpose(session, now)
         after = ai_budget.by_purpose(session, reset + 1)
-    assert status['counted_usd'] == data['counted_usd'] == '0.25'
+    assert status['counted_usd'] == data['counted_usd'] == '0.35'
     assert status['next_reset_authoritative'] is data['next_reset_authoritative'] is False
-    assert [(group['purpose'], group['counted_usd']) for group in data['groups']] == [('update_scoring', '0.25')]
+    assert [(group['purpose'], group['counted_usd']) for group in data['groups']] == [('update_scoring', '0.35')]
+    group = data['groups'][0]
+    assert (group['sent_usd'], group['uncertain_outcome_usd'], group['uncertain_usd']) == ('0.25', '0.1', '0.35')
     assert after['next_reset_authoritative'] is True
-    assert after['counted_usd'] == '0.25'
+    assert after['counted_usd'] == '0.35'
 
 
 def test_only_positive_observed_unreleased_spend_affects_reset_authority(admin):
