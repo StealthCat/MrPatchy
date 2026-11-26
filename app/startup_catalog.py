@@ -182,6 +182,8 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'locations': (_loc('/etc/smartd.conf', ('debian',)), _loc('/etc/smartmontools/smartd.conf', ('rpm',)),
                    _loc('/etc/smartmontools/run.d', ('debian',)),
                    _loc('/etc/smartmontools/smartd_warning.d', ('debian',)))},
+    {'id': 'tcp_wrappers', 'label': 'TCP wrappers spawn, twist and aclexec commands', 'trigger': 'event',
+     'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/hosts.allow'), _loc('/etc/hosts.deny'))},
     {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),

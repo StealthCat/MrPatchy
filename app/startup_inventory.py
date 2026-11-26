@@ -14,6 +14,8 @@ CATALOG=(
     ('boot','Local boot script','/etc/rc.local'),
     ('loader','Loader preload configuration','/etc/ld.so.preload'),
     ('anacron','anacron table','/etc/anacrontab'),
+    ('tcp_wrappers_allow','TCP wrappers allow rules','/etc/hosts.allow'),
+    ('tcp_wrappers_deny','TCP wrappers deny rules','/etc/hosts.deny'),
 )
 GAPS=[
     'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar) are not parsed into jobs; anacron and at queue parsing is described separately below.',
@@ -21,6 +23,7 @@ GAPS=[
     'Vendor/user systemd units, effective precedence, generated/transient units and runtime state are not enumerated.',
     '/var/spool/anacron timestamps, user login/autostart/SSH hooks, udev and module-load mechanisms are not comprehensively inventoried.',
     'Exception for anacron: /etc/anacrontab is hashed and its jobs are parsed into period, delay, job identifier and command from the hashed bytes by agents that report them, with the START_HOURS_RANGE and RANDOM_DELAY settings. Other environment values are counted, never stored; commands use the same best-effort redaction and are bounded to 64 jobs; lines anacron would reject are counted as unparsed. Scripts that run-parts commands execute, anacron timestamps and whether anacron runs (cron, systemd timer or boot) are not evaluated.',
+    'TCP wrappers: /etc/hosts.allow and /etc/hosts.deny are hashed as startup files by agents that report them, but their spawn, twist and aclexec commands are not yet parsed in this view. Whether any running daemon is linked against libwrap, and which daemon names match, are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
     'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
