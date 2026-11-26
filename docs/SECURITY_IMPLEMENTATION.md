@@ -6756,6 +6756,17 @@ action.
   AI classification and any response action. There is no schema, API, auth
   or response-authorization change.
 
+### Docker daemon.json program contract — worker checkpoint #1521 (roadmap F)
+
+- **Outcome:** `app/docker_daemon.py` is a pure, I/O-free contract. From captured `/etc/docker/daemon.json` text it reports which programs `dockerd` runs as root because of that file: each `runtimes` entry (its `path` and `runtimeArgs`, or its containerd `runtimeType` shim) and which one is the `default-runtime` used for every container that names none; the init binary (`init-path`, default `docker-init`) and whether `"init": true` starts it in every container; the userland proxy (`userland-proxy-path`, default `docker-proxy`) and whether it is enabled; and the `authorization-plugins` names. A planted default runtime or init path runs as root on every container start, so this is a startup/persistence point no earlier contract covered.
+- **Semantics, checked against a real dockerd 29.9.3** started with each case and read back through `docker info` and its generated runtime wrappers:
+  - a UTF-8 BOM and an empty file are accepted, and a repeated key keeps its last value; comments, trailing commas and non-JSON constants stop dockerd;
+  - a runtime with non-empty `runtimeArgs` runs through a generated wrapper, `#!/bin/sh` then `<path> <args joined by spaces> $@`, with nothing quoted, so `/bin/sh` re-parses the line; with no arguments the path is the runtime binary itself;
+  - dockerd refuses to start when a runtime is named `runc`, sets both or neither of `path` and `runtimeType`, combines `runtimeArgs` with `runtimeType`, or when `default-runtime` names an undefined runtime that is not a containerd shim name (`io.containerd.kata.v2` is accepted and runs `containerd-shim-kata-v2`). A refused file reports no programs, because none run.
+- **Fail closed:** blocking gaps cover wrong value types, unknown runtime keys (including case variants such as `Path`), a runtime named `io.containerd.runc.v2`, shell metacharacters, spaces or empty arguments in a wrapper line (the argv is then not guessed), and over-limit input. `complete` is false whenever one is present, and no result is a safety verdict or authorizes a response.
+- **Validation:** `tests/test_docker_daemon.py` (14 tests); the cases marked native were each run through dockerd 29.9.3. Mutating the shell-metacharacter check makes its test fail.
+- **Remaining (#1521):** native collection of `daemon.json` and of the dockerd flags in its service unit (a flag that repeats a file directive stops dockerd), rootless `~/.config/docker/daemon.json`, PATH resolution, startup-inventory wiring, provenance, UI and AI classification.
+
 ### Per-user shell startup files contract — worker checkpoint #1057
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -13928,6 +13939,7 @@ keepalived runs administrator-configured programs on VRRP state changes, health 
 - **Remaining:**
   - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
 - **Acceptance:** stays incomplete until those are delivered.
+
 ### net-snmp snmpd program contract — worker checkpoint #1327 (roadmap F, increment 1)
 
 snmpd runs configured programs whenever an SNMP manager reads, or for writable entries sets, the object identifiers they serve. On Debian and Ubuntu it runs them as `Debian-snmp`. The `extend`, `exec`, `sh`, `pass` and `pass_persist` directives are a known persistence and remote-execution surface, and the startup inventory did not model them.
@@ -14412,3 +14424,62 @@ holds, plus a normal triage investigation and its provider admission check.
 They measure five projected columns on current main and one on the revised
 paths. The admin status still includes the reason and review revision. Fleet
 throughput and exact integrated-head measurements remain open.
+
+### OpenSSH client ssh_config command contract — Roadmap F checkpoint #1509
+
+- **Outcome:** `app/ssh_client_commands.py` is a pure contract with no I/O. It takes the captured `/etc/ssh/ssh_config`, every file its `Include` lines match (with owner and mode) and the observed glob expansions. It reports which local programs the system-wide client configuration makes `ssh` run, which also covers `scp`, `sftp`, `rsync -e ssh` and `git` over SSH, for every invoking user, root included:
+  - `Match exec` commands, which run through `$SHELL -c` while the configuration is being parsed;
+  - `ProxyCommand` (`$SHELL -c "exec …"`) and `LocalCommand` (gated on `PermitLocalCommand`);
+  - `KnownHostsCommand`, exec'd directly when its argv[0] is absolute;
+  - `PKCS11Provider`/`SmartcardDevice` and `SecurityKeyProvider` libraries.
+  
+  Each item has its file, line, enclosing `Host`/`Match`/include conditions and a status: `effective`, `fallback`, `conditional`, `shadowed`, `never_applies`, `not_permitted` or `never_runs_config_fatal`.
+- **Semantics:** taken from OpenSSH portable 10.6 source.
+  - `readconf.c`: `strdelim` keyword splitting with a single `=`, and the `argv_split(…, terminate_on_comment=1)` check. Command directives keep their raw remainder.
+  - First obtained value wins, and `none` counts as a value. `Host`/`Match` activation, including `Match all` and the quirk that `Match host x all` is accepted.
+  - `Include`: relative to `/etc/ssh`, glob matches sorted. A file is entered with the includer's activation state, which is restored afterwards. A file included from an inactive block is read with `SSHCONF_NEVERMATCH`.
+  - `match_cfg_line`: `exec` is skipped only after a failed earlier criterion on the same line. It still runs in files included from inactive blocks.
+  - `readconf.c`/`ssh.c`: a `ProxyCommand` after an effective `ProxyJump` never runs. OpenSSH 9.6 and 10.2 ignore it and use the jump host, and 10.6 exits with `inconsistent options`, so the conflict is reported as version-dependent.
+  - `sshconnect.c`/`misc.c`: `KnownHostsCommand` is split with `argv_split` and goes through `subprocess()`, which requires an absolute path.
+- **Fatal outcomes:** these are reported as `config_fatal` with file, line and reason, together with the `Match exec` commands that already ran before ssh exited:
+  - an unknown keyword (honouring `IgnoreUnknown`), invalid quotes, a missing argument, a bad `Match` condition, an invalid flag value, a `~` include path or a vanished glob match (ssh finishes the file, then exits);
+  - a group- or world-writable included file, or include nesting deeper than 16 (ssh exits at once).
+- **Fails closed:** each of these is a blocking gap:
+  - unobserved files, globs, text or include permissions;
+  - an included file owned by a non-root user, which is fatal for every user except that owner;
+  - `%`/`${}` include paths that depend on the invocation;
+  - a conditional `IgnoreUnknown`, quoted keywords, NUL bytes and over-limit input.
+- **Validation:** `tests/test_ssh_client_commands.py` has 86 test cases, counting parameter cases. They were run locally with a minimal pytest-compatible shim because PyPI is unreachable from this environment. They cover:
+  - the Debian `ssh_config.d` layout, glob order and first-value-wins;
+  - `Host` and `Match` classification, `Match exec` gating, and includes from inactive blocks;
+  - include inheritance and restoration;
+  - each fatal and gap path;
+  - `PermitLocalCommand` gating, `KnownHostsCommand` argv rules, providers and the `ProxyJump` conflict;
+  - an `argv_split` port table.
+  
+  `ruff` is clean. A differential run against a locally built `ssh -G` was not possible in this environment.
+- **Not modeled:** per-user `~/.ssh/config`, which is read first and wins (stated in `limits`); `-F`/`-o` overrides; evaluating `Host`/`Match` criteria other than `Host *`/`Match all`; validating values of directives the contract does not interpret; and `RemoteCommand`, which runs remotely.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files, globs and permissions, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### polkit rules.d load-order contract — worker checkpoint #1411 (roadmap F)
+
+polkitd loads every `*.rules` JavaScript file from `/etc/polkit-1/rules.d` and `/usr/share/polkit-1/rules.d` at start and whenever either directory changes. Those rules decide which privileged actions unprivileged users may perform without authenticating, and `polkit.spawn()` runs commands as the polkitd user, so a planted rule is persistent privilege configuration. The startup inventory did not model these directories.
+
+- **Change:** the pure `app/polkit_rules.py` takes captured directory metadata (state, mode, owner, entries and followed symlink targets), the polkit version and the polkitd identity. It returns the files polkitd evaluates in load order, the reason every other entry is not loaded, and owner/writability observations. It performs no I/O and never reads or parses a rule.
+- **Fidelity:** semantics come from polkit 0.120–125, in both the mozjs and duktape backends. Both directories are read, with no shadowing, so a same-named file loads twice. Only the `.rules` suffix is checked; hidden and backup names still load. Files are sorted by basename with `strcmp` and then by full path, so `/etc` comes first. polkitd reads as `User=polkitd` without `CAP_DAC_OVERRIDE`, so files or directories that the polkitd account cannot read are skipped. A compile or evaluation error skips only that file.
+- **Fail closed:** blocking gaps cover these cases, and `origin` is `not_assessed`:
+  - an unobserved or unreadable directory, an incomplete listing, or an unobserved polkit version or polkitd identity;
+  - a version outside 0.120–125, or before 0.106, which uses `.pkla` files;
+  - POSIX ACLs;
+  - FIFOs, sockets and devices named `*.rules`;
+  - malformed, duplicate or over-limit input.
+
+  A symlinked rule loads only if polkitd can search every directory along its target path, so it is reported as `conditional`.
+- **Validation:** `tests/test_polkit_rules.py` has 13 tests. There is no live differential against a running polkitd yet.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:**
+  - a live differential;
+  - agent collection;
+  - a catalog entry, package provenance, persistence, UI and AI classification of rule contents;
+  - `.pkla` local-authority files for polkit 0.105 (Ubuntu 22.04).
