@@ -136,7 +136,8 @@ def _word_candidates(text: str, pos: int) -> list[tuple[int, int, str, Any]]:
             found.append((len(word), 7, BOOL, value))
             break
     run = _IP_CHARS.match(text, pos)
-    if run:
+    # IPv4 literals need a '.', IPv6 literals a ':'; skip the prefix search otherwise.
+    if run and ('.' in run.group() or ':' in run.group()):
         for rule_priority, rule in enumerate(_IP_RULES):
             for end in range(run.end(), pos, -1):
                 if rule.fullmatch(text, pos, end):
