@@ -3716,6 +3716,16 @@ its run is `deferred`. That wording predates this checkpoint and is unchanged
 here. MySQL-native runs, data-sharing controls, contention/fairness and measured
 performance remain open milestone-4 items.
 
+### Attribute unreconciled spend by activity — Roadmap A checkpoint #1380
+
+The current-window table breaks out the amount marked sent without reconciled
+usage and the amount with a recorded uncertain outcome for each AI activity.
+Both amounts come from the same grouped ledger read and count their existing
+conservative amounts, including carryover after a timezone change. A sent row
+can outlive a worker. The table reports accounting state and uses the existing
+combined column for older API responses. The combined API amount remains
+available for existing clients.
+
 ### Retained spend history CSV download — worker checkpoint #874
 
 Settings → AI → *Retained spend history* adds **Download CSV**. The admin-only
@@ -4779,6 +4789,22 @@ other retry states, and attempt data. The reviewed action, audit and outbound
 admission checks use their existing paths. On a 1,200-row fixture, main reads and
 updates 900 affected rows individually through the ORM. The worker branch uses
 one update. Roadmap A remains incomplete.
+
+### Explicit server AI policy repair — Roadmap C/J checkpoint #1313
+
+The administrator's server AI panel distinguishes a malformed policy from an
+intentional pause. The repair action opens the existing audited save flow and
+writes a valid paused policy; the panel offers resuming only as a separate
+action after repair. The server AI API itself is unchanged and still accepts an
+audited administrator save with `paused: false` against a repair revision,
+which is recorded as `server AI resumed`, as it was before this checkpoint.
+The panel does not render the malformed value. A malformed revision that
+cannot be submitted to the existing API is represented by an opaque value
+derived from the stored policy, so a later change still rejects a stale save.
+
+The same role, CSRF and server lifecycle checks apply. This is a repair
+workflow for the saved pause policy. It sends no provider request and does not
+change global AI settings or historical results.
 
 ### Reviewed shared provider-backoff reset — worker checkpoint #552
 
@@ -13206,6 +13232,15 @@ Admission applies the existing mixed-range ordering before reading evidence for
 the selected window. A mixed-verdict fixture at a two-probe limit materializes
 two records where it previously loaded four. Cursor rotation, full evidence
 checks and free-only admission are retained. Production throughput remains open.
+
+### Read both triage start gates together — Roadmap A checkpoint #1481
+
+Triage claims check the shared provider-backoff and paced-rate deadlines in
+one read under the triage admission lock. Each check uses its singleton key.
+Unpaced modes omit the rate check. Either active deadline still keeps paid
+work queued while permitting eligible local exact-cache hits. When both
+gates are open, the same daily-cap check applies. Provider calls still
+recheck the gates before sending. Fleet throughput remains open.
 
 ### Rotating free known-good hit probe window — worker checkpoint #1241 (roadmap A/B)
 

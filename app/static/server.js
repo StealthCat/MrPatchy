@@ -857,20 +857,28 @@ async function renderServerAIPolicy(panel,hostId,deleted=false){
   const limit=Number.isSafeInteger(policy.concurrency_limit)?policy.concurrency_limit:2;
   const minimum=Number.isSafeInteger(policy.concurrency_limit_min)?policy.concurrency_limit_min:1;
   const maximum=Number.isSafeInteger(policy.concurrency_limit_max)?policy.concurrency_limit_max:4;
+  const needsRepair=policy.needs_repair===true;
+  const heading=needsRepair?'Paused for repair':policy.paused?'Paused':policy.global_enabled?'Eligible':'Globally disabled';
+  const toggleLabel=needsRepair?'Repair AI policy':policy.paused?'Resume AI':'Pause AI';
+  const repairHelp=needsRepair?'<p class="help">The saved policy is malformed. Repair saves a valid policy and keeps AI paused.</p>':'';
   const occupied=policy.active_lease_count,expiry=policy.earliest_lease_expires_at;
   const occupancy=Number.isSafeInteger(occupied)&&occupied>=0
    ? `<p class="help">${occupied} active investigation lease${occupied===1?'':'s'} at last refresh.${Number.isFinite(expiry)&&expiry>0?' Earliest expiry if not renewed: '+date(expiry)+'.':''} This snapshot does not guarantee global capacity.</p>`
    : '';
-  panel.innerHTML=`<div class="toolbar"><div><h3>AI integration · ${policy.paused?'Paused':policy.global_enabled?'Eligible':'Globally disabled'}</h3><p class="help">Applies only to this server. Inventory, patching, schedules, scanning and monitoring continue. Historical AI results remain available.</p></div>${deleted?'':`<div class="actions"><button id="server-ai-capacity">Change AI capacity</button><button id="server-ai-toggle">${policy.paused?'Resume AI':'Pause AI'}</button></div>`}</div><p><strong>${limit} process investigation slot${limit===1?'':'s'}</strong></p>${occupancy}<p class="help">This limit applies to new investigations. Lowering it leaves active leases in place. Supported range: ${minimum}–${maximum}. ${policy.paused?'New provider calls, including queued proposals, are blocked.':policy.global_enabled?'Processing remains subject to global configuration, eligibility and quotas.':'Global AI is off. Resuming here cannot enable it.'} ${policy.updated?'Last changed '+date(policy.updated)+' by '+esc(policy.actor)+'.':''}</p>`;
+  const capacityButton=needsRepair?'':'<button id="server-ai-capacity">Change AI capacity</button>';
+  panel.innerHTML=`<div class="toolbar"><div><h3>AI integration · ${heading}</h3>${repairHelp}<p class="help">Applies only to this server. Inventory, patching, schedules, scanning and monitoring continue. Historical AI results remain available.</p></div>${deleted?'':`<div class="actions">${capacityButton}<button id="server-ai-toggle">${toggleLabel}</button></div>`}</div><p><strong>${limit} process investigation slot${limit===1?'':'s'}</strong></p>${occupancy}<p class="help">This limit applies to new investigations. Lowering it leaves active leases in place. Supported range: ${minimum}–${maximum}. ${policy.paused?'New provider calls, including queued proposals, are blocked.':policy.global_enabled?'Processing remains subject to global configuration, eligibility and quotas.':'Global AI is off. Resuming here cannot enable it.'} ${policy.updated?'Last changed '+date(policy.updated)+' by '+esc(policy.actor)+'.':''}</p>`;
   if(deleted)return;
   panel.querySelector('#server-ai-toggle').onclick=()=>{
-   modal(policy.paused?'Resume server AI':'Pause server AI',`<p>Change AI processing for this server only? Historical results are retained. A request already in flight must finish before this change can be saved. Resume respects global settings and existing retry limits.</p><form id="server-ai-form"><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Save AI state</button></form>`);
+   const title=needsRepair?'Repair server AI policy':policy.paused?'Resume server AI':'Pause server AI';
+   const description=needsRepair?'Replace the malformed policy with a valid paused policy. You can review and resume AI separately after saving.':'Change AI processing for this server only? Historical results are retained. A request already in flight must finish before this change can be saved. Resume respects global settings and existing retry limits.';
+   modal(title,`<p>${description}</p><form id="server-ai-form"><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>${needsRepair?'Save repaired policy':'Save AI state'}</button></form>`);
    const form=$('#server-ai-form'),revision=modalRevision;
    form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('button');button.disabled=true;try{
-    const saved=await api(base,'PUT',{paused:!policy.paused,concurrency_limit:limit,expected_revision:policy.revision,reason:new FormData(form).get('reason')});
-    await saveDone(saved,revision,'Server AI state saved');
+    const saved=await api(base,'PUT',{paused:needsRepair||!policy.paused,concurrency_limit:limit,expected_revision:policy.revision,reason:new FormData(form).get('reason')});
+    await saveDone(saved,revision,needsRepair?'Server AI policy repaired. AI remains paused.':'Server AI state saved');
    }catch(error){toast(error.message);}finally{if(button.isConnected)button.disabled=false;}};
   };
+  if(needsRepair)return;
   panel.querySelector('#server-ai-capacity').onclick=()=>{
    modal('Change server AI capacity',`<p>Choose how many independent process investigations this server may occupy. Global concurrency, pause, rate and spend controls still apply. Lowering the value does not cancel work already sent.</p><form id="server-ai-capacity-form"><label>Process investigation slots<select name="limit">${Array.from({length:maximum-minimum+1},(_,index)=>minimum+index).map(value=>`<option value="${value}" ${value===limit?'selected':''}>${value}</option>`).join('')}</select></label><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Save AI capacity</button></form>`);
    const form=$('#server-ai-capacity-form'),revision=modalRevision;
@@ -916,12 +924,18 @@ function startupAnacronJobs(row){
  return `<h4>anacron jobs (${esc(tab.jobs.length)})</h4>${settings}${tab.jobs.length?`<div class="table-wrap"><table class="startup-anacron-jobs"><thead><tr><th>Line</th><th>Period</th><th>Delay</th><th>Job</th><th>Command</th></tr></thead><tbody>${tab.jobs.map(job=>`<tr><td>${esc(job.line)}</td><td>${period(job)}</td><td>${esc(job.delay_minutes)} min</td><td><code>${esc(job.identifier)}</code>${job.duplicate_of_line?`<br><small>Shares a timestamp with line ${esc(job.duplicate_of_line)}</small>`:''}</td><td><code>${esc(job.command)}</code>${job.redacted||job.command_truncated?`<br><small>${[job.redacted?'Credentials redacted':'',job.command_truncated?'Truncated':''].filter(Boolean).join(' · ')}</small>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="help">No jobs found in this file.</p>'}${notes?`<p class="help">${esc(notes)}</p>`:''}`;
 }
 
+function startupCronEnvironment(job){
+ if(!('shell' in job))return '<small>Not reported by this agent version</small>';
+ const value=(name,text,truncated)=>`<div><span>${name}</span> ${text===null?'<small>cron default, not evaluated</small>':text===''?'<small>set empty</small>':`<code>${esc(text)}</code>`}${truncated?' <small>Truncated</small>':''}</div>`;
+ return value('SHELL',job.shell,job.shell_truncated)+value('PATH',job.path,job.path_truncated);
+}
+
 function startupCronJobs(row){
  const loading=startupCronLoading(row);
  if(row.jobs_state==='not_reported')return loading+'<p class="help">Cron jobs: not reported by this agent version. Update the agent and collect a new integrity inspection.</p>';
  const cron=row.cron;if(!cron)return loading;
- const notes=[cron.unparsed?cron.unparsed+' unparsed lines':'',cron.environment?cron.environment+' environment assignments (values not exported)':'',cron.truncated?'Job limit reached; later jobs omitted':''].filter(Boolean).join(' · ');
- return `${loading}<h4>Cron jobs (${esc(cron.jobs.length)})</h4>${cron.jobs.length?`<div class="table-wrap"><table class="startup-cron-jobs"><thead><tr><th>Line</th><th>Schedule</th><th>Account</th><th>Command</th></tr></thead><tbody>${cron.jobs.map(job=>`<tr><td>${esc(job.line)}</td><td><code>${esc(job.schedule)}</code></td><td>${esc(job.account??'Unknown')}</td><td><code>${esc(job.command)}</code>${job.redacted||job.command_truncated||job.stdin?`<br><small>${[job.redacted?'Credentials redacted':'',job.command_truncated?'Truncated':'',job.stdin?'Standard input after % not shown':''].filter(Boolean).join(' · ')}</small>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<p class="help">No jobs found in this file.</p>'}${notes?`<p class="help">${esc(notes)}</p>`:''}`;
+ const notes=[cron.unparsed?cron.unparsed+' unparsed lines':'',cron.environment?cron.environment+' environment assignments (only SHELL and PATH values are shown)':'',cron.truncated?'Job limit reached; later jobs omitted':''].filter(Boolean).join(' · ');
+ return `${loading}<h4>Cron jobs (${esc(cron.jobs.length)})</h4>${cron.jobs.length?`<div class="table-wrap"><table class="startup-cron-jobs"><thead><tr><th>Line</th><th>Schedule</th><th>Account</th><th>Command</th><th>Shell and PATH set by this file</th></tr></thead><tbody>${cron.jobs.map(job=>`<tr><td>${esc(job.line)}</td><td><code>${esc(job.schedule)}</code></td><td>${esc(job.account??'Unknown')}</td><td><code>${esc(job.command)}</code>${job.redacted||job.command_truncated||job.stdin?`<br><small>${[job.redacted?'Credentials redacted':'',job.command_truncated?'Truncated':'',job.stdin?'Standard input after % not shown':''].filter(Boolean).join(' · ')}</small>`:''}</td><td class="startup-cron-environment">${startupCronEnvironment(job)}</td></tr>`).join('')}</tbody></table></div>`:'<p class="help">No jobs found in this file.</p>'}${notes?`<p class="help">${esc(notes)}</p>`:''}`;
 }
 
 async function startupFiles(revision,context){

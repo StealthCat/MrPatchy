@@ -285,6 +285,7 @@ def run_one():
             admission_started = perf_counter()
             host_ids = set()
             batch=[]
+            availability=[]
             for package,host,key,row,deferred in scoring_candidates(s):
                 for stale in deferred:
                     if stale.id==key:continue
@@ -300,6 +301,7 @@ def run_one():
                 host_ids.add(host.id)
                 row.state='running';row.attempted=now;row.next_at=0;row.model=cfg['ai_model'];row.score=None;row.configuration=''
                 batch.append({'id':key,**evidence(host,package)})
+                availability.append(package.available_since)
                 if len(batch)>=5:break
             if not batch:
                 # Persist stale deferred identities even when current exact evidence
@@ -315,6 +317,10 @@ def run_one():
             with host_lifecycle.activity(host_ids,'ai'):
                 with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates',host_ids=host_ids) as run_id:
                     ai_runs.timing('admission', admission_seconds)
+                    # An unknown timestamp could belong to the oldest update.
+                    # Capture only diagnostic age, separate from provider evidence.
+                    if all(isinstance(at, (int, float)) and 0 < at <= now for at in availability):
+                        ai_runs.timing('oldest_update_age', now - min(availability))
                     key=unseal(encrypted)
                     with Session() as s:
                         scores=_batch_scores(s,ids)

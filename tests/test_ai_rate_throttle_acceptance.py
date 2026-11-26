@@ -192,16 +192,16 @@ def test_a_start_lost_to_another_caller_after_the_claim_is_durable_uncharged_and
     failed attempt, and the subject resumes at the next refill."""
     configure(mode)
     subject=add_subject('host-a')
-    real_waiting=ai_admission.waiting;raced=[]
+    real_waiting=ai_admission.shared_start_waiting;raced=[]
     def waiting(session,now,**kwargs):
         result=real_waiting(session,now,**kwargs)
         if not raced:
             # Another worker or billable path is admitted between the claim's read and this call's admission.
             raced.append(ai_admission.admit('other-caller'))
         return result
-    monkeypatch.setattr(ai_admission,'waiting',waiting)
+    monkeypatch.setattr(ai_admission,'shared_start_waiting',waiting)
     worker.investigate_one()
-    monkeypatch.setattr(ai_admission,'waiting',real_waiting)
+    monkeypatch.setattr(ai_admission,'shared_start_waiting',real_waiting)
 
     assert raced and provider.sent==[]
     taken=admitted_next_at()

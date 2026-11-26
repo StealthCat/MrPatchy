@@ -520,18 +520,20 @@ def by_purpose(session,now=None):
     purpose=case((AIRun.id.is_(None),'unattributed'),(AIRun.purpose.in_(SPEND_PURPOSES),AIRun.purpose),else_='other')
     retained_spend=func.max(case((_survives_reset(now,reset,amount),1),else_=0))
     query=(select(purpose,func.count(BudgetEntry.id),bucket('settled'),bucket('reserved'),
-        bucket('sent','uncertain'),_aggregate(session,amount),retained_spend)
+        bucket('sent'),bucket('uncertain'),_aggregate(session,amount),retained_spend)
         .select_from(BudgetEntry).outerjoin(AIRun,AIRun.id==BudgetEntry.run_id)
         # Same predicate as _state so the groups sum to the counted total.
         .where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
         .group_by(purpose))
     groups={};total=Decimal(0);calls=0;overlapping=False
-    for key,count,settled,reserved,uncertain,counted,survives_reset in session.execute(query):
+    for key,count,settled,reserved,sent,uncertain,counted,survives_reset in session.execute(query):
         counted=Decimal(counted or 0);total+=counted;calls+=count
         overlapping=overlapping or bool(survives_reset)
+        sent=Decimal(sent or 0);uncertain=Decimal(uncertain or 0)
         groups[key]={'purpose':key,'call_count':count,'settled_usd':_money(Decimal(settled or 0)),
-            'reserved_usd':_money(Decimal(reserved or 0)),'uncertain_usd':_money(Decimal(uncertain or 0)),
+            'reserved_usd':_money(Decimal(reserved or 0)),'uncertain_usd':_money(sent+uncertain),
+            'sent_usd':_money(sent),'uncertain_outcome_usd':_money(uncertain),
             'counted_usd':_money(counted)}
     result.update(call_count=calls,counted_usd=_money(total),next_reset_authoritative=not overlapping,
         groups=[groups[key] for key in SPEND_PURPOSE_ORDER if key in groups])
