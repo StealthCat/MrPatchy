@@ -291,7 +291,7 @@ def test_live_differential(body):
         probe = os.path.join(directory, 'probe.sh')
         with open(probe, 'w') as handle:
             handle.write(PROBE.format(out=out))
-        os.chmod(probe, 0o755)
+        os.chmod(probe, 0o700)
         inc = os.path.join(directory, 'inc')
         os.mkdir(inc)
         for name in ('b', 'a', '.c'):
