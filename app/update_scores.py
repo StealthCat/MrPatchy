@@ -3,6 +3,7 @@ import hashlib
 import json
 import math
 import time
+from time import perf_counter
 from typing import NamedTuple
 from sqlalchemy import String, Text, Integer, Double, Index, select, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
@@ -281,6 +282,7 @@ def run_one():
                     ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600)
                     .offset(limit-1).limit(1).exists())
                 if s.scalar(select(recent)):return
+            admission_started = perf_counter()
             batch=[]
             for package,host,key,row,deferred in scoring_candidates(s):
                 for stale in deferred:
@@ -301,7 +303,9 @@ def run_one():
                 # Persist stale deferred identities even when current exact evidence
                 # is already complete and no provider batch needs to start.
                 s.commit();return
-            s.commit();encrypted=secret.value['encrypted']
+            s.commit()
+            admission_seconds = perf_counter() - admission_started
+            encrypted=secret.value['encrypted']
         ids=[item['id'] for item in batch]
         with Session() as s:
             host_ids=list(s.scalars(select(UpdateScore.host_id).where(UpdateScore.id.in_(ids)).distinct()))
@@ -310,6 +314,7 @@ def run_one():
             ai_policy.require(host_ids)
             with host_lifecycle.activity(host_ids,'ai'):
                 with ai_runs.track('update_scoring',cfg['ai_model'],subject=str(len(batch))+' pending updates',host_ids=host_ids) as run_id:
+                    ai_runs.timing('admission', admission_seconds)
                     key=unseal(encrypted)
                     with Session() as s:
                         scores=_batch_scores(s,ids)

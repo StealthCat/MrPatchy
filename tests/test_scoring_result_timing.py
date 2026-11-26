@@ -46,6 +46,55 @@ def score_states():
         return sorted(row.state for row in s.scalars(select(update_scores.UpdateScore)))
 
 
+def test_admission_timing_tracks_batch_selection_and_commit_before_provider(admin, monkeypatch):
+    seed()
+    elapsed = 10.0
+    candidates = update_scores.scoring_candidates
+
+    def select_batch(session):
+        nonlocal elapsed
+        elapsed += 0.1
+        yield from candidates(session)
+
+    def write_batch(session, context, instances):
+        nonlocal elapsed
+        if any(isinstance(row, update_scores.UpdateScore) and row.state == 'running'
+               for row in session.new):
+            elapsed += 0.025
+
+    def delayed_provider(payload, key):
+        nonlocal elapsed
+        elapsed += 8
+        return reply(payload, key)
+
+    monkeypatch.setattr(update_scores, 'scoring_candidates', select_batch)
+    monkeypatch.setattr(update_scores, 'perf_counter', lambda: elapsed, raising=False)
+    monkeypatch.setattr(ai, 'request', delayed_provider)
+    event.listen(sqlalchemy.orm.Session, 'before_flush', write_batch)
+    try:
+        update_scores.run_one()
+    finally:
+        event.remove(sqlalchemy.orm.Session, 'before_flush', write_batch)
+
+    run, _, stages = outcomes()
+    assert run.state == 'complete' and stages.count('admission') == 1
+    assert score_states() == ['complete', 'complete']
+    result = admin.get('/api/ai/triage/timings', params={'purpose': 'update_scoring'})
+    assert result.status_code == 200
+    assert result.json()['stages']['admission'] == {
+        'samples': 1, 'errors': 0, 'p50_ms': 125.0, 'p95_ms': 125.0,
+    }
+
+
+def test_idle_scoring_does_not_record_an_admission_sample(admin, monkeypatch):
+    seed(count=0)
+    monkeypatch.setattr(ai, 'request', lambda *_: pytest.fail('idle scoring called the provider'))
+    update_scores.run_one()
+
+    with Session() as session:
+        assert session.scalar(select(ai_runs.AIRun.id).where(ai_runs.AIRun.purpose == 'update_scoring')) is None
+
+
 def test_committed_reply_records_one_complete_result_persistence(admin, monkeypatch):
     seed()
     monkeypatch.setattr(ai, 'request', reply)
@@ -102,6 +151,7 @@ def test_provider_refusals_record_no_result_persistence(admin, monkeypatch, fail
     update_scores.run_one()
     run, persisted, stages = outcomes()
     assert run.state == 'error' and persisted == [] and stages.count('run') == 1
+    assert stages.count('admission') == 1
     assert 'complete' not in score_states()
 
 
