@@ -216,10 +216,10 @@ jobs:
     needs: retest
     if: needs.retest.outputs.needed == 'true'
     runs-on: ubuntu-24.04
-    # Shards usually take 12-19 minutes, but a slow runner has taken over 30: a
-    # passing shard was cancelled at 98% progress under the former 30-minute limit
-    # (#972), as 20 minutes had done before (#666).
-    timeout-minutes: 45
+    # Two MySQL jobs reached the 45-minute limit while pytest was still
+    # progressing (#1583). Recent runs had different slowest shards, so allow
+    # up to one hour for each job while keeping the setup steps bounded.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
