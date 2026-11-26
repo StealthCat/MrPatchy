@@ -11,9 +11,12 @@ health producer.
   unknown is not recovery. Telemetry loss has its own producer.
 - The reason text is fixed and names only the affected categories, so changing
   percentages add no revisions; a changed category set adds one.
+- The trigger is administrator-configurable (Settings → Patch policy,
+  ``resource_attention_percent``, default 10%, #1297). A missing or invalid stored
+  value falls back to the default, so a bad value never silences the notice.
 - Hysteresis: a capacity category already in the active event stays until its
-  available share rises above ``CLEAR_AVAILABLE_PERCENT``, so values hovering
-  around the trigger threshold do not flap the event.
+  available share rises ``CLEAR_MARGIN_PERCENT`` points above the trigger, so
+  values hovering around the trigger threshold do not flap the event.
 
 Resolution uses the shared operational path, which needs the kind registered in
 ``operations.OPERATIONAL_NOTIFICATIONS``. It is notification-only: there is no
@@ -22,14 +25,20 @@ an AI call, repairs anything or authorizes any response.
 """
 import itertools
 import logging
+import re
 
 from sqlalchemy import select
 
 from . import agent_fleet_health, host_lifecycle, notifications
 
 ALERT_KIND = 'resource attention'
+# Administrator-configurable trigger (#1297), stored as a whole percentage in the ``config`` setting.
+CONFIG_KEY = 'resource_attention_percent'
 TRIGGER_AVAILABLE_PERCENT = agent_fleet_health.LOW_AVAILABLE_PERCENT
-CLEAR_AVAILABLE_PERCENT = 15
+TRIGGER_MIN_PERCENT = 1
+TRIGGER_MAX_PERCENT = 50
+CLEAR_MARGIN_PERCENT = 5
+CLEAR_AVAILABLE_PERCENT = TRIGGER_AVAILABLE_PERCENT + CLEAR_MARGIN_PERCENT
 # Display order and fixed wording. Capacity categories map to the resources() key.
 CAPACITY = (('disk-space-low', 'disk', 'free disk space on the root file system'),
             ('disk-inodes-low', 'inodes', 'free inodes on the root file system'),
@@ -39,15 +48,26 @@ CODES = tuple(code for code, _, _ in CAPACITY) + (CLOCK,)
 _LABELS = {code: label for code, _, label in CAPACITY}
 
 
-def message(codes):
-    """Fixed text for a non-empty set of attention codes. No live numbers or endpoint text."""
+def trigger_percent(cfg):
+    """Return the configured trigger percentage, or the default when absent or invalid."""
+    value = cfg.get(CONFIG_KEY, TRIGGER_AVAILABLE_PERCENT) if isinstance(cfg, dict) else TRIGGER_AVAILABLE_PERCENT
+    if type(value) is not int or not TRIGGER_MIN_PERCENT <= value <= TRIGGER_MAX_PERCENT:
+        return TRIGGER_AVAILABLE_PERCENT
+    return value
+
+
+def message(codes, percent=TRIGGER_AVAILABLE_PERCENT):
+    """Fixed text for a non-empty set of attention codes. No live numbers or endpoint text.
+
+    ``percent`` is the configured trigger; the default keeps the pre-#1297 wording byte for byte.
+    """
     ordered = [code for code in CODES if code in codes]
     if not ordered:
         raise ValueError('No resource attention codes')
     parts = []
     low = [_LABELS[code] for code in ordered if code in _LABELS]
     if low:
-        parts.append('The agent reports low ' + ', '.join(low) + f' ({TRIGGER_AVAILABLE_PERCENT}% or less available).')
+        parts.append('The agent reports low ' + ', '.join(low) + f' ({int(percent)}% or less available).')
     if CLOCK in ordered:
         parts.append('The agent reports that the kernel clock is not synchronized.')
     return (' '.join(parts) + ' Patching, logging and evidence collection can fail or record wrong times. Review '
@@ -56,17 +76,28 @@ def message(codes):
             'authorize any response.')
 
 
+# The configured percentage is the only variable part of the reason text. Normalising it lets an active
+# event written under any threshold recover its categories exactly, so a threshold change never resolves
+# an event on an unknown or drops its hysteresis.
+_PERCENT = re.compile(r' \((?:[1-9]|[1-4][0-9]|50)% or less available\)\.')
+
+
+def _normalise(reason):
+    return _PERCENT.sub(' (N% or less available).', reason, count=1) if isinstance(reason, str) else reason
+
+
 # Every possible reason text, so an active event's categories can be recovered exactly.
 _BY_MESSAGE = {message(set(combo)): frozenset(combo)
                for size in range(1, len(CODES) + 1) for combo in itertools.combinations(CODES, size)}
+_BY_NORMALISED = {_normalise(reason): codes for reason, codes in _BY_MESSAGE.items()}
 
 
-def evaluate(resources, previous):
+def evaluate(resources, previous, percent=TRIGGER_AVAILABLE_PERCENT):
     """Return the attention codes for one server's fresh resources summary.
 
     ``previous`` is the code set of the server's active event (empty when none).
     A metric that is unknown keeps its previous state; a capacity category that
-    was already active stays until it is above ``CLEAR_AVAILABLE_PERCENT``.
+    was already active stays until it is above ``percent + CLEAR_MARGIN_PERCENT``.
     """
     codes = set()
     for code, key, _ in CAPACITY:
@@ -75,7 +106,7 @@ def evaluate(resources, previous):
             if code in previous:
                 codes.add(code)
             continue
-        limit = CLEAR_AVAILABLE_PERCENT if code in previous else TRIGGER_AVAILABLE_PERCENT
+        limit = percent + CLEAR_MARGIN_PERCENT if code in previous else percent
         if value['available_percent'] <= limit:
             codes.add(code)
     clock = resources.get('clock') if isinstance(resources, dict) else None
@@ -97,15 +128,17 @@ def _active(session, source, subject_type, kind):
         revision, (revision.event_id == event.id) & (revision.revision == event.revision)).where(
         event.source == source, event.kind == kind, event.subject_type == subject_type,
         revision.lifecycle == 'active')).all()
-    return {host_id: _BY_MESSAGE.get(reason, frozenset()) for host_id, reason in rows}
+    return {host_id: _BY_NORMALISED.get(_normalise(reason), frozenset()) for host_id, reason in rows}
 
 
-def publish(session, hosts, now, notify, published):
+def publish(session, hosts, now, notify, published, cfg=None):
     """Publish for every affected eligible server and add its key to ``published``.
 
     ``notify(host_id, alert_kind, message, now)`` is the operational publisher;
-    servers left out of ``published`` are resolved by the caller.
+    servers left out of ``published`` are resolved by the caller. ``cfg`` is the
+    controller configuration; its ``resource_attention_percent`` sets the trigger.
     """
+    percent = trigger_percent(cfg or {})
     from .operations import (OPERATIONAL_NOTIFICATION_SOURCE, OPERATIONAL_NOTIFICATION_SUBJECT,
                              OPERATIONAL_NOTIFICATIONS)
     kind = OPERATIONAL_NOTIFICATIONS[ALERT_KIND][0]
@@ -118,7 +151,7 @@ def publish(session, hosts, now, notify, published):
         try:
             state, _ = agent_fleet_health.telemetry_state(host.telemetry, now)
             summary = agent_fleet_health.resources(host.telemetry, state) if state == 'fresh' else None
-            codes = evaluate(summary, previous or frozenset()) if summary is not None else set(previous or ())
+            codes = evaluate(summary, previous or frozenset(), percent) if summary is not None else set(previous or ())
         except (ArithmeticError, TypeError, ValueError):
             codes = set(previous or ())  # uninterpretable telemetry is unknown, not recovery
         if previous is not None and not previous and not codes:
@@ -132,6 +165,6 @@ def publish(session, hosts, now, notify, published):
         # Keep the key even if publishing is rejected, so an active event is never resolved by mistake.
         published.add((host.id, kind))
         try:
-            notify(host.id, ALERT_KIND, message(codes), now)
+            notify(host.id, ALERT_KIND, message(codes, percent), now)
         except ValueError:
             logging.getLogger(__name__).warning('Skipped in-app resource attention notification on %s', host.id)

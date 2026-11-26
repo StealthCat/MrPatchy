@@ -8155,6 +8155,28 @@ event (medium, linking to `#servers/<id>/agent`) per enabled, enrolled server wh
 Remaining in #342: certificate expiry, metric history, configurable thresholds,
 preflight blockers and SMART/NVMe or kernel-error signals.
 
+Worker checkpoint (issue #1297, #342 configurable-threshold slice): administrators can
+set the low-resource notification trigger in Settings → Patch policy
+(`resource_attention_percent`, whole percent 1–50, default 10).
+
+- The producer triggers at or below the configured share of free disk space, free
+  inodes or available memory. An active category clears only above the trigger plus
+  5 points, so the hysteresis band keeps its width.
+- The fixed reason text names the configured percentage. The default reproduces the
+  earlier text byte for byte, so active events gain no revision on upgrade.
+- Changing the threshold keeps an active event's categories: the percentage is
+  normalised when the text is recovered. One reworded revision follows, and unknown
+  telemetry is still not recovery.
+- A missing or invalid stored value falls back to 10%, so a bad value never silences
+  the notice.
+- Saving uses the existing admin-only, CSRF-protected patch-settings API with strict
+  integer validation. A changed value records the before and after percentages in
+  the audit log. Older clients that omit the field keep the stored value.
+
+There is no schema, SMTP/webhook, health-classification, AI or response-authorization
+change. Known limit: the endpoint-agent view's advisory flags stay at 10%. Metric
+history, certificate expiry and SMART/NVMe or kernel-error signals remain in #342.
+
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
