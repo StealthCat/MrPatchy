@@ -4,7 +4,11 @@ Expected values replay ``testparm -s -v`` from Ubuntu 24.04 ``samba 2:4.19.5`` o
 same fixtures, and a native ``smbd -F`` run (guest connection with ``smbclient``) that
 showed ``root preexec``/``root postexec`` writing uid 0, ``preexec`` writing the guest
 uid 65534 and an ``available = no`` share refusing the tree connect without running its
-command. ``test_live_testparm_differential`` repeats the comparison when ``testparm`` is
+command. Further native runs (#1581 review) showed that smbd adds ``IPC$`` from the final
+``[global]`` defaults and runs its inherited ``root preexec`` as uid 0 and ``preexec`` as
+the guest uid on every connection, that an explicit ``[IPC$]`` keeps its creation-time
+snapshot and is forced available, and that ``force user = root``, ``force user = daemon``
+and ``admin users = nobody`` ran ``preexec`` as uid 0, 1 and 0. ``test_live_testparm_differential`` repeats the comparison when ``testparm`` is
 installed.
 """
 import shutil
@@ -153,7 +157,73 @@ def test_live_testparm_differential(tmp_path):
     r = sc.analyze(text, {str(inc): inc.read_text()}, config_path=str(conf))
     got = cmds(r)
     for share in r['shares']:
+        if share in ('IPC$', 'ADMIN$'):
+            continue  # testparm does not add the implicit IPC shares
         for param in sc.SHARE_COMMANDS:
             out = subprocess.run(['testparm', '-s', '-v', '--section-name', share, '--parameter-name', param,
                                   str(conf)], capture_output=True, text=True, check=True).stdout.rstrip('\n')
             assert out == got.get((share, param), ''), (share, param)
+
+
+def test_implicit_ipc_share_takes_final_global_defaults():
+    text = ("[global]\nroot preexec = /bin/g1\n[fu]\npath=/s\nroot preexec =\n"
+            "[global]\nroot preexec = /bin/g2\npreexec = /bin/gpre\n")
+    r = sc.analyze(text)
+    got = cmds(r)
+    assert ('fu', 'root preexec') not in got
+    assert got[('IPC$', 'root preexec')] == '/bin/g2' and got[('IPC$', 'preexec')] == '/bin/gpre'
+    ipc = [c for c in r['root_commands'] if c['share'] == 'IPC$']
+    assert len(ipc) == 1 and ipc[0]['implicit_share'] is True and ipc[0]['line'] == 7
+    assert r['complete']
+    # Only [global]: the review's case where no ordinary share inherits the command.
+    only = sc.analyze('[global]\nroot preexec = /bin/only\n')
+    assert [(c['share'], c['account']) for c in only['root_commands']] == [('IPC$', 'root')]
+
+
+def test_explicit_ipc_section_keeps_snapshot_and_is_forced_available():
+    text = ("[IPC$]\nroot preexec = /bin/explicit\navailable = no\n"
+            "[global]\nforce user = root\npreexec = /bin/gpre\n[plain]\npath=/s\n")
+    r = sc.analyze(text)
+    got = cmds(r)
+    assert got[('IPC$', 'root preexec')] == '/bin/explicit' and ('IPC$', 'preexec') not in got
+    ipc = next(c for c in r['commands'] if c['share'] == 'IPC$')
+    assert ipc['share_available'] is True and ipc['implicit_share'] is False
+    plain = next(c for c in r['commands'] if c['share'] == 'plain')
+    assert plain['account'] == 'root' and plain['forced_user'] == 'root' and plain in r['root_commands']
+
+
+def test_admin_share_only_with_asu_support():
+    assert ('ADMIN$', 'root preexec') not in cmds(sc.analyze('[global]\nroot preexec = /bin/g\n'))
+    r = sc.analyze('[global]\nenable asu support = yes\nroot preexec = /bin/g\n')
+    assert cmds(r)[('ADMIN$', 'root preexec')] == '/bin/g'
+    assert sc.analyze('[global]\nenable asu support = perhaps\n')['loads'] is False
+
+
+def test_force_user_and_admin_users_accounts():
+    text = ("[fu]\npath=/s\nforce user = root\npreexec = /bin/fu\nroot postexec = /bin/rp\n"
+            "[adm]\npath=/s\nadmin users = nobody @wheel\npreexec = /bin/adm\n"
+            "[dmn]\npath=/s\nforce user = daemon\npostexec = /bin/dmn\n"
+            "[toor]\npath=/s\nforce user = toor\npreexec = /bin/toor\n"
+            "[plain]\npath=/s\npreexec = /bin/plain\n")
+    passwd = 'root:x:0:0::/root:/bin/sh\ndaemon:x:1:1::/:/bin/false\ntoor:x:0:0::/root:/bin/sh\n'
+    r = sc.analyze(text, passwd_text=passwd)
+    by = {c['share']: c for c in r['commands'] if c['parameter'] in ('preexec', 'postexec')}
+    assert by['fu']['account'] == 'root' and by['toor']['account'] == 'root'
+    assert by['dmn']['account'] == 'forced_user' and by['dmn']['forced_user'] == 'daemon'
+    assert by['adm']['account'] == 'connecting_user' and by['adm']['root_for_admin_users'] == 'nobody @wheel'
+    assert by['plain']['account'] == 'connecting_user' and by['plain']['root_for_admin_users'] is None
+    roots = {(c['share'], c['parameter']) for c in r['root_commands']}
+    assert roots == {('fu', 'preexec'), ('fu', 'root postexec'), ('toor', 'preexec'), ('adm', 'preexec')}
+    assert r['complete']
+
+
+@pytest.mark.parametrize('value, passwd', [
+    ('daemon', None),             # no /etc/passwd captured: uid unknown
+    ('ghost', 'root:x:0:0::/:/bin/sh\n'),
+    ('%U', 'root:x:0:0::/:/bin/sh\n'),
+])
+def test_unresolved_force_user_is_blocking(value, passwd):
+    r = sc.analyze(f'[s]\npath=/s\nforce user = {value}\npreexec = /bin/x\n', passwd_text=passwd)
+    cmd = next(c for c in r['commands'] if c['share'] == 's')
+    assert cmd['account'] == 'not_assessed' and r['complete'] is False
+    assert {g['code'] for g in r['gaps']} == {'unresolved_force_user'}

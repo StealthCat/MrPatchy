@@ -27,6 +27,13 @@ and ``source3/param/loadparm.c`` section/parameter handling, checked against
   included file ended in. A missing include file is skipped; more than 100 nested
   includes rejects the file.
 * An invalid boolean for a tracked boolean parameter rejects the file.
+* After loading, smbd adds ``IPC$`` (and ``ADMIN$`` with ``enable asu support``) from
+  the *final* ``[global]`` defaults, so inherited ``root preexec``/``preexec`` run on
+  every client connection; an explicit ``[IPC$]`` keeps its own snapshot and is forced
+  available.
+* ``preexec``/``postexec`` run as the ``force user`` account when one is set (``root``
+  or a name resolving to uid 0 in captured ``/etc/passwd`` is root), and as root for
+  ``admin users``; an unresolvable ``force user`` is a blocking gap.
 """
 from __future__ import annotations
 
@@ -95,7 +102,11 @@ NOT_EVALUATED = (
 )
 _LOCAL_NOT_EVALUATED = NOT_EVALUATED[:9]
 
-_BOOLEAN_SHARE = ('available', 'root preexec close', 'preexec close')
+_BOOLEAN_SHARE = ('available', 'root preexec close', 'preexec close', 'enable asu support')
+# Share parameters that change the account ``preexec``/``postexec`` run as.
+_ACCOUNT_PARAMS = ('force user', 'admin users')
+# Shares smbd adds after loading (``lp_add_ipc``) from the final ``[global]`` defaults.
+_IPC_SHARES = ('IPC$', 'ADMIN$')
 _TRUE = ('yes', 'true', 'on', '1')
 _FALSE = ('no', 'false', 'off', '0')
 
@@ -107,9 +118,10 @@ def _key(name: str) -> str:
 
 _SYNONYMS = {'exec': 'preexec'}
 _CANONICAL = {_key(n): n for n in (*SHARE_COMMANDS, *CLOSE_FLAGS, *GLOBAL_COMMANDS, *NOT_EVALUATED,
-                                   'available', 'include', 'copy', 'config file', 'config backend')}
+                                   'available', 'include', 'copy', 'config file', 'config backend',
+                                   'enable asu support', *_ACCOUNT_PARAMS)}
 _CANONICAL.update({_key(k): v for k, v in _SYNONYMS.items()})
-_GLOBAL_ONLY = {*GLOBAL_COMMANDS, *NOT_EVALUATED[9:], 'config file', 'config backend'}
+_GLOBAL_ONLY = {*GLOBAL_COMMANDS, *NOT_EVALUATED[9:], 'config file', 'config backend', 'enable asu support'}
 
 
 def _logical_lines(text: str):
@@ -165,11 +177,13 @@ class _Reject(Exception):
 
 
 def analyze(config_text: str | None, includes: Mapping[str, str | None] | None = None,
-            config_path: str = DEFAULT_CONFIG_PATH) -> dict[str, Any]:
+            config_path: str = DEFAULT_CONFIG_PATH, passwd_text: str | None = None) -> dict[str, Any]:
     """Report the commands configured by ``config_text``.
 
     ``includes`` maps absolute include paths to their captured text, or to ``None`` when
     the file was observed to be absent. A path missing from the mapping is unobserved.
+    ``passwd_text`` is captured ``/etc/passwd`` text, used only to resolve ``force user``
+    accounts other than ``root`` to a uid.
     """
     includes = dict(includes or {})
     gaps: list[dict[str, str]] = []
@@ -261,7 +275,7 @@ def analyze(config_text: str | None, includes: Mapping[str, str | None] | None =
         if existing is None:
             if len(shares) >= 1024:
                 raise _Reject('more than 1024 shares')
-            existing = {'name': raw, 'params': dict(defaults)}
+            existing = {'name': raw, 'params': dict(defaults), 'implicit': False}
             shares[raw.lower()] = existing
         state['section'] = existing
 
@@ -301,13 +315,25 @@ def analyze(config_text: str | None, includes: Mapping[str, str | None] | None =
 
     commands: list[dict[str, Any]] = []
     configured_not_evaluated: set[str] = set()
+    uids = _passwd_uids(passwd_text)
     if loads:
+        # lp_add_ipc: IPC$ (and ADMIN$ with ``enable asu support``) are added after the
+        # whole file is read, so they take the final [global] defaults. An explicit
+        # section with the same name keeps its own creation-time snapshot. Both are
+        # forced available.
+        added = ['IPC$'] + (['ADMIN$'] if _bool(globals_.get('enable asu support'), False) else [])
+        for name in added:
+            share = shares.get(name.lower())
+            if share is None:
+                shares[name.lower()] = {'name': name, 'params': dict(defaults), 'implicit': True}
+            else:
+                share['params']['available'] = ('yes', '', 0)
         for name, (value, path, line) in sorted(globals_.items()):
             if name in NOT_EVALUATED:
                 if value:
                     configured_not_evaluated.add(name)
                 continue
-            if value:
+            if value and name in GLOBAL_COMMANDS:
                 account, trigger = GLOBAL_COMMANDS[name]
                 commands.append({'parameter': name, 'share': None, 'template': None, 'command': value,
                                  'account': account, 'trigger': trigger, 'file': path, 'line': line,
@@ -319,14 +345,27 @@ def analyze(config_text: str | None, includes: Mapping[str, str | None] | None =
             for name in _LOCAL_NOT_EVALUATED:
                 if params.get(name, ('',))[0]:
                     configured_not_evaluated.add(name)
+            forced = params.get('force user', ('', '', 0))
+            admins = params.get('admin users', ('', '', 0))[0] or None
+            user_account = 'connecting_user'
+            if forced[0]:
+                user_account = _forced_account(forced[0], uids)
             for name, (account, trigger) in SHARE_COMMANDS.items():
                 value, path, line = params.get(name, ('', '', 0))
                 if not value:
                     continue
+                runs_as_user = account == 'connecting_user'
+                if runs_as_user and user_account not in ('connecting_user', 'root', 'forced_user'):
+                    gap('unresolved_force_user', f'[{share["name"]}] force user = {forced[0]} ({forced[1]}:{forced[2]}) '
+                        f'could not be resolved to a uid, so the account of {name} is not known')
                 close_flag = next((f for f, target in CLOSE_FLAGS.items() if target == name), None)
                 commands.append({
                     'parameter': name, 'share': share['name'], 'template': template, 'command': value,
-                    'account': account, 'trigger': trigger, 'file': path, 'line': line,
+                    'implicit_share': share['implicit'],
+                    'account': user_account if runs_as_user else account, 'trigger': trigger,
+                    'file': path, 'line': line,
+                    'forced_user': forced[0] if runs_as_user and forced[0] else None,
+                    'root_for_admin_users': admins if runs_as_user else None,
                     'share_available': available,
                     'refuses_connection_on_failure': _bool(params.get(close_flag), False) if close_flag else False,
                 })
@@ -342,7 +381,7 @@ def analyze(config_text: str | None, includes: Mapping[str, str | None] | None =
         'loads': loads,
         'reject_reason': reject_reason,
         'commands': commands,
-        'root_commands': [c for c in commands if c['account'] == 'root'
+        'root_commands': [c for c in commands if (c['account'] == 'root' or c.get('root_for_admin_users'))
                           and c['share_available'] is not False],
         'shares': sorted(s['name'] for s in shares.values()) if loads else [],
         'configured_not_evaluated': sorted(configured_not_evaluated),
@@ -358,3 +397,33 @@ def _bool(entry: tuple[str, str, int] | None, default: bool) -> bool:
     if entry is None:
         return default
     return entry[0].lower() in _TRUE
+
+
+def _passwd_uids(text: str | None) -> dict[str, int] | None:
+    if not isinstance(text, str):
+        return None
+    uids: dict[str, int] = {}
+    for line in text.splitlines()[:100000]:
+        fields = line.split(':')
+        if len(fields) >= 3 and fields[0] and fields[2].isdigit():
+            uids.setdefault(fields[0], int(fields[2]))
+    return uids
+
+
+def _forced_account(name: str, uids: dict[str, int] | None) -> str:
+    """Account for ``preexec``/``postexec`` under ``force user``.
+
+    ``root`` (or any name resolving to uid 0) is ``root``; another resolved name is
+    ``forced_user``. A ``%`` macro, an unknown name or a missing ``/etc/passwd`` is
+    ``not_assessed`` and the caller records a blocking gap.
+    """
+    if '%' in name:
+        return 'not_assessed'
+    if name == 'root':
+        return 'root'
+    if uids is None:
+        return 'not_assessed'
+    uid = uids.get(name, uids.get(name.lower()))
+    if uid is None:
+        return 'not_assessed'
+    return 'root' if uid == 0 else 'forced_user'
