@@ -130,6 +130,31 @@ def test_host_list_and_hosttags_use_the_node_name():
         assert _values(result)['global/cache_repair_executable'] == '/opt/cr'
 
 
+def test_host_list_values_are_checked_in_order_like_check_host_filters():
+    # lvm2 _check_host_filters passes on the first matching string and only
+    # fails on a non-string value reached before any match.
+    files = {'lvm.conf': 'tags { web { host_list = [ "web1", 7 ] } }\n',
+             'lvm_web.conf': 'global { thin_check_executable = "/tmp/x" }\n'}
+    matched = _assess(files, hostname='web1')
+    assert matched['lvm_starts'] is True
+    assert [t['tag'] for t in matched['tags']] == ['web']
+    assert _values(matched)['global/thin_check_executable'] == '/tmp/x'
+    assert 'invalid_host_list_lvm_commands_fail' not in {g['reason'] for g in matched['gaps']}
+    for host_list in ('[ 7 ]', '[ "other", 7 ]', '[ 7, "web1" ]'):
+        failed = _assess({'lvm.conf': f'tags {{ web {{ host_list = {host_list} }} }}\n'},
+                         hostname='web1')
+        assert failed['lvm_starts'] is False, host_list
+        assert 'invalid_host_list_lvm_commands_fail' in {g['reason'] for g in failed['gaps']}
+        assert failed['tags'] == []
+    unknown = _assess({'lvm.conf': 'tags { web { host_list = [ "a", 7 ] } }\n'}, hostname=None)
+    reasons = {g['reason'] for g in unknown['gaps']}
+    assert 'hostname_unknown_for_host_list' in reasons
+    assert 'invalid_host_list_lvm_commands_fail' not in reasons
+    assert unknown['lvm_starts'] is not False and unknown['complete'] is False
+    definite = _assess({'lvm.conf': 'tags { web { host_list = [ 7, "a" ] } }\n'}, hostname=None)
+    assert definite['lvm_starts'] is False
+
+
 def test_unknown_hostname_is_a_gap_not_a_silent_miss():
     result = lc.assess([{'path': '/etc/lvm/lvm.conf', 'state': 'regular',
                          'text': 'tags { hosttags = 1 db { host_list = ["vm"] } }\n'},

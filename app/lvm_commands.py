@@ -438,15 +438,29 @@ def assess(files: list[dict[str, Any]] | None, *, hostname: str | None = None,
                     passes = False
                     if sub.value[0][0] == 'empty_array':
                         continue
-                    if any(t != 'string' for t, _ in sub.value):
+                    # _check_host_filters walks the values in order: a
+                    # matching string passes at once, and only a non-string
+                    # reached before any match fails the command.
+                    outcome = None
+                    for kind, value in sub.value:
+                        if kind != 'string':
+                            outcome = 'invalid'
+                            break
+                        if hostname is None:
+                            outcome = 'unknown'
+                            break
+                        if value == hostname:
+                            outcome = 'match'
+                            break
+                    if outcome == 'invalid':
                         result['lvm_starts'] = False
                         gap('invalid_host_list_lvm_commands_fail', path=path, tag=tag)
                         return
-                    if hostname is None:
+                    if outcome == 'unknown':
                         gap('hostname_unknown_for_host_list', path=path, tag=tag)
                         passes = False
                         break
-                    if hostname in _strings(sub.value):
+                    if outcome == 'match':
                         passes = True
                         break
                 if sub.key == 'host_filter':
