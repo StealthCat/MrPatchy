@@ -3811,6 +3811,20 @@ SQLite and MySQL use exact comparisons for both fields. Potentially incurred
 charges stay counted, and the release reason and time remain in the ledger.
 Fleet throughput and the wider shared-admission milestones remain open.
 
+### Record capped provider transmission in one ledger write — worker checkpoint #1459
+
+Before a capped call reaches the provider, the worker changes its ledger
+reservation to sent with one primary-key update under the shared budget lock.
+The update matches the exact reserved state and commits the receipt ID, time and
+existing diagnostic. Missing, changed or malformed reservations stop
+transmission. A second worker attempting the same transition also stops.
+
+Acceptance observes the default provider flow with a disposable transport,
+then checks committed ledger and receipt state from a second database session.
+The same tests cover concurrent attempts and exact status matching on SQLite
+and MySQL. The change preserves conservative charges for unknown provider
+outcomes and leaves throughput acceptance open.
+
 ### Unknown pricing and usage under a daily cap — worker checkpoint #994
 
 Milestone 4 acceptance for **unknown pricing/usage**.
