@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from sqlalchemy import event, select
+from sqlalchemy import event, insert, select
 
 from app import ai, ai_admission, ai_provider_backoff, ai_runs
 from app.db import Session, Setting, engine
@@ -80,15 +80,33 @@ def test_backoff_persists_and_no_header_uses_bounded_exponential_jitter(admin, m
 
 
 def test_success_clears_shared_backoff_and_status(admin, monkeypatch):
-    configure();ai_provider_backoff.failed(ai.AIError('transient',transient=True,retry_after=5))
-    with Session() as session:
-        row=session.get(ai_provider_backoff.ProviderBackoff,'global');row.blocked_until=0;session.commit()
+    configure()
+    ai_provider_backoff.failed(ai.AIError('transient', transient=True, retry_after=5), now=100)
+    statements = []
+    original_lock = ai_provider_backoff.Lock
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if 'ai_provider_backoff' in statement.lower():
+            statements.append(statement.split()[0].upper())
+
+    @contextmanager
+    def trace_lock(name):
+        with original_lock(name):
+            event.listen(engine, 'before_cursor_execute', capture)
+            try:
+                yield
+            finally:
+                event.remove(engine, 'before_cursor_execute', capture)
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', trace_lock)
     monkeypatch.setattr(ai.transport, 'post', lambda *a, **k: success())
     assert ai.request(payload(), 'fixture-key')=={}
     with Session() as session:
         row=session.get(ai_provider_backoff.ProviderBackoff,'global')
-        assert row.failures==0 and row.blocked_until==0
+        assert (row.failures, row.blocked_until, row.reason) == (0, 0, '')
+        assert row.updated > 105
         assert ai_provider_backoff.status(session)['blocked'] is False
+    assert statements == ['UPDATE']
 
 
 def test_overlapping_failures_preserve_the_reason_for_the_active_deadline(admin, monkeypatch):
@@ -223,6 +241,26 @@ def test_eligible_reset_rechecks_after_concurrent_failure(admin, monkeypatch):
         assert (row.failures, row.blocked_until, row.updated) == (2, 222, 102)
 
 
+def test_eligible_reset_preserves_another_workers_completed_reset(admin, monkeypatch):
+    configure()
+    ai_provider_backoff.failed(ai.AIError('transient', transient=True, retry_after=30), now=100)
+    original_lock = ai_provider_backoff.Lock
+
+    @contextmanager
+    def concurrent_success(name):
+        with monkeypatch.context() as inner:
+            inner.setattr(ai_provider_backoff, 'Lock', original_lock)
+            ai_provider_backoff.succeeded(request_started=101, now=102)
+        with original_lock(name):
+            yield
+
+    monkeypatch.setattr(ai_provider_backoff, 'Lock', concurrent_success)
+    ai_provider_backoff.succeeded(request_started=103, now=104)
+    with Session() as session:
+        row = session.get(ai_provider_backoff.ProviderBackoff, 'global')
+        assert (row.failures, row.blocked_until, row.reason, row.updated) == (0, 0, '', 102)
+
+
 def test_nontransient_provider_error_does_not_create_global_backoff(admin, monkeypatch):
     configure();ai_provider_backoff.failed(ai.AIError('transient',transient=True,retry_after=5))
     with Session() as session:
@@ -342,6 +380,59 @@ def test_admin_clear_rejects_backoff_expiring_during_lock_wait(admin, monkeypatc
 ])
 def test_admin_clear_requires_review_fields(admin,body):
     assert admin.post('/api/ai/provider-backoff/clear',json=body).status_code==422
+
+
+def test_release_provider_waits_in_one_write_and_preserve_other_deadlines(admin):
+    from app.ai_retry import TriageRetry
+
+    now = 100
+    # state, existing retry time, provider floor, expected retry time, expected floor
+    cases = [
+        ('deferred', 170, 170, 100, 0),
+        ('deferred', 130, 170, 100, 0),
+        ('deferred', 190, 170, 190, 0),
+        ('deferred', 99, 170, 99, 0),
+        ('blocked', 170, 170, 170, 0),
+        ('DEFERRED', 170, 170, 170, 0),
+        ('deferred', 100, 100, 100, 100),
+        ('deferred', 170, 0, 170, 0),
+    ]
+    size = 1200
+    retries = []
+    for i in range(size):
+        state, deadline, floor, _, _ = cases[i % len(cases)]
+        retries.append({
+            'subject': f'wait-{i:04d}', 'configuration': 'fixture-config', 'attempts': 2,
+            'state': state, 'next_at': deadline, 'provider_until': floor, 'reason': 'fixture reason',
+        })
+    with Session() as session:
+        session.execute(insert(TriageRetry), retries)
+        session.commit()
+
+    statements = []
+
+    def capture(_connection, _cursor, statement, parameters, _context, executemany):
+        if 'ai_triage_retries' in statement:
+            statements.append((statement.split()[0], len(parameters) if executemany else 1))
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        assert ai_provider_backoff.revoke_item_waits(now) is True
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+
+    counts = {op: sum(count for kind, count in statements if kind == op)
+              for op in {kind for kind, _ in statements}}
+    assert counts == {'UPDATE': 1}
+    assert ai_provider_backoff.revoke_item_waits(now) is False
+
+    with Session() as session:
+        rows = list(session.scalars(select(TriageRetry).order_by(TriageRetry.subject)))
+    assert len(rows) == size
+    for i, row in enumerate(rows):
+        state, _, _, expected_deadline, expected_floor = cases[i % len(cases)]
+        assert (row.state, row.next_at, row.provider_until) == (state, expected_deadline, expected_floor)
+        assert (row.attempts, row.configuration, row.reason) == (2, 'fixture-config', 'fixture reason')
 
 
 def test_clear_revokes_provider_only_item_waits_but_keeps_attempts(admin):

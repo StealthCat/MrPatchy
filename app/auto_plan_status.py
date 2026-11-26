@@ -24,7 +24,7 @@ authorization are unchanged and plans remain manual-only.
 """
 import time
 
-from sqlalchemy import JSON, func, literal, select, type_coerce, union_all
+from sqlalchemy import JSON, and_, func, literal, or_, select, type_coerce, union_all
 from sqlalchemy.orm import aliased
 
 from . import ai_control_status, ai_policy, host_lifecycle, incidents
@@ -32,6 +32,7 @@ from .db import Host, Job, Setting, config
 
 AWAITING_LIMIT = 500
 FLEET_LIMIT = 100
+FLEET_POLICY_PAGE_SIZE = 512
 POLICY_PREFIX = 'security-policy:'
 PLAN_ACTIONS = ('security-plan', 'startup-plan')
 STATES = ('off', 'ai_disabled', 'not_configured', 'paused', 'held', 'inactive', 'ready')
@@ -46,22 +47,23 @@ def _readiness(session, host_ids, cfg):
     if not cfg['ai_model'] or session.scalar(select(Setting.key).where(Setting.key == 'openai_key')) is None:
         return dict.fromkeys(host_ids, 'not_configured')
 
-    keys = {host_id: ai_policy.PREFIX + host_id for host_id in host_ids}
-    policies = dict(session.execute(
-        select(Setting.key, Setting.value).where(Setting.key.in_(keys.values()))
-    ).all())
-    paused = {
-        host_id for host_id, key in keys.items()
-        if ai_policy.stored_paused(policies.get(key), present=key in policies)
-    }
-    from .operations import quarantined_hosts
-    held = quarantined_hosts(session, [host_id for host_id in host_ids if host_id not in paused])
-    unchecked = [host_id for host_id in host_ids if host_id not in paused and host_id not in held]
-    active = set(session.scalars(host_lifecycle.active_ids().where(Host.id.in_(unchecked)))) if unchecked else set()
+    from .operations import host_hold_exists
+
+    policy = aliased(Setting)
+    rows = session.execute(
+        select(Host.id, policy.key, policy.value, host_hold_exists(Host.id),
+               Host.id.in_(host_lifecycle.active_ids()))
+        .outerjoin(policy, policy.key == literal(ai_policy.PREFIX) + Host.id)
+        .where(Host.id.in_(host_ids))
+    )
     states = dict.fromkeys(host_ids, 'inactive')
-    states.update(dict.fromkeys(active, 'ready'))
-    states.update(dict.fromkeys(held, 'held'))
-    states.update(dict.fromkeys(paused, 'paused'))
+    for host_id, key, value, held, active in rows:
+        if ai_policy.stored_paused(value, present=key is not None):
+            states[host_id] = 'paused'
+        elif held:
+            states[host_id] = 'held'
+        elif active:
+            states[host_id] = 'ready'
     return states
 
 
@@ -177,6 +179,34 @@ def status(session, host_id, now=None):
     return {'generated_at': now, **_host(host_id, state, jobs, summaries), 'pacing': _pacing(session, cfg, now)}
 
 
+def _fleet_opted_in_hosts(session):
+    """Read through the first extra opted-in server to determine truncation."""
+    query = (
+        select(Host.id, Host.name, Setting.value)
+        .join(Setting, Setting.key == literal(POLICY_PREFIX) + Host.id)
+        .where(Host.deleted_at == 0)
+        .order_by(Host.name, Host.id)
+        .limit(FLEET_POLICY_PAGE_SIZE)
+    )
+    page = query
+    opted = {}
+    while True:
+        rows = session.execute(page).all()
+        for host_id, name, policy in rows:
+            if isinstance(policy, dict) and policy.get('auto_ai_plan'):
+                # A rename between pages can move a listed host past the cursor.
+                opted.setdefault(host_id, name)
+                if len(opted) > FLEET_LIMIT:
+                    break
+        if len(opted) > FLEET_LIMIT or len(rows) < FLEET_POLICY_PAGE_SIZE:
+            return list(opted.items())
+        host_id, name, _ = rows[-1]
+        page = query.where(
+            Host.name >= name,
+            or_(Host.name > name, and_(Host.name == name, Host.id > host_id)),
+        )
+
+
 def fleet(session, now=None):
     """Return automatic AI plan status for every opted-in, non-deleted server (#936). Read-only.
 
@@ -186,13 +216,7 @@ def fleet(session, now=None):
     """
     now = time.time() if now is None else now
     cfg = config(session)
-    hosts = session.execute(
-        select(Host.id, Host.name, Setting.value)
-        .join(Setting, Setting.key == literal(POLICY_PREFIX) + Host.id)
-        .where(Host.deleted_at == 0)
-        .order_by(Host.name, Host.id)).all()
-    opted = [(host_id, name) for host_id, name, value in hosts
-             if isinstance(value, dict) and value.get('auto_ai_plan')]
+    opted = _fleet_opted_in_hosts(session)
     listed = opted[:FLEET_LIMIT]
     host_ids = [host_id for host_id, _ in listed]
     jobs = _plan_jobs(session, host_ids)

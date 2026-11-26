@@ -763,6 +763,7 @@ def investigate_one(owner=None):
         try:
             with ai_runs.track('triage',lease.cfg['ai_model'],row.host_id,row.id,run_id=lease.run_id):
                 ai_runs.timing('claim_lock',lease.claim_lock_wait)
+                ai_runs.timing('claim_lock_hold',lease.claim_lock_hold)
                 lease.check()
                 ai_runs.timing('admission',time.perf_counter()-admission_started)
                 ai_runs.timing('queue_age',time.time()-row.first_seen)
@@ -919,9 +920,16 @@ def _assess_active_behavior(s,row,cfg,secret):
             with lease.mutation() as (write,saved):save(write,saved)
         else:save(s,row);s.commit()
 
-def ai_plan_waiting(s,job):
+def ai_plan_waiting(s,job,waiting_hosts=None):
     """True for queued AI planning jobs that must wait for AI to be enabled/resumed (no retry time)."""
-    return job.action in ('release-plan','security-plan','startup-plan') and (not config(s)['ai_enabled'] or ai_policy.status(s,job.host_id)['paused'])
+    if job.action not in ('release-plan','security-plan','startup-plan'):
+        return False
+    if waiting_hosts is not None and job.host_id in waiting_hosts:
+        return True
+    waiting = not config(s)['ai_enabled'] or ai_policy.status(s,job.host_id)['paused']
+    if waiting and waiting_hosts is not None:
+        waiting_hosts.add(job.host_id)
+    return waiting
 
 
 def loop(role="embedded"):
@@ -1046,11 +1054,13 @@ def _loop(reporter):
                         if len(active_jobs)>=capacity['jobs']:break
                         if submit_job(jobs,j,active_jobs,resume_busy):busy_hosts.add(j.host_id)
                     hold_cache={};window_cache={};closed_patch_windows=set()
+                    # Recheck each scan and never cache permission to start an AI plan.
+                    waiting_plan_hosts=set()
                     for j in s.scalars(select(Job).where(Job.state=='queued',Job.next_at<=now,Job.host_id.not_in(busy_hosts),Job.host_id.in_(host_lifecycle.active_ids())).order_by(Job.created)):
                         if len(active_jobs)>=capacity['jobs']: break
                         if j.host_id in busy_hosts:continue
                         if j.host_id in closed_patch_windows and j.action in ('patch','repair','release-upgrade') and not j.payload.get('_schedule'):continue
-                        if ai_plan_waiting(s,j):continue
+                        if ai_plan_waiting(s,j,waiting_plan_hosts):continue
                         scope=response_hold_scope(j)
                         hold_scope=(j.host_id,*scope.values())
                         if hold_scope not in hold_cache:

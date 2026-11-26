@@ -23,7 +23,7 @@ request and changes no schema, admission, reservation, retry or authorization.
 """
 import time
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import load_only
 
 from . import ai_policy, ai_retry, host_lifecycle, update_scores
@@ -45,18 +45,19 @@ LIMITATIONS = (
 
 
 def _signature(session, cfg):
-    key = session.get(Setting, 'openai_key')
-    if not cfg.get('ai_model') or key is None:
+    model = cfg.get('ai_model')
+    if not model:
         return None
-    return ai_retry.configuration_signature(cfg['ai_model'], key.value)
+    key = session.get(Setting, 'openai_key')
+    return ai_retry.configuration_signature(model, key.value) if key is not None else None
 
 
-def _scheduler_state(session, cfg):
+def _scheduler_state(cfg, *, configured):
     if not cfg.get('ai_enabled'):
         return 'ai_disabled'
     if not cfg.get('ai_updates_enabled'):
         return 'scoring_disabled'
-    if not cfg.get('ai_model') or session.get(Setting, 'openai_key') is None:
+    if not configured:
         return 'not_configured'
     return 'enabled'
 
@@ -83,12 +84,7 @@ def _current_candidates(session):
     hosts = {}
     cursor = None
     while True:
-        query = select(Package).where(Package.candidate != '', Package.host_id.not_in(ai_policy.paused_ids()),
-                                      Package.host_id.in_(host_lifecycle.active_ids()))
-        if cursor is not None:
-            query = query.where(or_(Package.available_since > cursor[0],
-                                    and_(Package.available_since == cursor[0], Package.id > cursor[1])))
-        packages = list(session.scalars(query.order_by(Package.available_since, Package.id).limit(CHUNK)))
+        packages = update_scores.scoring_package_page(session, cursor, CHUNK)
         if not packages:
             return
         cursor = (packages[-1].available_since, packages[-1].id)
@@ -148,7 +144,7 @@ def status(session, cfg, now=None):
         Package.host_id.in_(ai_policy.paused_ids()))) or 0
     total = sum(counts.values())
     return {
-        'scheduler': _scheduler_state(session, cfg),
+        'scheduler': _scheduler_state(cfg, configured=signature is not None),
         'current_updates': total,
         'counts': counts,
         'unscored': total - counts['complete'],

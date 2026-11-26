@@ -5,8 +5,8 @@ import json
 import math
 import time
 import uuid
-from sqlalchemy import String, JSON, Double, Text, select, func, or_
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import String, JSON, Double, Text, select, func, literal, or_
+from sqlalchemy.orm import Mapped, aliased, mapped_column
 from .db import Base, Setting, audit
 
 class Scan(Base):
@@ -316,7 +316,29 @@ def automatic_candidate(row):
 def automatic_candidate_sql():
     """SQL form of ``automatic_candidate`` for bounded reads (#922): a missing engine is not YARA."""
     engine=Incident.evidence[('scan_context','engine')].as_string()
-    return or_(engine.is_(None),engine!='YARA')
+    # Match Python's exact string comparison even under a folding SQL collation.
+    yara='YARA'.encode('ascii').hex().upper()
+    return or_(engine.is_(None),func.hex(engine)!=yara)
+
+
+def _auto_plan_enabled_hosts(s):
+    from . import ai_policy
+
+    security_prefix = 'security-policy:'
+    pause_policy = aliased(Setting)
+    host_suffix = func.substr(Setting.key, len(security_prefix) + 1, type_=String)
+    # Match keys in the database so the pause check uses the same collation as
+    # the individual lookup. A joined key distinguishes missing from JSON null.
+    policies = (
+        select(Setting.key, Setting.value, pause_policy.key, pause_policy.value)
+        .outerjoin(pause_policy, pause_policy.key == literal(ai_policy.PREFIX) + host_suffix)
+        .where(Setting.key.like(security_prefix + '%'))
+    )
+    return [
+        key[len(security_prefix):]
+        for key, policy, pause_key, pause in s.execute(policies)
+        if policy.get('auto_ai_plan') and not ai_policy.stored_paused(pause, present=pause_key is not None)
+    ]
 
 
 def auto_plan_tick(now=None):
@@ -336,26 +358,20 @@ def auto_plan_tick(now=None):
                     Job.created>now-3600).limit(remaining).subquery())
                 remaining-=s.scalar(select(func.count()).select_from(recent))
             if remaining<=0:return
-            policies={r.key.split(':',1)[1]:r.value for r in s.scalars(select(Setting).where(Setting.key.like('security-policy:%')))}
-            from . import ai_policy
-            enabled=[host for host,p in policies.items() if p.get('auto_ai_plan') and not ai_policy.status(s,host)['paused']]
+            enabled=_auto_plan_enabled_hosts(s)
             if not enabled:return
-            from .operations import host_quarantined
-            enabled=[host for host in enabled if not host_quarantined(s,host)]
+            from .operations import unheld_hosts
+            enabled=unheld_hosts(s,enabled)
             if not enabled:return
-            query=select(Incident).where(Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),*awaiting_auto_plan()).order_by(Incident.updated,Incident.id)
-            # YARA incidents are never planned automatically, so page past them instead of letting them fill a fixed window.
-            rows=[];offset=0
-            while len(rows)<100:
-                batch=list(s.scalars(query.limit(100).offset(offset)))
-                rows+=[r for r in batch if automatic_candidate(r)]
-                if len(batch)<100:break
-                offset+=100
-            candidates=rows[:100]
+            # Older incidents on an occupied server must leave room for
+            # available servers in the bounded candidate window.
+            enabled = select(Host.id).where(Host.id.in_(enabled), ~_active_plan_for_host(Host.id))
+            candidates=s.execute(select(Incident.id,Incident.host_id,Incident.scan_id).where(
+                Incident.host_id.in_(enabled),Incident.host_id.in_(host_lifecycle.active_ids()),
+                *awaiting_auto_plan(),automatic_candidate_sql())
+                .order_by(Incident.updated,Incident.id).limit(100)).all()
             if not candidates:return
-            occupied=select(Job.id).where(
-                Job.host_id==Incident.host_id,Job.action.in_(['security-plan','startup-plan']),
-                Job.state.in_(['queued','running'])).exists()
+            occupied=_active_plan_for_host(Incident.host_id)
             eligibility={incident_host:(canonical_host,has_active_plan) for incident_host,canonical_host,has_active_plan in s.execute(
                 select(Incident.host_id,Host.id,occupied).join(Host,Host.id==Incident.host_id)
                 .where(Incident.id.in_([row.id for row in candidates])))}
@@ -370,6 +386,16 @@ def auto_plan_tick(now=None):
                     enqueue(s,row.host_id,'security-plan',{'incident_id':row.id,'scan_id':row.scan_id,'automatic':True})
                     occupied_hosts.add(canonical_host);remaining-=1
                 except ValueError:continue
+
+
+def _active_plan_for_host(host_id):
+    from .db import Job
+
+    return select(Job.id).where(
+        Job.host_id == host_id,
+        Job.action.in_(('security-plan', 'startup-plan')),
+        Job.state.in_(('queued', 'running')),
+    ).exists()
 
 
 def record_inspection(s,host_id,job_id,report,*,vendor_authenticated=False):

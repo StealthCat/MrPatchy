@@ -82,22 +82,29 @@ def prune_history(s, cutoff):
     s.execute(delete(AIRun).where(AIRun.started < cutoff, AIRun.state != 'running'))
 
 
-def run_hosts(s, run_ids):
-    grouped = {identifier: set() for identifier in run_ids}
-    if not grouped: return grouped
+def shared_run_ids(s, run_ids):
+    """Return the visible runs with score or membership links to multiple servers."""
+    if not run_ids:
+        return set()
     from .update_scores import UpdateScore
     # Score links recover some historical batches created before durable membership.
-    for model in (AIRunHost, UpdateScore):
-        for run_id, host_id in s.execute(select(model.run_id, model.host_id).where(model.run_id.in_(grouped))):
-            grouped[run_id].add(host_id)
-    return grouped
+    members = union_all(
+        select(AIRunHost.run_id, AIRunHost.host_id).where(AIRunHost.run_id.in_(run_ids)),
+        select(UpdateScore.run_id, UpdateScore.host_id).where(UpdateScore.run_id.in_(run_ids)),
+    ).subquery()
+    # Preserve exact identifier equality under case-insensitive MySQL collations.
+    return set(s.scalars(
+        select(members.c.run_id)
+        .group_by(members.c.run_id, func.hex(members.c.run_id))
+        .having(func.count(func.distinct(func.hex(members.c.host_id))) > 1)
+    ))
 
 
 # These diagnostic timings share ordinary run-history retention, not a budget or
 # cache ledger. Monotonic elapsed time never depends on host wall-clock changes.
 TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_persistence',
                  'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age',
-                 'file_provenance','known_good_lookup','claim_lock'}
+                 'file_provenance','known_good_lookup','claim_lock','claim_lock_hold'}
 
 
 TIMING_SUMMARY_RUN_LIMIT = 100
@@ -223,15 +230,14 @@ def request_started(model):
         return receipt.id
 
 
-def record_usage(call_id, data, payload):
-    values = ai_pricing.estimate(data, payload)
-    if not call_id: return values
+def record_usage(call_id, values):
+    """Persist the computed usage estimate in the diagnostic receipt."""
+    if not call_id: return
     with Session() as s:
         row = s.get(AICall, call_id)
-        if not row: return values
+        if not row: return
         for key, value in values.items(): setattr(row, key, value)
         s.commit()
-    return values
 
 
 def call_receipts(s, run_ids):
