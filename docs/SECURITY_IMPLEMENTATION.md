@@ -12966,6 +12966,13 @@ Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit
 - **Validation:** `tests/test_known_good_daily_cap_hit.py` has 8 tests. Five fail on main `c5c1504`: the exhausted cap, a quote below one reservation (the issue's reproduction), an older paid subject in front of a newer hit, pause then resume, and the probe itself. The other three pass both before and after: a paid subject, a Re-triage and a revoked candidate all stay held. The related SQLite admission, budget, claims, file-status, known-good, triage, retry, pause and worker-control selection passes (419 passed).
 - **Remaining:** ~~while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear.~~ Addressed by the #1241 worker checkpoint below. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
 
+Roadmap A/B checkpoint #1387 bounds full behavior reads in a closed-gate
+known-good probe. The pending and error index ranges return IDs and timestamps.
+Admission applies the existing mixed-range ordering before reading evidence for
+the selected window. A mixed-verdict fixture at a two-probe limit materializes
+two records where it previously loaded four. Cursor rotation, full evidence
+checks and free-only admission are retained. Production throughput remains open.
+
 ### Rotating free known-good hit probe window — worker checkpoint #1241 (roadmap A/B)
 
 The #1030 checkpoint bounded closed-gate admission to the 50 oldest eligible subjects (`FREE_HIT_SCAN`). A free exact hit behind 50 or more older paid subjects was therefore never probed while the daily cap, rate admission or provider backoff stayed closed, which under an exhausted cap meant waiting for the reset.
