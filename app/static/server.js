@@ -453,7 +453,7 @@ function vendorInspectionFindings(report){
 async function serverIntegrityFindings(revision,{root,hostId}){
  const endpoint='/hosts/'+encodeURIComponent(hostId);
  const current=()=>root.isConnected&&currentView(revision,'servers');
- const findings=items=>`<div class="table-wrap"><table><thead><tr><th>Path or source</th><th>Finding</th></tr></thead>
+ const findings=items=>`<div class="table-wrap"><table class="integrity-findings-table"><thead><tr><th>Path or source</th><th>Finding</th></tr></thead>
  <tbody>${items.map(item=>`<tr><td>${esc(item.path||'Collector')}</td><td>${esc(item.issue||'No detail recorded')}</td></tr>`).join('')}</tbody></table></div>`;
  const result=await api(endpoint+'/integrity-findings');
  if(!current())return;

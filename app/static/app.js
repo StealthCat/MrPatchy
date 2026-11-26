@@ -175,7 +175,11 @@ async function overview(revision=renderRevision){
    <section class="card fleet-reading"><h2>Coverage has boundaries</h2><p>Recent contact is not proof that patching succeeded, a reboot took effect, an endpoint is clean, or every collector is current. Package totals describe retained inventory for enabled servers; held packages may still have candidates.</p><p>Review target errors, individual collection timestamps and operation outcomes. The deployment-health dashboard, remote readiness and expanded automatic protection remain unfinished.</p><div class="quick-links"><a href="#activity">${PatchyUI.icon('activity')} Review operation outcomes</a><a href="#servers">${PatchyUI.icon('servers')} Open server details</a>${isAdmin()?'<a href="#security">'+PatchyUI.icon('shield')+' Review security coverage</a><a href="#activity/workers">'+PatchyUI.icon('activity')+' Inspect worker reports</a>':''}</div></section>`;
  }
  root.innerHTML=intro+navigation+(section==='findings'?'':notice)+`<div data-fleet-section="${section}">${content}</div>`;
- if(section==='findings'){renderFleetIntegrityFindings(root.querySelector('#fleet-integrity-findings'),integrityRows());return;}
+ if(section==='findings'){
+  root.querySelector('.heading').classList.add('fleet-integrity-heading');
+  renderFleetIntegrityFindings(root.querySelector('#fleet-integrity-findings'),integrityRows());
+  return;
+ }
  if(section!=='attention')return;
  const state=fleetReviewContext,search=$('#fleet-review-search'),filter=$('#fleet-review-filter');filter.value=state.filter;
  const draw=()=>{
@@ -195,7 +199,7 @@ function renderFleetIntegrityFindings(root,rows){
   root.innerHTML=empty('No stored integrity findings','Enabled servers have no findings in their latest stored snapshots. Missing or stale observations cannot verify integrity.');
   return;
  }
- root.innerHTML='<p id="fleet-integrity-count" class="help" role="status"></p><div class="table-wrap"><table><thead><tr><th>Server</th><th>Path or source</th><th>Finding</th></tr></thead><tbody id="fleet-integrity-rows"></tbody></table></div><div class="actions"><button id="fleet-integrity-prev">Previous</button><span id="fleet-integrity-page" class="help"></span><button id="fleet-integrity-next">Next</button></div>';
+ root.innerHTML='<p id="fleet-integrity-count" class="help" role="status"></p><div class="table-wrap"><table class="integrity-findings-table"><thead><tr><th>Server</th><th>Path or source</th><th>Finding</th></tr></thead><tbody id="fleet-integrity-rows"></tbody></table></div><div class="actions"><button id="fleet-integrity-prev">Previous</button><span id="fleet-integrity-page" class="help"></span><button id="fleet-integrity-next">Next</button></div>';
  const state=fleetIntegrityContext,size=50,prefix='#fleet-integrity';
  const draw=()=>{
   const visible=pagedRows(state,rows,size,prefix);

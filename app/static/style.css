@@ -428,6 +428,12 @@ body:not([data-role="admin"]) [data-admin], body[data-role="viewer"] [data-opera
 .overview-sections a { flex:1;justify-content:center;min-height:44px;text-align:center; }
 .overview-sections a.active { color:var(--mint);background:#9ee8d114;border-color:var(--line-bright); }
 .overview-sections a.active::after { display:none; }
+.integrity-findings-table th { white-space: normal; }
+.integrity-findings-table td { overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+ .heading-overview.fleet-integrity-heading .heading-mascot { top: 10px; right: 12px; bottom: auto; width: 54px; height: 44px; }
+ .integrity-findings-table th, .integrity-findings-table td { padding-inline: 7px; }
+}
 .server-overview-guide { display:flex;flex-direction:column;align-items:flex-start;min-height:240px; }
 .server-guide-mascot { order:99;align-self:flex-end;margin-top:auto;width:150px;max-width:40%;height:auto;pointer-events:none; }
 .overview-job-counts { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin:20px 0; }

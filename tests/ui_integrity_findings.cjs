@@ -59,6 +59,7 @@ module.exports=async function integrityFindingsUI(page,capture){
   for(const width of [320,768,1440]){
    await page.setViewportSize({width,height:1000});
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+   assert.equal(await page.locator('#fleet-integrity-findings .table-wrap').evaluate(table=>table.scrollWidth>table.clientWidth),false);
    await capture('fleet-integrity-'+width);
   }
   await open('#servers/integrity-a/overview');
