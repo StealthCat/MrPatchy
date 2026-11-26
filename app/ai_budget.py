@@ -236,8 +236,9 @@ def _survives_reset(now,reset,amount):
     return and_(BudgetEntry.created<=now,BudgetEntry.reset_at>reset,amount>0)
 
 
-def status(session,now=None):
-    now=time.time() if now is None else now;cfg=config(session)
+def status(session, now=None, *, settings=None):
+    now = time.time() if now is None else now
+    cfg = config(session) if settings is None else settings
     enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
     unreconciled_count,oldest=reconciliation
     # A timezone change can leave a previously admitted window open beyond the

@@ -12345,6 +12345,12 @@ body, call/run identifier or ledger record. It performs no provider or target tr
 conservative price quote, provider policy, finite concurrency, per-server pause and
 lifecycle checks remain authoritative and can still refuse work.
 
+[#1443](https://github.com/StealthCat/MrPatchy/issues/1443) keeps the displayed
+settings consistent within each Investigations status, shared AI controls and
+Settings response. Each request reads the saved configuration once and reuses
+it for its budget, rate and retry details. Live admission and response
+authorization still evaluate their own settings at execution.
+
 This is an API/control-plane checkpoint, not the complete queue/spend dashboard or
 faster-AI acceptance. UI integration, call-specific preview, provider-invoice truth,
 multi-controller failover/reset acceptance and fresh code-scanning verification remain

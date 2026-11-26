@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import event
 
 from app import ai, ai_admission, ai_budget, ai_control_status, ai_pricing, ai_provider_backoff, ai_runs
 from app.db import Session, Setting
@@ -27,6 +28,32 @@ def priced_catalog(monkeypatch):
     # These cases exercise other gates; keep the #735 pricing gate open for them.
     monkeypatch.setattr(ai_pricing, 'VERIFIED_AT', 0)
     monkeypatch.setattr(ai_pricing, 'EXPIRES_AT', 4_000_000_000)
+
+
+@pytest.mark.parametrize('endpoint', [
+    '/api/investigation-status',
+    '/api/settings/ai-control-status',
+    '/api/settings',
+])
+def test_ai_status_uses_one_saved_configuration_read(admin, endpoint):
+    configure(model='gpt-6-luna', mode='rate_and_daily')
+    config_reads = []
+
+    def capture(_connection, _cursor, statement, _parameters, context, _many):
+        if 'FROM settings' in statement and any(
+                tuple(bound.values()) == ('config',) for bound in context.compiled_parameters):
+            config_reads.append(statement)
+
+    with Session() as session:
+        engine = session.get_bind()
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        response = admin.get(endpoint)
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+
+    assert response.status_code == 200
+    assert len(config_reads) == 1
 
 
 def test_snapshot_uses_latest_simultaneous_gate_without_exposing_records(admin, monkeypatch):
