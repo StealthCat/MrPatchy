@@ -64,3 +64,13 @@ def test_retained_startup_review_does_not_require_active_management(seeded):
     after=seeded.get(url,params={'expected_digest':before['digest']})
     assert after.status_code==200 and after.json()['total']==30
     assert after.json()['digest']==before['digest']
+
+
+def test_cron_gap_describes_shown_shell_and_path_without_overclaiming():
+    """#837: the gap no longer says PATH/SHELL are unevaluated, and still discloses what is not evaluated."""
+    from app import startup_inventory
+    text=' '.join(startup_inventory.GAPS)
+    assert 'PATH/SHELL settings' not in text
+    assert 'SHELL and PATH its crontab file assigns above it' in text
+    assert 'cron daemon defaults, /etc/environment, PAM-supplied environment' in text
+    assert 'whether the cron daemon runs is not evaluated' in text
