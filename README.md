@@ -41,7 +41,7 @@ follow [CONTRIBUTING.md](CONTRIBUTING.md).
 | Investigations | Optional two-stage OpenAI triage, persistent redacted run logs, worker health/backoff diagnostics, live lease expiry with recovery and billing caveats, bounded manual retry, fixed read-only evidence checks, explicit known-good approvals and a saved-settings connection test; administrator selection of up to 50 completed investigations across pages and All/Cached filters for all-or-nothing fresh AI triage with revision checks; selections drop when a returning row's verdict or revision changes, approval withdrawal and per-item audit; cached known-good verdicts receive a display-only mark and administrator source links (other roles see only the mark); administrators can retry up to 200 fleet investigations blocked by non-transient AI configuration failures in one audited batch, with normal scheduler admission controlling execution and no provider request at queue time; the legacy triage status shows the later reopening time across active attempt and run windows; no fleet-wide select-all |
 | Fleet analysis | **Available patches** view of every pending package update across the fleet, opened from navigation or the Overview **Updates available** card, with server-side paging, search and server, priority, status and disabled-server filters; API-only saved server queries for OS, package, state, enabled and overdue updates, with paginated host/package evidence, query versions and freshness indicators (up to 100 hosts and 20 matching packages per host) |
 | Identity | Local administrator password-reset script, dedicated Users page, named administrator/operator/viewer accounts, self-service passwords, administrator-assisted MFA recovery, TOTP MFA, session revocation, OIDC SSO with manageable explicit issuer/subject bindings, verified SSH-key rotation |
-| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; resolved history is pruned after configured history retention while active events are kept; durable signed-in arrival cursor for newly committed visible revisions; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; admin-only, attention-only telemetry-loss notices after a configurable threshold (default 15 minutes, Settings → Patch policy) of scheduler-leader observation, resolving on recovery, disable or deletion (a paused leader can briefly over-report on resume); fixed-text admin-only resource-attention notices when fresh enrolled-agent telemetry reports free disk space, inodes or memory at 10% or less available or an unsynchronized kernel clock (capacity notices clear only above 15%; stale or unknown telemetry does not clear active notices; advisory only, no response authorization); verified-TLS SMTP or HTTPS webhook delivery |
+| Notifications | Persistent authenticated-shell bell with permission-filtered unread severity and an eight-item recent panel; deep-linkable retained-history center with bounded pagination and unread, dismissed, severity, source and server filters; resolved history is pruned after configured history retention while active events are kept; durable signed-in arrival cursor for newly committed visible revisions; exact-revision per-user read/dismiss state; monitoring and recovery-required alerts with acknowledgements/retries; admin-only, attention-only telemetry-loss notices after a configurable threshold (default 15 minutes, Settings → Patch policy) of scheduler-leader observation, resolving on recovery, disable or deletion (a paused leader can briefly over-report on resume); fixed-text admin-only resource-attention notices when fresh enrolled-agent telemetry reports free disk space, inodes or memory at or below a configurable available percentage (default 10%, whole percent 1–50, Settings → Patch policy, audited) or an unsynchronized kernel clock (capacity notices clear only 5 points above that threshold, 15% by default; stale or unknown telemetry does not clear active notices; advisory only, no response authorization); verified-TLS SMTP or HTTPS webhook delivery |
 | Deployment and recovery | SQLite or MySQL, coordinated worker replicas, Caddy HTTPS, certificate upload/custom ACME, encrypted restic backup and staged restore |
 
 [Quick start](#quick-start) · [Enrollment](#enroll-a-server-in-three-steps) · [Release upgrades](#distribution-release-upgrades) · [Recovery](#workers-databases-and-backups) · [Documentation](#documentation)
@@ -735,7 +735,8 @@ without reliable pricing or usage—including timeouts and interrupted workers�
 full ceiling counted. Unsent failures release their reservation, including a confirmed
 local connection-pool timeout before a provider request is sent. The separate ledger
 is not deleted with diagnostic AI history and exposes settled, reserved, uncertain,
-remaining and next-reset values in Settings and AI worker status. The administrator
+remaining and next-reset values in Settings and AI worker status; each response derives
+its budget and rate details from one saved-configuration read. The administrator
 sets the USD/day amount and explicit IANA reset timezone; mode, cap and timezone
 changes are audited. Changing the reset timezone retains unreleased spend while
 its original admission window is still open, alongside spend in the current local
@@ -745,7 +746,9 @@ and may differ from the provider invoice.
 In capped modes, AI Settings also shows how many counted transmitted calls await
 reconciliation and the oldest retained reservation time among them. This includes
 calls from still-counted prior windows. The time is the reservation time, because the
-ledger keeps no separate transmission timestamp.
+ledger keeps no separate transmission timestamp. The same notice splits the unreconciled
+amount into sent calls still awaiting reconciled usage and calls with a recorded uncertain
+outcome; both count toward the cap.
 
 A confirmed local HTTP connection-pool timeout receives a short local retry delay
 without creating or changing the fleet-wide provider backoff. Provider and ambiguous
@@ -913,7 +916,9 @@ legacy scoring membership; unrelated runs return 404 in that context. List purpo
 and pagination are remembered separately for fleet and each server during navigation
 and refresh, clearing on reload/sign-out. Back/Forward and direct detail reloads
 work without sending AI requests. Cost estimates/partial/unavailable states retain
-their saved usage/rate limitations; shared batch cost covers the whole run.
+their saved usage/rate limitations; shared batch cost covers the whole run. A run is
+marked as a shared batch when its retained server membership, or legacy update-scoring
+links, cover more than one server.
 Historical AI views remain available under existing administrator and lifecycle
 controls. No retry, approval or target action occurs when browsing.
 

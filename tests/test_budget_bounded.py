@@ -38,8 +38,10 @@ def test_distinct_receipts_return_bounded_totals(admin, monkeypatch, capsys, cou
         def observed(statement, *args, **kwargs):
             result=execute(statement, *args, **kwargs)
             if 'ai_budget_entries' in str(statement):
-                assert len(statement.selected_columns)==2
-                values=result.all(); rows.extend(values); return values
+                assert len(statement.selected_columns)==1
+                snapshot=result.freeze()
+                rows.extend(snapshot().all())
+                return snapshot()
             return result
         monkeypatch.setattr(session, 'execute', observed)
         start_time=time.perf_counter()
@@ -47,7 +49,7 @@ def test_distinct_receipts_return_bounded_totals(admin, monkeypatch, capsys, cou
         candidate_seconds=time.perf_counter()-start_time
         dialect=session.get_bind().dialect.name
     assert state[5]==baseline_total==Decimal(count*(count+1)//2)/10**9
-    assert len(rows)<=5, f'Aggregation returned {len(rows)} ledger groups'
+    assert len(rows)==1
     with capsys.disabled():
         print('\nBudget aggregation acceptance: '+json.dumps({'database':dialect,
             'distinct_receipts':count, 'baseline_result_rows':len(baseline),
@@ -82,11 +84,66 @@ def test_mixed_and_unknown_totals_match_retained_numeric_values(admin):
     event.listen(ai_budget.BudgetEntry, 'load', observe)
     try:
         with Session() as session:
-            state=ai_budget._state(session, config(session), now)
+            state=ai_budget._state(session, config(session), now, include_reconciliation=True)
     finally:event.remove(ai_budget.BudgetEntry, 'load', observe)
     assert not loaded
     assert state[5]==counted
     assert state[4]=={k:expected[k] for k in ('reserved','sent','settled','uncertain')}
+
+
+def test_cap_decisions_use_one_ungrouped_exact_total(admin, monkeypatch):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from sqlalchemy import event
+
+    from app import ai
+    from app.db import engine
+    from test_ai_budget import payload
+
+    now=datetime(2026,3,9,0,30,tzinfo=timezone.utc).timestamp()
+    configure(cap=Decimal('1'))
+    monkeypatch.setattr(ai_budget, 'time', SimpleNamespace(time=lambda: now))
+    monkeypatch.setattr(ai_budget.ai_pricing, 'reservation', lambda _: {
+        'ok': True, 'amount_usd': Decimal('0.000001')})
+    entries=[
+        ('settled', now, now+3600, '0.1', '0.000000003'),
+        ('reserved', now, now+3600, '0.3', None),
+        ('sent', now, now+3600, '0.2', None),
+        ('uncertain', now, now+3600, '0.25', None),
+        ('unknown_prior', now-7200, now+3600, '0.249999', None),
+        ('released', now, now+3600, '9', None),
+        ('settled', now-7200, now-3600, '9', None),
+    ]
+    with Session() as session:
+        session.add_all(ai_budget.BudgetEntry(id=str(i),created=created,updated=created,
+            reset_at=reset,timezone='UTC',model='fixture',status=status,
+            reservation_usd=Decimal(reserved),actual_usd=Decimal(actual) if actual is not None else None,
+            pricing_version='fixture',pricing_source='fixture')
+            for i,(status,created,reset,reserved,actual) in enumerate(entries))
+        session.commit()
+        result=ai_budget.status(session,now)
+    assert result['counted_usd']=='0.999999003'
+    assert result['remaining_usd']=='0.000000997'
+    assert result['unreconciled_call_count']==2
+
+    selects=[]
+    def capture(_connection,_cursor,statement,*_args):
+        sql=' '.join(statement.lower().split())
+        if sql.startswith('select') and ' from ai_budget_entries ' in sql:
+            selects.append(sql)
+
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        with Session() as session:
+            assert ai_budget.waiting(session,now)==0
+            assert ai_budget.waiting(session,now,payload())==result['next_reset']
+        with pytest.raises(ai.AIError,match='safe reservation'):
+            ai_budget.reserve(payload())
+    finally:
+        event.remove(engine,'before_cursor_execute',capture)
+    assert len(selects)==3
+    assert all(' group by ' not in statement for statement in selects)
 
 
 def test_large_ledger_parallel_cap_admission_is_still_atomic(admin, monkeypatch):

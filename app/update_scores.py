@@ -4,8 +4,9 @@ import json
 import math
 import time
 from typing import NamedTuple
-from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_, update
+from sqlalchemy import String, Text, Integer, Double, Index, select, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
+from sqlalchemy import Boolean, column, literal
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy, ai_retry
@@ -38,6 +39,24 @@ BLOCKED_SUFFIX=(' No automatic retry is scheduled until the saved AI model or AP
     'the exact package evidence remains queued.')
 
 
+# A refusal and token-budget exhaustion reached the provider (#1158/#1162), so neither
+# may read as a key problem or as "nothing was sent". Eligibility is unchanged: the
+# configuration signature still re-admits on a model or key change.
+MODEL_REFUSAL_EXPLANATION=('The AI model declined to score these package updates. The request was sent and may be '
+    'billed. Changing the API key does not help; a different model may score them.')
+TOKEN_BUDGET_EXPLANATION=('The AI model used its whole response token budget before finishing these update scores. '
+    'The request was sent and may be billed. Select a model that completes within Mr Patchy\'s scoring budget. '
+    'Changing the API key does not help.')
+
+
+def blocked_explanation(error):
+    """Explanation stored on every package of a blocked batch (#1162)."""
+    cause=getattr(error,'cause',None)
+    if cause==ai.MODEL_REFUSAL:return MODEL_REFUSAL_EXPLANATION+BLOCKED_SUFFIX
+    if cause==ai.TOKEN_BUDGET:return TOKEN_BUDGET_EXPLANATION+BLOCKED_SUFFIX
+    return ai_runs.safe_error(error)+BLOCKED_SUFFIX
+
+
 def blocked_by(error):
     """True for a non-transient, non-policy AI failure (#790 AC1).
 
@@ -52,6 +71,7 @@ def blocked_by(error):
 
 SCORE_HISTORY_INDEX = Index('ix_update_scores_host_name_state_candidate',
     UpdateScore.host_id, UpdateScore.name, UpdateScore.state, UpdateScore.candidate)
+SCORE_RUN_HOST_INDEX = Index('ix_update_scores_run_id_host_id', UpdateScore.run_id, UpdateScore.host_id)
 
 
 def _inventory_scoring_context(inventory):
@@ -148,6 +168,19 @@ def _scoring_package_filters():
             Package.host_id.in_(host_lifecycle.active_ids()))
 
 
+def scoring_package_page(session, cursor, limit):
+    """Read the ordered scoring inputs shared by scheduling and queue status."""
+    query = select(Package).options(load_only(
+        Package.id, Package.host_id, Package.name, Package.installed, Package.candidate,
+        Package.priority, Package.priority_manual, Package.available_since, Package.held,
+        Package.dpkg_state, raiseload=True,
+    )).where(*_scoring_package_filters())
+    if cursor is not None:
+        query = query.where(or_(Package.available_since > cursor[0],
+                               and_(Package.available_since == cursor[0], Package.id > cursor[1])))
+    return list(session.scalars(query.order_by(Package.available_since, Package.id).limit(limit)))
+
+
 def scoring_candidates(s):
     """Read ordered candidates and exact/deferred score state in bounded chunks.
 
@@ -158,11 +191,7 @@ def scoring_candidates(s):
     cursor = None
     hosts = {}
     while True:
-        query=select(Package).where(*_scoring_package_filters())
-        if cursor is not None:
-            query=query.where(or_(Package.available_since>cursor[0],
-                and_(Package.available_since==cursor[0],Package.id>cursor[1])))
-        packages=list(s.scalars(query.order_by(Package.available_since,Package.id).limit(200)))
+        packages = scoring_package_page(s, cursor, 200)
         if not packages:
             # Only an exhausted pass knows which servers were absent.
             for host_id in _MEMO.keys() - hosts.keys():
@@ -181,19 +210,41 @@ def scoring_candidates(s):
                 host, memo = entry
                 current.append((package, host, cached_identity(host, package, memo)))
         if not current:continue
-        score_state=select(UpdateScore).options(load_only(UpdateScore.id,UpdateScore.host_id,
-            UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,UpdateScore.configuration,raiseload=True))
-        scores={r.id:r for r in s.scalars(score_state.where(UpdateScore.id.in_([key for _,_,key in current])))}
-        scopes={(p.host_id,p.name) for p,_,_ in current};deferred={}
-        for row in s.scalars(score_state.where(UpdateScore.state=='deferred',
-                tuple_(UpdateScore.host_id,UpdateScore.name).in_(scopes))):
-            deferred.setdefault((row.host_id,row.name),[]).append(row)
+        fields = (UpdateScore.id, UpdateScore.host_id, UpdateScore.name, UpdateScore.state,
+                  UpdateScore.attempted, UpdateScore.next_at, UpdateScore.configuration)
+        keys = [key for _, _, key in current]
+        scopes = {(package.host_id, package.name) for package, _, _ in current}
+        exact = select(*fields, literal(False).label('scope_match')).where(UpdateScore.id.in_(keys))
+        by_scope = select(*fields, literal(True).label('scope_match')).where(
+            UpdateScore.state == 'deferred', tuple_(UpdateScore.host_id, UpdateScore.name).in_(scopes))
+        # Each branch keeps its own indexed filter. The marker preserves both
+        # memberships when the current score is also deferred.
+        score_query = select(UpdateScore, column('scope_match', Boolean)).options(
+            load_only(*fields, raiseload=True)).from_statement(exact.union_all(by_scope))
+        scores = {}
+        deferred = {}
+        for row, scope_match in s.execute(score_query):
+            if scope_match:
+                deferred.setdefault((row.host_id, row.name), []).append(row)
+            else:
+                scores[row.id] = row
         for package,host,key in current:
             yield package,host,key,scores.get(key),deferred.get((host.id,package.name),())
 
 
 def _batch_scores(s, ids):
     return {row.id:row for row in s.scalars(select(UpdateScore).where(UpdateScore.id.in_(ids)))}
+
+
+def needs_dispatch(session):
+    """Schedule enabled scoring or recovery of a previously started run."""
+    settings = config(session)
+    if settings['ai_enabled'] and settings['ai_updates_enabled']:
+        return True
+    run = ai_runs.AIRun
+    return session.scalar(select(run.id).where(
+        run.purpose == 'update_scoring', run.state == 'running',
+    ).limit(1)) is not None
 
 
 def run_one():
@@ -224,8 +275,12 @@ def run_one():
             if not cfg['ai_enabled'] or not cfg['ai_updates_enabled'] or not cfg['ai_model'] or not secret:return
             signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
             if cfg['ai_control_mode']=='legacy':
-                count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600))
-                if count>=cfg['ai_update_hourly_limit']:return
+                limit=math.ceil(cfg['ai_update_hourly_limit'])
+                if limit<=0:return
+                recent=(select(ai_runs.AIRun.started).where(
+                    ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600)
+                    .offset(limit-1).limit(1).exists())
+                if s.scalar(select(recent)):return
             batch=[]
             for package,host,key,row,deferred in scoring_candidates(s):
                 for stale in deferred:
@@ -278,14 +333,21 @@ def run_one():
                                        for identifier, score in scores.items()}
                         packages = {package.id: package for package in s.scalars(
                             select(Package).where(Package.id.in_(package_ids.values())))}
-                        evidence_host_ids = {score.host_id for score in scores.values()}
-                        hosts = {host.id: host for host in s.execute(
-                            select(Host.id, Host.inventory).where(Host.id.in_(evidence_host_ids)))}
+                        names_by_host = {}
+                        for score in scores.values():
+                            package = packages.get(package_ids[score.id])
+                            if package and package.candidate:
+                                names_by_host.setdefault(score.host_id, set()).add(package.name)
+                        hosts = {
+                            host.id: (host, version_index(host.inventory, names=names_by_host[host.id]))
+                            for host in s.execute(
+                                select(Host.id, Host.inventory).where(Host.id.in_(names_by_host)))
+                        }
                         for item in rows:
                             row = scores[item['id']]
                             package = packages.get(package_ids[row.id])
-                            host = hosts.get(row.host_id)
-                            if not package or not host or not package.candidate or identity(host,package)!=row.id:
+                            host, index = hosts.get(row.host_id, (None, None))
+                            if not package or not host or not package.candidate or identity(host,package,index)!=row.id:
                                 row.state='superseded';row.next_at=0;row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
                             row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.next_at=0;row.completed=time.time()
                         s.commit()
@@ -302,7 +364,7 @@ def run_one():
                     row.state='deferred' if deferred else 'blocked' if blocked else 'error';row.next_at=next_at
                     row.configuration=signature if blocked else ''
                     row.explanation=('Queued until shared AI eligibility; no evidence was discarded.' if deferred else
-                        ai_runs.safe_error(error)+(BLOCKED_SUFFIX if blocked else ''))
+                        blocked_explanation(error) if blocked else ai_runs.safe_error(error))
                 s.commit()
             if deferred:ai_runs.defer(run_id,next_at)
     finally:lock.release()

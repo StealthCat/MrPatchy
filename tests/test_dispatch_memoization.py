@@ -1,4 +1,5 @@
 """Queued dispatch must not repeat host-wide eligibility work for sibling jobs."""
+from collections.abc import Mapping
 from concurrent.futures import Future
 from types import SimpleNamespace
 
@@ -110,3 +111,56 @@ def test_closed_patch_window_does_not_block_later_nonpatch_work(admin, monkeypat
     dispatch_once(monkeypatch)
 
     assert submitted==['allowed-refresh']
+
+
+def test_paused_plan_backlog_checks_policy_once_and_rechecks_after_resume(admin, monkeypatch):
+    with Session() as session:
+        session.merge(Setting(key='config', value={'ai_enabled': True}))
+        for host_id in ('paused', 'malformed', 'ready'):
+            session.add(Host(id=host_id, name=host_id, address='192.0.2.1', fingerprint=''))
+        session.add(Setting(key='server-ai:paused', value={'paused': True}))
+        session.add(Setting(key='server-ai:malformed', value=['invalid policy']))
+        for host_id in ('paused', 'malformed'):
+            for index, action in enumerate(('security-plan', 'startup-plan', 'release-plan') * 4):
+                session.add(Job(id=f'{host_id}-{index}', host_id=host_id, action=action, created=index))
+        session.add_all([
+            Job(id='ready-plan', host_id='ready', action='security-plan', created=100),
+            Job(id='paused-refresh', host_id='paused', action='refresh', created=101),
+        ])
+        session.commit()
+
+    submitted = []
+
+    def submit(pool, job, active, busy):
+        submitted.append(job.id)
+        future = Future()
+        future.set_result(None)
+        active[job.id] = (future, job.host_id)
+        busy.add(job.host_id)
+        return True
+
+    policy_reads = []
+
+    def observe(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().lower().startswith('select'):
+            values = parameters.values() if isinstance(parameters, Mapping) else parameters
+            policy_reads.extend(value for value in values if value in ('server-ai:paused', 'server-ai:malformed'))
+
+    monkeypatch.setattr(worker, 'submit_job', submit)
+    event.listen(engine, 'before_cursor_execute', observe)
+    try:
+        with monkeypatch.context() as scan:
+            dispatch_once(scan)
+    finally:
+        event.remove(engine, 'before_cursor_execute', observe)
+
+    assert submitted == ['ready-plan', 'paused-refresh']
+    assert sorted(policy_reads) == ['server-ai:malformed', 'server-ai:paused']
+
+    with Session() as session:
+        session.merge(Setting(key='server-ai:paused', value={'paused': False}))
+        session.commit()
+    submitted.clear()
+    with monkeypatch.context() as scan:
+        dispatch_once(scan)
+    assert submitted == ['paused-0', 'ready-plan']

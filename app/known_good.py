@@ -17,7 +17,7 @@ import time
 
 from sqlalchemy import Boolean, Double, Integer, JSON, String, case, func, select, true
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, aliased, mapped_column
 from .db import Base, audit
 
 FINGERPRINT_VERSION = 1
@@ -609,22 +609,25 @@ def avoided_estimate(s):
     result = {'reuse_with_priced_source': 0, 'reuse_with_unpriced_source': 0,
         'reuse_with_unavailable_source': 0, 'estimated_calls': 0,
         'estimated_usd': None, 'currency': 'USD'}
-    per_entry = s.execute(select(Observation.fingerprint, func.count()).join(
-        Entry, Entry.fingerprint == Observation.fingerprint).join(
-        Assessment, Assessment.id == Observation.assessment_id,
-    ).where(Assessment.source == 'known_good').group_by(Observation.fingerprint)).all()
+    origin = aliased(Assessment)
+    per_run = s.execute(
+        select(origin.run_id, func.count()).select_from(Observation)
+        .join(Entry, Entry.fingerprint == Observation.fingerprint)
+        .join(Assessment, Assessment.id == Observation.assessment_id)
+        .outerjoin(origin, origin.id == Entry.assessment_id)
+        .where(Assessment.source == 'known_good')
+        # Keep distinct IDs separate under case-insensitive MySQL collations.
+        .group_by(origin.run_id, func.hex(origin.run_id))
+    ).all()
     amount = Decimal(0)
-    for start in range(0, len(per_entry), LOOKUP_READ_BATCH):
-        batch = dict(per_entry[start:start + LOOKUP_READ_BATCH])
-        runs = dict(s.execute(select(Entry.fingerprint, Assessment.run_id).join(
-            Assessment, Assessment.id == Entry.assessment_id).where(
-            Entry.fingerprint.in_(batch))).all())
-        run_ids = {value for value in runs.values() if value}
+    for start in range(0, len(per_run), LOOKUP_READ_BATCH):
+        batch = per_run[start:start + LOOKUP_READ_BATCH]
+        run_ids = [run_id for run_id, _ in batch if run_id]
         rows = {row.id: row for row in s.scalars(select(ai_runs.AIRun).where(
             ai_runs.AIRun.id.in_(run_ids)))} if run_ids else {}
         receipts = ai_runs.call_receipts(s, list(rows))
-        for fingerprint, reused in batch.items():
-            run = rows.get(runs.get(fingerprint) or '')
+        for run_id, reused in batch:
+            run = rows.get(run_id)
             cost = ai_runs.cost_summary(run, receipts[run.id]) if run else None
             if cost is None or cost['status'] == 'no_calls' or cost['in_progress']:
                 result['reuse_with_unavailable_source'] += reused

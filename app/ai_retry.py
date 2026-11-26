@@ -16,6 +16,8 @@ from .db import Base, Behavior, Setting, config
 MAX_ATTEMPTS=5
 RATE_WAIT_REASON='Waiting for shared AI rate eligibility; no provider request was sent.'
 BUDGET_WAIT_REASON='Waiting for the daily AI spend cap to reset; no provider request was sent.'
+FOLLOW_UP_BUDGET_WAIT_REASON=('Waiting for the daily AI spend cap to reset before the required follow-up; the follow-up was not sent, '
+    'but the earlier first-stage provider call was sent and can still count toward the cap.')
 PROVIDER_BLOCKED_REASON='Review the failure and correct API configuration or explicitly retry. No automatic retry is scheduled.'
 # A local refusal is not a key, quota or model problem (#1007): say so, so an
 # administrator does not rotate the key or change the model to clear it.
@@ -45,8 +47,9 @@ class TriageRetry(Base):
     reason: Mapped[str]=mapped_column(Text,default='')
 
 
-def configuration(s):
-    cfg=config(s);key=s.get(Setting,'openai_key')
+def configuration(s, *, settings=None):
+    cfg = config(s) if settings is None else settings
+    key = s.get(Setting, 'openai_key')
     return configuration_signature(cfg['ai_model'],key.value if key else None)
 
 
@@ -93,7 +96,7 @@ def begin(s,row,signature,now):
 
 
 def failed(s,row,error,now):
-    from .ai import AIError
+    from .ai import AIError, BUDGET_CONNECTION_LOST, defer_until
     retry=s.get(TriageRetry,row.id)
     retry.state='blocked';retry.next_at=0
     retry.reason=PROVIDER_BLOCKED_REASON
@@ -109,13 +112,16 @@ def failed(s,row,error,now):
         provider_wait=(provider_wait if type(provider_wait) in (int,float)
             and math.isfinite(provider_wait) and provider_wait>0 else 0)
         budget_reset=getattr(error,'budget_wait_until',None)
-        if provider_wait:
+        if cause==BUDGET_CONNECTION_LOST:
+            retry.next_at=defer_until(error,now)
+            retry.reason=error.diagnostic
+        elif provider_wait:
             retry.provider_until=provider_wait
             retry.next_at=max(now,provider_wait)
             retry.reason='Waiting for shared provider backoff; no provider request was sent.'
         elif budget_reset is not None:
             retry.next_at=max(now,budget_reset)
-            retry.reason=BUDGET_WAIT_REASON
+            retry.reason=FOLLOW_UP_BUDGET_WAIT_REASON if cause=='follow_up_budget' else BUDGET_WAIT_REASON
         elif error.retry_after:
             # Only rate waiters share the pacing queue. Budget and provider
             # waits each have their own time boundary.
@@ -173,8 +179,13 @@ def summary(retry,signature,now,attempted=0):
         return {'state':'legacy_wait' if attempted>now-3600 else 'ready','attempts':0,
                 'next_at':attempted+3600 if attempted>now-3600 else 0,'reason':''}
     exhausted=retry.state=='interrupted' and retry.attempts>=MAX_ATTEMPTS
-    changed=(retry.state=='blocked' or exhausted) and retry.configuration!=signature and retry.provider_until<=now
-    if exhausted and not changed:return {'state':'blocked','attempts':retry.attempts,'next_at':0,'reason':'Interrupted automatic attempt limit reached. Review the failure before explicitly retrying.'}
-    state='ready' if changed or (retry.state in ('deferred','interrupted') and retry.next_at<=now) else retry.state
+    if (retry.state=='blocked' or exhausted) and retry.configuration!=signature:
+        if retry.provider_until>now:
+            return {'state':'deferred','attempts':retry.attempts,'next_at':retry.provider_until,
+                    'reason':'API configuration changed. Waiting for the provider Retry-After to expire.'}
+        return {'state':'ready','attempts':retry.attempts,'next_at':0,
+                'reason':'API configuration changed; eligible for another attempt.'}
+    if exhausted:return {'state':'blocked','attempts':retry.attempts,'next_at':0,'reason':'Interrupted automatic attempt limit reached. Review the failure before explicitly retrying.'}
+    state='ready' if retry.state in ('deferred','interrupted') and retry.next_at<=now else retry.state
     return {'state':state,'attempts':retry.attempts,'next_at':retry.next_at or retry.provider_until,
-            'reason':'API configuration changed; eligible for another attempt.' if changed else retry.reason}
+            'reason':retry.reason}
