@@ -2245,6 +2245,16 @@ coverage and truncation, and keeps individual run logs available when the summar
 request fails. The panel is read-only and available to administrators. Matched
 production serial/parallel measurements remain outstanding.
 
+### Update-scoring admission timing — Roadmap A checkpoint #1333
+
+AI stage timings for update scoring report one monotonic admission
+measurement for each tracked batch. It covers candidate selection, evidence
+and payload preparation, and committing the running score rows. Recovery,
+host/provider gate checks, provider calls and result persistence happen
+outside this measurement. Idle polls have no run or admission sample.
+Successful runs and provider refusals retain admission in the same redacted
+timing buffer as the other stages. Production throughput remains open.
+
 ### Update-scoring candidate database reads
 
 Candidate discovery reads server IDs and inventory in its existing bounded
@@ -3764,6 +3774,22 @@ receipt can still settle it. Duplicate or stale failure reports leave the
 existing ledger state intact. The wider shared spend-control and performance
 milestones remain open.
 
+### Budget reset guidance from the current ledger snapshot — worker checkpoint #1457
+
+The current daily budget summary reads spend, outstanding receipt counts and
+reset guidance in one grouped ledger statement. A positive charge from a
+prior timezone can outlive the configured reset. The dashboard reports that
+boundary as a recheck whenever the same rows contributing to the displayed
+total include that carryover. A release committed during the read is visible
+on the next refresh.
+
+Acceptance covers a release through the normal unsent-reservation path on
+another connection, positive and zero settled cost, an unknown retained
+status, released rows, and exact timestamp boundaries. The reset indicator
+uses the existing amount and window rules. Admission, reservations and alerts
+continue to use their existing ledger checks. Fleet-wide performance and
+the wider Roadmap A acceptance remain open.
+
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
 The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
@@ -3800,6 +3826,20 @@ receipt exactly matches, including the empty receipt used outside a tracked run.
 SQLite and MySQL use exact comparisons for both fields. Potentially incurred
 charges stay counted, and the release reason and time remain in the ledger.
 Fleet throughput and the wider shared-admission milestones remain open.
+
+### Record capped provider transmission in one ledger write — worker checkpoint #1459
+
+Before a capped call reaches the provider, the worker changes its ledger
+reservation to sent with one primary-key update under the shared budget lock.
+The update matches the exact reserved state and commits the receipt ID, time and
+existing diagnostic. Missing, changed or malformed reservations stop
+transmission. A second worker attempting the same transition also stops.
+
+Acceptance observes the default provider flow with a disposable transport,
+then checks committed ledger and receipt state from a second database session.
+The same tests cover concurrent attempts and exact status matching on SQLite
+and MySQL. The change preserves conservative charges for unknown provider
+outcomes and leaves throughput acceptance open.
 
 ### Unknown pricing and usage under a daily cap — worker checkpoint #994
 
@@ -3902,6 +3942,12 @@ and both together, compare the admin endpoints and verify actual claim
 eligibility immediately before and at the reported boundary. Explicit AI
 control modes retain their own gate timing. This checkpoint changes queue
 visibility. Admission, reservations and provider calls follow the existing path.
+
+Roadmap A checkpoint #1400 bounds legacy process-triage claim admission to
+one query. The two indexed probes seek the configured threshold in recent
+behavior attempts and triage runs. Either match holds admission, with the same
+strict one-hour cutoff. Status still reads full counts to display usage and
+retry deadlines. The query-shape and cutoff regressions exercise real claims.
 
 ### Read legacy AI allowance deadlines with their counts — Roadmap A checkpoint #1208
 
@@ -14483,3 +14529,22 @@ polkitd loads every `*.rules` JavaScript file from `/etc/polkit-1/rules.d` and `
   - agent collection;
   - a catalog entry, package provenance, persistence, UI and AI classification of rule contents;
   - `.pkla` local-authority files for polkit 0.105 (Ubuntu 22.04).
+
+### rsyncd.conf exec-command contract — worker checkpoint #1395 (roadmap F)
+
+`rsync --daemon` reads `/etc/rsyncd.conf` again for every connection. When a client opens a module, the daemon runs that module's `post-xfer exec`, `early exec`, `pre-xfer exec` and `name converter` values through `/bin/sh -c` (or `$RSYNC_SHELL -c`). They run as the daemon itself, which is root under the stock `rsync.service`, not as the module's `uid`/`gid` and outside the module chroot. The startup inventory did not model these commands.
+
+- **Change:** the pure `app/rsyncd_exec.py` takes captured file text and returns each command the daemon would run: module, kind, when it runs in the connection, the raw command and its SHA-256, the line and whether the value came from a global default, the run-as user and group (`daemon uid`/`daemon gid`, or the daemon's starting user), and the `daemon chroot` root. It performs no I/O and never runs a command.
+- **Fidelity:** it emulates rsync 3.2.7 `params.c` byte by byte: comments, the bogus-backslash skip, continuations, whitespace collapsing and `\r` removal. It also models these `loadparm.c` rules:
+  - labels match ignoring case and whitespace;
+  - names starting with `-`, and unknown names, are ignored;
+  - a module copies the global defaults current when it is created;
+  - a repeated section reuses the module, matched by its current name;
+  - an unset value falls back to the final global default, and an empty value disables a command;
+  - a global parameter inside a module is ignored, and `name` renames a module.
+  
+  A module whose exact name is reused later, or that has no `path`, runs nothing. A rejected configuration is reported as `config_rejected` with no commands: an empty or unterminated section, `/` in a module name, an empty parameter name or an unknown `&` directive.
+- **Fail closed:** an unobserved file, NUL bytes, over-limit input and `&include`/`&merge` directives make the result incomplete. A `%VAR%` reference is flagged because the daemon environment is not observed. Unknown module `uid`/`gid` names refuse the module before any command runs, and this is not modelled, so the result over-reports and says so. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_rsyncd_exec.py` (9 tests). A differential harness ran random configurations through the real rsync 3.2.7 daemon in single-use remote-shell mode and probed every module, with 0 disagreements. The configurations mixed label variants, `[global]` sections, repeated and renamed modules, empty values, continuations, comments, `\r`, missing paths and rejected section names.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection, a catalog entry, `&include`/`&merge` resolution, package provenance, persistence, UI and AI classification.
