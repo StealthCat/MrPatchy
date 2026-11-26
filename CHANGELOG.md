@@ -1,3 +1,12 @@
+## 1.110.0 — 2026-11-26
+
+1. [PR #1577](https://github.com/StealthCat/MrPatchy/pull/1577): The agent's built-in startup inventory now hashes `/etc/rsnapshot.conf` as metadata, with a `schedule`-triggered rsnapshot mechanism and a coverage gap noting that its root hook and backup commands are not parsed yet. Compatibility: the path joins the reviewed additive built-in scope, so older baselines list it as newly in scope, saved custom paths stay valid, and older agents keep working. No file content is collected. Refs #1530 (increment 2).
+2. [PR #1576](https://github.com/StealthCat/MrPatchy/pull/1576): After taking the server queue lock, triage rereads the elected behavior and its server lifecycle (ID, enabled, deletion time) in one database statement. The subject must still belong to the elected server before a lease is created, so a stale election that supplied another server's behavior is now refused. Compatibility: no schema or API change. Fixes #1575.
+3. [PR #1422](https://github.com/StealthCat/MrPatchy/pull/1422): A pure Roadmap F SDDM contract (`app/sddm_display_scripts.py`) resolves which display setup and stop scripts, and which X server command, SDDM runs as root, from its effective configuration. Compatibility: new module only. Closes #1421.
+4. [PR #1406](https://github.com/StealthCat/MrPatchy/pull/1406): A pure Roadmap F GDM contract (`app/gdm_scripts.py`) resolves which `Init`, `PostLogin`, `PreSession` and `PostSession` scripts gdm runs as root, for which display or remote host, and whether their failure blocks login. It reports explicit coverage gaps rather than guessing. Compatibility: new module only. Refs #1405 (increment 1).
+
+Integrated together through batch [PR #1582](https://github.com/StealthCat/MrPatchy/pull/1582). This source update does not publish a Docker image.
+
 ## 1.109.1 — 2026-11-26
 
 1. [PR #1574](https://github.com/StealthCat/MrPatchy/pull/1574): Settings and Investigations read both legacy triage activity windows (attempts and triage runs) in one SQL statement, so the displayed usage and hold describe the same snapshot. Usage is still the greater of the two counters, and the hold clears when both do. Compatibility: no schema, API or admission change. Fixes #1573.
