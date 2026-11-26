@@ -16,6 +16,8 @@ from .db import Base, Behavior, Setting, config
 MAX_ATTEMPTS=5
 RATE_WAIT_REASON='Waiting for shared AI rate eligibility; no provider request was sent.'
 BUDGET_WAIT_REASON='Waiting for the daily AI spend cap to reset; no provider request was sent.'
+FOLLOW_UP_BUDGET_WAIT_REASON=('Waiting for the daily AI spend cap to reset before the required follow-up; the follow-up was not sent, '
+    'but the earlier first-stage provider call was sent and can still count toward the cap.')
 PROVIDER_BLOCKED_REASON='Review the failure and correct API configuration or explicitly retry. No automatic retry is scheduled.'
 # A local refusal is not a key, quota or model problem (#1007): say so, so an
 # administrator does not rotate the key or change the model to clear it.
@@ -118,7 +120,7 @@ def failed(s,row,error,now):
             retry.reason='Waiting for shared provider backoff; no provider request was sent.'
         elif budget_reset is not None:
             retry.next_at=max(now,budget_reset)
-            retry.reason=BUDGET_WAIT_REASON
+            retry.reason=FOLLOW_UP_BUDGET_WAIT_REASON if cause=='follow_up_budget' else BUDGET_WAIT_REASON
         elif error.retry_after:
             # Only rate waiters share the pacing queue. Budget and provider
             # waits each have their own time boundary.
