@@ -191,6 +191,8 @@ def test_limited_page_total_and_capacity_share_one_backlog_read(admin):
     # The other two reads build the existing model/key retry signature.
     assert len(statements) == 3
     assert sum('FROM behaviors' in statement for statement in statements) == 1
+    if engine.dialect.name == 'mysql':
+        assert 'FORCE INDEX FOR JOIN (ix_ai_triage_claims_host_id)' in statements[-1]
     assert breakdown(now, limit=10_000)['max_servers'] == triage_queue_servers.MAX_SERVERS
 
 

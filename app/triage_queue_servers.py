@@ -80,6 +80,9 @@ def status(session, now=None, limit=MAX_SERVERS):
     # left the pending scope while the investigation was active.
     active_leases = (select(func.count()).select_from(claim)
         .where(claim.host_id == backlog.c.host_id, claim.expires > now)
+        # MySQL can choose a full scan for each correlated lookup on a small
+        # lease table. Use the existing host index to keep the lookup host-scoped.
+        .with_hint(claim, 'FORCE INDEX FOR JOIN (ix_ai_triage_claims_host_id)', dialect_name='mysql')
         .correlate(backlog).scalar_subquery())
     rows = session.execute(
         select(backlog, Host.name, Setting.key.label('policy_key'), Setting.value,
