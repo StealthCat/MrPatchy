@@ -107,7 +107,7 @@ def test_catalogs_label_both_files_separately():
     assert rows['tcp_wrappers_allow']['observed_files'] == 1 and rows['tcp_wrappers_deny']['observed_files'] == 1
     mechanism = next(m for m in startup_catalog._MECHANISMS if m['id'] == 'tcp_wrappers')
     assert mechanism['parse'] == 'metadata' and [loc['path'] for loc in mechanism['locations']] == list(WRAPPERS)
-    assert any('/etc/hosts.allow' in gap and 'not yet parsed' in gap for gap in startup_inventory.GAPS)
+    assert any('/etc/hosts.allow' in gap and 'parse their spawn, twist and aclexec commands' in gap for gap in startup_inventory.GAPS)
 
 
 def test_saved_monitor_policy_with_promoted_wrapper_path_is_accepted(admin):

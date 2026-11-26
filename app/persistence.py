@@ -102,9 +102,47 @@ def validate_anacron(anacron,path):
     return len(jobs)
 
 
+TCP_WRAPPERS_FILES=('/etc/hosts.allow','/etc/hosts.deny')
+TCP_WRAPPERS_KEYS={'parsed','entries','skipped','option_errors','error_line','unconditional_line','aclexec_through_unconditional','commands','truncated','redacted'}
+TCP_WRAPPERS_COMMAND_KEYS={'line','option','command','command_truncated','redacted','daemons','clients','matches_every_request','identity_options_ignored','after_runtime_checks'}
+TCP_WRAPPERS_RUNTIME=('user','group','umask','linger','keepalive','nice','severity','setenv','rfc931','banners','aclexec')
+
+
+def _tcpw_line(value):
+    return value is None or (type(value) is int and 1<=value<=1000000)
+
+
+def validate_tcp_wrappers(tcpw,path):
+    """Strictly validate optional parsed hosts.allow/hosts.deny commands reported by newer agents (#1390)."""
+    if path not in TCP_WRAPPERS_FILES:raise ValueError('TCP wrappers commands outside hosts.allow/hosts.deny')
+    if not isinstance(tcpw,dict) or set(tcpw)!=TCP_WRAPPERS_KEYS:raise ValueError('Invalid TCP wrappers commands')
+    if any(type(tcpw[k]) is not bool for k in ('parsed','aclexec_through_unconditional','truncated','redacted')) or any(type(tcpw[k]) is not int or not 0<=tcpw[k]<=1000000 for k in ('entries','skipped','option_errors')):
+        raise ValueError('Invalid TCP wrappers commands')
+    if not _tcpw_line(tcpw['error_line']) or not _tcpw_line(tcpw['unconditional_line']) or (tcpw['aclexec_through_unconditional'] and tcpw['unconditional_line'] is None):
+        raise ValueError('Invalid TCP wrappers commands')
+    commands=tcpw['commands']
+    if not isinstance(commands,list) or len(commands)>CRON_FILE_JOBS or (not tcpw['parsed'] and (commands or tcpw['entries'] or tcpw['skipped'] or tcpw['option_errors'] or tcpw['error_line'] or tcpw['unconditional_line'] or tcpw['truncated'] or tcpw['redacted'])):
+        raise ValueError('Invalid TCP wrappers commands')
+    if tcpw['option_errors']>tcpw['entries'] or (commands and not tcpw['entries']):raise ValueError('Invalid TCP wrappers commands')
+    previous=0
+    for item in commands:
+        if not isinstance(item,dict) or set(item)!=TCP_WRAPPERS_COMMAND_KEYS or item['option'] not in ('spawn','twist','aclexec'):raise ValueError('Invalid TCP wrappers command')
+        if type(item['line']) is not int or not previous<=item['line']<=1000000 or item['line']<1 or (tcpw['error_line'] is not None and item['line']>=tcpw['error_line']):raise ValueError('Invalid TCP wrappers command')
+        previous=item['line']
+        if any(type(item[k]) is not bool for k in ('command_truncated','redacted','matches_every_request')):raise ValueError('Invalid TCP wrappers command')
+        if not isinstance(item['command'],str) or not 1<=len(item['command'])<=CRON_COMMAND_LIMIT or '\x00' in item['command']:raise ValueError('Invalid TCP wrappers command')
+        for key in ('daemons','clients'):
+            tokens=item[key]
+            if not isinstance(tokens,list) or len(tokens)>32 or any(not isinstance(t,str) or not 1<=len(t)<=255 or '\x00' in t for t in tokens):raise ValueError('Invalid TCP wrappers command')
+        for key,allowed in (('identity_options_ignored',('user','group')),('after_runtime_checks',TCP_WRAPPERS_RUNTIME)):
+            names=item[key]
+            if not isinstance(names,list) or any(type(n) is not str or n not in allowed for n in names) or len(set(names))!=len(names):raise ValueError('Invalid TCP wrappers command')
+    return len(commands)
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron job detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers')} if row is not None else None
 
 
 def validate(inventory):
@@ -140,6 +178,9 @@ def validate(inventory):
         if 'anacron' in row:
             if row['kind']!='regular':raise ValueError('Anacron jobs require a regular file')
             validate_anacron(row['anacron'],path)
+        if 'tcp_wrappers' in row:
+            if row['kind']!='regular':raise ValueError('TCP wrappers commands require a regular file')
+            validate_tcp_wrappers(row['tcp_wrappers'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
