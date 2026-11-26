@@ -366,6 +366,9 @@ function bindTriageTimingSummary(root,revision){
    table.innerHTML=hasSamples?`<table><caption>${esc(name)}</caption><thead><tr><th scope="col">Stage</th><th scope="col">Samples</th><th scope="col">Errors</th><th scope="col">p50 (ms)</th><th scope="col">p95 (ms)</th></tr></thead><tbody>${rows.join('')}</tbody></table>`:'';
    table.hidden=!hasSamples;
    status.textContent=`${name}: `+(hasSamples?'':'No retained timing samples. ')+`${count(data.sampled_runs)} runs sampled. ${count(data.runs_without_samples)} without valid samples. ${count(data.discarded_events)} malformed events discarded.`+(data.events_truncated?` Sample limited to the latest ${count(data.event_limit)} timing events.`:'');
+   if(purpose==='update_scoring'&&Object.hasOwn(data.stages,'oldest_update_age')){
+    status.textContent+=' Oldest update age measures time from first observed pending availability to batch selection.';
+   }
    button.textContent='Refresh timing summary';
   }catch{
    if(!current())return;

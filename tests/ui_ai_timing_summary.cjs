@@ -13,7 +13,8 @@ module.exports=async(page,capture)=>{
   }};
   const scoring={...populated,purpose:'update_scoring',sampled_runs:2,runs_without_samples:0,discarded_events:0,events_truncated:false,stages:{
     provider:{samples:2,errors:0,p50_ms:4,p95_ms:9},
-    result_persistence:{samples:2,errors:0,p50_ms:1.5,p95_ms:2}
+    result_persistence:{samples:2,errors:0,p50_ms:1.5,p95_ms:2},
+    oldest_update_age:{samples:1,errors:0,p50_ms:42,p95_ms:42}
   }};
   const routeHandler=async route=>{
     const purpose=new URL(route.request().url()).searchParams.get('purpose');purposes.push(purpose);
@@ -54,6 +55,8 @@ module.exports=async(page,capture)=>{
     await panel.getByRole('row',{name:/result persistence/}).waitFor();
     assert.deepEqual(await panel.getByRole('row',{name:/provider/}).getByRole('cell').allTextContents(),['2','0','4','9']);
     assert.match(await panel.getByRole('status').textContent(),/^Update importance: 2 runs sampled/);
+    assert.match(await panel.getByRole('status').textContent(),/from first observed pending availability to batch selection/);
+    assert.deepEqual(await panel.getByRole('row',{name:/oldest update age/}).getByRole('cell').allTextContents(),['1','0','42','42']);
     assert.equal(await panel.getByRole('table').getByText('Update importance').count(),1);
     assert.equal(purposes.at(-1),'update_scoring');
     for(const width of [320,768,1440]){
@@ -65,6 +68,8 @@ module.exports=async(page,capture)=>{
     await activity.selectOption('triage');
     await panel.getByRole('button',{name:'Load timing summary'}).click();
     await panel.getByRole('row',{name:/ssh evidence/}).waitFor();
+    assert.equal(await panel.getByRole('row',{name:/oldest update age/}).count(),0);
+    assert.doesNotMatch(await panel.getByRole('status').textContent(),/Oldest update age/);
     for(const width of [320,768,1440]){
       await page.setViewportSize({width,height:900});
       assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
