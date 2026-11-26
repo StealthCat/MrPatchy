@@ -2,6 +2,8 @@
 import time
 from decimal import Decimal, InvalidOperation
 
+from sqlalchemy import case, func, null, select, union_all
+
 from . import ai_admission, ai_budget, ai_credential_notifications, ai_pricing, ai_provider_backoff
 from .db import Setting, config
 
@@ -42,28 +44,34 @@ def _money_exhausted(value):
         return True
 
 
-def _window(session, column, conditions, limit, now):
-    """Count one legacy sliding window and when it next drops below ``limit``.
+def _window_query(column, conditions, limit, now):
+    """Select a legacy window's count and the timestamp that keeps it full.
 
     Admission counts entries with ``column > now - 3600``. Once ``count >= limit``
     the gate reopens when the ``limit``-th newest entry leaves the window. Read
     the count and that timestamp in the same statement. The ordered lookup is
     bounded by the allowance even when the window is heavily overfilled.
     """
-    from sqlalchemy import case, func, select
-
     start = now - WINDOW_SECONDS
     where = (column > start, *conditions)
     count = select(func.count().label('used')).where(*where)
     if limit < 1:
-        return session.scalar(count), True, None
+        return count.add_columns(null())
     total = count.subquery()
     pivot = (
         select(column).where(*where)
         .order_by(column.desc()).offset(limit - 1).limit(1).scalar_subquery()
     )
-    used, timestamp = session.execute(select(total.c.used, case((total.c.used >= limit, pivot)))).one()
+    return select(total.c.used, case((total.c.used >= limit, pivot)))
+
+
+def _window_result(row, limit):
+    used, timestamp = row
     return used, used >= limit, None if timestamp is None else float(timestamp) + WINDOW_SECONDS
+
+
+def _window(session, column, conditions, limit, now):
+    return _window_result(session.execute(_window_query(column, conditions, limit, now)).one(), limit)
 
 
 def legacy_triage_allowance(session, limit, now):
@@ -72,11 +80,15 @@ def legacy_triage_allowance(session, limit, now):
     from .db import Behavior
 
     # ai_claims.acquire refuses while either counter has reached the limit.
-    attempts = _window(session, Behavior.attempted, (), limit, now)
-    runs = _window(session, AIRun.started, (AIRun.purpose == 'triage',), limit, now)
-    openings = [opens_at for _, blocked, opens_at in (attempts, runs) if blocked]
+    # Read both windows in one snapshot so usage and the hold describe the same state.
+    counters = union_all(
+        _window_query(Behavior.attempted, (), limit, now),
+        _window_query(AIRun.started, (AIRun.purpose == 'triage',), limit, now),
+    )
+    windows = [_window_result(row, limit) for row in session.execute(counters)]
+    openings = [opens_at for _, blocked, opens_at in windows if blocked]
     next_at = max(openings) if openings and None not in openings else None
-    return max(attempts[0], runs[0]), bool(openings), next_at
+    return max(used for used, _, _ in windows), bool(openings), next_at
 
 
 def _legacy_purpose_limits(session, settings, now):
