@@ -750,6 +750,46 @@ def test_database_json_normalization_is_bound_before_followup(admin,monkeypatch)
         assert s.get(Behavior,'subject-0').verdict=='low'
 
 
+@pytest.mark.parametrize('held_by', ('attempts', 'runs', None))
+def test_legacy_triage_reads_one_bounded_allowance_query(admin, monkeypatch, held_by):
+    from types import SimpleNamespace
+
+    now=1_750_000_000
+    seed(count=1,limit=2)
+    monkeypatch.setattr(ai_claims, 'time', SimpleNamespace(time=lambda: now))
+    with Session() as s:
+        for index, age in enumerate((45, 3599 if held_by=='attempts' else 3600)):
+            s.add(Behavior(id=f'old-attempt-{index}',host_id='host-0',verdict='low',
+                           attempted=now-age,evidence={}))
+        for index, age in enumerate((45, 3599 if held_by=='runs' else 3600)):
+            s.add(ai_runs.AIRun(id=f'old-run-{index}',purpose='triage',state='complete',
+                               started=now-age))
+        s.add(ai_runs.AIRun(id='unrelated-run',purpose='update_scoring',state='complete',started=now-30))
+        s.commit()
+
+    queries=[]
+    def capture(_connection,_cursor,statement,*_args):
+        sql=' '.join(statement.lower().split())
+        if 'behaviors.attempted >' in sql or 'ai_runs.started >' in sql:
+            queries.append(sql)
+
+    event.listen(engine,'before_cursor_execute',capture)
+    try:
+        lease=ai_claims.acquire()
+    finally:
+        event.remove(engine,'before_cursor_execute',capture)
+
+    if held_by is None:
+        assert lease and lease.subject=='subject-0'
+        with lease:pass
+    else:
+        assert lease is None
+    assert len(queries)==1
+    assert queries[0].count('exists (')==2
+    assert queries[0].count(' limit ')==2
+    assert 'count(' not in queries[0]
+
+
 def test_rate_throttled_triage_is_not_claimed_and_deferrals_are_spread(admin,monkeypatch):
     seed(count=4)
     with Session() as s:
