@@ -187,6 +187,14 @@ def valid():
     lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('clients', ['']),
     lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('identity_options_ignored', ['umask']),
     lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('after_runtime_checks', ['user', 'user']),
+    lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('identity_options_ignored', [{'user': 1}]),
+    lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('identity_options_ignored', [['user']]),
+    lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('identity_options_ignored', ['user', {}]),
+    lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('identity_options_ignored', [None]),
+    lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('after_runtime_checks', [{'user': 1}]),
+    lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('after_runtime_checks', [['user']]),
+    lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('after_runtime_checks', ['user', []]),
+    lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('after_runtime_checks', [1]),
     lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].__setitem__('redacted', 1),
     lambda inv: inv['entries'][0]['tcp_wrappers']['commands'][0].pop('line'),
 ])
@@ -196,6 +204,19 @@ def test_controller_rejects_malformed_reports(mutate):
     mutate(inventory)
     with pytest.raises(ValueError):
         persistence.validate(inventory)
+
+
+@pytest.mark.parametrize('key,names', [
+    ('identity_options_ignored', []),
+    ('identity_options_ignored', ['user']),
+    ('identity_options_ignored', ['user', 'group']),
+    ('after_runtime_checks', []),
+    ('after_runtime_checks', sorted(persistence.TCP_WRAPPERS_RUNTIME)),
+])
+def test_controller_accepts_valid_unique_option_lists(key, names):
+    inventory = valid()
+    inventory['entries'][0]['tcp_wrappers']['commands'][0][key] = list(names)
+    persistence.validate(inventory)
 
 
 def test_parsed_detail_is_not_part_of_baseline_comparison():

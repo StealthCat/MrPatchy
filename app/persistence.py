@@ -136,7 +136,7 @@ def validate_tcp_wrappers(tcpw,path):
             if not isinstance(tokens,list) or len(tokens)>32 or any(not isinstance(t,str) or not 1<=len(t)<=255 or '\x00' in t for t in tokens):raise ValueError('Invalid TCP wrappers command')
         for key,allowed in (('identity_options_ignored',('user','group')),('after_runtime_checks',TCP_WRAPPERS_RUNTIME)):
             names=item[key]
-            if not isinstance(names,list) or len(set(names))!=len(names) or any(n not in allowed for n in names):raise ValueError('Invalid TCP wrappers command')
+            if not isinstance(names,list) or any(type(n) is not str or n not in allowed for n in names) or len(set(names))!=len(names):raise ValueError('Invalid TCP wrappers command')
     return len(commands)
 
 
