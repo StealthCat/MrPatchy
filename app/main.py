@@ -25,7 +25,7 @@ from .db import Session, engine, Host, Package, Behavior, Job, Setting, Audit, I
 from .security import password_hash, verify, token_hash, seal, needs_rehash, derive_key
 from . import ssh, apt, worker, tls, scheduling, ai, ai_runs, update_scores, install_times, package_history, packages as package_backend
 from .http_security import RequestSizeLimit
-from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes, reboot_status, integrity_sweep_notifications
+from . import fleet_queries, operations, incidents, connections, host_lifecycle, notifications as notification_events, agent_spool_health, os_upgrade, os_lifecycle, recovery_readiness, freezes, reboot_status, resource_attention_notifications, integrity_sweep_notifications
 from .identity import User,consume_otp,new_secret
 from .security import unseal
 
@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = '1.99.0'
+APP_VERSION = '1.100.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -1360,10 +1360,11 @@ def settings(user=Depends(admin_user)):
     with Session() as s:
         cfg=config(s)
         return cfg|{'ai_controls_revision':ai_controls_revision(cfg),'api_key_configured':s.get(Setting,'openai_key') is not None,'api_key_revision':ai_key_revision(s.get(Setting,'openai_key')),'tls':tls.public_state(),
-            'ai_budget':ai_budget.status(s),'ai_provider_backoff':ai_provider_backoff.status(s),
+            'ai_budget':ai_budget.status(s, settings=cfg),'ai_provider_backoff':ai_provider_backoff.status(s),
             'ai_scoring_blocked':scoring_block_notifications.blocked_count(s,cfg)[0],
             'ai_control_migration':ai_control_preview.legacy_migration(cfg),
             'telemetry_lost_minutes':operations.telemetry_lost_minutes(cfg),
+            'resource_attention_percent':resource_attention_notifications.trigger_percent(cfg),
             'integrity_sweep_stalled_minutes':integrity_sweep_notifications.stalled_minutes(cfg)}
 
 @app.get('/api/settings/ai-connections')
@@ -1506,6 +1507,8 @@ class PatchSettingsInput(BaseModel):
     os_lifecycle_warning_days:int|None=Field(default=None,ge=0,le=730)
     # Optional for the same reason; whole minutes before the in-app telemetry-lost notice (#948).
     telemetry_lost_minutes:int|None=Field(default=None,ge=5,le=1440,strict=True)
+    # Optional for the same reason; whole percentage of available disk, inodes or memory for the in-app notice (#1297).
+    resource_attention_percent:int|None=Field(default=None,ge=1,le=50,strict=True)
     # Optional for the same reason; whole minutes before the in-app hash-sweep stall notice (#1265).
     integrity_sweep_stalled_minutes:int|None=Field(default=None,ge=10,le=1440,strict=True)
 
@@ -1538,6 +1541,10 @@ def save_settings_section(values,section,expected_ai_controls_revision=None,conf
                 before=operations.telemetry_lost_minutes(previous)
                 if before!=values['telemetry_lost_minutes']:
                     detail+='; telemetry-loss notification threshold changed from '+str(before)+' to '+str(values['telemetry_lost_minutes'])+' minutes'
+            if section=='patching' and 'resource_attention_percent' in values:
+                before=resource_attention_notifications.trigger_percent(previous)
+                if before!=values['resource_attention_percent']:
+                    detail+='; low-resource notification threshold changed from '+str(before)+'% to '+str(values['resource_attention_percent'])+'% available'
             if section=='patching' and 'integrity_sweep_stalled_minutes' in values:
                 before=integrity_sweep_notifications.stalled_minutes(previous)
                 if before!=values['integrity_sweep_stalled_minutes']:
