@@ -1,12 +1,13 @@
 """Read-only fleet-wide automatic AI plan status (#936)."""
 import json
+from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import event, func, select
+from sqlalchemy import event, func, inspect, select
 from test_auto_plan_status import seed
 from test_operations import login_as
 
-from app import ai, ai_policy, auto_plan_status, incidents
+from app import ai, ai_policy, auto_plan_status, db, incidents
 from app.db import Host, Job, Session, Setting, engine
 
 URL = '/api/security/auto-plan-status'
@@ -217,6 +218,80 @@ def test_listing_is_bounded_and_reports_truncation(admin, monkeypatch):
     result = fleet(now)
     assert [item['host_name'] for item in result['items']] == ['host-0', 'host-1']
     assert result['truncated'] is True and result['totals']['servers'] == 2
+
+
+@pytest.mark.parametrize('extra_opt_in', [False, True], ids=['exactly-full', 'truncated'])
+def test_policy_pages_preserve_sparse_opt_ins_and_server_order(admin, monkeypatch, extra_opt_in):
+    now = seed()
+    monkeypatch.setattr(auto_plan_status, 'FLEET_LIMIT', 2)
+    monkeypatch.setattr(auto_plan_status, 'FLEET_POLICY_PAGE_SIZE', 3, raising=False)
+    policies = [
+        {'auto_ai_plan': False}, ['unknown'], {'enabled': True},
+        {'auto_ai_plan': 'legacy truthy value'}, {'auto_ai_plan': 0}, {'auto_ai_plan': True},
+        {'auto_ai_plan': extra_opt_in}, {'auto_ai_plan': None}, {},
+        ['unknown'], {'auto_ai_plan': ''}, {'auto_ai_plan': False},
+    ]
+    with Session() as s:
+        s.merge(Setting(key='security-policy:web', value={'auto_ai_plan': False}))
+        for index, policy in enumerate(policies):
+            host_id = f'fixture-{index:02d}'
+            s.add(Host(id=host_id, name='Same name', address='192.0.2.9', fingerprint=''))
+            s.add(Setting(key='security-policy:' + host_id, value=policy))
+        s.add_all([
+            Host(id='deleted', name='Earlier', address='192.0.2.9', fingerprint='', deleted_at=100),
+            Setting(key='security-policy:deleted', value={'auto_ai_plan': True}),
+            Host(id='missing-policy', name='Earlier still', address='192.0.2.9', fingerprint=''),
+        ])
+        s.commit()
+
+    policy_reads = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        sql = ' '.join(statement.lower().split())
+        if sql.startswith('select hosts.id, hosts.name, settings.value'):
+            policy_reads.append(sql)
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        result = fleet(now)
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+
+    assert [item['host_id'] for item in result['items']] == ['fixture-03', 'fixture-05']
+    assert result['truncated'] is extra_opt_in
+    assert result['totals']['servers'] == 2
+    assert all('limit' in sql for sql in policy_reads)
+    assert len(policy_reads) == (3 if extra_opt_in else 5)
+
+
+def test_database_init_adds_fleet_listing_index_to_an_existing_host_table(admin):
+    seed()
+    index_name = 'ix_hosts_deleted_name_id'
+    index = next(index for index in Host.__table__.indexes if index.name == index_name)
+    with engine.begin() as connection:
+        index.drop(connection)
+    assert index_name not in {item['name'] for item in inspect(engine).get_indexes('hosts')}
+
+    db.init()
+    db.init()
+
+    indexes = {item['name']: item['column_names'] for item in inspect(engine).get_indexes('hosts')}
+    assert indexes[index_name] == ['deleted_at', 'name', 'id']
+    with Session() as s:
+        assert s.get(Host, 'web').name == 'web'
+
+
+def test_policy_pages_skip_a_previously_listed_host_after_a_rename(monkeypatch):
+    monkeypatch.setattr(auto_plan_status, 'FLEET_LIMIT', 2)
+    monkeypatch.setattr(auto_plan_status, 'FLEET_POLICY_PAGE_SIZE', 2)
+    enabled = {'auto_ai_plan': True}
+    pages = iter([
+        [('first', 'a', enabled), ('second', 'b', enabled)],
+        [('first', 'c', enabled)],
+    ])
+    session = SimpleNamespace(execute=lambda query: SimpleNamespace(all=lambda: next(pages)))
+
+    assert auto_plan_status._fleet_opted_in_hosts(session) == [('first', 'a'), ('second', 'b')]
 
 
 def test_awaiting_truncation_is_carried_into_the_totals(admin, monkeypatch):

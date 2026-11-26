@@ -51,6 +51,41 @@ def test_comparison_reports_equivalent_deltas_and_zero_percent():
     assert 'never treated as zero' in result['interpretation']['cost']
 
 
+@pytest.mark.parametrize('parallel_peak', [1, 4])
+def test_comparison_preserves_measured_provider_peak(parallel_peak):
+    baseline = {**report(), 'peak_provider_requests': 1}
+    candidate = {**report('parallel', 4), 'peak_provider_requests': parallel_peak}
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['baseline']['peak_provider_requests'] == 1
+    assert result['candidate']['peak_provider_requests'] == parallel_peak
+
+
+def test_comparison_marks_unrecorded_provider_peak_as_unknown():
+    candidate = {**report('parallel', 4), 'peak_provider_requests': 3}
+    result = compare_ai_benchmarks.compare(report(), candidate)
+    assert result['baseline']['peak_provider_requests'] is None
+    assert result['candidate']['peak_provider_requests'] == 3
+
+
+@pytest.mark.parametrize('peak', [None, False, '2', 1.5, 0, 5])
+def test_comparison_rejects_invalid_provider_peak(peak):
+    candidate = {**report('parallel', 4), 'peak_provider_requests': peak}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.peak_provider_requests'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
+def test_comparison_rejects_provider_peak_above_serial_concurrency():
+    baseline = {**report(), 'peak_provider_requests': 2}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='baseline.peak_provider_requests'):
+        compare_ai_benchmarks.compare(baseline, report('parallel', 4))
+
+
+def test_comparison_rejects_provider_peak_above_number_of_investigations():
+    candidate = {**report('parallel', 4), 'runs': 2, 'peak_provider_requests': 3}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.peak_provider_requests'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
 def test_legacy_report_has_one_server_per_subject():
     baseline, candidate = report(), report('parallel', 4)
     candidate['fixture_hosts'] = candidate['runs']
@@ -58,11 +93,74 @@ def test_legacy_report_has_one_server_per_subject():
     assert result['baseline']['fixture_hosts'] == result['candidate']['fixture_hosts'] == 8
 
 
+def with_queue_timings(execution='serial', concurrency=1, scale=1):
+    value = report(execution, concurrency)
+    value['stages']['executor_wait'] = {'count': 8, 'p50_ms': 5 * scale, 'p95_ms': 10 * scale}
+    value['persisted_stages'] = {
+        'claim_lock': {'count': 8, 'p50_ms': 2 * scale, 'p95_ms': 4 * scale},
+        'claim_lock_hold': {'count': 8, 'p50_ms': 3 * scale, 'p95_ms': 6 * scale},
+    }
+    return value
+
+
+def test_compares_each_queue_timing_with_its_own_sample_summary():
+    baseline = with_queue_timings()
+    candidate = with_queue_timings('parallel', 4, scale=2)
+    result = compare_ai_benchmarks.compare(baseline, candidate)
+    assert result['capability_equivalent'] is True
+    timings = result['queue_timing']
+    assert set(timings) == {'executor_wait', 'claim_lock', 'claim_lock_hold'}
+    assert timings['executor_wait']['baseline'] == baseline['stages']['executor_wait']
+    assert timings['claim_lock']['candidate'] == candidate['persisted_stages']['claim_lock']
+    assert timings['claim_lock_hold']['p50_ms']['absolute'] == 3
+    assert timings['executor_wait']['p95_ms']['absolute'] == 10
+
+
+@pytest.mark.parametrize('new_side', ['baseline', 'candidate'])
+def test_mixed_reports_only_compare_timings_measured_on_both_sides(new_side):
+    base = with_queue_timings() if new_side == 'baseline' else report()
+    candidate = with_queue_timings('parallel', 4) if new_side == 'candidate' else report('parallel', 4)
+    legacy = candidate if new_side == 'baseline' else base
+    legacy['persisted_stages'] = {'claim_lock': {'count': 8, 'p50_ms': 1, 'p95_ms': 2}}
+    result = compare_ai_benchmarks.compare(base, candidate)
+    missing_side = 'baseline' if new_side == 'candidate' else 'candidate'
+    for stage in ('executor_wait', 'claim_lock_hold'):
+        item = result['queue_timing'][stage]
+        assert item[missing_side] is None and item[new_side]['count'] == 8
+        assert item['p50_ms'] is None and item['p95_ms'] is None
+    assert result['queue_timing']['claim_lock']['p95_ms']['absolute'] == (2 if new_side == 'candidate' else -2)
+
+
+@pytest.mark.parametrize(('field', 'value'), [
+    ('count', 7), ('count', 0), ('p50_ms', True), ('p50_ms', math.inf),
+    ('p50_ms', -1), ('p50_ms', 100), ('p95_ms', 751),
+])
+def test_rejects_malformed_queue_timings(field, value):
+    candidate = with_queue_timings('parallel', 4)
+    candidate['persisted_stages']['claim_lock_hold'][field] = value
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='candidate.persisted_stages.claim_lock_hold'):
+        compare_ai_benchmarks.compare(with_queue_timings(), candidate)
+
+
+def test_legacy_claim_wait_only_keeps_the_old_output_shape():
+    baseline, candidate = report(), report('parallel', 4)
+    for sample in (baseline, candidate):
+        sample['persisted_stages'] = {'claim_lock': {'count': 8, 'p50_ms': 2, 'p95_ms': 4}}
+    assert 'queue_timing' not in compare_ai_benchmarks.compare(baseline, candidate)
+
+
 @pytest.mark.parametrize(('base_layout', 'candidate_layout', 'message'), [
     ({}, {'fixture_hosts': 1, 'single_server_slots': 4}, 'fixture_hosts differs'),
     ({'fixture_hosts': 1, 'single_server_slots': 3},
      {'fixture_hosts': 1, 'single_server_slots': 4}, 'single_server_slots differs'),
-    ({}, {'fixture_hosts': 2}, 'fixture_hosts must be 1 or equal to runs'),
+    ({}, {'fixture_hosts': 9}, 'fixture_hosts must be between 1 and runs'),
+    ({}, {'fixture_hosts': 2}, 'shared_server_slots must be a finite number'),
+    ({}, {'fixture_hosts': 8, 'shared_server_slots': 4}, 'shared_server_slots requires a shared layout'),
+    ({'fixture_hosts': 2, 'shared_server_slots': 3},
+     {'fixture_hosts': 2, 'shared_server_slots': 4}, 'shared_server_slots differs'),
+    ({'fixture_hosts': 2, 'shared_server_slots': 4},
+     {'fixture_hosts': 3, 'shared_server_slots': 4}, 'fixture_hosts differs'),
+    ({}, {'fixture_hosts': 2, 'shared_server_slots': 3}, 'concurrency exceeds shared_server_slots'),
     ({}, {'fixture_hosts': 1}, 'single_server_slots must be a finite number'),
     ({}, {'fixture_hosts': 1, 'single_server_slots': 3}, 'concurrency exceeds single_server_slots'),
     ({}, {'fixture_hosts': 1, 'single_server_slots': 5}, 'single_server_slots must be between 1 and 4'),
@@ -314,6 +412,35 @@ def test_comparison_requires_distinct_execution_configuration():
         compare_ai_benchmarks.compare(report(), copy.deepcopy(report()))
 
 
+def test_fixed_concurrency_cli_compares_matched_reports(tmp_path,capsys):
+    baseline=tmp_path/'main.json'
+    candidate=tmp_path/'candidate.json'
+    baseline.write_text(json.dumps({**report('parallel',4),'database_version':'3.49.1'}))
+    candidate.write_text(json.dumps({**report('parallel',4),'database_version':'3.49.1',
+                                     'elapsed_seconds':0.8,'runs_per_second':10.0}))
+    args=[str(baseline),str(candidate)]
+    assert compare_ai_benchmarks.main(['--fixed-concurrency',*args])==0
+    output=json.loads(capsys.readouterr().out)
+    assert output['comparison_mode']=='fixed_concurrency'
+    assert output['capability_equivalent'] is True
+    assert output['baseline']['concurrency']==output['candidate']['concurrency']==4
+    assert output['deltas']['elapsed_seconds']['absolute']==0.05
+
+
+@pytest.mark.parametrize('candidate,message', [
+    ({**report('parallel',4),'database_version':'3.49.1'}, 'requires identical concurrency'),
+    ({**report(),'database_version':'3.50.0'}, 'database_version differs'),
+    (report(), 'requires a recorded database_version'),
+    ({**report(),'database_version':'3.49.1','provider_delay_ms':25}, 'provider_delay_ms differs'),
+    ({**report(),'database_version':'3.49.1',
+      'workload_fingerprint':{'version':1,'sha256':'b'*64}}, 'workload_fingerprint differs'),
+])
+def test_fixed_concurrency_refuses_unmatched_reports(candidate,message):
+    baseline={**report(),'database_version':'3.49.1'}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError,match=message):
+        compare_ai_benchmarks.compare(baseline,candidate,fixed_concurrency=True)
+
+
 @pytest.mark.parametrize('elapsed', [1.234500001, 1.234567, 1.235499999])
 def test_comparison_accepts_producer_rounding_for_derived_throughput(elapsed):
     baseline = report()
@@ -474,3 +601,74 @@ def test_malformed_database_fields_are_refused(field, value, reason):
     candidate[field] = value
     with pytest.raises(compare_ai_benchmarks.ComparisonError, match=reason):
         compare_ai_benchmarks.compare(report(), candidate)
+
+
+def test_comparison_reports_connection_reuse_without_requiring_the_same_count():
+    serial = {**report(), 'connections': 1}
+    parallel = {**report('parallel', 4), 'connections': 4}
+    result = compare_ai_benchmarks.compare(serial, parallel)
+    assert result['capability_equivalent'] is True
+    assert result['connection_reuse']['baseline'] == {'connections': 1, 'requests_on_reused_connections': 11}
+    assert result['connection_reuse']['candidate'] == {'connections': 4, 'requests_on_reused_connections': 8}
+    assert result['connection_reuse']['connection_delta']['absolute'] == 3
+
+
+def test_comparison_leaves_absent_legacy_connection_evidence_unavailable():
+    parallel = {**report('parallel', 4), 'connections': 12}
+    result = compare_ai_benchmarks.compare(report(), parallel)
+    assert result['connection_reuse']['baseline'] is None
+    assert result['connection_reuse']['candidate'] == {'connections': 12, 'requests_on_reused_connections': 0}
+    assert result['connection_reuse']['connection_delta'] is None
+
+
+@pytest.mark.parametrize('count', [0, -1, 13, 1.25, True, None])
+def test_comparison_rejects_invalid_connection_counts(count):
+    parallel = {**report('parallel', 4), 'connections': count}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match=r'candidate[.]connections'):
+        compare_ai_benchmarks.compare(report(), parallel)
+
+
+@pytest.mark.parametrize('workload', ['cross-server', 'same-server'])
+def test_cli_compares_persisted_provider_transport(workload, capsys):
+    records = ROOT / 'docs' / 'benchmarks' / 'ai-equivalence-c86141a'
+    paths = [records / f'{workload}-{run}.json' for run in ('serial', 'parallel')]
+    assert compare_ai_benchmarks.main([*map(str, paths), '--provider-transport']) == 0
+    result = json.loads(capsys.readouterr().out)
+    transport = result['provider_transport']
+    base, candidate = [json.loads(path.read_text())['persisted_stages']['provider'] for path in paths]
+    assert transport['samples_per_report'] == result['capability']['provider_calls']
+    for field in ('p50_ms', 'p95_ms'):
+        assert transport[field]['baseline'] == base[field]
+        assert transport[field]['candidate'] == candidate[field]
+        assert transport[field]['absolute'] == pytest.approx(candidate[field] - base[field])
+        assert transport[field] != result['deltas']['stages']['provider'][field]
+
+
+@pytest.mark.parametrize(('persisted', 'expected'), [
+    (None, 'baseline.persisted_stages must be an object'),
+    ({}, 'baseline.persisted_stages.provider must be an object'),
+    ({'provider': {'count': 11, 'p50_ms': 10, 'p95_ms': 20}}, 'sample count does not match provider calls'),
+    ({'provider': {'count': 12, 'p50_ms': 20, 'p95_ms': 10}}, 'must not be less than p50_ms'),
+])
+def test_cli_refuses_unusable_provider_transport(persisted, expected, tmp_path, capsys):
+    baseline = tmp_path / 'baseline.json'
+    candidate = tmp_path / 'candidate.json'
+    baseline.write_text(json.dumps({**report(), 'persisted_stages': persisted}))
+    candidate.write_text(json.dumps(report('parallel', 4)))
+    assert compare_ai_benchmarks.main([str(baseline), str(candidate), '--provider-transport']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert expected in captured.err
+
+
+def test_cli_checks_workload_equivalence_before_transport(tmp_path, capsys):
+    baseline = tmp_path / 'baseline.json'
+    candidate = tmp_path / 'candidate.json'
+    baseline.write_text(json.dumps(report()))
+    parallel = report('parallel', 4)
+    parallel['workload_fingerprint']['sha256'] = 'b' * 64
+    candidate.write_text(json.dumps(parallel))
+    assert compare_ai_benchmarks.main([str(baseline), str(candidate), '--provider-transport']) == 2
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert 'capability mismatch: workload_fingerprint differs' in captured.err

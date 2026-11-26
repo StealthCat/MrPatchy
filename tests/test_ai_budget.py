@@ -5,9 +5,10 @@ import threading
 
 import httpx
 import pytest
+from sqlalchemy import event
 
-from app import ai, ai_admission, ai_budget, ai_pricing, ai_provider_backoff, notifications, operations
-from app.db import Session, Setting
+from app import ai, ai_admission, ai_budget, ai_pricing, ai_provider_backoff, ai_runs, notifications, operations
+from app.db import Session, Setting, engine
 from app.security import seal
 from tests.ai_settings_helpers import confirmed_put
 
@@ -331,12 +332,84 @@ def test_pool_timeout_release_requires_matching_sent_call(admin, monkeypatch, ca
     identifier = ai_budget.reserve(payload())
     ai_budget.mark_sent(identifier, call_id)
     ai_budget.release_unsent(identifier, 'Wrong receipt.', pool_timeout_call_id='call-two')
+    if call_id:
+        ai_budget.release_unsent(identifier, 'Wrong case.', pool_timeout_call_id=call_id.upper())
+        ai_budget.release_unsent(identifier, 'Trailing space.', pool_timeout_call_id=call_id + ' ')
     ai_budget.release_unsent(identifier, 'No receipt was supplied.')
     with Session() as session:
         assert session.get(ai_budget.BudgetEntry, identifier).status == 'sent'
     ai_budget.release_unsent(identifier, 'Pool timeout.', pool_timeout_call_id=call_id)
     with Session() as session:
         assert session.get(ai_budget.BudgetEntry, identifier).status == 'released'
+
+
+@pytest.mark.parametrize('pool_timeout', [False, True])
+def test_provider_unsent_release_uses_one_ledger_write(admin, monkeypatch, pool_timeout):
+    configure(cap=Decimal('1'))
+    release = ai_budget.release_unsent
+    statements = []
+    sends = []
+
+    def observe(connection, cursor, statement, parameters, context, executemany):
+        if 'ai_budget_entries' in statement.lower():
+            statements.append(statement.split(maxsplit=1)[0].upper())
+
+    def observe_release(*args, **kwargs):
+        event.listen(engine, 'before_cursor_execute', observe)
+        try:
+            release(*args, **kwargs)
+        finally:
+            event.remove(engine, 'before_cursor_execute', observe)
+
+    def reject_before_provider(model):
+        raise ai.AIError('Fixture rate wait.', policy_wait=True)
+
+    def wait_for_pool(*args, **kwargs):
+        sends.append(True)
+        raise httpx.PoolTimeout('Private fixture transport detail.')
+
+    monkeypatch.setattr(ai_budget, 'release_unsent', observe_release)
+    monkeypatch.setattr(ai.transport, 'post', wait_for_pool)
+    if not pool_timeout:
+        monkeypatch.setattr(ai_admission, 'admit', reject_before_provider)
+    expected_error = 'connection pool timed out' if pool_timeout else 'Fixture rate wait'
+    with pytest.raises(ai.AIError, match=expected_error), ai_runs.track('test', payload()['model']):
+        ai.request(payload(), 'fixture-key')
+
+    with Session() as session:
+        row = session.query(ai_budget.BudgetEntry).one()
+        assert row.status == 'released'
+        assert bool(row.call_id) is pool_timeout
+        assert 'Private fixture transport detail' not in row.reason
+        assert ('connection pool timed out' in row.reason) is pool_timeout
+        assert ai_budget.status(session)['counted_usd'] == '0'
+    assert len(sends) == int(pool_timeout)
+    # The outer exception cleanup also tries a reserved-only release after a
+    # pool timeout. That second attempt must leave the pool-timeout release intact.
+    assert statements == ['UPDATE'] * (2 if pool_timeout else 1)
+
+
+@pytest.mark.parametrize('stored_status,receipt', [
+    ('Reserved', None), ('reserved ', None), ('Sent', 'call-one'),
+    ('sent ', 'call-one'), ('uncertain', 'call-one'), ('settled', 'call-one'),
+])
+def test_unsent_release_keeps_ineligible_reservations(admin, stored_status, receipt):
+    configure(cap=Decimal('1'))
+    identifier = ai_budget.reserve(payload())
+    with Session() as session:
+        row = session.get(ai_budget.BudgetEntry, identifier)
+        row.status = stored_status
+        row.call_id = 'call-one'
+        row.updated = 123.0
+        row.reason = 'Original diagnosis.'
+        session.commit()
+
+    ai_budget.release_unsent(identifier, 'Incorrect cleanup.', pool_timeout_call_id=receipt)
+    with Session() as session:
+        row = session.get(ai_budget.BudgetEntry, identifier)
+        assert (row.status, row.call_id, row.updated, row.reason) == (
+            stored_status, 'call-one', 123.0, 'Original diagnosis.',
+        )
 
 
 def test_settings_expose_combined_cap_and_validate_timezone(admin):
@@ -618,11 +691,11 @@ def test_history_csv_cells_neutralise_every_formula_prefix():
 DAY=1793404800.0  # 2026-10-31T00:00:00Z
 
 
-def ledger(amount, *, created=DAY+60, status='reserved', reset=DAY+86400):
+def ledger(amount, *, created=DAY+60, status='reserved', reset=DAY+86400, timezone_name='UTC'):
     import uuid
     with Session() as session:
         session.add(ai_budget.BudgetEntry(id=str(uuid.uuid4()), created=created, updated=created,
-            reset_at=reset, timezone='UTC', model='gpt-6-luna', status=status,
+            reset_at=reset, timezone=timezone_name, model='gpt-6-luna', status=status,
             reservation_usd=Decimal(amount), pricing_version='fixture', pricing_source='fixture'))
         session.commit()
 
@@ -650,7 +723,7 @@ def test_exhausted_daily_cap_notifies_once_per_window_and_resolves_at_reset(admi
         assert revision.lifecycle=='active' and revision.severity=='medium'
         assert revision.deep_link=='#settings/ai'
         assert '$1 (UTC day)' in revision.reason and '2026-11-01T00:00:00Z' in revision.reason
-        assert 'deferred, not discarded' in revision.reason
+        assert 'Queued paid triage, scoring and plans wait for available budget' in revision.reason
         notifications.mark_read(session, 'admin', event.id, event.revision, now=DAY+200)
         session.commit()
     # Further spend in the same window is not a new observation.
@@ -674,6 +747,43 @@ def test_exhausted_daily_cap_notifies_once_per_window_and_resolves_at_reset(admi
         assert event.revision==3 and revision.lifecycle=='active'
         assert '2026-11-02T00:00:00Z' in revision.reason
         assert notifications.unread_count(session, 'admin')==1
+
+
+def test_cap_notification_explains_recheck_when_retained_spend_survives_reset(admin):
+    configure(mode='daily_cap', cap=Decimal('1'))
+    created = DAY + 12 * 3600
+    timezone_name = 'America/Los_Angeles'
+    _, retained_reset = ai_budget._window(created, timezone_name)
+    configured_reset = DAY + 86400
+    assert retained_reset > configured_reset
+    ledger('1', created=created, status='uncertain', reset=retained_reset, timezone_name=timezone_name)
+
+    operations.collect_alerts(created + 60)
+    with Session() as session:
+        event = cap_event(session)
+        revision = cap_revision(session, event)
+        assert event.revision == 1 and revision.lifecycle == 'active'
+        assert 'Recheck the budget at 2026-11-01T00:00:00Z' in revision.reason
+        assert 'Spend from an earlier budget window can still count after this time.' in revision.reason
+        assert 'until the reset' not in revision.reason
+        notifications.mark_read(session, 'admin', event.id, event.revision, now=created + 70)
+        session.commit()
+
+    operations.collect_alerts(created + 120)
+    with Session() as session:
+        assert cap_event(session).revision == 1
+        assert notifications.unread_count(session, 'admin') == 0
+
+    operations.collect_alerts(configured_reset + 60)
+    with Session() as session:
+        event = cap_event(session)
+        assert cap_revision(session, event).lifecycle == 'active'
+        assert ai_budget.status(session, configured_reset + 60)['remaining_usd'] == '0'
+
+    operations.collect_alerts(retained_reset + 60)
+    with Session() as session:
+        assert cap_revision(session, cap_event(session)).lifecycle == 'resolved'
+        assert ai_budget.status(session, retained_reset + 60)['remaining_usd'] == '1'
 
 
 @pytest.mark.parametrize('change', ['raise_cap', 'rate_mode', 'unthrottled', 'disabled'])

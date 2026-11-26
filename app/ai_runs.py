@@ -7,7 +7,7 @@ import uuid
 from decimal import Decimal
 from contextvars import ContextVar
 from contextlib import contextmanager
-from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, case, literal
+from sqlalchemy import String, Text, Double, Integer, JSON, Index, select, delete, func, and_, case, literal, union_all
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Setting, Behavior, Package, Job, config
 from . import ai_pricing
@@ -97,7 +97,7 @@ def run_hosts(s, run_ids):
 # cache ledger. Monotonic elapsed time never depends on host wall-clock changes.
 TIMING_STAGES = {'provider_admission','provider','receipt_persistence','usage_persistence',
                  'ssh_evidence','evidence_persistence','result_persistence','run','admission','queue_age',
-                 'file_provenance','known_good_lookup','claim_lock'}
+                 'file_provenance','known_good_lookup','claim_lock','claim_lock_hold'}
 
 
 TIMING_SUMMARY_RUN_LIMIT = 100
@@ -113,22 +113,34 @@ def triage_timing_summary(s, limit, purpose='triage'):
     """
     if purpose not in TIMING_SUMMARY_PURPOSES:
         raise ValueError('unsupported timing summary purpose')
-    run_ids = list(s.scalars(
+    sampled_runs = (
         select(AIRun.id)
         .where(AIRun.purpose == purpose, AIRun.state.in_(('complete', 'error')), AIRun.finished > 0)
         .order_by(AIRun.started.desc(), AIRun.id)
         .limit(limit)
-    ))
+        .cte('sampled_timing_runs')
+    )
     stage_names = {'timing_' + stage: stage for stage in sorted(TIMING_STAGES)}
+    sampled_events = (
+        select(AIEvent.id, AIEvent.run_id, AIEvent.stage, func.substr(AIEvent.message, 1, 96).label('message'))
+        .where(AIEvent.run_id.in_(select(sampled_runs.c.id)), AIEvent.stage.in_(tuple(stage_names)))
+        .order_by(AIEvent.id.desc())
+        .limit(TIMING_SUMMARY_EVENT_LIMIT + 1)
+        .subquery('sampled_timing_events')
+    )
+    # Keep the run and event selections on one snapshot during retention.
+    # The event limit applies before keeping runs without any sampled event.
+    result = s.execute(
+        select(sampled_runs.c.id, sampled_events.c.id, sampled_events.c.stage, sampled_events.c.message)
+        .select_from(sampled_runs.outerjoin(sampled_events, sampled_events.c.run_id == sampled_runs.c.id))
+        .order_by(sampled_events.c.id.desc())
+    )
+    run_ids = set()
     rows = []
-    if run_ids:
-        rows = s.execute(
-            select(AIEvent.run_id, AIEvent.stage, func.substr(AIEvent.message, 1, 96))
-            .where(AIEvent.run_id.in_(run_ids),
-                   AIEvent.stage.in_(tuple(stage_names)))
-            .order_by(AIEvent.id.desc())
-            .limit(TIMING_SUMMARY_EVENT_LIMIT + 1)
-        ).all()
+    for run_id, event_id, stage, message in result:
+        run_ids.add(run_id)
+        if event_id is not None:
+            rows.append((run_id, stage, message))
 
     timings = {stage: [] for stage in stage_names.values()}
     errors = dict.fromkeys(timings, 0)
@@ -211,15 +223,14 @@ def request_started(model):
         return receipt.id
 
 
-def record_usage(call_id, data, payload):
-    values = ai_pricing.estimate(data, payload)
-    if not call_id: return values
+def record_usage(call_id, values):
+    """Persist the computed usage estimate in the diagnostic receipt."""
+    if not call_id: return
     with Session() as s:
         row = s.get(AICall, call_id)
-        if not row: return values
+        if not row: return
         for key, value in values.items(): setattr(row, key, value)
         s.commit()
-    return values
 
 
 def call_receipts(s, run_ids):
@@ -344,13 +355,26 @@ def task_failure(error):
 
 
 def _status_run_details(s):
-    # Select each newest row before combining them so each branch stays bounded.
+    # Each fixed purpose can seek its newest run using the purpose/start index.
+    candidates = []
+    for purpose in ('triage', 'worker'):
+        newest_for_purpose = (
+            select(AIRun.id, AIRun.started).where(AIRun.purpose == purpose)
+            .order_by(AIRun.started.desc(), AIRun.id.desc()).limit(1).subquery()
+        )
+        candidates.append(select(newest_for_purpose))
+    latest_candidates = union_all(*candidates).subquery()
+    newest = (
+        select(latest_candidates.c.id)
+        .order_by(latest_candidates.c.started.desc(), latest_candidates.c.id.desc())
+        .limit(1).scalar_subquery()
+    )
     latest = select(literal('latest').label('kind'), AIRun.id,
         case((AIRun.state.in_(('error','interrupted')), AIRun.message), else_='').label('detail')).where(
-        AIRun.purpose.in_(('triage','worker'))).order_by(AIRun.started.desc()).limit(1).subquery()
+        AIRun.id == newest)
     running = select(literal('running').label('kind'), literal(None).label('id'), AIRun.stage.label('detail')).where(
         AIRun.purpose=='triage', AIRun.state=='running').order_by(AIRun.started.desc()).limit(1).subquery()
-    rows = s.execute(select(latest).union_all(select(running)))
+    rows = s.execute(latest.union_all(select(running)))
     details = {kind:(identifier,detail) for kind,identifier,detail in rows}
     _,running_stage = details.get('running',(None,None))
     last_run,last_error = details.get('latest',(None,''))
@@ -427,19 +451,27 @@ def status(s):
     plan_actions=('release-plan','security-plan','startup-plan')
     plan_where=(Job.action.in_(plan_actions),Job.state=='queued',Job.host_id.not_in(host_lifecycle.inactive_ids()),
         marker_type,Job.payload['_ai_deferred'].as_boolean()==True)
-    plan_ready_sql=and_(Job.next_at<=now,Job.host_id.not_in(ai_policy.paused_ids()))
+    plan_unpaused=and_(Job.host_id.in_(host_lifecycle.active_ids()),Job.host_id.not_in(ai_policy.paused_ids()))
+    plan_due=and_(Job.next_at<=now,plan_unpaused)
+    plan_future=Job.next_at>now
     plan_by_action={action:{'deferred':0,'ready':0,'next_at':None} for action in plan_actions}
     # Canonical labels preserve the existing action predicate under MySQL collations.
     plan_action=case(*[(Job.action==action,action) for action in plan_actions]).label('plan_action')
-    plan_rows=s.execute(select(plan_action,func.count(),counted(plan_ready_sql),
-        func.min(case((Job.next_at>now,Job.next_at)))).where(*plan_where).group_by('plan_action'))
-    for action,deferred,eligible,next_at in plan_rows:
-        plan_by_action[action]={'deferred':deferred,'ready':eligible,'next_at':next_at}
+    plan_rows=s.execute(select(plan_action,func.count(),counted(plan_due),
+        func.min(case((plan_future,Job.next_at))),
+        func.min(case((and_(plan_future,plan_unpaused),Job.next_at))))
+        .where(*plan_where).group_by('plan_action'))
+    plan_next_eligible=None
+    for action,deferred,due,next_at,eligible_at in plan_rows:
+        plan_by_action[action]={'deferred':deferred,'ready':due,'next_at':next_at}
+        if eligible_at is not None and (plan_next_eligible is None or eligible_at<plan_next_eligible):
+            plan_next_eligible=eligible_at
+    if not cfg['ai_enabled']:plan_next_eligible=None
     plan_deferred=sum(row['deferred'] for row in plan_by_action.values())
     plan_ready=sum(row['ready'] for row in plan_by_action.values())
     plan_next=min((row['next_at'] for row in plan_by_action.values() if row['next_at'] is not None),default=None)
     if scoring_next is not None:retry=min([value for value in (retry,scoring_next) if value is not None])
-    if plan_next:retry=min([value for value in (retry,plan_next) if value is not None])
+    if plan_next_eligible is not None:retry=min([value for value in (retry,plan_next_eligible) if value is not None])
     if provider_backoff['blocked']:
         retry=min([value for value in (retry,provider_backoff['next_at']) if value is not None])
     if admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now:
@@ -452,9 +484,14 @@ def status(s):
     elif legacy_blocked:
         reason='rate_limited'; message='Legacy hourly investigation limit reached.'; retry=legacy_next
     elif admission['mode'] in ('rate','rate_and_daily') and admission['next_at'] and admission['next_at']>now: reason='rate_limited'; message='Shared smooth-rate admission is waiting for the next provider start.'
-    elif budget['enabled'] and float(budget['remaining_usd'])<=0: reason='spend_limited'; message='The daily AI spend cap is fully reserved or settled until reset.';retry=budget['next_reset']
+    elif budget['enabled'] and float(budget['remaining_usd'])<=0:
+        reason='spend_limited'
+        message='The daily AI spend cap has no remaining headroom.'
+        retry=budget['next_reset'] if budget['next_reset_authoritative'] else None
+        if retry is None:
+            message+=' Spend from earlier budget windows can still count after the configured reset.'
     elif not pending_count and plan_deferred and plan_ready:reason='ready';message='Deferred advisory AI planning is eligible for the next scheduler slot.'
-    elif not pending_count and plan_deferred and plan_next:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
+    elif not pending_count and plan_next_eligible is not None:reason='backoff';message='Advisory AI planning is queued until shared AI eligibility.'
     elif not pending_count and plan_deferred:reason='blocked';message='Advisory AI planning remains queued until its server AI integration is resumed.'
     elif not pending_count and scoring_ready:reason='ready';message='Deferred update scoring is eligible for the next scheduler slot.'
     elif not pending_count and scoring_next is not None:reason='backoff';message='Update scoring is queued until shared AI eligibility.'
@@ -478,4 +515,5 @@ def status(s):
             'last_run':last_run,'admission':admission,'budget':budget,'provider_backoff':provider_backoff,
             'scoring_deferred':scoring_deferred,'scoring_ready':scoring_ready,'scoring_next_at':scoring_next,
             'plan_deferred':plan_deferred,'plan_ready':plan_ready,'plan_next_at':plan_next,
+            'plan_next_eligible_at':plan_next_eligible,
             'plan_deferred_by_action':plan_by_action}
