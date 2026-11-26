@@ -6970,6 +6970,57 @@ mechanism and `entries_parsed` wiring, persistence, baselines and alerts, UI,
 provenance and AI classification. No schema, API, auth or
 response-authorization change.
 
+### rsyslog program-action contract — worker checkpoint #1227
+
+Contract increment only; the startup-awareness requirement remains incomplete.
+`app/rsyslog_programs.py` is a pure, versioned contract for the programs
+rsyslogd starts: `omprog` and `mmexternal` actions and the legacy `^program`
+shell-execute action. These run as rsyslogd's user, root unless the
+configuration drops privileges. It takes captured configuration text and
+captured include-directory listings, and performs no I/O.
+
+- **Source.** Behaviour observed by running the real rsyslogd 8.2312.0
+  (Ubuntu 24.04 `rsyslog_8.2312.0-3ubuntu9.4`) with a probe program that
+  recorded its argv, uid and gid. The opt-in live differential in
+  `tests/test_rsyslog_programs.py` reruns these cases.
+- **argv.** A `binary` value splits at its first space into the program and
+  the rest, and the rest splits at single spaces outside double quotes. Quotes
+  stay in the argument, and single quotes and backslashes are ordinary
+  characters. Two spaces make an empty argument, a trailing empty argument is
+  dropped, and a tab is not a separator. A value that starts with a space has
+  an empty program, so it is `rejected`. `^program` runs the program with the
+  formatted message as its only argument.
+- **Modules.** `omprog`/`mmexternal` actions need `module(load=...)` or
+  `$ModLoad` earlier in configuration order, include order included.
+  Otherwise the action is `module_not_loaded`. `$ActionOMProgBinary` takes one
+  word and is only known after omprog loads. A legacy `:omprog:` action uses
+  the latest value, and is `rejected` without one.
+- **Account.** `$PrivDropToUser[ID]`/`$PrivDropToGroup[ID]` are global and the
+  last one wins. Every program child runs as the dropped user. Without a group
+  directive, the group stays root. In 8.2312.0,
+  `global(privilege.dropToUser=...)` is an unknown parameter and drops
+  nothing. A note records it.
+- **Includes.** `include(file=...)` and `$IncludeConfig` expand a glob in the
+  last path component, in sorted order and skipping dotfiles. A glob with no
+  matches includes nothing.
+- **Fail closed.** These mark the result incomplete:
+  - an unobserved file or listing;
+  - a directory, relative or glob-in-directory include, or `include(text=)`;
+  - backtick values;
+  - unterminated strings or comments, or malformed objects;
+  - invalid UTF-8, NUL bytes, or over-limit input or include depth.
+
+  Actions in a file with a syntax error are `unresolved`. Every result names
+  what it cannot observe: whether rsyslogd runs, and its command line; which
+  messages reach each action; program existence and contents; whether the
+  account exists; other releases; and whether rsyslogd's own grammar accepts
+  the file. `origin` is always `not_assessed`, and no result is a safety
+  verdict.
+
+**Not covered:** agent collection, catalog wiring, persistence, baselines and
+alerts, UI, provenance and AI classification. No schema, API, auth or
+response-authorization change.
+
 ### sysvinit inittab contract — worker checkpoint #1110
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -14548,3 +14599,84 @@ polkitd loads every `*.rules` JavaScript file from `/etc/polkit-1/rules.d` and `
 - **Validation:** `tests/test_rsyncd_exec.py` (9 tests). A differential harness ran random configurations through the real rsync 3.2.7 daemon in single-use remote-shell mode and probed every module, with 0 disagreements. The configurations mixed label variants, `[global]` sections, repeated and renamed modules, empty values, continuations, comments, `\r`, missing paths and rejected section names.
 - **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
 - **Remaining:** agent collection, a catalog entry, `&include`/`&merge` resolution, package provenance, persistence, UI and AI classification.
+
+### netfilter-persistent plugin contract — worker checkpoint #1479 (roadmap F)
+
+`netfilter-persistent.service` runs `/usr/sbin/netfilter-persistent start` as root before `network-pre.target` and `netfilter-persistent stop` at shutdown; the SysV init script makes the same calls. The script sources `/etc/default/netfilter-persistent` as root shell code, then runs `run-parts -v -a <argument> ${PLUGINS}`. `PLUGINS` defaults to `/usr/share/netfilter-persistent/plugins.d`, and the defaults file can reassign it. An executable dropped in the plugin directory, or a `PLUGINS=` redirect, is therefore a root trigger at every boot. No existing contract covered it.
+
+- **Change:** the pure `app/netfilter_persistent.py` takes the captured state and text of the defaults file and the captured plugin-directory listing, with entry kinds, modes and followed symlink kinds. For `start`, `stop`, `restart`, `reload`, `flush` and `save` it returns the ordered argv of every plugin that runs as root. It also reports whether the defaults file is sourced as root, its static `PLUGINS` and `FLUSH_ON_STOP` assignments, and a per-entry outcome. It performs no I/O and runs nothing.
+- **Fidelity:** it follows the netfilter-persistent 1.0.24 script under `dash` and debianutils `run-parts.c` 5.24. Only names matching `^[a-zA-Z0-9_-]+$` are considered. They run in byte order, because run-parts never calls `setlocale`. Symlinks are followed, and dangling ones are dropped. Directories are skipped. A regular file runs when any execute bit is set, as root's `access(X_OK)` allows. Other kinds are skipped. `restart` and `reload` map to `start`. `stop` runs the plugins with `flush` only when dash's `[ ${FLUSH_ON_STOP} -gt 0 ]` succeeds. An unset, empty, non-numeric or out-of-range value makes the test fail, so nothing runs. An empty `PLUGINS` makes run-parts fail with a usage error, so nothing runs.
+- **Fail closed:** only comments, blank lines and single static `NAME=value` assignments are resolved. Any other shell, and any assignment to `PATH` (which selects `run-parts`) or `IFS`, is a blocking gap. A `PLUGINS` or `FLUSH_ON_STOP` value that would be word-split or glob-expanded is unresolved, as is a relative `PLUGINS`. Blocking gaps also cover unobserved defaults, directories, kinds, modes or symlink targets, a listing for a different directory, duplicate or malformed entries, invalid UTF-8, NUL bytes and over-limit input. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_netfilter_persistent.py` (10 tests). Four rule mutations were each caught: the execute bit, the ordering, the `PATH`/`IFS` gap and the flush comparison. A differential harness compared the contract with system `dash` and the packaged debianutils 5.17 `run-parts`, and executed no downloaded code. Across 4,400 generated defaults files, `dash` agreed on `PLUGINS` and the `FLUSH_ON_STOP` test in all 2,641 resolved cases. Across 4,400 generated plugin trees, `run-parts -v -a` agreed on the argv and order of all 19,863 plugin runs. The trees included hidden, dotted and backup names, mixed case, partial execute bits, directories, FIFOs, and symlinks to executables, non-executables and directories, plus dangling symlinks. The real netfilter-persistent wrapper was not executed in this session. Its three-line dispatch was transcribed from the 1.0.24 source.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the defaults file and listing, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### OCI hooks.d contract — worker checkpoint #1471 (roadmap F)
+
+Podman and CRI-O load JSON hook definitions from `hooks.d` directories through containers/common `pkg/hooks`. They inject every matching hook program into each new container's OCI configuration. The runtime, or for Podman's `precreate` and `poststop` extension stages the engine itself, then runs the program with the engine's privileges, outside the container. For a rootful engine that is root. A single `.json` file is therefore a root execution trigger on every matching container start. No existing contract covered it.
+
+- **Change:** the pure `app/oci_hooks.py` takes the engine's effective ordered `hooks_dir` list, its extension stages, whether it is rootful, the captured directory listings with entry kinds and text, and the captured existence of each hook program. In injection order it returns each effective hook: source file, masked files, format, program path, `args`, `env`, `timeout`, stages with their executor (runtime or engine), whom it runs as, and whether it matches `always`, `conditional` (with its conditions) or `never`. It also returns a per-file outcome. It performs no I/O and runs nothing.
+- **Fidelity:** it follows containers/common v0.60.4 (`read.go`, `hooks.go`, `0.1.0`, `1.0.0`) and containers/storage v1.55.0 `fileutils.Exists`, and Podman 5.2.2 `setupOCIHooks` for the extension stages. Only names ending in `.json` are read, in byte order. A file that loads masks an earlier file of the same name; a failed file masks nothing. A dangling entry is skipped. The engine ignores a directory's error only when its first failure is "does not exist", such as a missing `hook.path`. Any other first failure refuses the whole hook set (`status: aborts`, no hooks). Legacy `0.1.0` hooks are converted, including the `stage`/`stages`, `cmd`/`cmds` and `annotation`/`annotations` exclusivity, `[hook, *arguments]` and OR matching. Current `when` matching is an AND: `always: false`, `hasBindMounts: false` or an empty `when` never match. The default containers.conf `hooks_dir` is only `/usr/share/containers/oci/hooks.d`; the caller supplies the effective list.
+- **Fail closed:** blocking gaps cover unobserved directories, files or hook-program existence, relative paths, unknown rootfulness, other entry kinds, invalid UTF-8, NUL bytes and over-limit input. They also cover what Go would decode differently from Python: JSON keys that match a field only without regard to case, non-ASCII keys, duplicate field keys and unpaired surrogate escapes. Regexes are accepted only when they use syntax that RE2 and Python both compile; anything else is `regex_unverified`. File names that collide when lower-cased make the injection order unverified, which is a non-blocking gap. Podman's implicit mode (an explicitly empty `hooks_dir`, rootful only) is listed under `not_observed` and not modelled. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_oci_hooks.py` has 13 tests. A differential harness built the real containers/common v0.60.4 `pkg/hooks` with Go 1.24. It ran 6,000 random hook trees with one to three directories, current and legacy files, masking, dangling and directory entries, missing hook programs, invalid versions, stages, types and regexes. It compared the manager outcome, injection order, path, `args` and stages, and probed `When.Match` for `always` and `never`. Across 4,466 results reported complete (2,883 refused hook sets, 456 loaded hook sets and 1,127 with no hooks) there were 0 mismatches.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the listings, file text and hook-program existence, the effective `hooks_dir` from containers.conf and crio.conf, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### snmptrapd traphandle contract — worker checkpoint #1431 (roadmap F)
+
+A `traphandle OID|default COMMAND` line in `snmptrapd.conf` makes `snmptrapd` run `COMMAND` through `/bin/sh -c` for every matching SNMP trap. The packaged Debian/Ubuntu service runs as root, and the remote sender decides when a trap arrives. The startup inventory did not model this file.
+
+- **Change:** the pure `app/snmptrapd_handlers.py` takes captured configuration files in read order and the observed service user. It returns each handler with its source line, OID or `default`, subtree flags, `-F` format, the raw command and `runs_as`, plus the authorization state: `disabled`, `execute_granted` or `none`. Handlers run only with `execute` access or `disableAuthorization yes`. It performs no I/O, never runs snmptrapd, and sets `origin: not_assessed`.
+- **Fail-closed:** unchecked files, invalid UTF-8, NUL bytes, over-limit text or lines, `includeFile`/`includeDir`/`includeSearch`, `[section]` context switches, embedded `perl` handlers, symbolic OIDs, an unparseable `disableAuthorization` value and an unknown service user all make the result incomplete.
+- **Validation:** the focused tests pass, and a randomized differential against the real Ubuntu `snmptrapd` 5.9.4 daemon sent a v2c trap for 540 generated configurations. It found two contract bugs, both fixed: access types are case-sensitive, and a later `authCommunity` line for the same community does not change the earlier access. The final 200 runs had 0 mismatches.
+- **Remaining:** which trap OIDs select each handler, sender/view restrictions, command existence, agent collection of the files and `-c`/`SNMPCONFPATH` overrides, a startup catalog entry, provenance, persistence, UI and AI classification. Roadmap F stays incomplete.
+
+### sudo.conf plugin and path contract — worker checkpoint #1425 (roadmap F)
+
+`sudo` is setuid root. Every `sudo` and `sudoedit` invocation reads `/etc/sudo.conf` and `dlopen`s the plugins it names into the root process, so each object's constructors run as root before any policy check. `Path plugin_dir` also moves the default `sudoers.so`, so a single line can make the next `sudo` call load another object as root. `Path noexec`, `intercept` and `sesh` choose the libraries sudo preloads into commands and the helper it runs as root. The startup inventory did not model this event trigger.
+
+- **Change:** the pure `app/sudo_conf_plugins.py` takes the captured file text, whether the file exists, and the opened file's type, owner and mode. It returns:
+  - each plugin sudo would load, in load order: source line or built-in default, symbol, configured and resolved path with its SHA-256, options, type, outcome, and whether its code runs as root;
+  - each `Path` value with its source line and intended use, and the `Debug` files sudo writes as root;
+  - a `fails` status with the fatal reason when sudo would exit while loading plugins.
+
+  It performs no I/O and never runs sudo.
+- **Fidelity:** it follows `sudo_conf.c`, `parseln.c`, `strsplit.c` and `load_plugins.c` in sudo 1.9.15p5, with the Ubuntu 24.04 compiled defaults. That covers:
+  - the `sudo_secure_fd` check, which ignores a file that is not a root-owned regular file, or that is group- or world-writable;
+  - comments, line continuation and blank trimming;
+  - ASCII-only case folding;
+  - `Path` values that run to the end of the line;
+  - relative plugin paths appended to `plugin_dir` without a separator;
+  - the default `sudoers_policy`/`sudoers_audit`/`sudoers_io` fallback, and the move of `sudoers_policy` options to `sudoers_audit`;
+  - ignored duplicates, `_clone` instances, and the fatal errors for a second policy plugin, an unset `plugin_dir` and an overlong path.
+- **Fail closed:** a plugin type is reported only for the symbols sudo's own objects export at their packaged path. Any other object, including `sudoers.so` under a changed `plugin_dir`, gets a blocking `plugin_type_unresolved` gap, because a policy-type object changes which defaults load. These also make the result incomplete:
+  - an unchecked file, or an unobserved type, owner or mode. A `stat` with a missing, `None`, `bool` or non-integer `uid`/`mode`, or a missing type, counts as unobserved rather than as insecure or secure;
+  - NUL bytes, over-limit input or invalid UTF-8;
+  - more than 128 `Plugin` lines.
+
+  `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:**
+  - `tests/test_sudo_conf_plugins.py` (28 tests, including 12 partly observed `stat` cases that failed before the review fix).
+  - A ctypes differential harness ran 8,000 random files through the installed sudo 1.9.15p5 `sudo_conf_read_v1`, comparing plugins, options, line numbers, paths and debug entries. There were 0 mismatches.
+  - Against the real setuid `sudo` in a disposable container, marker constructors in test objects ran as euid 0 in four cases: a `plugin_dir` override with no `Plugin` lines, a relative path concatenated without a slash, a duplicate policy symbol from another object, and a duplicate I/O symbol. In each case sudo then failed on the missing symbol. A group-writable file was ignored, and an unset `plugin_dir` was fatal.
+  - 17 source mutations were all caught.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:**
+  - agent collection of the file and its metadata, a catalog entry, package provenance, persistence, UI and AI classification;
+  - the compiled defaults of other sudo builds (Debian 12 1.9.13p3, RPM families), which callers cannot yet supply.
+
+### autofs program-map resolution — worker checkpoint #1375 (roadmap F)
+
+automount runs as root and, when a master-map entry's map source resolves to a program map, runs that program as root on every key lookup under the mount point with argv `[program, key]`. An untyped `/etc/auto.<name>` map becomes a program map only because its owner execute bit is set, so it is a persistence location the startup inventory did not model.
+
+- **Change (increment 1):** the pure `app/autofs_program_maps.py` takes tokenized master-map entries, captured `stat` observations, captured text maps and the `automount:` nsswitch sources, and returns each entry's resolved source (`program`, `file`, `hosts`, `not_found`, `refused`, `remote`, `unknown`, `invalid`) and each program automount would run, as root. It performs no I/O and never runs a map.
+- **Fidelity:** transcribed from autofs 5.1.9 `daemon/lookup.c` (`lookup_nss_read_map`, `read_file_source_instance`, `find_map_path`, `lookup_map_read_map`), `modules/lookup_program.c` (`do_init`, `lookup_one`) and `lib/nss_parse.y`, as built by Ubuntu 24.04 `autofs_5.1.9-1ubuntu4.1` with `--with-mapdir=/etc`. It covers explicit `program:` (absolute and `access(X_OK)` as root), explicit `file:` (never executed), untyped absolute maps (`S_IEXEC`), untyped relative names through nsswitch `files` (`/etc/<name>`, the default when nsswitch has no `automount` entry), and `sss` skipped for amd maps.
+- **Fail closed:** the result is incomplete for an unobserved `stat`, an LDAP (`//`) or remote nsswitch source that could answer (including any source listed after a `files` hit, because `lookup_nss_read_map` turns a files success into `TRYAGAIN` and key lookups fall through on `NOTFOUND`), an explicit remote type, an amd-format relative name (configured `search_path`), a `multi` map, and any text map that was not captured, is over-limit or binary, or contains a `+` include or an `fstype=autofs` submount. `origin` is `not_assessed`; no result is a safety verdict.
+- **Validation:** `tests/test_autofs_program_maps.py` (14 tests). This is a source review only: no upstream differential ran, because automount needs root and the autofs kernel interface.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Change (increment 2):** `read_master` reads the master map the way automount does and returns, in order, each record buffer that `master_parse_entry` would parse. It transcribes `read_one` (comments, continuations, quotes and escapes, and the swallowing of indented lines after a bad entry), `+` includes with the self-include and depth-16 limits, `+dir:` directories (`*.autofs`, no dot files, glibc `versionsort` order), typed `file:`/`dir:` master names, `files` nsswitch lookups under `/etc`, `master_map_name` and the `auto_master` fallback. Remote sources, unobserved files or directories, typed names that select a lookup module it does not model, over-limit input, and a key that overflows upstream's key buffer (undefined behaviour) are blocking gaps.
+- **Validation (increment 2):** `tests/test_autofs_program_maps.py` (22 tests). Upstream's own `read_one`, compiled unchanged from 5.1.9 `modules/lookup_file.c` into a harness, agreed with the transcription on 26,000 random files, including keys and entries at the 255 and 16,384 byte limits. The only differences were 40 key-buffer overflows, which fail closed. The transcribed `strverscmp` agreed with glibc on 200,000 random pairs. The include and nsswitch logic rests on source review.
+- **Change (increment 3):** `parse_entry` parses each record buffer with a fail-closed subset of the `daemon/master_tok.l`/`daemon/master_parse.y` grammar: an absolute mount point (trailing slashes stripped), `-hosts`, `-null`, an untyped or `<type>[,<format>]:` map name (`exec` means `program`), and blank- or comma-separated mount and daemon options including `--timeout=N`. Each accepted form was checked rule by rule against the flex longest-match rules. Names where another scanner rule can start mid-name (`-hosts`, `-null`, `-xfn`, `--`, `//`, `:`, `=`, `,`, a bare map-type keyword), quotes, escapes, `-D` macros with a blank, `multi` and LDAP DN syntax are `unmodelled`. `entries_from_records` applies `master_parse_entry` bookkeeping: `-null` hides later entries for its mount point, a repeated indirect mount point in one read is ignored while `/-` accumulates, and an entry without a format becomes `amd` when autofs.conf has a section for its mount point. `evaluate_master` composes `read_master`, `entries_from_records` and `evaluate`.
+- **Fail closed (increment 3):** an `unmodelled` record is a blocking `entry_grammar_not_modelled` gap, and every later record in the same read is unresolved too, because an aborted parse can leave the scanner in a non-initial start condition for the next buffer. When autofs.conf was not captured (`amd_mount_paths=None`), an untyped relative map name is a blocking `amd_sections_not_observed` gap.
+- **Validation (increment 3):** `tests/test_autofs_program_maps.py` (28 tests). This rests on source review only. Running a flex-built upstream scanner was refused by the sandbox, so no upstream differential ran for the grammar.
+- **Remaining:** an upstream differential of the grammar subset, agent collection, a catalog entry, provenance, UI and AI classification.
