@@ -4,8 +4,9 @@ import json
 import math
 import time
 from typing import NamedTuple
-from sqlalchemy import String, Text, Integer, Double, Index, select, func, tuple_, and_, or_, update
+from sqlalchemy import String, Text, Integer, Double, Index, select, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
+from sqlalchemy import Boolean, column, literal
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy, ai_retry
@@ -166,6 +167,19 @@ def _scoring_package_filters():
             Package.host_id.in_(host_lifecycle.active_ids()))
 
 
+def scoring_package_page(session, cursor, limit):
+    """Read the ordered scoring inputs shared by scheduling and queue status."""
+    query = select(Package).options(load_only(
+        Package.id, Package.host_id, Package.name, Package.installed, Package.candidate,
+        Package.priority, Package.priority_manual, Package.available_since, Package.held,
+        Package.dpkg_state, raiseload=True,
+    )).where(*_scoring_package_filters())
+    if cursor is not None:
+        query = query.where(or_(Package.available_since > cursor[0],
+                               and_(Package.available_since == cursor[0], Package.id > cursor[1])))
+    return list(session.scalars(query.order_by(Package.available_since, Package.id).limit(limit)))
+
+
 def scoring_candidates(s):
     """Read ordered candidates and exact/deferred score state in bounded chunks.
 
@@ -176,11 +190,7 @@ def scoring_candidates(s):
     cursor = None
     hosts = {}
     while True:
-        query=select(Package).where(*_scoring_package_filters())
-        if cursor is not None:
-            query=query.where(or_(Package.available_since>cursor[0],
-                and_(Package.available_since==cursor[0],Package.id>cursor[1])))
-        packages=list(s.scalars(query.order_by(Package.available_since,Package.id).limit(200)))
+        packages = scoring_package_page(s, cursor, 200)
         if not packages:
             # Only an exhausted pass knows which servers were absent.
             for host_id in _MEMO.keys() - hosts.keys():
@@ -199,13 +209,24 @@ def scoring_candidates(s):
                 host, memo = entry
                 current.append((package, host, cached_identity(host, package, memo)))
         if not current:continue
-        score_state=select(UpdateScore).options(load_only(UpdateScore.id,UpdateScore.host_id,
-            UpdateScore.name,UpdateScore.state,UpdateScore.attempted,UpdateScore.next_at,UpdateScore.configuration,raiseload=True))
-        scores={r.id:r for r in s.scalars(score_state.where(UpdateScore.id.in_([key for _,_,key in current])))}
-        scopes={(p.host_id,p.name) for p,_,_ in current};deferred={}
-        for row in s.scalars(score_state.where(UpdateScore.state=='deferred',
-                tuple_(UpdateScore.host_id,UpdateScore.name).in_(scopes))):
-            deferred.setdefault((row.host_id,row.name),[]).append(row)
+        fields = (UpdateScore.id, UpdateScore.host_id, UpdateScore.name, UpdateScore.state,
+                  UpdateScore.attempted, UpdateScore.next_at, UpdateScore.configuration)
+        keys = [key for _, _, key in current]
+        scopes = {(package.host_id, package.name) for package, _, _ in current}
+        exact = select(*fields, literal(False).label('scope_match')).where(UpdateScore.id.in_(keys))
+        by_scope = select(*fields, literal(True).label('scope_match')).where(
+            UpdateScore.state == 'deferred', tuple_(UpdateScore.host_id, UpdateScore.name).in_(scopes))
+        # Each branch keeps its own indexed filter. The marker preserves both
+        # memberships when the current score is also deferred.
+        score_query = select(UpdateScore, column('scope_match', Boolean)).options(
+            load_only(*fields, raiseload=True)).from_statement(exact.union_all(by_scope))
+        scores = {}
+        deferred = {}
+        for row, scope_match in s.execute(score_query):
+            if scope_match:
+                deferred.setdefault((row.host_id, row.name), []).append(row)
+            else:
+                scores[row.id] = row
         for package,host,key in current:
             yield package,host,key,scores.get(key),deferred.get((host.id,package.name),())
 
@@ -253,8 +274,12 @@ def run_one():
             if not cfg['ai_enabled'] or not cfg['ai_updates_enabled'] or not cfg['ai_model'] or not secret:return
             signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
             if cfg['ai_control_mode']=='legacy':
-                count=s.scalar(select(func.count()).select_from(ai_runs.AIRun).where(ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600))
-                if count>=cfg['ai_update_hourly_limit']:return
+                limit=math.ceil(cfg['ai_update_hourly_limit'])
+                if limit<=0:return
+                recent=(select(ai_runs.AIRun.started).where(
+                    ai_runs.AIRun.purpose=='update_scoring',ai_runs.AIRun.started>now-3600)
+                    .offset(limit-1).limit(1).exists())
+                if s.scalar(select(recent)):return
             batch=[]
             for package,host,key,row,deferred in scoring_candidates(s):
                 for stale in deferred:
@@ -307,14 +332,21 @@ def run_one():
                                        for identifier, score in scores.items()}
                         packages = {package.id: package for package in s.scalars(
                             select(Package).where(Package.id.in_(package_ids.values())))}
-                        evidence_host_ids = {score.host_id for score in scores.values()}
-                        hosts = {host.id: host for host in s.execute(
-                            select(Host.id, Host.inventory).where(Host.id.in_(evidence_host_ids)))}
+                        names_by_host = {}
+                        for score in scores.values():
+                            package = packages.get(package_ids[score.id])
+                            if package and package.candidate:
+                                names_by_host.setdefault(score.host_id, set()).add(package.name)
+                        hosts = {
+                            host.id: (host, version_index(host.inventory, names=names_by_host[host.id]))
+                            for host in s.execute(
+                                select(Host.id, Host.inventory).where(Host.id.in_(names_by_host)))
+                        }
                         for item in rows:
                             row = scores[item['id']]
                             package = packages.get(package_ids[row.id])
-                            host = hosts.get(row.host_id)
-                            if not package or not host or not package.candidate or identity(host,package)!=row.id:
+                            host, index = hosts.get(row.host_id, (None, None))
+                            if not package or not host or not package.candidate or identity(host,package,index)!=row.id:
                                 row.state='superseded';row.next_at=0;row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
                             row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.next_at=0;row.completed=time.time()
                         s.commit()

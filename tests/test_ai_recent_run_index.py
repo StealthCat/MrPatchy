@@ -97,10 +97,10 @@ def test_recent_run_reads_use_purpose_and_time_range(admin, monkeypatch):
     assert len(queries) == 3
     assert 'ORDER BY ai_runs.started DESC' in queries[0][0]
     assert queries[1][0].lower().count('exists (') == 2
-    assert 'count(' in queries[2][0].lower()
+    assert 'exists (' in queries[2][0].lower()
     with db.engine.connect() as connection:
         assert connection.scalars(select(ai_claims.Claim.subject)).all() == []
-        expected = [(2, now - 3599), (True,), (2,)]
+        expected = [(2, now - 3599), (True,), (True,)]
         for (statement, parameters), result in zip(queries, expected, strict=True):
             assert connection.exec_driver_sql(statement, parameters).one() == result
             if connection.dialect.name == 'sqlite':

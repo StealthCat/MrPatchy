@@ -8,6 +8,14 @@ on:
   schedule:
     - cron: '21 4 * * 3'
 
+# Supersede in-progress analysis for the same pull request, as Validate Mr Patchy does
+# (issue #1514): a newer head makes the older analysis moot, so it should not hold a
+# runner. Pushes to main group by ref; scheduled and manual runs keep their own group
+# and are never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('push-{0}', github.ref) || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
