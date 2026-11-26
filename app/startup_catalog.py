@@ -184,6 +184,8 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
                    _loc('/etc/smartmontools/smartd_warning.d', ('debian',)))},
     {'id': 'tcp_wrappers', 'label': 'TCP wrappers spawn, twist and aclexec commands', 'trigger': 'event',
      'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/hosts.allow'), _loc('/etc/hosts.deny'))},
+    {'id': 'rsnapshot', 'label': 'rsnapshot pre/post-exec, backup script and include commands', 'trigger': 'schedule',
+     'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/rsnapshot.conf'),)},
     {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),
