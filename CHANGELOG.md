@@ -1,3 +1,14 @@
+## 1.103.0 — 2026-11-26
+
+1. [PR #1396](https://github.com/StealthCat/MrPatchy/pull/1396): A pure Roadmap F rsyncd contract (`app/rsyncd_exec.py`) resolves which `early exec`, `pre-xfer exec`, `post-xfer exec` and `name converter` commands `rsync --daemon` runs for each module, and as which user. Compatibility: new module only. Closes #1395.
+2. [PR #1539](https://github.com/StealthCat/MrPatchy/pull/1539): A pure Roadmap F kdump contract (`app/kdump_hooks.py`) reports which `kdump_pre`, `kdump_post`, `kdump_emergency`, `core_collector` and `pre.d`/`post.d`/`emergency.d` programs the crash-capture environment runs as root, in which order and with which failure effects. It also reports when `kdumpctl` refuses the configuration. Compatibility: new module only. Refs #1538.
+3. [PR #1402](https://github.com/StealthCat/MrPatchy/pull/1402): The legacy hourly triage allowance is checked with a bounded probe at its admission threshold. The limit and displayed status are unchanged. Compatibility: no schema or API change. Fixes #1400.
+4. [PR #1334](https://github.com/StealthCat/MrPatchy/pull/1334): Update-scoring stage timings now include an `admission` sample per tracked batch, covering candidate selection, evidence assembly and committing the running score rows. Idle polls create no run or sample. Compatibility: observation only, with no schema, retention, score outcome, admission-gate or API-structure change. Tracks #1333.
+5. [PR #1460](https://github.com/StealthCat/MrPatchy/pull/1460): Recording a capped AI provider call as sent before transmission now takes one conditional ledger update instead of a read followed by an update. Ineligible reservations still stop the call before anything reaches the provider, and concurrent callers cannot both mark the same reservation as sent. Compatibility: no schema, API or setting change. Fixes #1459.
+6. [PR #1458](https://github.com/StealthCat/MrPatchy/pull/1458): The administrator daily budget summary reads counted spend, outstanding receipts and reset guidance from one ledger snapshot, so concurrent ledger changes cannot make the guidance disagree with the displayed spend. Compatibility: no schema or setting change. Fixes #1457.
+
+Integrated together through batch [PR #1550](https://github.com/StealthCat/MrPatchy/pull/1550). This source update does not publish a Docker image.
+
 ## 1.102.1 — 2026-11-26
 
 1. [PR #1546](https://github.com/StealthCat/MrPatchy/pull/1546): The Patch calendar month view shows its columns as Sat, Mon–Fri, Sun. Each row is still one Monday–Sunday week, so Saturday sits at the left of its own week, and day and "+N more" links announce their weekday. Compatibility: display only, with no API, schema, scheduling, timezone or authorization change. The schedule form's day checkboxes and the maintenance-window lists keep their order. Fixes #1540 (P1).
