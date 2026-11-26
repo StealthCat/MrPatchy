@@ -6,7 +6,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, Numeric, and_, case, func, or_, select
+from sqlalchemy import String, Text, Double, LargeBinary, Numeric, and_, case, cast, func, or_, select
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -76,25 +76,26 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     unreconciled_count=0
     oldest_reservation=None
     if enabled:
-        # At most five result rows, regardless of receipt amounts or unknown statuses.
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
         # MySQL performs the sum in native DECIMAL without a float intermediate.
         amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),else_=BudgetEntry.reservation_usd)
-        bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
-        total=_aggregate(session,amount)
         # A row also counts while the window it was admitted under (its own reset_at) is still
         # open, so changing the reset timezone cannot hand back spend from that window.
-        metrics=(func.count(),func.min(BudgetEntry.created)) if include_reconciliation else ()
-        query=select(bucket,total,*metrics).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
-            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(bucket)
-        for key,value,*summary in session.execute(query):
-            total=Decimal(value or 0);counted+=total
-            if key in groups:groups[key]+=total
-            if summary and key in ('sent','uncertain'):
-                call_count,oldest=summary
-                unreconciled_count+=call_count
-                if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
-                    oldest_reservation=oldest
+        query=select(_aggregate(session,amount)).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
+        if include_reconciliation:
+            bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
+            detail=query.add_columns(bucket,func.count(),func.min(BudgetEntry.created)).group_by(bucket)
+            for value,key,call_count,oldest in session.execute(detail):
+                total=Decimal(value or 0);counted+=total
+                if key in groups:groups[key]=total
+                if key in ('sent','uncertain'):
+                    unreconciled_count+=call_count
+                    if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
+                        oldest_reservation=oldest
+        else:
+            # Admission and alert gates only need the counted total.
+            counted=Decimal(session.execute(query).scalar_one() or 0)
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
@@ -161,32 +162,55 @@ def mark_sent(identifier,call_id):
 def release_unsent(identifier,reason,*,pool_timeout_call_id=None):
     """Release before transmission, or after a matching pool acquisition failure."""
     if not identifier:return
+    ledger = BudgetEntry.__table__
+    expected = [(ledger.c.status, 'reserved')]
+    if pool_timeout_call_id is not None:
+        if not isinstance(pool_timeout_call_id, str):
+            return
+        expected = [(ledger.c.status, 'sent'), (ledger.c.call_id, pool_timeout_call_id)]
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if not row:return
-            if pool_timeout_call_id is None:
-                unsent=row.status=='reserved'
+            # Preserve Python's exact comparisons for both status and receipt.
+            if session.get_bind().dialect.name in ('mysql', 'mariadb'):
+                matches = [cast(column, LargeBinary) == value.encode('utf-8') for column, value in expected]
             else:
-                unsent=row.status=='sent' and row.call_id==pool_timeout_call_id
-            if unsent:
-                row.status='released';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
+                matches = [column.collate('BINARY') == value for column, value in expected]
+            result = session.execute(ledger.update().where(ledger.c.id == identifier, *matches).values(
+                status='released', updated=time.time(), reason=str(reason)[:500],
+            ))
+            if result.rowcount == 1:
+                session.commit()
 
 
 def reconcile(identifier,values):
     if not identifier:return
+    pricing = values.get('pricing')
+    actual = None
+    if values.get('status') == 'estimated' and isinstance(pricing, dict):
+        try:
+            actual = Decimal(str(pricing.get('estimated_usd')))
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+    if actual is not None and actual.is_finite() and 0 <= actual <= Decimal('1000000'):
+        settlement = dict(status='settled', actual_usd=actual,
+            reason='Reconciled to provider-reported usage using the retained public price snapshot; not an invoice.')
+    else:
+        settlement = dict(status='uncertain',
+            reason=str(values.get('reason') or 'Provider usage or pricing was unavailable; the full reservation remains counted.')[:500])
+    ledger = BudgetEntry.__table__
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if not row or row.status not in ('sent','uncertain'):return
-            try:actual=Decimal(str((values.get('pricing') or {}).get('estimated_usd')))
-            except (InvalidOperation,TypeError,ValueError):actual=None
-            if values.get('status')=='estimated' and actual is not None and 0<=actual<=Decimal('1000000'):
-                row.status='settled';row.actual_usd=actual
-                row.reason='Reconciled to provider-reported usage using the retained public price snapshot; not an invoice.'
+            # Match the stored state exactly, including on MySQL's default collation.
+            state = ledger.c.status
+            if session.get_bind().dialect.name in ('mysql', 'mariadb'):
+                eligible = cast(state, LargeBinary).in_((b'sent', b'uncertain'))
             else:
-                row.status='uncertain';row.reason=str(values.get('reason') or 'Provider usage or pricing was unavailable; the full reservation remains counted.')[:500]
-            row.updated=time.time();session.commit()
+                eligible = state.collate('BINARY').in_(('sent', 'uncertain'))
+            result = session.execute(ledger.update().where(ledger.c.id == identifier, eligible).values(
+                **settlement, updated=time.time(),
+            ))
+            if result.rowcount == 1:
+                session.commit()
 
 
 def mark_uncertain(identifier,reason):
@@ -219,7 +243,8 @@ def status(session,now=None):
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
-        'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
+        'uncertain_usd':_money(uncertain),'sent_usd':_money(groups['sent']),
+        'uncertain_outcome_usd':_money(groups['uncertain']),'remaining_usd':_money(max(Decimal(0),cap-counted)),
         'unreconciled_call_count':unreconciled_count,'oldest_unreconciled_reservation_at':oldest,
         'next_reset':reset if enabled else None,'next_reset_authoritative':enabled and not overlapping,
         'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,

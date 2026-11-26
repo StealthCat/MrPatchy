@@ -3,7 +3,7 @@ import hashlib
 import time
 import pytest
 from sqlalchemy import event,select
-from app import ai,ai_policy,ai_runs,update_scores
+from app import ai,ai_policy,ai_runs,scoring_queue_status,update_scores
 from app.db import Session,Host,Package,Setting,engine
 from app.security import seal
 
@@ -242,24 +242,66 @@ def test_complete_current_scores_still_supersede_changed_deferred_history(admin,
         assert sum(r.state=='superseded' and r.next_at==0 for r in rows)==450
 
 
-def test_scoring_candidate_queries_only_load_scheduling_fields(admin):
-    seed(450)
-    score_reads=[]
-    def observe(conn,cursor,statement,parameters,context,executemany):
-        if statement.startswith('SELECT update_scores.'):
-            score_reads.append(statement.partition('\n')[0].strip())
+@pytest.mark.parametrize('state', ['complete', 'deferred'])
+def test_scoring_candidate_page_reads_exact_and_deferred_together(admin, state):
+    package_ids = seed(450, state)
+    score_reads = []
 
-    with Session() as s:
-        event.listen(engine,'before_cursor_execute',observe)
+    def observe(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith('SELECT update_scores.'):
+            score_reads.append(statement)
+
+    with Session() as session:
+        event.listen(engine, 'before_cursor_execute', observe)
         try:
-            candidates=list(update_scores.scoring_candidates(s))
+            candidates = list(update_scores.scoring_candidates(session))
         finally:
-            event.remove(engine,'before_cursor_execute',observe)
-        assert len(score_reads)==6,score_reads
-        fields=('id','host_id','name','state','attempted','next_at','configuration')
-        projection='SELECT '+', '.join('update_scores.'+field for field in fields)
-        assert all(statement==projection for statement in score_reads),score_reads[0]
-        assert len(candidates)==450 and all(row.state=='complete' for _,_,_,row,_ in candidates)
+            event.remove(engine, 'before_cursor_execute', observe)
+
+        assert len(score_reads) == 3
+        fields = ('id', 'host_id', 'name', 'state', 'attempted', 'next_at', 'configuration')
+        projection = 'SELECT ' + ', '.join('update_scores.' + field for field in fields)
+        for statement in score_reads:
+            first, second = statement.split(' UNION ALL ')
+            for branch in (first, second):
+                assert branch.partition(' AS scope_match')[0].rsplit(', ', 1)[0] == projection
+
+        assert [package.id for package, *_ in candidates] == package_ids
+        for _, _, key, row, deferred in candidates:
+            assert row.id == key and row.state == state
+            if state == 'deferred':
+                assert deferred == [row]
+            else:
+                assert not deferred
+
+def test_scoring_and_queue_status_omit_unused_package_columns_across_pages(admin):
+    expected_order = seed(450)
+    with Session() as session:
+        full_hosts = {host.id: host for host in session.scalars(select(Host))}
+        keys = {package.id: update_scores.identity(full_hosts[package.host_id], package)
+                for package in session.scalars(select(Package))}
+
+    package_reads = []
+
+    def observe(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().lower().startswith('select packages.'):
+            package_reads.append(statement.partition('\n')[0].strip().lower())
+
+    event.listen(engine, 'before_cursor_execute', observe)
+    try:
+        with Session() as session:
+            candidate_order = [(package.id, key)
+                               for package, _, key, _, _ in update_scores.scoring_candidates(session)]
+        with Session() as session:
+            status_order = [(package.id, key)
+                            for package, key in scoring_queue_status._current_candidates(session)]
+    finally:
+        event.remove(engine, 'before_cursor_execute', observe)
+
+    assert candidate_order == status_order == [(identifier, keys[identifier]) for identifier in expected_order]
+    columns = ('id', 'host_id', 'name', 'installed', 'candidate', 'priority',
+               'priority_manual', 'available_since', 'held', 'dpkg_state')
+    assert package_reads == ['select ' + ', '.join('packages.' + field for field in columns)] * 8
 
 
 @pytest.mark.parametrize('count,completed',[(513,505),(1000,0)])
@@ -398,6 +440,77 @@ def test_equal_age_candidates_keep_id_tiebreak_order_across_chunks(admin,monkeyp
         expected=expected[:5]
     sent=capture_assessments(monkeypatch);update_scores.run_one()
     assert [row['id'] for row in sent]==expected
+
+
+def test_reply_revalidation_scans_rpm_inventory_once_for_five_packages(admin, monkeypatch):
+    package_ids = seed(5, completed=0, host_count=1)
+    expected = []
+    with Session() as session:
+        host = session.get(Host, 'bulk-0')
+        host.inventory = {
+            'package_manager': 'rpm',
+            'os': 'ID=almalinux\nVERSION_ID=9',
+            'rpm_packages': [
+                {'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1.2-1'},
+                {'name': 'pkg0000', 'arch': 'aarch64', 'evr': '0:9-1'},
+                {'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1.1-1'},
+                {'name': 'pkg0000', 'arch': 'x86_64', 'evr': '0:1.1-1'},
+                {'name': 'pkg0001', 'arch': 'x86_64', 'evr': '0:1-1'},
+                *[{'name': f'other{index}', 'arch': 'x86_64', 'evr': '0:1-1'}
+                  for index in range(100)],
+            ],
+        }
+        for identifier in package_ids:
+            package = session.get(Package, identifier)
+            package.name += ':x86_64'
+            package.id = host.id + ':' + package.name
+            expected.append({'id': update_scores.identity(host, package),
+                             **update_scores.evidence(host, package)})
+        session.commit()
+
+    sent = capture_assessments(monkeypatch)
+    assess = ai.request
+    versions = update_scores.versions
+    version_index = update_scores.version_index
+    reply_started = False
+    scans = []
+
+    def change_inventory(*args, **kwargs):
+        nonlocal reply_started
+        result = assess(*args, **kwargs)
+        with Session() as session:
+            host = session.get(Host, 'bulk-0')
+            first, *remaining = host.inventory['rpm_packages']
+            host.inventory = {**host.inventory, 'rpm_packages': [{**first, 'evr': '0:1.3-1'}, *remaining]}
+            session.commit()
+        reply_started = True
+        return result
+
+    def observe_versions(inventory, name, fallback, index=None):
+        if reply_started and index is None and inventory.get('package_manager') == 'rpm':
+            scans.append('unindexed')
+        return versions(inventory, name, fallback, index)
+
+    def observe_index(inventory, *args, **kwargs):
+        index = version_index(inventory, *args, **kwargs)
+        if reply_started and inventory.get('package_manager') == 'rpm':
+            scans.append(('indexed', set(index)))
+        return index
+
+    monkeypatch.setattr(ai, 'request', change_inventory)
+    monkeypatch.setattr(update_scores, 'versions', observe_versions)
+    monkeypatch.setattr(update_scores, 'version_index', observe_index)
+    update_scores.run_one()
+
+    assert sent == expected
+    assert sent[0]['installed'] == ['0:1.1-1', '0:1.2-1']
+    assert sent[-1]['installed'] == ['1']
+    with Session() as session:
+        rows = {row.id: (row.state, row.score)
+                for row in session.scalars(select(update_scores.UpdateScore))}
+    assert rows == {expected[0]['id']: ('superseded', None),
+                    **{item['id']: ('complete', 50) for item in expected[1:]}}
+    assert scans == [('indexed', {'pkg0000:x86_64', 'pkg0001:x86_64'})]
 
 
 def test_paused_and_inactive_hosts_stay_out_of_scoring_and_stale_supersession(admin,monkeypatch):
