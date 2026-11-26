@@ -317,11 +317,11 @@ def acquire(owner=None):
             if not cfg['ai_enabled'] or not cfg['ai_model'] or not secret or not owner_valid(s,owner,True):return None
             if cfg['ai_control_mode']=='legacy' and _legacy_allowance_reached(s,cfg['ai_hourly_limit'],now):
                 return None
-            from . import ai_admission,ai_budget,ai_provider_backoff,known_good
+            from . import ai_admission,ai_budget,known_good
             # A local exact cache hit needs no provider admission. Keep paid
             # work queued while any shared provider start gate is closed.
-            free_only=bool(ai_admission.waiting(s,now,settings=cfg)
-                or ai_provider_backoff.waiting(s,now) or ai_budget.waiting(s,now,settings=cfg))
+            free_only=bool(ai_admission.shared_start_waiting(s,now,settings=cfg)
+                or ai_budget.waiting(s,now,settings=cfg))
             if free_only and s.scalar(select(known_good.Entry.fingerprint).where(
                     known_good.Entry.active.is_(True),known_good.Entry.model==cfg['ai_model'].strip()).limit(1)) is None:
                 return None

@@ -185,7 +185,9 @@ def test_concurrent_threads_never_send_beyond_the_cap_or_duplicate_a_subject(adm
         # Bypass the claim-time hints so every contender reaches authoritative
         # reservation. The normal rate admission still runs before transmission.
         monkeypatch.setattr(ai_budget, 'waiting', lambda *args, **kwargs: 0)
-        monkeypatch.setattr(ai_admission, 'waiting', lambda *args, **kwargs: 0)
+        # The claim reads the rate and provider-backoff gates together; no
+        # provider backoff is set here, so bypassing it only skips the rate hint.
+        monkeypatch.setattr(ai_admission, 'shared_start_waiting', lambda *args, **kwargs: False)
     sent, guard, overlap = [], threading.Lock(), threading.Event()
     first_transmission = threading.Event()
     respond = overlapping_post(sent, guard, overlap)

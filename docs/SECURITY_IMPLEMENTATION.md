@@ -13207,6 +13207,15 @@ the selected window. A mixed-verdict fixture at a two-probe limit materializes
 two records where it previously loaded four. Cursor rotation, full evidence
 checks and free-only admission are retained. Production throughput remains open.
 
+### Read both triage start gates together — Roadmap A checkpoint #1481
+
+Triage claims check the shared provider-backoff and paced-rate deadlines in
+one read under the triage admission lock. Each check uses its singleton key.
+Unpaced modes omit the rate check. Either active deadline still keeps paid
+work queued while permitting eligible local exact-cache hits. When both
+gates are open, the same daily-cap check applies. Provider calls still
+recheck the gates before sending. Fleet throughput remains open.
+
 ### Rotating free known-good hit probe window — worker checkpoint #1241 (roadmap A/B)
 
 The #1030 checkpoint bounded closed-gate admission to the 50 oldest eligible subjects (`FREE_HIT_SCAN`). A free exact hit behind 50 or more older paid subjects was therefore never probed while the daily cap, rate admission or provider backoff stayed closed, which under an exhausted cap meant waiting for the reset.
