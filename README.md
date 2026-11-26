@@ -750,7 +750,9 @@ reconciliation and the oldest retained reservation time among them. This include
 calls from still-counted prior windows. The time is the reservation time, because the
 ledger keeps no separate transmission timestamp. The same notice splits the unreconciled
 amount into sent calls still awaiting reconciled usage and calls with a recorded uncertain
-outcome; both count toward the cap.
+outcome; both count toward the cap. When retained uncertain charges reduce the headroom
+under an enabled daily cap, administrators receive one in-app notice that opens AI Settings;
+the existing exhaustion notice takes over if the cap fills.
 
 A confirmed local HTTP connection-pool timeout receives a short local retry delay
 without creating or changing the fleet-wide provider backoff. Provider and ambiguous

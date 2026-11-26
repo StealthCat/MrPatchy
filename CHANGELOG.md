@@ -1,3 +1,12 @@
+## 1.105.0 — 2026-11-26
+
+1. [PR #1339](https://github.com/StealthCat/MrPatchy/pull/1339): Administrators receive one in-app notice when a retained uncertain provider charge reduces the headroom under an enabled daily cap. It opens AI Settings. Ordinary sent reservations do not trigger it, and the existing exhaustion notice takes over if the cap fills. The three cap notices and their current revisions share one read. Compatibility: no schema, configuration or provider change. It uses the existing administrator-only in-app channel, SMTP and webhook delivery are unchanged, and the notice can add one to the unread count. Fixes #1337.
+2. [PR #1204](https://github.com/StealthCat/MrPatchy/pull/1204): A pure Roadmap F contract (`app/ca_certificates_hooks.py`) resolves which `/etc/ca-certificates/update.d` hooks Debian's `update-ca-certificates` runs as root, in what byte order and with which argument. It also gives the certificate-change stdin, on package installs, dpkg triggers and manual runs. Version-dependent behaviour is reported rather than guessed. Compatibility: new module only. Closes #1203.
+3. [PR #1554](https://github.com/StealthCat/MrPatchy/pull/1554): An AI triage fixture capture now records `source_commit` when the same clean tracked checkout is verified at its start and end, and the one-pair comparator carries baseline and candidate identities. Dirty or exported checkouts omit the field. Compatibility: fixture tooling only. Fixes #1553.
+4. [PR #1549](https://github.com/StealthCat/MrPatchy/pull/1549): `tools/compare_ai_benchmark_series.py --fixed-concurrency` compares at least three repeated before-and-after AI triage captures at the same worker count. It reports the median and range of paired changes, and refuses mismatched or copied reports. Compatibility: developer tooling only. Fixes #1548.
+
+Integrated together through batch [PR #1562](https://github.com/StealthCat/MrPatchy/pull/1562). This source update does not publish a Docker image.
+
 ## 1.104.0 — 2026-11-26
 
 1. [PR #1552](https://github.com/StealthCat/MrPatchy/pull/1552): A pure Roadmap F collectd contract (`app/collectd_exec.py`) reports which `Exec` and `NotificationExec` programs collectd starts, with which argv and as which user and groups. It also reports when collectd refuses an account or rejects the configuration. Compatibility: new module only. Refs #1551.
