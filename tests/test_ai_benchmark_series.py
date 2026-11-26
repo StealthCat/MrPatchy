@@ -29,9 +29,10 @@ def make_pairs(tmp_path, mutate=None):
     return pairs
 
 
-def run_series(pairs):
+def run_series(pairs, *options):
     return subprocess.run(
-        [sys.executable, str(TOOL), *(argument for pair in pairs for argument in ('--pair', *map(str, pair)))],
+        [sys.executable, str(TOOL), *options,
+         *(argument for pair in pairs for argument in ('--pair', *map(str, pair)))],
         text=True, capture_output=True, check=False,
     )
 
@@ -52,6 +53,49 @@ def test_series_reports_paired_medians_and_ranges(tmp_path):
     assert [pair['elapsed_seconds']['absolute'] for pair in output['pairs']] == [-1, -2, -7]
     if 'serial_peak_provider_requests' in output['pairs'][0]:
         assert all(pair['serial_peak_provider_requests'] is None for pair in output['pairs'])
+
+
+@pytest.mark.parametrize('workers', [1, 4])
+def test_fixed_concurrency_series_reports_baseline_and_candidate(tmp_path, workers):
+    execution = 'serial' if workers == 1 else 'parallel'
+
+    def matched(index, baseline, candidate):
+        baseline.update(execution=execution, concurrency=workers, peak_provider_requests=1)
+        candidate.update(execution=execution, concurrency=workers, peak_provider_requests=min(index, workers))
+
+    pairs = make_pairs(tmp_path, matched)
+    assert run_series(pairs).returncode == 2, 'same worker count requires an explicit mode'
+    result = run_series(pairs, '--fixed-concurrency')
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output['fixture_only'] and output['capability_equivalent']
+    assert output['comparison_mode'] == 'fixed_concurrency'
+    assert output['baseline']['concurrency'] == output['candidate']['concurrency'] == workers
+    assert 'serial' not in output and 'parallel' not in output
+    assert output['pair_count'] == 3
+    assert output['pairs'][0]['baseline_report'] == pairs[0][0].name
+    assert output['pairs'][0]['candidate_report'] == pairs[0][1].name
+    assert [row['candidate_peak_provider_requests'] for row in output['pairs']] == [
+        min(index, workers) for index in (1, 2, 3)
+    ]
+    assert output['paired_differences']['elapsed_seconds']['absolute']['median'] == -2
+    assert 'candidate minus baseline' in output['interpretation']
+
+
+@pytest.mark.parametrize('match_within_pair', [False, True])
+def test_fixed_concurrency_series_refuses_inconsistent_workers(tmp_path, match_within_pair):
+    def change_workers(index, baseline, candidate):
+        baseline.update(execution='parallel', concurrency=4)
+        if index == 2:
+            candidate.update(concurrency=3)
+            if match_within_pair:
+                baseline.update(concurrency=3)
+
+    result = run_series(make_pairs(tmp_path, change_workers), '--fixed-concurrency')
+    assert result.returncode == 2
+    expected = ('workload or execution settings differ' if match_within_pair
+                else 'fixed-concurrency comparison requires identical concurrency')
+    assert f'pair 2: {expected}' in result.stderr
 
 
 @pytest.mark.parametrize('count', [2, 21])
@@ -165,8 +209,8 @@ def test_series_preserves_observed_provider_overlap_without_requiring_it_to_matc
 
     compare_pair = series.compare
 
-    def compare_with_overlap(serial, parallel, serial_name, parallel_name):
-        comparison = compare_pair(serial, parallel, serial_name, parallel_name)
+    def compare_with_overlap(serial, parallel, serial_name, parallel_name, **options):
+        comparison = compare_pair(serial, parallel, serial_name, parallel_name, **options)
         comparison['baseline']['peak_provider_requests'] = serial['peak_provider_requests']
         comparison['candidate']['peak_provider_requests'] = parallel['peak_provider_requests']
         return comparison
@@ -188,8 +232,8 @@ def test_series_summarizes_measured_queue_timing_pairs(tmp_path, monkeypatch):
 
     compare_pair = series.compare
 
-    def compare_with_queue_timing(serial, parallel, serial_name, parallel_name):
-        comparison = compare_pair(serial, parallel, serial_name, parallel_name)
+    def compare_with_queue_timing(serial, parallel, serial_name, parallel_name, **options):
+        comparison = compare_pair(serial, parallel, serial_name, parallel_name, **options)
         comparison['queue_timing'] = serial['fixture_queue_timing']
         return comparison
 

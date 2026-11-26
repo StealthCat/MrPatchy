@@ -883,7 +883,8 @@ def test_nearing_daily_cap_warns_once_per_window_and_hands_over_at_exhaustion(ad
     with Session() as session:
         event=warning_event(session)
         assert event.revision==1 and cap_revision(session, event).reason==first_reason
-        assert notifications.unread_count(session, 'admin')==0
+        unread = notifications.list_for_user(session, 'admin', unread_only=True)
+        assert [item['kind'] for item in unread] == ['uncertain-charge']
         assert not session.query(operations.Alert).filter(operations.Alert.kind.like('%cap%')).count()
     # Reaching the cap resolves the warning; only the exhausted notification is active.
     ledger('0.1')
@@ -956,3 +957,109 @@ def test_cap_warning_is_admin_only_and_does_not_change_admission(admin, monkeypa
         after=ai_budget.status(session, DAY+120)
         assert before==after
         assert session.query(ai_budget.BudgetEntry).count()==1
+
+
+def uncertain_event(session):
+    return session.query(notifications.NotificationEvent).filter_by(
+        source='ai-budget', kind='uncertain-charge').one_or_none()
+
+
+def test_uncertain_charge_notices_stay_private_stable_and_reopen(admin):
+    from app.identity import User
+
+    configure(mode='daily_cap', cap=Decimal('1'))
+    for status in ('reserved', 'sent', 'released', 'settled'):
+        ledger('0.05', status=status)
+    operations.collect_alerts(DAY + 90)
+    with Session() as session:
+        assert uncertain_event(session) is None
+        session.add_all([User(username='viewer', password='x', role='viewer'),
+                         User(username='operator', password='x', role='operator')])
+        session.commit()
+
+    ledger('0.10', status='uncertain')
+    with Session() as session:
+        row = session.query(ai_budget.BudgetEntry).filter_by(status='uncertain').one()
+        row.reason = 'private provider detail'
+        session.commit()
+        before = ai_budget.status(session, DAY + 120)
+    operations.collect_alerts(DAY + 120)
+    with Session() as session:
+        event = uncertain_event(session)
+        assert event is not None and event.revision == 1 and event.minimum_role == 'admin'
+        event_id = event.id
+        revision = cap_revision(session, event)
+        assert revision.lifecycle == 'active' and revision.deep_link == '#settings/ai'
+        assert 'still counted' in revision.reason and 'private provider detail' not in revision.reason
+        assert event_id in {item['id'] for item in notifications.list_for_user(session, 'admin')}
+        for user in ('viewer', 'operator'):
+            assert notifications.list_for_user(session, user) == []
+            assert notifications.unread_count(session, user) == 0
+        assert ai_budget.status(session, DAY + 120) == before
+        assert not session.query(operations.Alert).filter_by(kind='uncertain-charge').count()
+        notifications.mark_read(session, 'admin', event_id, 1, now=DAY + 123)
+        session.commit()
+
+    ledger('0.10', status='uncertain')
+    operations.collect_alerts(DAY + 150)
+    with Session() as session:
+        assert uncertain_event(session).revision == 1
+        assert notifications.unread_count(session, 'admin') == 0
+        for row in session.query(ai_budget.BudgetEntry).filter_by(status='uncertain'):
+            row.status = 'settled'
+            row.actual_usd = row.reservation_usd
+        session.commit()
+    operations.collect_alerts(DAY + 180)
+    operations.collect_alerts(DAY + 181)
+    with Session() as session:
+        event = uncertain_event(session)
+        assert event.revision == 2 and cap_revision(session, event).lifecycle == 'resolved'
+
+    ledger('0.10', status='uncertain')
+    operations.collect_alerts(DAY + 210)
+    with Session() as session:
+        event = uncertain_event(session)
+        assert event.id == event_id and event.revision == 3
+        assert cap_revision(session, event).lifecycle == 'active'
+        assert notifications.unread_count(session, 'admin') == 1
+
+
+def test_uncertain_charge_notice_tracks_carryover_and_cap_exhaustion(admin):
+    configure(mode='rate_and_daily', cap=Decimal('1'))
+    ledger('0.2', status='uncertain', created=DAY - 3600, reset=DAY + 240)
+    operations.collect_alerts(DAY + 120)
+    with Session() as session:
+        event = uncertain_event(session)
+        assert event is not None and cap_revision(session, event).lifecycle == 'active'
+    ledger('0.9')
+    operations.collect_alerts(DAY + 150)
+    with Session() as session:
+        event = uncertain_event(session)
+        assert event.revision == 2 and cap_revision(session, event).lifecycle == 'resolved'
+        assert cap_revision(session, cap_event(session)).lifecycle == 'active'
+    configure(mode='rate_and_daily', cap=Decimal('2'))
+    operations.collect_alerts(DAY + 180)
+    with Session() as session:
+        assert cap_revision(session, uncertain_event(session)).lifecycle == 'active'
+    operations.collect_alerts(DAY + 240)
+    with Session() as session:
+        event = uncertain_event(session)
+        assert event.revision == 4 and cap_revision(session, event).lifecycle == 'resolved'
+
+
+@pytest.mark.parametrize('disabled', ['ai', 'cap'])
+def test_uncertain_charge_notice_resolves_when_ai_or_cap_is_disabled(admin, disabled):
+    configure(mode='daily_cap', cap=Decimal('1'))
+    ledger('0.2', status='uncertain')
+    operations.collect_alerts(DAY + 120)
+    with Session() as session:
+        assert cap_revision(session, uncertain_event(session)).lifecycle == 'active'
+        row = session.get(Setting, 'config')
+        change = {'ai_enabled': False} if disabled == 'ai' else {'ai_control_mode': 'unthrottled'}
+        row.value = {**row.value, **change}
+        session.commit()
+
+    operations.collect_alerts(DAY + 150)
+    with Session() as session:
+        assert cap_revision(session, uncertain_event(session)).lifecycle == 'resolved'
+        assert session.query(ai_budget.BudgetEntry).one().status == 'uncertain'

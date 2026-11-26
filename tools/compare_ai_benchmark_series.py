@@ -1,4 +1,4 @@
-"""Summarize paired serial/parallel timing differences over repeated AI fixture runs."""
+"""Summarize paired timing differences over repeated AI triage fixture runs."""
 
 import argparse
 import hashlib
@@ -41,19 +41,22 @@ def _summary(values):
     return {'median': round(median(values), 6), 'min': min(values), 'max': max(values)}
 
 
-def compare_series(pairs):
+def compare_series(pairs, *, fixed_concurrency=False):
     if not MIN_PAIRS <= len(pairs) <= MAX_PAIRS:
         raise ComparisonError(f'provide {MIN_PAIRS} to {MAX_PAIRS} matched pairs')
 
     seen = set()
     comparisons = []
     first_signature = None
-    for index, (serial, parallel) in enumerate(pairs, 1):
+    for index, (baseline_path, candidate_path) in enumerate(pairs, 1):
         try:
-            result = compare(_report(serial, seen), _report(parallel, seen), serial.name, parallel.name)
+            result = compare(
+                _report(baseline_path, seen), _report(candidate_path, seen),
+                baseline_path.name, candidate_path.name, fixed_concurrency=fixed_concurrency,
+            )
             baseline = _configuration(result['baseline'])
             candidate = _configuration(result['candidate'])
-            if baseline['execution'] != 'serial' or candidate['execution'] != 'parallel':
+            if not fixed_concurrency and (baseline['execution'], candidate['execution']) != ('serial', 'parallel'):
                 raise ComparisonError('provide the serial report before the parallel report')
             if not baseline['database_version'] or baseline['database_version'] != candidate['database_version']:
                 raise ComparisonError('both reports need the same recorded database version')
@@ -83,23 +86,25 @@ def compare_series(pairs):
         stage: {'pair_count': len(differences), **_summary(differences)}
         for stage, differences in queue_differences.items()
     })
+    baseline_label, candidate_label = ('baseline', 'candidate') if fixed_concurrency else ('serial', 'parallel')
     return {
         'schema_version': 1,
+        **({'comparison_mode': 'fixed_concurrency'} if fixed_concurrency else {}),
         'fixture_only': True,
         'capability_equivalent': True,
         'pair_count': len(comparisons),
-        'serial': baseline,
-        'parallel': candidate,
+        baseline_label: baseline,
+        candidate_label: candidate,
         'capability': capability,
         'pairs': [
             {
-                'serial_report': result['baseline']['name'],
-                'parallel_report': result['candidate']['name'],
+                f'{baseline_label}_report': result['baseline']['name'],
+                f'{candidate_label}_report': result['candidate']['name'],
                 'elapsed_seconds': result['deltas']['elapsed_seconds'],
                 'runs_per_second': result['deltas']['runs_per_second'],
                 **({
-                    'serial_peak_provider_requests': result['baseline']['peak_provider_requests'],
-                    'parallel_peak_provider_requests': result['candidate']['peak_provider_requests'],
+                    f'{baseline_label}_peak_provider_requests': result['baseline']['peak_provider_requests'],
+                    f'{candidate_label}_peak_provider_requests': result['candidate']['peak_provider_requests'],
                 } if 'peak_provider_requests' in result['baseline'] else {}),
             }
             for result in comparisons
@@ -113,7 +118,7 @@ def compare_series(pairs):
         },
         'stage_p50_ms_differences': stage_summaries,
         'interpretation': (
-            'Each difference is parallel minus serial within one pair. Median and range '
+            f'Each difference is {candidate_label} minus {baseline_label} within one pair. Median and range '
             'describe the spread in these disposable, synthetic fixture runs.'
         ),
     }
@@ -122,10 +127,13 @@ def compare_series(pairs):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--pair', type=Path, action='append', nargs=2, required=True,
-                        metavar=('SERIAL', 'PARALLEL'), help='Repeat for each independent fixture pair.')
+                        metavar=('BASELINE', 'CANDIDATE'), help='Repeat for each independent fixture pair.')
+    parser.add_argument('--fixed-concurrency', action='store_true',
+                        help='compare baseline and candidate at the same worker count instead of serial and parallel')
     args = parser.parse_args(argv)
     try:
-        output = json.dumps(compare_series(args.pair), indent=2, sort_keys=True, allow_nan=False)
+        output = json.dumps(compare_series(args.pair, fixed_concurrency=args.fixed_concurrency),
+                            indent=2, sort_keys=True, allow_nan=False)
     except ComparisonError as error:
         print(f'comparison refused: {error}', file=sys.stderr)
         return 2
