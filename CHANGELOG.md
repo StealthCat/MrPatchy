@@ -1,3 +1,10 @@
+## 1.113.0 — 2026-11-25
+
+1. [PR #1600](https://github.com/StealthCat/MrPatchy/pull/1600): A pure Roadmap F LVM2 contract (`app/lvm_commands.py`) reports which check and repair executables, dmeventd plugins and thin/vdo event commands the `/etc/lvm` configuration makes LVM run as root. Compatibility: new module only, with no schema, route, auth, agent, scheduling or response-authorization change. Increment 1 of #1599.
+2. [PR #1610](https://github.com/StealthCat/MrPatchy/pull/1610): The verified native Linux capped SQLite benchmark from the new on-demand workflow is now kept in the repository, beyond the 30-day artifact retention. That covers twelve raw captures, the accepted series and runner provenance. Replay tests check the six matched pairs and their evidence, follow-ups and settlement counts. Compatibility: records and tests only. Refs #1609.
+
+Integrated together through batch [PR #1616](https://github.com/StealthCat/MrPatchy/pull/1616). This source update does not publish a Docker image.
+
 ## 1.112.0 — 2026-11-25
 
 1. [PR #1591](https://github.com/StealthCat/MrPatchy/pull/1591): Agents hash `/etc/kdump.conf` as a built-in startup file. Its `kdump_pre`, `kdump_post`, `kdump_emergency` and `core_collector` commands run as root in the crash-capture environment after a kernel crash. The file is metadata-only and additive to existing baselines. Compatibility: older agents keep working. After the agent update, existing baselines show the file as newly in scope until an administrator approves a new baseline. Increment 2 of #1538.
