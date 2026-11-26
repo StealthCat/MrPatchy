@@ -1097,12 +1097,13 @@ PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/etc/cron.hourly','/etc/cron.weekly','/etc/cron.monthly',
                      '/var/spool/cron','/etc/init.d','/etc/profile.d')
 PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab',
-                     '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig')
+                     '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
+                     '/etc/kdump.conf')
 # Built-in files that administrators could previously select as custom paths. A stored
 # custom path equal to one of them is already covered by built-in scope, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
 PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf',
-                              '/etc/gitconfig')
+                              '/etc/gitconfig','/etc/kdump.conf')
 PACKAGE_ID = r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}'
 
 
@@ -1431,6 +1432,151 @@ def parse_anacrontab(data):
     return result
 
 
+# TCP wrappers (#1390): hosts.allow/hosts.deny spawn, twist and aclexec commands, parsed as data
+# exactly as app/tcp_wrappers.resolve() does (libwrap 7.6.q with the Debian patches). Nothing is run.
+TCP_WRAPPERS_FILES = ('/etc/hosts.allow','/etc/hosts.deny')
+TCPW_BUFLEN = 2048
+TCPW_TEXT_LIMIT = 1024*1024
+TCPW_LIST_TOKENS = 32
+TCPW_TOKEN_LIMIT = 255
+_TCPW_SEP = ', \t\r\n'
+_TCPW_SPACE = ' \t\n\v\f\r'
+# keyword -> (needs value, value optional, must be last)
+_TCPW_OPTIONS = {'user':(1,0,0),'group':(1,0,0),'umask':(1,0,0),'linger':(1,0,0),'keepalive':(0,0,0),
+                 'aclexec':(1,0,0),'spawn':(1,0,0),'twist':(1,0,1),'rfc931':(0,1,0),'setenv':(1,0,0),
+                 'nice':(0,1,0),'severity':(1,0,0),'allow':(0,0,1),'deny':(0,0,1),'banners':(1,0,0)}
+_TCPW_COMMANDS = ('spawn','twist','aclexec')
+_TCPW_RUNTIME = frozenset({'user','group','umask','linger','keepalive','nice','severity','setenv','rfc931','banners','aclexec'})
+
+
+def _tcpw_lines(text):
+    """xgets(): (first line, logical line), or (first line, None) for the line-length/newline error."""
+    physical=text.split('\n');last=physical.pop()
+    physical=[line+'\n' for line in physical]+([last] if last else [])
+    number=0;index=0
+    while index<len(physical):
+        kept='';first=number+1
+        while index<len(physical):
+            line=physical[index];index+=1
+            if not line.endswith('\n') or len(kept.encode())+len(line.encode())>TCPW_BUFLEN-1:
+                yield first,None;return
+            number+=1
+            if len(line)>=2 and line[-2]=='\\':kept+=line[:-2];continue
+            yield first,kept+line;break
+        else:
+            if kept:yield first,None
+            return
+
+
+def _tcpw_split(value):
+    depth=0
+    for position,char in enumerate(value):
+        if char=='[':depth+=1
+        elif char==']':depth-=1
+        elif depth==0 and char==':':return value[:position],value[position+1:]
+    return value,None
+
+
+def _tcpw_tokens(value):
+    out=[];word=''
+    for char in value:
+        if char in _TCPW_SEP:
+            if word:out.append(word)
+            word=''
+        else:word+=char
+    if word:out.append(word)
+    return out
+
+
+def _tcpw_lower(value):
+    return ''.join(chr(ord(c)+32) if 'A'<=c<='Z' else c for c in value)
+
+
+def _tcpw_unconditional(tokens):
+    lower=[_tcpw_lower(t) for t in tokens]
+    return 'all' in lower and 'except' not in lower
+
+
+def _tcpw_options(text):
+    """process_options(): the options that run, and the error that stops the rest (or None)."""
+    if text is None:return [],None
+    fields=[];index=0
+    while index<len(text):
+        field=''
+        while index<len(text):
+            char=text[index]
+            if char==':':index+=1;break
+            if char=='\\' and index+1<len(text) and text[index+1]==':':index+=1
+            field+=text[index];index+=1
+        fields.append(field)
+    done=[]
+    for index,field in enumerate(fields):
+        current=field.strip(_TCPW_SPACE);cut=len(current)
+        for position,char in enumerate(current):
+            if char in '= \t\r\n':cut=position;break
+        key,value=current[:cut],None
+        if cut<len(current):
+            rest=current[cut:]
+            if rest[0]!='=':rest=rest[1:].lstrip(' \t\r\n')
+            if rest.startswith('='):rest=rest[1:].lstrip(' \t\r\n')
+            value=rest or None
+        name=_tcpw_lower(key);spec=_TCPW_OPTIONS.get(name)
+        if not key or spec is None or (value is None and spec[0]) or (value is not None and not (spec[0] or spec[1])) or (index<len(fields)-1 and spec[2]):
+            return done,key
+        if value is not None and name in _TCPW_COMMANDS:value=value.strip(_TCPW_SPACE)
+        done.append((name,value))
+    return done,None
+
+
+def _tcpw_escape(value):
+    return _CRON_CONTROL.sub(lambda m:'\\x%02x'%ord(m.group()),value)
+
+
+def parse_tcp_wrappers(data):
+    """Parse hosts.allow or hosts.deny as data, mirroring app/tcp_wrappers.resolve(). Nothing is
+    executed. Only spawn/twist/aclexec commands (with best-effort redaction), their daemon and client
+    lists and the facts needed for reachability are stored; other option values are never stored.
+    Text that is too large, not UTF-8 or contains NUL bytes yields no commands."""
+    result={'parsed':False,'entries':0,'skipped':0,'option_errors':0,'error_line':None,'unconditional_line':None,
+            'aclexec_through_unconditional':False,'commands':[],'truncated':False,'redacted':False}
+    if len(data)>TCPW_TEXT_LIMIT or b'\x00' in data:return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:return result
+    aclexec=False
+    for line,logical in _tcpw_lines(text):
+        if logical is None:result['error_line']=line;break
+        if logical[0]=='#' or not logical.strip(' \t\r\n'):continue
+        daemons_text,rest=_tcpw_split(logical)
+        if rest is None:result['skipped']+=1;continue
+        clients_text,options_text=_tcpw_split(rest)
+        daemons,clients=_tcpw_tokens(daemons_text),_tcpw_tokens(clients_text)
+        options,failed=_tcpw_options(options_text)
+        result['entries']+=1;result['option_errors']+=failed is not None
+        unconditional=_tcpw_unconditional(daemons) and _tcpw_unconditional(clients)
+        if result['unconditional_line'] is None:
+            aclexec=aclexec or any(name=='aclexec' for name,_ in options) or (failed is not None and _tcpw_lower(failed)=='aclexec')
+            if unconditional:result['unconditional_line']=line;result['aclexec_through_unconditional']=aclexec
+        before=[];identity=[]
+        for name,value in options:
+            if name in _TCPW_COMMANDS:
+                if len(result['commands'])>=CRON_FILE_JOBS:result['truncated']=True
+                else:
+                    shown,redacted=redact_cron_command(_tcpw_escape(value))
+                    result['redacted']=result['redacted'] or redacted
+                    lists={}
+                    for key,tokens in (('daemons',daemons),('clients',clients)):
+                        if len(tokens)>TCPW_LIST_TOKENS or any(len(t)>TCPW_TOKEN_LIMIT for t in tokens):result['truncated']=True
+                        lists[key]=[_tcpw_escape(t)[:TCPW_TOKEN_LIMIT] for t in tokens[:TCPW_LIST_TOKENS]]
+                    result['commands'].append({'line':line,'option':name,'command':shown[:CRON_COMMAND_LIMIT],
+                        'command_truncated':len(shown)>CRON_COMMAND_LIMIT,'redacted':redacted,**lists,
+                        'matches_every_request':unconditional,'identity_options_ignored':list(identity),
+                        'after_runtime_checks':list(before)})
+            if name in ('user','group') and name not in identity:identity.append(name)
+            if name in _TCPW_RUNTIME and name not in before:before.append(name)
+    result['parsed']=True
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -1441,7 +1587,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;content=bytearray() if form or at_name or anacron else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;content=bytearray() if form or at_name or anacron or tcpw else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1483,6 +1629,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['at']=parse_at_job(bytes(content),at_name)
             if anacron and row['kind']=='regular':
                 row['anacron']=parse_anacrontab(bytes(content))
+            if tcpw and row['kind']=='regular':
+                row['tcp_wrappers']=parse_tcp_wrappers(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:

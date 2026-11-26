@@ -77,15 +77,29 @@ def compare_series(pairs, *, fixed_concurrency=False):
         for stage, count in capability['stage_samples'].items() if count
     }
     queue_differences = {}
+    budget_differences = {}
     for result in comparisons:
         for stage, timing in result.get('queue_timing', {}).items():
             delta = timing['p50_ms']
             if delta is not None:
                 queue_differences.setdefault(stage, []).append(delta['absolute'])
+        # The pair comparator supplies deltas only when both reports have measurements.
+        budget_deltas = result.get('budget_timings', {}).get('deltas')
+        for stage, timings in (budget_deltas or {}).items():
+            paired = budget_differences.setdefault(stage, {})
+            for percentile, delta in timings.items():
+                paired.setdefault(percentile, []).append(delta['absolute'])
     stage_summaries.update({
         stage: {'pair_count': len(differences), **_summary(differences)}
         for stage, differences in queue_differences.items()
     })
+    budget_summaries = {
+        stage: {
+            percentile: {'pair_count': len(differences), **_summary(differences)}
+            for percentile, differences in timings.items()
+        }
+        for stage, timings in budget_differences.items()
+    }
     baseline_label, candidate_label = ('baseline', 'candidate') if fixed_concurrency else ('serial', 'parallel')
     return {
         'schema_version': 1,
@@ -117,6 +131,7 @@ def compare_series(pairs, *, fixed_concurrency=False):
             for metric in ('elapsed_seconds', 'runs_per_second')
         },
         'stage_p50_ms_differences': stage_summaries,
+        **({'budget_timing_differences': budget_summaries} if budget_summaries else {}),
         'interpretation': (
             f'Each difference is {candidate_label} minus {baseline_label} within one pair. Median and range '
             'describe the spread in these disposable, synthetic fixture runs.'

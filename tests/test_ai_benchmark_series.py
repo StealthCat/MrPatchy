@@ -6,6 +6,7 @@ import sys
 import pytest
 
 from tests.test_ai_benchmark_compare import report
+from tests.test_ai_benchmark_control_mode import capped_budget
 
 
 TOOL = Path(__file__).resolve().parents[1] / 'tools' / 'compare_ai_benchmark_series.py'
@@ -46,6 +47,7 @@ def test_series_reports_paired_medians_and_ranges(tmp_path):
     assert output['serial']['concurrency'] == 1
     assert output['parallel']['concurrency'] == 4
     assert output['capability']['provider_calls'] == 12
+    assert 'budget_timing_differences' not in output
     assert output['paired_differences']['elapsed_seconds']['absolute'] == {'median': -2, 'min': -7, 'max': -1}
     assert output['paired_differences']['elapsed_seconds']['percent']['median'] == -50
     assert output['paired_differences']['runs_per_second']['absolute'] == {'median': 4, 'min': 2, 'max': 7}
@@ -251,3 +253,47 @@ def test_series_summarizes_measured_queue_timing_pairs(tmp_path, monkeypatch):
     assert stages['claim_lock'] == {'pair_count': 3, 'median': 4, 'min': 2, 'max': 6}
     assert 'claim_lock_hold' not in stages
     assert stages['provider'] == {'median': -6, 'min': -8, 'max': -4}
+
+
+def test_series_summarizes_verified_budget_timings_from_both_sides(tmp_path):
+    def capped(index, baseline, candidate):
+        for data in (baseline, candidate):
+            data.update(ai_control_mode='daily_cap', fixture_budget=capped_budget())
+        for data, adjustment in ((baseline, 0), (candidate, index)):
+            if index == 2 and data is baseline:
+                continue
+            data['stages'].update(
+                budget_reservation={'count': 12, 'p50_ms': 4 + adjustment, 'p95_ms': 10 + 3 * adjustment},
+                budget_reconciliation={'count': 12, 'p50_ms': 7 - adjustment, 'p95_ms': 12 + adjustment},
+            )
+
+    result = run_series(make_pairs(tmp_path, capped))
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output['capability_equivalent'] and output['pair_count'] == 3
+    assert output['budget_timing_differences'] == {
+        'budget_reservation': {
+            'p50_ms': {'pair_count': 2, 'median': 2, 'min': 1, 'max': 3},
+            'p95_ms': {'pair_count': 2, 'median': 6, 'min': 3, 'max': 9},
+        },
+        'budget_reconciliation': {
+            'p50_ms': {'pair_count': 2, 'median': -2, 'min': -3, 'max': -1},
+            'p95_ms': {'pair_count': 2, 'median': 2, 'min': 1, 'max': 3},
+        },
+    }
+
+
+def test_series_omits_budget_deltas_without_any_fully_measured_pair(tmp_path):
+    def older(index, baseline, candidate):
+        for data in (baseline, candidate):
+            data.update(ai_control_mode='daily_cap', fixture_budget=capped_budget())
+        if index > 1:
+            one_side = baseline if index == 2 else candidate
+            one_side['stages'].update(
+                budget_reservation={'count': 12, 'p50_ms': 4, 'p95_ms': 10},
+                budget_reconciliation={'count': 12, 'p50_ms': 3, 'p95_ms': 8},
+            )
+
+    result = run_series(make_pairs(tmp_path, older))
+    assert result.returncode == 0, result.stderr
+    assert 'budget_timing_differences' not in json.loads(result.stdout)
