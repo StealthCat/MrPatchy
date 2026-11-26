@@ -1,3 +1,9 @@
+## 1.102.0 — 2026-11-26
+
+1. [PR #1544](https://github.com/StealthCat/MrPatchy/pull/1544): Fleet and server Overview integrity counts now link to the stored findings they summarize, and each server has a dedicated **Integrity findings** tab. The tab shows current collector findings with contact, telemetry and hash-sweep timestamps, plus retained history within the reader's existing permissions. Administrators can review a retained resolved alert and page through stored package and vendor inspection findings. Reading the tab sends no target or provider request. Compatibility: no migration or settings change. Fixes #1541 and #1542 (P1).
+
+This source update does not publish a Docker image.
+
 ## 1.101.0 — 2026-11-26
 
 1. [PR #1536](https://github.com/StealthCat/MrPatchy/pull/1536): A pure Roadmap F system gitconfig contract (`app/git_system_config.py`). For `/etc/gitconfig` and its includes, it reports which programs every git invocation may start: shell aliases, pagers, editors, ssh/proxy commands, fsmonitor hooks, `core.hooksPath`, credential helpers, diff/filter/merge drivers, gpg programs and the upload-pack hook. Each comes with its source line, include chain, trigger and shell use. It follows git 2.43, was checked against native git, and fails closed on unmodelled input. Compatibility: new module only. Refs #1535 (increment 1).
