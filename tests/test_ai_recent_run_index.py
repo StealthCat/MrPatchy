@@ -100,9 +100,11 @@ def test_recent_run_reads_use_purpose_and_time_range(admin, monkeypatch):
     assert 'exists (' in queries[2][0].lower()
     with db.engine.connect() as connection:
         assert connection.scalars(select(ai_claims.Claim.subject)).all() == []
-        expected = [(2, now - 3599), (True,), (True,)]
+        # The status statement returns both counters. Its recent-run range scan
+        # must still use the purpose/start index within the combined statement.
+        expected = [[(0, None), (2, now - 3599)], [(True,)], [(True,)]]
         for (statement, parameters), result in zip(queries, expected, strict=True):
-            assert connection.exec_driver_sql(statement, parameters).one() == result
+            assert sorted(connection.exec_driver_sql(statement, parameters).all()) == result
             if connection.dialect.name == 'sqlite':
                 plan = connection.exec_driver_sql('EXPLAIN QUERY PLAN ' + statement, parameters).all()
                 assert any(f'USING COVERING INDEX {RUN_INDEX} (purpose=? AND started>?)' in row[3]
