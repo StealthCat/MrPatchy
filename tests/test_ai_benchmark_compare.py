@@ -60,6 +60,28 @@ def test_comparison_preserves_measured_provider_peak(parallel_peak):
     assert result['candidate']['peak_provider_requests'] == parallel_peak
 
 
+def test_comparison_preserves_source_commits_without_requiring_them():
+    old, new = 'a' * 40, 'b' * 40
+    baseline = {**report(), 'source_commit': old, 'database_version': '3.50.4'}
+    candidate = {**report(), 'source_commit': new, 'database_version': '3.50.4'}
+    result = compare_ai_benchmarks.compare(baseline, candidate, fixed_concurrency=True)
+    assert result['capability_equivalent'] is True
+    assert result['baseline']['source_commit'] == old
+    assert result['candidate']['source_commit'] == new
+
+    del baseline['source_commit']
+    mixed = compare_ai_benchmarks.compare(baseline, candidate, fixed_concurrency=True)
+    assert 'source_commit' not in mixed['baseline']
+    assert mixed['candidate']['source_commit'] == new
+
+
+@pytest.mark.parametrize('source_commit', [None, True, 'abc', 'a' * 39 + '\n', 'A' * 40])
+def test_malformed_source_commit_is_refused(source_commit):
+    candidate = {**report('parallel', 4), 'source_commit': source_commit}
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match=r'candidate\.source_commit'):
+        compare_ai_benchmarks.compare(report(), candidate)
+
+
 def test_comparison_marks_unrecorded_provider_peak_as_unknown():
     candidate = {**report('parallel', 4), 'peak_provider_requests': 3}
     result = compare_ai_benchmarks.compare(report(), candidate)
