@@ -10,6 +10,7 @@ import re
 import statistics
 import socket
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -22,7 +23,8 @@ from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SOURCE_ROOT))
 
 MYSQL_URL_ENV = 'AI_BENCHMARK_MYSQL_URL'
 FIXTURE_MODEL = 'fixture-model'
@@ -48,6 +50,28 @@ class BenchmarkTimingError(ValueError):
 class BenchmarkAssessmentError(ValueError):
     """The disposable workload did not retain its expected assessments."""
 
+
+
+def clean_source_commit(root):
+    """Return the tracked checkout's commit when Git can verify it is clean."""
+    if not (root / '.git').exists():
+        return None
+    # Identify this checkout independent of the caller's directory or Git overrides.
+    environment = {key: value for key, value in os.environ.items() if not key.upper().startswith('GIT_')}
+    try:
+        status = subprocess.run(
+            ['git', '--no-optional-locks', '-c', 'core.fsmonitor=false',
+             'status', '--porcelain=v2', '--branch', '--untracked-files=no'],
+            cwd=root, env=environment, check=True, capture_output=True, encoding='utf-8',
+            errors='replace', timeout=5,
+        ).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if any(not line.startswith('# ') for line in status):
+        return None
+    commit = next((line.removeprefix('# branch.oid ') for line in status
+                   if line.startswith('# branch.oid ')), '')
+    return commit if re.fullmatch(r'[0-9a-f]{40}(?:[0-9a-f]{24})?', commit) else None
 
 
 class DatabaseRefused(Exception):
@@ -380,6 +404,7 @@ def main():
         parser.error('--queue-age-seconds must be between 0 and 86400')
     if not 0 <= args.retained_history_rows <= 50_000:
         parser.error('--retained-history-rows must be between 0 and 50000')
+    source_commit = clean_source_commit(SOURCE_ROOT)
     begin=ContextVar('benchmark_begin');two_stage=ContextVar('benchmark_two_stage',default=False)
     # Set before importing runtime modules; never inherit a deployment database.
     with tempfile.TemporaryDirectory(prefix='mrpatchy-ai-benchmark-') as directory, contextlib.ExitStack() as cleanup:
@@ -602,7 +627,11 @@ def main():
                     return {'count': 0, 'p50_ms': None, 'p95_ms': None}
                 ordered=sorted(values)
                 return {'count':len(values),'p50_ms':round(statistics.median(values),3),'p95_ms':round(ordered[math.ceil(.95*len(values))-1],3)}
-            report = json.dumps({'fixture_only':True,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
+            source_identity = (
+                {'source_commit': source_commit}
+                if source_commit and clean_source_commit(SOURCE_ROOT) == source_commit else {}
+            )
+            report = json.dumps({'fixture_only':True,**source_identity,'execution':'serial' if args.concurrency==1 else 'parallel','concurrency':args.concurrency,'provider_delay_ms':args.provider_delay_ms,'ssh_delay_ms':args.ssh_delay_ms,'persistence_delay_ms':args.persistence_delay_ms,'queue_age_seconds':args.queue_age_seconds,'runs':args.runs,'provider_calls':len(requests),
                 'fixture_hosts':len(set(observed_hosts.values())),
                 'single_server_slots':per_server_slots if servers == 1 else None,
                 **({'shared_server_slots':per_server_slots} if 1 < servers < args.runs else {}),
