@@ -378,8 +378,8 @@ def test_scoring_batch_links_and_persists_outcomes_with_bounded_reads(admin, mon
         assert {row.score for row in rows} == ({50} if outcome == 'complete' else {None})
         assert all((row.next_at > time.time()) == (outcome == 'deferred') for row in rows)
 
-    # Candidate identity and persisted host scope are still read separately.
-    assert len(score_reads) == 4
+    # Read exact scores for candidate admission, run linkage and outcome persistence.
+    assert len(score_reads) == 3
     assert all('where update_scores.id in (' in query for query in score_reads)
 
 
