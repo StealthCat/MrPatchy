@@ -159,7 +159,7 @@ jobs:
         timeout-minutes: 5
         run: |
           bash .github/scripts/configure-ci-apt.sh
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends restic
+          sudo sh tests/fixtures/ci-apt-update.sh && sudo apt-get install -y --no-install-recommends restic
       - run: pip install -r requirements-dev.txt
       # --durations keeps the slowest tests in the log so shard imbalance stays visible.
       - name: SQLite test suite
@@ -252,7 +252,7 @@ jobs:
         timeout-minutes: 5
         run: |
           bash .github/scripts/configure-ci-apt.sh
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends restic mariadb-client
+          sudo sh tests/fixtures/ci-apt-update.sh && sudo apt-get install -y --no-install-recommends restic mariadb-client
       - run: pip install -r requirements-dev.txt
       # --durations keeps per-test timing in the log so shard imbalance stays visible.
       - run: python -m pytest -q --durations=25
@@ -277,7 +277,7 @@ jobs:
         timeout-minutes: 5
         run: |
           bash .github/scripts/configure-ci-apt.sh
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends gnupg
+          sudo sh tests/fixtures/ci-apt-update.sh && sudo apt-get install -y --no-install-recommends gnupg
       - run: pip install -r requirements.txt
       - run: docker build --build-arg TARGET_BASE=${{ matrix.target }} -f tests/fixtures/Dockerfile.ssh -t mrpatchy-ssh-test tests/fixtures
       - run: python tests/integration_ssh.py
@@ -339,7 +339,7 @@ jobs:
         timeout-minutes: 5
         run: |
           bash .github/scripts/configure-ci-apt.sh
-          sudo apt-get update && sudo apt-get install -y python3-dnf python3-rpm python3-venv rpm
+          sudo sh tests/fixtures/ci-apt-update.sh && sudo apt-get install -y python3-dnf python3-rpm python3-venv rpm
       - run: /usr/bin/python3 -m venv --system-site-packages /tmp/patchy-rpm-test
       - run: /tmp/patchy-rpm-test/bin/pip install -r requirements-dev.txt
       # These run against the runner's own libdnf/libRPM and do not depend on the
