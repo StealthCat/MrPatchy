@@ -76,25 +76,26 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     unreconciled_count=0
     oldest_reservation=None
     if enabled:
-        # At most five result rows, regardless of receipt amounts or unknown statuses.
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
         # MySQL performs the sum in native DECIMAL without a float intermediate.
         amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),else_=BudgetEntry.reservation_usd)
-        bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
-        total=_aggregate(session,amount)
         # A row also counts while the window it was admitted under (its own reset_at) is still
         # open, so changing the reset timezone cannot hand back spend from that window.
-        metrics=(func.count(),func.min(BudgetEntry.created)) if include_reconciliation else ()
-        query=select(bucket,total,*metrics).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
-            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(bucket)
-        for key,value,*summary in session.execute(query):
-            total=Decimal(value or 0);counted+=total
-            if key in groups:groups[key]+=total
-            if summary and key in ('sent','uncertain'):
-                call_count,oldest=summary
-                unreconciled_count+=call_count
-                if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
-                    oldest_reservation=oldest
+        query=select(_aggregate(session,amount)).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
+        if include_reconciliation:
+            bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
+            detail=query.add_columns(bucket,func.count(),func.min(BudgetEntry.created)).group_by(bucket)
+            for value,key,call_count,oldest in session.execute(detail):
+                total=Decimal(value or 0);counted+=total
+                if key in groups:groups[key]=total
+                if key in ('sent','uncertain'):
+                    unreconciled_count+=call_count
+                    if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
+                        oldest_reservation=oldest
+        else:
+            # Admission and alert gates only need the counted total.
+            counted=Decimal(session.execute(query).scalar_one() or 0)
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
