@@ -41,7 +41,11 @@ The rules follow lighttpd 1.4.74, checked against native runs of Ubuntu 24.04
   ``var.CWD`` and ``var.PID`` are predefined.
 - ``=`` on a key already set in the same block is a "Duplicate config
   variable" error that rejects the configuration; ``:=`` replaces and ``+=``
-  appends.
+  appends. Loggers and backends are reported from the effective (final)
+  value of each scope only, so a replaced pipe is not reported.
+- A global ``server.errorlog-use-syslog`` that is enabled makes
+  ``config_log_error_open`` skip the global ``server.errorlog``; conditional
+  error logs are still opened.
 - ``include`` paths are relative to the including file's directory. A glob
   that matches nothing is silently skipped; a missing plain file rejects the
   configuration.
@@ -75,6 +79,10 @@ MAX_DEPTH = 16
 MAX_COMMANDS = 1000
 LOGGER_KEYS = ('server.errorlog', 'server.breakagelog', 'accesslog.filename')
 BACKEND_KEYS = ('fastcgi.server', 'scgi.server')
+SYSLOG_KEY = 'server.errorlog-use-syslog'
+# config_plugin_value_tobool() in lighttpd 1.4.74.
+_TRUE = ('enable', 'enabled', 'true', '1')
+_FALSE = ('disable', 'disabled', 'false', '0')
 _GLOB = re.compile(r'[*?\[]')
 _KEY = re.compile(r'[A-Za-z_][A-Za-z0-9_.\-]*')
 # Commands made only of these characters were executed directly, without the shell, in the
@@ -176,6 +184,8 @@ class _Reader:
         self.notes: list[dict[str, Any]] = []
         self.read: list[dict[str, Any]] = []
         self.commands: list[dict[str, Any]] = []
+        # (condition, key) -> effective assignment, in first-assignment order.
+        self.effective: dict[tuple[str | None, str], dict[str, Any]] = {}
         self.rejected = False
         self.count = 0
 
@@ -353,21 +363,39 @@ class _Parser:
             raise ConfigError(f'Duplicate config variable: {key}', line)
         keys.add(key)
         values = self.r.values
+        condition = self.scope.get('condition')
+        slot = (condition, key)
         if result is _UNRESOLVED:
             values.pop(key, None)
+            self.r.effective.pop(slot, None)
             self.r.gap('unresolved_value', key=key, source=self.name, line=line)
             return
-        if operator == '+=' and key in values:
-            result = _concat(values[key], result, line)
-        if self.scope.get('condition') is None or key.startswith('var.'):
+        here = (self.name, line)
+        origins = [here] * len(result) if isinstance(result, list) else []
+        if operator == '+=':
+            # Append to this scope's own value when it has one, else to the inherited one.
+            if slot in self.r.effective:
+                prior = self.r.effective[slot]
+                base = prior['value']
+            else:
+                prior = self.r.effective.get((None, key))
+                base = values.get(key)
+            if base is not None:
+                if isinstance(base, list) and isinstance(result, list):
+                    known = prior is not None and len(prior['origins']) == len(base)
+                    origins = (prior['origins'] if known else [here] * len(base)) + origins
+                result = _concat(base, result, line)
+        if condition is None or key.startswith('var.'):
             values[key] = result
-        self.record(key, result, line)
+        self.record(key, result, line, origins)
 
-    def record(self, key: str, result: Any, line: int) -> None:
-        condition = self.scope.get('condition')
-        row = {'key': key, 'value': result, 'source': self.name, 'line': line, 'condition': condition}
-        if key in LOGGER_KEYS + BACKEND_KEYS:
-            self.r.notes.append({'code': 'assignment', **row})
+    def record(self, key: str, result: Any, line: int, origins: list[tuple[str, int]]) -> None:
+        # Keep only the effective value per scope: a later ``:=`` (or ``+=``) in the same
+        # scope replaces the earlier assignment, as lighttpd opens only the parsed final value.
+        if key in LOGGER_KEYS + BACKEND_KEYS + (SYSLOG_KEY,):
+            self.r.effective[(self.scope.get('condition'), key)] = {
+                'key': key, 'value': result, 'source': self.name, 'line': line,
+                'condition': self.scope.get('condition'), 'origins': origins}
 
     def expression(self) -> Any:
         result = self.value()
@@ -427,6 +455,21 @@ def _pairs(value: Any) -> list[tuple[Any, Any]]:
     return [item for item in value if isinstance(item, tuple)] if isinstance(value, list) else []
 
 
+def _global_syslog(reader: _Reader) -> bool:
+    """Whether the global ``server.errorlog-use-syslog`` is enabled."""
+    entry = reader.effective.get((None, SYSLOG_KEY))
+    if entry is None:
+        return False
+    value = entry['value']
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str) and value.lower() in _TRUE + _FALSE:
+        return value.lower() in _TRUE
+    # Unknown value: keep reporting the global errorlog pipe, conservatively.
+    reader.gap('unrecognized_boolean', key=SYSLOG_KEY, source=entry['source'], line=entry['line'])
+    return False
+
+
 def _fingerprint(rows: list[dict[str, Any]]) -> str:
     material = [{k: row[k] for k in ('kind', 'argv', 'account', 'condition', 'extension')} for row in rows]
     return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
@@ -475,28 +518,39 @@ def evaluate(*, files: Mapping[str, str | bytes | None], globs: Mapping[str, Seq
             reader.reject('unknown_group', group=str(groupname))
         elif groupname is not None:
             gid = groups[str(groupname)][0]
-    for note in [n for n in reader.notes if n['code'] == 'assignment']:
-        key, value = note['key'], note['value']
-        common = {'source': note['source'], 'line': note['line'], 'condition': note['condition'],
+    use_syslog = _global_syslog(reader)
+    for entry in reader.effective.values():
+        key, value = entry['key'], entry['value']
+        common = {'source': entry['source'], 'line': entry['line'], 'condition': entry['condition'],
                   'account': account, 'uid': uid, 'gid': gid, 'runs': 'daemon_start',
                   'privileged_at_service_start': uid in (None, 0)}
         if key in LOGGER_KEYS and isinstance(value, str) and value.startswith('|'):
             command = value[1:]
+            if key == 'server.errorlog' and entry['condition'] is None and use_syslog:
+                # config_log_error_open() skips the global errorlog when syslog is enabled.
+                reader.notes.append({'code': 'errorlog_replaced_by_syslog', 'command': command,
+                                     'source': entry['source'], 'line': entry['line']})
+                continue
             reader.add({'kind': 'piped_logger', 'key': key, 'command': command,
-                        'argv': reader.argv(command, note['source'], note['line']), **common})
+                        'argv': reader.argv(command, entry['source'], entry['line']), **common})
         elif key in BACKEND_KEYS:
-            for extension, hosts in _pairs(value):
+            pairs = value if isinstance(value, list) else []
+            for index, item in enumerate(pairs):
+                if not isinstance(item, tuple):
+                    continue
+                extension, hosts = item
+                origin = entry['origins'][index] if index < len(entry['origins']) else (entry['source'], entry['line'])
                 for host in hosts if isinstance(hosts, list) else []:
                     options = dict(_pairs(host) if isinstance(host, list) else [])
                     bin_path = options.get('bin-path')
                     if isinstance(bin_path, str) and bin_path.strip():
                         reader.add({'kind': key.split('.')[0], 'key': key, 'extension': extension,
                                     'command': bin_path, 'argv': bin_path.split(),
-                                    'max_procs': options.get('max-procs', 4), **common})
+                                    'max_procs': options.get('max-procs', 4),
+                                    **common, 'source': origin[0], 'line': origin[1]})
     for row in reader.commands:
         row.setdefault('extension', None)
         row['starts'] = not reader.rejected
-    reader.notes = [n for n in reader.notes if n['code'] != 'assignment']
     blocking = [gap for gap in reader.gaps if gap['blocking']]
     return {
         'command_sha256': _fingerprint(reader.commands),

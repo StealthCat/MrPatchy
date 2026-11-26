@@ -227,6 +227,58 @@ class RulesTest(unittest.TestCase):
                    'server.errorlog = "|" + var.c\n')
         self.assertEqual(argvs(good), [['/bin/sh', '-c', '/b -x']])
 
+    def test_replacement_reports_only_effective_logger(self):
+        # Review on 2cb8eacb: ``:=`` replaces the destination, so only the final value is opened.
+        base = 'server.username = "www-data"\n'
+        replaced = run(base + 'server.errorlog = "|/inert/old"\nserver.errorlog := "|/inert/new"\n')
+        self.assertTrue(replaced['complete'], replaced['gaps'])
+        self.assertEqual(argvs(replaced), [['/inert/new']])
+        self.assertEqual(replaced['commands'][0]['line'], 3)
+        to_file = run(base + 'accesslog.filename = "|/inert/pipe"\naccesslog.filename := "/var/log/a.log"\n')
+        self.assertEqual(argvs(to_file), [])
+        to_pipe = run(base + 'accesslog.filename = "/var/log/a.log"\naccesslog.filename := "|/inert/pipe"\n')
+        self.assertEqual(argvs(to_pipe), [['/inert/pipe']])
+        # A replacement in a conditional scope does not remove the global logger.
+        scoped = run(base + 'accesslog.filename = "|/inert/g"\n'
+                     '$HTTP["host"] == "a" { accesslog.filename = "|/inert/c1"\naccesslog.filename := "/var/log/c" }\n')
+        self.assertEqual([(row['argv'], row['condition']) for row in scoped['commands']],
+                         [(['/inert/g'], None)])
+
+    def test_backend_append_keeps_entries_and_replacement_drops_them(self):
+        base = 'server.username = "www-data"\n'
+        appended = run(base + 'fastcgi.server = ( ".a" => (( "bin-path" => "/inert/a" )) )\n'
+                       'include "conf-enabled/b.conf"\n',
+                       files={'/etc/lighttpd/conf-enabled/b.conf':
+                              'fastcgi.server += ( ".b" => (( "bin-path" => "/inert/b" )) )\n'})
+        self.assertEqual([(row['argv'], row['source'], row['line']) for row in appended['commands']],
+                         [(['/inert/a'], CONF, 2), (['/inert/b'], '/etc/lighttpd/conf-enabled/b.conf', 1)])
+        replaced = run(base + 'fastcgi.server = ( ".a" => (( "bin-path" => "/inert/a" )) )\n'
+                       'fastcgi.server := ( ".b" => (( "bin-path" => "/inert/b" )) )\n')
+        self.assertEqual(argvs(replaced), [['/inert/b']])
+
+    def test_global_syslog_skips_global_errorlog_only(self):
+        # lighttpd 1.4.74 config_log_error_open() skips the global errorlog with syslog enabled.
+        text = ('server.username = "www-data"\nserver.errorlog = "|/inert/err"\n'
+                'server.errorlog-use-syslog = "enable"\nserver.breakagelog = "|/inert/brk"\n'
+                '$HTTP["host"] == "a" { server.errorlog = "|/inert/cond" }\n')
+        result = run(text)
+        self.assertTrue(result['complete'], result['gaps'])
+        self.assertEqual(argvs(result), [['/inert/brk'], ['/inert/cond']])
+        self.assertEqual([n['code'] for n in result['notes']], ['errorlog_replaced_by_syslog'])
+        disabled = run(text.replace('"enable"', '"disable"'))
+        self.assertEqual(argvs(disabled)[0], ['/inert/err'])
+        unknown = run(text.replace('"enable"', '"maybe"'))
+        self.assertIn('unrecognized_boolean', codes(unknown))
+        self.assertFalse(unknown['complete'])
+        self.assertEqual(argvs(unknown)[0], ['/inert/err'])
+
+    def test_include_shell_observations_survive_later_replacements(self):
+        text = ('server.username = "www-data"\ninclude_shell "/inert/gen"\n'
+                'server.errorlog := "/var/log/e.log"\n')
+        result = run(text, include_shell_output={'/inert/gen': 'server.errorlog = "|/inert/from-gen"\n'})
+        self.assertEqual([(row['kind'], row['argv']) for row in result['commands']],
+                         [('include_shell', ['/inert/gen'])])
+
     def test_escaped_quote_and_comment_inside_string(self):
         result = run('server.username = "www-data"\nserver.errorlog = "|/bin/echo \\"a#b\\"" # trailing\n')
         self.assertEqual(argvs(result), [['/bin/sh', '-c', '/bin/echo "a#b"']])
