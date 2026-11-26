@@ -4003,6 +4003,7 @@ and that a sent call may still be billable. From code reading, not tested here: 
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
 
+
 ### Daily-cap admission failover when the admitting process dies — milestone 4 acceptance #1285
 
 Milestone 4 acceptance for **failover** of capped admission. Every capped reservation
@@ -4027,6 +4028,21 @@ Mutation check: excluding `reserved` rows from counted spend in `ai_budget._stat
 fails all three tests. No defect found and no runtime change. The SQLite run is local;
 MySQL runs through the CI shards. Controller/coordinator failover, a database failover
 mid-admission and before/after production performance remain open.
+
+### Recover expired and orphaned investigations from one read — worker checkpoint #1461
+
+Triage admission reads expired claims and running investigations without a
+claim in one statement while holding the existing admission lock. The expired
+branch includes runs linked to a claim slated for deletion. The orphan branch
+matches running triage runs that already have no claim. Both branches project
+keys before loading the rows needed for recovery. Each pass supplies its own
+expiry cutoff to the shared statement.
+
+Acceptance covers a healthy admission with a live lease and a mixed recovery
+pass with expiry at the cutoff, missing runs, completed runs, repeated claims
+for one run and retained call receipts. Repeating recovery leaves one
+interruption event per recovered run. Cap accounting, claim fencing and the
+caller-owned commit continue to apply. Production throughput remains open.
 
 ### Lease loss across the daily-cap reset — milestone 4 acceptance #1277
 
