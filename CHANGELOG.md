@@ -1,3 +1,9 @@
+## 1.108.1 — 2026-11-26
+
+1. [PR #1569](https://github.com/StealthCat/MrPatchy/pull/1569): Update scoring saves one database read per nonempty batch by keeping the server IDs it selected at admission. A batch with several packages on one server still checks that server's current AI policy, acquires its lifecycle guard and records one membership on the AI run. Compatibility: no schema, API or authorization change. Fixes #1568.
+
+This source update does not publish a Docker image.
+
 ## 1.108.0 — 2026-11-26
 
 1. [PR #1314](https://github.com/StealthCat/MrPatchy/pull/1314): A server whose saved AI policy is malformed now shows **Paused for repair** with a **Repair AI policy** action instead of the ordinary Resume control. The repair uses the existing audited save to write a valid paused policy, and Resume AI then returns as a separate action. The administrator-only status gains a repair-needed flag. An invalid stored revision is represented by an opaque value, so stale repair submissions still fail. Compatibility: no schema or authorization change. Tracks #1313.
