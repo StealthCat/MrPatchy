@@ -5,6 +5,7 @@ from decimal import Decimal, localcontext
 import json
 import math
 from pathlib import Path
+import re
 import sys
 
 
@@ -326,8 +327,12 @@ def _validate(report, label):
             not isinstance(database_version, str) or not database_version.isprintable()
             or not 1 <= len(database_version) <= MAX_DATABASE_VERSION_CHARS):
         raise ComparisonError(f'{label}.database_version must be a short printable string')
+    source_commit = report.get('source_commit')
+    if 'source_commit' in report and (
+            not isinstance(source_commit, str) or not re.fullmatch(r'[0-9a-f]{40}(?:[0-9a-f]{24})?', source_commit)):
+        raise ComparisonError(f'{label}.source_commit must be a full lowercase Git object ID')
     return {
-        'database': database, 'database_version': database_version,
+        'database': database, 'database_version': database_version, 'source_commit': source_commit,
         'execution': execution, 'concurrency': concurrency, 'runs': runs,
         'fixture_hosts': fixture_hosts, 'single_server_slots': single_server_slots,
         'shared_server_slots': shared_server_slots,
@@ -454,6 +459,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'queue_age_source': base['queue_age_source'],
             'retained_history_rows': base['retained_history_rows'],
             'database': base['database'], 'database_version': base['database_version'],
+            **({'source_commit': base['source_commit']} if base['source_commit'] is not None else {}),
             'cost_status': base['cost_status'],
             'ai_control_mode': base['ai_control_mode'],
             'ai_control_mode_source': base['ai_control_mode_source'],
@@ -474,6 +480,7 @@ def compare(baseline, candidate, baseline_name='baseline', candidate_name='candi
             'queue_age_source': current['queue_age_source'],
             'retained_history_rows': current['retained_history_rows'],
             'database': current['database'], 'database_version': current['database_version'],
+            **({'source_commit': current['source_commit']} if current['source_commit'] is not None else {}),
             'cost_status': current['cost_status'],
             'ai_control_mode': current['ai_control_mode'],
             'ai_control_mode_source': current['ai_control_mode_source'],

@@ -73,13 +73,14 @@ def test_headroom_below_smallest_call_notifies_admins_once_per_window(admin):
         assert notifications.list_for_user(session, 'viewer') == []
         notifications.mark_read(session, 'admin', item.id, item.revision, now=DAY + 130);session.commit()
         first = current.reason
-    # Further spend in the same window is not a new observation.
+    # An uncertain charge is a separate notice. It leaves the headroom revision read.
     ledger('0.01', status='uncertain')
     operations.collect_alerts(DAY + 180)
     with Session() as session:
         item = event(session)
         assert item.revision == 1 and revision(session, item).reason == first
-        assert notifications.unread_count(session, 'admin') == 0
+        unread = notifications.list_for_user(session, 'admin', unread_only=True)
+        assert [item['kind'] for item in unread] == ['uncertain-charge']
         assert not session.query(operations.Alert).filter(operations.Alert.kind.like('%cap%')).count()
     # A later window that is again too small resurfaces as unread.
     ledger('0.05', created=DAY + 86400 + 100, reset=DAY + 2 * 86400)

@@ -6,7 +6,7 @@ import time
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import String, Text, Double, LargeBinary, Numeric, and_, case, cast, func, or_, select
+from sqlalchemy import String, Text, Double, LargeBinary, Numeric, and_, case, cast, func, or_, select, update
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .coordination import Lock
@@ -75,6 +75,7 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     groups={key:Decimal(0) for key in ('reserved','sent','settled','uncertain')};counted=Decimal(0)
     unreconciled_count=0
     oldest_reservation=None
+    overlapping=False
     if enabled:
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
         # MySQL performs the sum in native DECIMAL without a float intermediate.
@@ -85,21 +86,25 @@ def _state(session,cfg,now,*,include_reconciliation=False):
             and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
         if include_reconciliation:
             bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
-            detail=query.add_columns(bucket,func.count(),func.min(BudgetEntry.created)).group_by(bucket)
-            for value,key,call_count,oldest in session.execute(detail):
+            # Carryover is a subset of the counted rows. Computing it in this query
+            # keeps the reset guidance on the same snapshot as the displayed spend.
+            detail=query.add_columns(bucket,func.count(),func.min(BudgetEntry.created),
+                func.max(case((_survives_reset(now,reset,amount),1),else_=0))).group_by(bucket)
+            for value,key,call_count,oldest,survives_reset in session.execute(detail):
                 total=Decimal(value or 0);counted+=total
                 if key in groups:groups[key]=total
+                overlapping=overlapping or bool(survives_reset)
                 if key in ('sent','uncertain'):
                     unreconciled_count+=call_count
                     if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
                         oldest_reservation=oldest
         else:
-            # Admission and alert gates only need the counted total.
+            # Callers using only the counted total can skip grouping the ledger.
             counted=Decimal(session.execute(query).scalar_one() or 0)
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
-    return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation)
+    return enabled,name,start,reset,groups,counted,cap,(unreconciled_count,oldest_reservation,overlapping)
 
 
 def waiting(session,now,payload=None,*,settings=None,quote=None):
@@ -155,10 +160,26 @@ def mark_sent(identifier,call_id):
     if not identifier:return
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if not row or row.status!='reserved':raise RuntimeError('AI budget reservation changed before provider transmission')
-            row.status='sent';row.call_id=call_id or '';row.updated=time.time()
-            row.reason='Provider transmission began; the reserved ceiling remains counted until reconciliation.'
+            ledger = BudgetEntry.__table__
+            # Preserve the exact Python status check with MySQL's case-insensitive text collation.
+            status = ledger.c.status
+            if session.get_bind().dialect.name == 'mysql':
+                reserved = cast(status, LargeBinary) == b'reserved'
+            else:
+                reserved = status.collate('BINARY') == 'reserved'
+            changed = session.execute(
+                update(ledger).where(
+                    ledger.c.id == identifier,
+                    reserved,
+                ).values(
+                    status='sent',
+                    call_id=call_id or '',
+                    updated=time.time(),
+                    reason='Provider transmission began; the reserved ceiling remains counted until reconciliation.',
+                )
+            )
+            if changed.rowcount != 1:
+                raise RuntimeError('AI budget reservation changed before provider transmission')
             session.commit()
 
 
@@ -243,14 +264,7 @@ def status(session, now=None, *, settings=None):
     now = time.time() if now is None else now
     cfg = config(session) if settings is None else settings
     enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
-    unreconciled_count,oldest=reconciliation
-    # A timezone change can leave a previously admitted window open beyond the
-    # configured reset.  In that case the configured boundary is useful for a
-    # recheck, but it cannot promise that recorded headroom will be available.
-    amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),
-        else_=BudgetEntry.reservation_usd)
-    overlapping=(enabled and session.scalar(select(BudgetEntry.id).where(
-        BudgetEntry.status!='released',_survives_reset(now,reset,amount)).limit(1)) is not None)
+    unreconciled_count,oldest,overlapping=reconciliation
     # A transmitted call without a receipt is already uncertain, including after
     # another controller/worker observes it following a restart.
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
@@ -266,6 +280,7 @@ def status(session, now=None, *, settings=None):
 
 DAILY_CAP_NOTIFICATION=dict(source='ai-budget',kind='daily-cap',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
 DAILY_CAP_WARNING_NOTIFICATION=dict(source='ai-budget',kind='daily-cap-warning',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
+UNCERTAIN_CHARGE_NOTIFICATION=dict(source='ai-budget',kind='uncertain-charge',subject_type='daily-cap',subject_id='shared-daily-ai-spend')
 # Default advance-warning percent of the cap. Administrators can change it with
 # `ai_daily_cap_warning_percent` (0 turns the warning off, #810).
 DAILY_CAP_WARNING_DEFAULT_PERCENT=80
@@ -284,16 +299,27 @@ def warning_percent(cfg):
     return value
 
 
-def _resolve_notification(session,spec,reason,now):
+def _resolve_notification(session,notices,spec,reason,now):
     from . import notifications
-    from .notifications import NotificationEvent, NotificationRevision
-    event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
-        for key,value in spec.items())))
-    if event is not None:
-        current=session.get(NotificationRevision,(event.id,event.revision))
-        if current is None or current.lifecycle!='resolved':
-            notifications.publish(session,**spec,subject_revision='resolved',severity='info',reason=reason,
-                deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+    stored=notices.get(spec['kind'])
+    if stored is not None and (stored[1] is None or stored[1].lifecycle!='resolved'):
+        notifications.publish(session,**spec,subject_revision='resolved',severity='info',reason=reason,
+            deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+
+
+def _publish_uncertain_charge_notification(session, notices, active, now):
+    from . import notifications
+
+    if active:
+        notifications.publish(session, **UNCERTAIN_CHARGE_NOTIFICATION,
+            subject_revision='retained-uncertain', severity='low', deep_link='#settings/ai',
+            minimum_role='admin', now=now,
+            reason='An AI provider call ended without a confirmed charge. Its reserved amount is still counted '
+                   'toward the daily cap. Review uncertain charges in AI Settings. Counted spend is a local estimate.')
+    else:
+        _resolve_notification(session, notices, UNCERTAIN_CHARGE_NOTIFICATION,
+            'The daily cap no longer has both a counted uncertain charge and remaining headroom. '
+            'AI Settings shows the current budget.', now)
 
 
 def publish_cap_notification(session,cfg,now):
@@ -314,10 +340,26 @@ def publish_cap_notification(session,cfg,now):
     """
     from . import notifications
     from .notifications import NotificationEvent, NotificationRevision
+    # Check all three cap notices in one read even when AI or the cap has been disabled:
+    # an existing notice still needs to resolve, but an absent notice needs no write.
+    cap_kinds=(DAILY_CAP_NOTIFICATION['kind'],DAILY_CAP_WARNING_NOTIFICATION['kind'],
+        UNCERTAIN_CHARGE_NOTIFICATION['kind'])
+    existing=session.execute(select(NotificationEvent,NotificationRevision).outerjoin(
+        NotificationRevision,and_(NotificationRevision.event_id==NotificationEvent.id,
+            NotificationRevision.revision==NotificationEvent.revision)).where(
+        NotificationEvent.source==DAILY_CAP_NOTIFICATION['source'],
+        NotificationEvent.subject_type==DAILY_CAP_NOTIFICATION['subject_type'],
+        NotificationEvent.subject_id==DAILY_CAP_NOTIFICATION['subject_id'],
+        NotificationEvent.host_id=='',NotificationEvent.kind.in_(cap_kinds)))
+    notices={event.kind:(event,current) for event,current in existing}
     capped=bool(cfg.get('ai_enabled')) and cfg['ai_control_mode'] in ai_pricing.CAP_MODES
     warning=False
+    uncertain_charge = False
     if capped:
-        _enabled,name,_start,reset,_groups,counted,cap,_reconciliation=_state(session,cfg,now)
+        _enabled,name,_start,reset,groups,counted,cap,_reconciliation=_state(
+            session,cfg,now,include_reconciliation=True)
+        # Sent reservations may still complete normally. Exhaustion already has its own notice.
+        uncertain_charge = groups['uncertain'] > 0 and counted < cap
         reset_text=datetime.fromtimestamp(reset,timezone.utc).isoformat().replace('+00:00','Z')
         percent=warning_percent(cfg)
         if percent and counted<cap and counted>=cap*Decimal(percent)/100:
@@ -327,9 +369,7 @@ def publish_cap_notification(session,cfg,now):
             # The default keeps the pre-#810 fingerprint so upgrading does not
             # republish an active warning; another threshold is a new observation.
             if percent!=DAILY_CAP_WARNING_DEFAULT_PERCENT:subject_revision+=':threshold:'+str(percent)
-            event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
-                for key,value in DAILY_CAP_WARNING_NOTIFICATION.items())))
-            current=session.get(NotificationRevision,(event.id,event.revision)) if event is not None else None
+            _event,current=notices.get(DAILY_CAP_WARNING_NOTIFICATION['kind'],(None,None))
             # The amounts are captured when spend first crosses the threshold for this
             # window and cap. The reason is part of the revision fingerprint, so an
             # active warning for the same window and cap is left unchanged rather than
@@ -345,8 +385,9 @@ def publish_cap_notification(session,cfg,now):
                 notifications.publish(session,**DAILY_CAP_WARNING_NOTIFICATION,
                     subject_revision=subject_revision,
                     severity='low',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
+    _publish_uncertain_charge_notification(session, notices, uncertain_charge, now)
     if not warning:
-        _resolve_notification(session,DAILY_CAP_WARNING_NOTIFICATION,
+        _resolve_notification(session,notices,DAILY_CAP_WARNING_NOTIFICATION,
             'Shared daily AI spend is no longer approaching the cap: the window reset, the cap, mode or warning threshold '
             'changed, AI was disabled, or the cap was reached and its own notification applies.',now)
     if capped:
@@ -359,14 +400,8 @@ def publish_cap_notification(session,cfg,now):
                 subject_revision='exhausted:'+name+':'+repr(float(reset))+':'+_money(cap),
                 severity='medium',reason=message,deep_link='#settings/ai',minimum_role='admin',now=now)
             return True
-    event=session.scalar(select(NotificationEvent).where(*(getattr(NotificationEvent,key)==value
-        for key,value in DAILY_CAP_NOTIFICATION.items())))
-    if event is not None:
-        current=session.get(NotificationRevision,(event.id,event.revision))
-        if current is None or current.lifecycle!='resolved':
-            notifications.publish(session,**DAILY_CAP_NOTIFICATION,subject_revision='resolved',
-                severity='info',reason='The shared daily AI spend cap no longer blocks new paid AI work.',
-                deep_link='#settings/ai',minimum_role='admin',lifecycle='resolved',now=now)
+    _resolve_notification(session,notices,DAILY_CAP_NOTIFICATION,
+        'The shared daily AI spend cap no longer blocks new paid AI work.',now)
     return False
 
 

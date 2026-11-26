@@ -4,8 +4,8 @@ import time
 import pytest
 from sqlalchemy import event, select
 
-from app import operations, scheduling as sched, worker
-from app.db import Host, Package, Session, engine
+from app import ai_budget, operations, scheduling as sched, worker
+from app.db import Host, Package, Session, config, engine
 
 HOSTS = 40
 
@@ -57,6 +57,14 @@ def test_collect_alerts_query_count_grows_slowly_with_hosts(admin, counted):
     operations.collect_alerts(); counted.clear()
     operations.collect_alerts()
     assert len(counted) < 6 * HOSTS, len(counted)
+
+
+def test_inactive_cap_notices_share_one_lookup(admin, counted):
+    with Session() as session:
+        settings = config(session)
+        counted.clear()
+        assert ai_budget.publish_cap_notification(session, settings, time.time()) is False
+        assert len(counted) == 1, counted
 
 
 def test_update_repos_loads_packages_once(admin, counted, monkeypatch):

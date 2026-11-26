@@ -64,7 +64,7 @@ async def lifespan(app):
                 ai.transport.close()
             finally:
                 presence.close()
-APP_VERSION = '1.100.0'
+APP_VERSION = '1.105.0'
 app=FastAPI(title='Mr Patchy',version=APP_VERSION,lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
 app.add_middleware(RequestSizeLimit)
 from starlette.middleware.sessions import SessionMiddleware
@@ -743,6 +743,39 @@ def host_summary(host_id:str,user=Depends(viewer_user)):
                           'pending_ai':sum(not r.approved and r.verdict in ('pending','error') for r in behaviors)},
                 'jobs':jobs,'last_patch':object_dict(last,('payload',)) if last else None,
                 'lifecycle':lifecycle,'reboot':reboot_status.evaluate(h.inventory)}
+
+@app.get('/api/hosts/{host_id}/integrity-findings')
+def host_integrity_findings(host_id: str, user=Depends(viewer_user)):
+    """Return current poll findings without running a new inspection."""
+    with Session() as s:
+        host = host_or_404(s, host_id)
+        require_host_read(s, host_id, user)
+        result = {
+            'items': host.integrity,
+            'last_seen': host.last_seen,
+            'collected': host.telemetry.get('collected'),
+            'hashed_at': host.telemetry.get('hashed_at'),
+            'inactive': not host.enabled or bool(host.deleted_at),
+        }
+        if user['role'] == 'admin':
+            alert = s.scalar(select(operations.Alert).where(
+                operations.Alert.host_id == host_id,
+                operations.Alert.kind == 'integrity',
+                operations.Alert.state == 'resolved',
+            ).order_by(operations.Alert.created.desc(), operations.Alert.id).limit(1))
+            if alert is not None:
+                try:
+                    recorded = json.loads(alert.message)
+                except ValueError:
+                    recorded = None
+                complete = isinstance(recorded, list) and all(isinstance(item, dict) for item in recorded)
+                result['resolved_alert'] = {
+                    'opened_at': alert.created,
+                    'items': [{'path': row.get('path'), 'issue': row.get('issue')} for row in recorded]
+                    if complete else [],
+                    'complete': complete,
+                }
+        return result
 
 @app.get('/api/spool-health')
 def fleet_spool_health(user=Depends(viewer_user)):
