@@ -2334,6 +2334,13 @@ regressions verify the reduced SQL and continued refusal after lifecycle or
 evidence changes. This limits recurring lease-check I/O. Production throughput
 and the wider parallel-investigation acceptance remain open.
 
+Roadmap A checkpoint #1383 projects the enabled and deletion fields in the
+post-queue-lock claim recheck. The admission fixture returned 17 host columns
+before this change and two afterward, excluding a seeded 256 KB inventory.
+A fresh snapshot still guards lifecycle changes, and historical observations
+whose host row is absent retain their existing treatment. This measures the
+claim's database projection. Production throughput remains open.
+
 Worker checkpoint #599 adds a composite approval/verdict/first-seen/identity
 index for the real process-triage admission query. Startup adds the index
 idempotently to existing databases while retaining behavior history and existing
@@ -2342,6 +2349,13 @@ index instead of scanning every completed behavior before the existing retry,
 pause, lifecycle, capacity and oldest-first eligibility checks. This is a partial
 database performance increment; production throughput and full faster-AI
 acceptance remain open.
+
+Roadmap A checkpoint #1385 resolves the ordinary oldest eligible triage subject
+by ID. With a 48 KB evidence fixture, the real admission path now reads the full
+behavior once under the host queue gate instead of reading it during election
+and again after the gate. Pending/error ordering, retry eligibility and full
+evidence at claim time remain covered. Free known-good probes still read the
+evidence they need to match. Production throughput acceptance remains open.
 
 Worker checkpoint #647 adds a covering index on the attempt timestamp used by
 the administrator's recent-attempt status and the legacy hourly admission gate.
@@ -3739,6 +3753,16 @@ The API regressions cover a real retained earlier window, released and zero-cost
 rows, unobserved spend, and authoritative, empty and uncapped windows. The
 browser regression refreshes from a reset to a recheck and verifies the same
 activity totals and escaped text.
+
+### Conditional recording of uncertain provider outcomes — Roadmap A checkpoint #1475
+
+Provider timeouts with unknown outcomes, transport errors and unusable replies
+record the uncertain ledger state with one indexed write under the shared budget
+lock. It matches only an exact sent reservation on SQLite and MySQL. The full
+reservation stays counted along with its original receipt. A late trustworthy
+receipt can still settle it. Duplicate or stale failure reports leave the
+existing ledger state intact. The wider shared spend-control and performance
+milestones remain open.
 
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
@@ -8131,6 +8155,28 @@ event (medium, linking to `#servers/<id>/agent`) per enabled, enrolled server wh
 Remaining in #342: certificate expiry, metric history, configurable thresholds,
 preflight blockers and SMART/NVMe or kernel-error signals.
 
+Worker checkpoint (issue #1297, #342 configurable-threshold slice): administrators can
+set the low-resource notification trigger in Settings → Patch policy
+(`resource_attention_percent`, whole percent 1–50, default 10).
+
+- The producer triggers at or below the configured share of free disk space, free
+  inodes or available memory. An active category clears only above the trigger plus
+  5 points, so the hysteresis band keeps its width.
+- The fixed reason text names the configured percentage. The default reproduces the
+  earlier text byte for byte, so active events gain no revision on upgrade.
+- Changing the threshold keeps an active event's categories: the percentage is
+  normalised when the text is recovered. One reworded revision follows, and unknown
+  telemetry is still not recovery.
+- A missing or invalid stored value falls back to 10%, so a bad value never silences
+  the notice.
+- Saving uses the existing admin-only, CSRF-protected patch-settings API with strict
+  integer validation. A changed value records the before and after percentages in
+  the audit log. Older clients that omit the field keep the stored value.
+
+There is no schema, SMTP/webhook, health-classification, AI or response-authorization
+change. Known limit: the endpoint-agent view's advisory flags stay at 10%. Metric
+history, certificate expiry and SMART/NVMe or kernel-error signals remain in #342.
+
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
@@ -12320,6 +12366,12 @@ body, call/run identifier or ledger record. It performs no provider or target tr
 `can_start_now` means only that these global gates are presently open: a call-specific
 conservative price quote, provider policy, finite concurrency, per-server pause and
 lifecycle checks remain authoritative and can still refuse work.
+
+[#1443](https://github.com/StealthCat/MrPatchy/issues/1443) keeps the displayed
+settings consistent within each Investigations status, shared AI controls and
+Settings response. Each request reads the saved configuration once and reuses
+it for its budget, rate and retry details. Live admission and response
+authorization still evaluate their own settings at execution.
 
 This is an API/control-plane checkpoint, not the complete queue/spend dashboard or
 faster-AI acceptance. UI integration, call-specific preview, provider-invoice truth,

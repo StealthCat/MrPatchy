@@ -1,3 +1,14 @@
+## 1.100.0 — 2026-11-26
+
+1. [PR #1298](https://github.com/StealthCat/MrPatchy/pull/1298): Administrators can set the low-resource notification threshold in Settings → Patch policy (whole percent 1–50 available, default 10%). The notice clears 5 points above the threshold. Changes are audited, and a missing or invalid stored value falls back to 10%. Compatibility: existing installations keep the 10%/15% behaviour and identical notice text, and the API field is optional. Viewers and operators get 403. The endpoint-agent view's advisory low-resource flags stay at 10%. Closes #1297.
+2. [PR #1288](https://github.com/StealthCat/MrPatchy/pull/1288): Fix: an investigation whose required follow-up the daily AI spend cap withholds now says so. It also says the earlier first-stage provider call was sent and can still count toward the cap, instead of claiming no provider request was sent. Compatibility: wording only, with no schema, API-shape, admission or response-authorization change. Rows already deferred keep their stored reason until retried. Fixes #1286.
+3. [PR #1444](https://github.com/StealthCat/MrPatchy/pull/1444): AI status and Settings responses reuse one saved-configuration read for their budget and rate details, so a concurrent save cannot mix settings within one response. Compatibility: no schema or API change. Fixes #1443.
+4. [PR #1384](https://github.com/StealthCat/MrPatchy/pull/1384): AI triage admission reads only the host lifecycle fields it needs. Lifecycle safeguards are unchanged. Compatibility: no schema or API change. Fixes #1383.
+5. [PR #1386](https://github.com/StealthCat/MrPatchy/pull/1386): Choosing the next AI triage candidate no longer reads its evidence twice. Evidence is loaded once, under the server queue lock. Compatibility: no schema or API change. Fixes #1385.
+6. [PR #1476](https://github.com/StealthCat/MrPatchy/pull/1476): Uncertain spend after an ambiguous AI provider failure is retained with one locked ledger write, with less shared budget lock work. Compatibility: no schema or configuration change. Refs #1475.
+
+Integrated together through batch [PR #1545](https://github.com/StealthCat/MrPatchy/pull/1545). This source update does not publish a Docker image.
+
 ## 1.99.0 — 2026-11-26
 
 1. [PR #1352](https://github.com/StealthCat/MrPatchy/pull/1352): AI Settings now splits unreconciled spend into sent amounts awaiting reconciled usage and amounts with a recorded uncertain outcome. Both still count toward the cap. Compatibility: display only. Fixes #1351.
