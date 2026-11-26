@@ -1,3 +1,9 @@
+## 1.109.1 — 2026-11-26
+
+1. [PR #1574](https://github.com/StealthCat/MrPatchy/pull/1574): Settings and Investigations read both legacy triage activity windows (attempts and triage runs) in one SQL statement, so the displayed usage and hold describe the same snapshot. Usage is still the greater of the two counters, and the hold clears when both do. Compatibility: no schema, API or admission change. Fixes #1573.
+
+This source update does not publish a Docker image.
+
 ## 1.109.0 — 2026-11-26
 
 1. [PR #1571](https://github.com/StealthCat/MrPatchy/pull/1571): A pure Roadmap F syslog-ng contract (`app/syslog_ng_programs.py`) resolves which `program()` destinations, `hook-commands()` and `confgen` commands syslog-ng runs as root. It follows syslog-ng 4.3.1 and was checked by a live differential against the real daemon. Compatibility: new module only. Part of #1570.
