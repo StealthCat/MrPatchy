@@ -215,11 +215,20 @@ def reconcile(identifier,values):
 
 def mark_uncertain(identifier,reason):
     if not identifier:return
+    ledger = BudgetEntry.__table__
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if row and row.status=='sent':
-                row.status='uncertain';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
+            state = ledger.c.status
+            # Only an exact sent state can transition, even on MySQL's default collation.
+            if session.get_bind().dialect.name in ('mysql', 'mariadb'):
+                sent = cast(state, LargeBinary) == b'sent'
+            else:
+                sent = state.collate('BINARY') == 'sent'
+            result = session.execute(ledger.update().where(ledger.c.id == identifier, sent).values(
+                status='uncertain', updated=time.time(), reason=str(reason)[:500],
+            ))
+            if result.rowcount == 1:
+                session.commit()
 
 
 def _survives_reset(now,reset,amount):
@@ -227,8 +236,9 @@ def _survives_reset(now,reset,amount):
     return and_(BudgetEntry.created<=now,BudgetEntry.reset_at>reset,amount>0)
 
 
-def status(session,now=None):
-    now=time.time() if now is None else now;cfg=config(session)
+def status(session, now=None, *, settings=None):
+    now = time.time() if now is None else now
+    cfg = config(session) if settings is None else settings
     enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
     unreconciled_count,oldest=reconciliation
     # A timezone change can leave a previously admitted window open beyond the

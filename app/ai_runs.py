@@ -405,7 +405,7 @@ def status(s):
                    ai_control_status, ai_provider_backoff, worker_registry)
     from .update_scores import UpdateScore
     now=time.time(); cfg=config(s)
-    signature=ai_retry.configuration(s)
+    signature=ai_retry.configuration(s, settings=cfg)
     TR=ai_retry.TriageRetry
     pending_where=_pending_behavior_scope()
     unpaused=Behavior.host_id.not_in(ai_policy.paused_ids())
@@ -430,7 +430,7 @@ def status(s):
     ).select_from(ai_claims.Claim).where(ai_claims.Claim.expires>now)).one()
     reports=[r.value for r in s.scalars(select(Setting).where(Setting.key.startswith(worker_registry.PREFIX)))]
     capacity=sum(v['ai_capacity'] for v in reports if isinstance(v,dict) and worker_registry.report_state(v,now)[0] in ('reporting','draining','drained') and type(v.get('ai_capacity')) is int and 1<=v['ai_capacity']<=8)
-    admission=ai_admission.status(s)
+    admission=ai_admission.status(s, settings=cfg)
     legacy_blocked,legacy_next=False,None
     if admission['mode']=='legacy':
         used,legacy_blocked,legacy_next=ai_control_status.legacy_triage_allowance(s,cfg['ai_hourly_limit'],now)
@@ -439,7 +439,7 @@ def status(s):
         runs=s.scalar(select(func.count()).select_from(AIRun).where(
             AIRun.purpose=='triage',AIRun.started>now-3600))
         used=max(attempts,runs)
-    budget=ai_budget.status(s,now)
+    budget=ai_budget.status(s, now, settings=cfg)
     provider_backoff=ai_provider_backoff.status(s,now)
     scoring_scope=and_(UpdateScore.host_id==Package.host_id,UpdateScore.name==Package.name,
         UpdateScore.installed==Package.installed,UpdateScore.candidate==Package.candidate)

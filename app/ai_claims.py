@@ -152,7 +152,7 @@ def _elect_host(s,election_filters,live_counts,signature,now):
         func.min(eligible.c.first_seen),eligible.c.host_id).limit(1))
 
 
-def _oldest(s,host_id,signature,now):
+def _oldest_subject(s,host_id,signature,now):
     # Within the elected host, keep each verdict as an equality range so the
     # admission index can skip retained completed history and satisfy
     # oldest-first ordering; the oldest member of either range is the host's
@@ -166,8 +166,8 @@ def _oldest(s,host_id,signature,now):
             *filters,Behavior.verdict==verdict).order_by(Behavior.first_seen,Behavior.id).limit(1).subquery()
         oldest.append(select(candidate.c.id,candidate.c.first_seen))
     candidates=union_all(*oldest).subquery()
-    return s.scalar(select(Behavior).join(candidates,candidates.c.id==Behavior.id).order_by(
-        candidates.c.first_seen,candidates.c.id).limit(1))
+    # The selected row is loaded with fresh evidence under the host queue gate.
+    return s.scalar(select(candidates.c.id).order_by(candidates.c.first_seen,candidates.c.id).limit(1))
 
 
 def _free_hit(s,model,election_filters):
@@ -335,13 +335,13 @@ def acquire(owner=None):
                 if free_only:
                     row=_free_hit(s,cfg['ai_model'],election_filters)
                     if not row:return None
-                    host_id=row.host_id
+                    subject=row.id;host_id=row.host_id
                 else:
                     host_id=_elect_host(s,election_filters,live_counts,signature,now)
                     if not host_id:return None
-                    row=_oldest(s,host_id,signature,now)
-                    if not row:return None
-                admitted=_admit(s,row,cfg,secret,owner,signature,now,free_only,claim_lock_wait)
+                    subject=_oldest_subject(s,host_id,signature,now)
+                    if subject is None:return None
+                admitted=_admit(s,subject,host_id,cfg,secret,owner,signature,now,free_only,claim_lock_wait)
                 if admitted is not _UNFUNDED:
                     # Only a real lease carries the measured lock hold time.
                     lease=admitted
@@ -364,19 +364,18 @@ def acquire(owner=None):
 _UNFUNDED=object()
 
 
-def _admit(s,row,cfg,secret,owner,signature,now,free_only,claim_lock_wait):
+def _admit(s,subject,host_id,cfg,secret,owner,signature,now,free_only,claim_lock_wait):
     from . import ai_budget,ai_pricing,known_good
     # Approval writes use this host queue gate. Re-read after acquiring
     # it, including on MySQL repeatable-read connections.
-    subject=row.id;host_id=row.host_id
     try:
         with host_lifecycle.activity([host_id],'queue'):
             s.rollback();row=s.get(Behavior,subject)
             if not row or row.approved or row.verdict not in ('pending','error'):return None
             # Legacy/test behavior rows may predate a retained Host row;
             # only a present host can carry a lifecycle transition.
-            host=s.get(Host,host_id)
-            if host is not None and not host_lifecycle.active(host):return None
+            lifecycle=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==host_id)).one_or_none()
+            if lifecycle is not None and not host_lifecycle.active(lifecycle):return None
             if free_only:
                 # Re-check under the host queue gate. A subsequent cache
                 # miss still goes through paid admission at the provider boundary.

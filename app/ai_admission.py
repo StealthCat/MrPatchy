@@ -86,8 +86,9 @@ def waiting(session,now,*,settings=None):
     row=session.get(Admission,'global')
     return row.next_at if row and row.next_at>now else 0
 
-def status(session):
-    settings=config(session);row=session.get(Admission,'global')
+def status(session, *, settings=None):
+    settings = config(session) if settings is None else settings
+    row = session.get(Admission, 'global')
     return {'mode':settings['ai_control_mode'],'rate_per_hour':settings['ai_rate_per_hour'],
         'next_at':row.next_at if row and settings['ai_control_mode'] in ('rate','rate_and_daily') else None,
         'admitted':row.admitted if row else 0}
