@@ -3754,6 +3754,16 @@ rows, unobserved spend, and authoritative, empty and uncapped windows. The
 browser regression refreshes from a reset to a recheck and verifies the same
 activity totals and escaped text.
 
+### Conditional recording of uncertain provider outcomes — Roadmap A checkpoint #1475
+
+Provider timeouts with unknown outcomes, transport errors and unusable replies
+record the uncertain ledger state with one indexed write under the shared budget
+lock. It matches only an exact sent reservation on SQLite and MySQL. The full
+reservation stays counted along with its original receipt. A late trustworthy
+receipt can still settle it. Duplicate or stale failure reports leave the
+existing ledger state intact. The wider shared spend-control and performance
+milestones remain open.
+
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
 The scheduler's hourly history cleanup (`worker.prune_history`) now delegates AI
