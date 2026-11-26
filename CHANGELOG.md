@@ -1,3 +1,9 @@
+## 1.102.1 — 2026-11-26
+
+1. [PR #1546](https://github.com/StealthCat/MrPatchy/pull/1546): The Patch calendar month view shows its columns as Sat, Mon–Fri, Sun. Each row is still one Monday–Sunday week, so Saturday sits at the left of its own week, and day and "+N more" links announce their weekday. Compatibility: display only, with no API, schema, scheduling, timezone or authorization change. The schedule form's day checkboxes and the maintenance-window lists keep their order. Fixes #1540 (P1).
+
+This source update does not publish a Docker image.
+
 ## 1.102.0 — 2026-11-26
 
 1. [PR #1544](https://github.com/StealthCat/MrPatchy/pull/1544): Fleet and server Overview integrity counts now link to the stored findings they summarize, and each server has a dedicated **Integrity findings** tab. The tab shows current collector findings with contact, telemetry and hash-sweep timestamps, plus retained history within the reader's existing permissions. Administrators can review a retained resolved alert and page through stored package and vendor inspection findings. Reading the tab sends no target or provider request. Compatibility: no migration or settings change. Fixes #1541 and #1542 (P1).
