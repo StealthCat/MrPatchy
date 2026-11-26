@@ -13,9 +13,9 @@ and OS context), using the same skip rules as ``update_scores.run_one``. Rows
 left from an earlier scoring context therefore never mask a pending rescore.
 
 The pass reads packages in the scheduler's bounded keyset order but keeps its
-version indexes and identity memo local to the request; it never mutates the
-scheduler's shared memo or any score row. It is computed only on request from
-``GET /api/update-scores/status``, not on every Settings load.
+version indexes local to the request. It computes each identity once and never
+mutates the scheduler's shared memo or any score row. Only the scoring status
+endpoint computes this summary.
 
 The summary returns fixed counts and timestamps only, never package names,
 evidence, explanations, provider text or key material. It sends no provider
@@ -93,12 +93,11 @@ def _current_candidates(session):
             for host_id, inventory in session.execute(select(Host.id, Host.inventory).where(Host.id.in_(missing))):
                 index = version_index(inventory)
                 context = {key: inventory[key] for key in ('os', 'package_manager') if key in inventory}
-                # Same shape as the scheduler's overflow path: a pass-local index and memo.
-                hosts[host_id] = (update_scores._ScoringHost(host_id, context, index), (None, index, {}))
+                hosts[host_id] = update_scores._ScoringHost(host_id, context, index)
         for package in packages:
-            entry = hosts.get(package.host_id)
-            if entry is not None:
-                yield package, update_scores.cached_identity(entry[0], package, entry[1])
+            host = hosts.get(package.host_id)
+            if host is not None:
+                yield package, update_scores.identity(host, package)
 
 
 def status(session, cfg, now=None):
@@ -107,7 +106,7 @@ def status(session, cfg, now=None):
     signature = _signature(session, cfg)
     counts = dict.fromkeys(CLASSES, 0)
     oldest_waiting = None
-    waits = []
+    next_eligible_at = None
     # A new attempt can still reference a previous run while the worker links its new run.
     state = (
         select(UpdateScore, AIRun.id.is_not(None))
@@ -120,7 +119,7 @@ def status(session, cfg, now=None):
     batch = []
 
     def flush():
-        nonlocal oldest_waiting
+        nonlocal oldest_waiting, next_eligible_at
         rows = {row.id: (row, interrupted) for row, interrupted in
                 session.execute(state.where(UpdateScore.id.in_([key for _, key in batch])))}
         for package, key in batch:
@@ -129,8 +128,8 @@ def status(session, cfg, now=None):
             counts[name] += 1
             if name != 'complete' and (oldest_waiting is None or package.available_since < oldest_waiting):
                 oldest_waiting = package.available_since
-            if wait is not None:
-                waits.append(float(wait))
+            if wait is not None and (next_eligible_at is None or wait < next_eligible_at):
+                next_eligible_at = float(wait)
         batch.clear()
 
     for package, key in _current_candidates(session):
@@ -149,7 +148,7 @@ def status(session, cfg, now=None):
         'counts': counts,
         'unscored': total - counts['complete'],
         'paused_server_updates': paused,
-        'next_eligible_at': min(waits) if waits else None,
+        'next_eligible_at': next_eligible_at,
         'oldest_waiting_since': oldest_waiting,
         'limitations': list(LIMITATIONS),
     }
