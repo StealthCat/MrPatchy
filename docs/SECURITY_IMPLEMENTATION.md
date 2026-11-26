@@ -4790,6 +4790,22 @@ admission checks use their existing paths. On a 1,200-row fixture, main reads an
 updates 900 affected rows individually through the ORM. The worker branch uses
 one update. Roadmap A remains incomplete.
 
+### Explicit server AI policy repair — Roadmap C/J checkpoint #1313
+
+The administrator's server AI panel distinguishes a malformed policy from an
+intentional pause. The repair action opens the existing audited save flow and
+writes a valid paused policy; the panel offers resuming only as a separate
+action after repair. The server AI API itself is unchanged and still accepts an
+audited administrator save with `paused: false` against a repair revision,
+which is recorded as `server AI resumed`, as it was before this checkpoint.
+The panel does not render the malformed value. A malformed revision that
+cannot be submitted to the existing API is represented by an opaque value
+derived from the stored policy, so a later change still rejects a stale save.
+
+The same role, CSRF and server lifecycle checks apply. This is a repair
+workflow for the saved pause policy. It sends no provider request and does not
+change global AI settings or historical results.
+
 ### Reviewed shared provider-backoff reset — worker checkpoint #552
 
 AI Settings exposes an active shared provider Retry-After/transient-failure floor with

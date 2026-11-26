@@ -70,5 +70,43 @@ module.exports=async(page,capture)=>{
   assert.equal(await page.getByText('Unable to load server policy').count(),0);
   await page.unroute(hostsUrl);await page.unroute(policyUrl);
  }
+ const repairUrl=new URL('/api/hosts/'+host.id+'/security/ai-policy',page.url()).href;
+ const submissions=[];
+ let needsRepair=true;
+ await page.route(repairUrl,async route=>{
+  if(route.request().method()==='GET'&&needsRepair){
+   const response=await route.fetch(),body=await response.json();
+   delete body.updated;delete body.actor;delete body.reason;
+   return route.fulfill({response,json:{...body,needs_repair:true}});
+  }
+  if(route.request().method()==='PUT'){
+   submissions.push(route.request().postDataJSON());
+   needsRepair=false;
+  }
+  return route.continue();
+ });
+ try{
+  await page.goto(new URL('/#servers/'+host.id+'/security',page.url()).href);
+  await page.reload();
+  for(const width of [320,768,1440]){
+   await page.setViewportSize({width,height:900});
+   await page.getByRole('heading',{name:'AI integration · Paused for repair',exact:true}).waitFor();
+   await page.getByText('The saved policy is malformed.',{exact:false}).waitFor();
+   assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+   assert.equal(await page.getByRole('button',{name:'Resume AI',exact:true}).count(),0);
+   assert.equal(await page.getByRole('button',{name:'Change AI capacity',exact:true}).count(),0);
+   if(capture)await capture('server-ai-repair-'+width);
+  }
+  await page.getByRole('button',{name:'Repair AI policy',exact:true}).click();
+  await page.getByText('You can review and resume AI separately after saving.',{exact:false}).waitFor();
+  await page.locator('#server-ai-form textarea').fill('Repair this saved policy and keep server AI paused.');
+  await page.getByRole('button',{name:'Save repaired policy',exact:true}).click();
+  await page.getByRole('heading',{name:'AI integration · Paused',exact:true}).waitFor();
+  assert.equal(submissions.length,1);
+  assert.equal(submissions[0].paused,true);
+  await page.getByRole('button',{name:'Resume AI',exact:true}).waitFor();
+  await page.reload();
+  await page.getByRole('heading',{name:'AI integration · Paused',exact:true}).waitFor();
+ }finally{await page.unroute(repairUrl);}
  await page.setViewportSize({width:1440,height:1000});
 };

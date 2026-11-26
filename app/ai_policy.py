@@ -1,6 +1,8 @@
 """Independent server AI controls, serialized with each outbound provider request."""
 from contextlib import contextmanager,ExitStack
 from contextvars import ContextVar
+import hashlib
+import json
 import time
 import uuid
 from sqlalchemy import and_,case,func,or_,select
@@ -69,8 +71,15 @@ def status(s,host_id):
     # can repair it by saving.
     paused=stored_paused(stored,row is not None)
     value=stored if isinstance(stored,dict) else {}
+    needs_repair = paused and value.get('paused') is not True
+    revision = value.get('revision', '')
+    if needs_repair and (not isinstance(revision, str) or len(revision) > 36):
+        # Keep repair bound to the value read even when its stored revision
+        # cannot be sent back through the existing policy API.
+        encoded = json.dumps(stored, sort_keys=True, separators=(',', ':')).encode()
+        revision = 'repair-' + hashlib.sha256(encoded).hexdigest()[:29]
     cfg=config(s)
-    return {**value,'paused':paused,'revision':value.get('revision',''),
+    return {**({} if needs_repair else value),'paused':paused,'revision':revision,'needs_repair':needs_repair,
         'concurrency_limit':investigation_limit_value(stored),
         'concurrency_limit_min':MIN_CONCURRENCY,'concurrency_limit_max':MAX_CONCURRENCY,
         'state':'paused' if paused else 'eligible' if cfg['ai_enabled'] else 'globally_disabled',
@@ -129,6 +138,7 @@ def save(s,host,paused,expected,reason,actor,concurrency_limit=None):
     if row:row.value=value
     else:s.add(Setting(key=PREFIX+host.id,value=value))
     if paused!=current['paused']:action='server AI paused' if paused else 'server AI resumed'
+    elif current['needs_repair']:action='server AI policy repaired'
     elif concurrency_limit!=current['concurrency_limit']:action='server AI concurrency changed'
     else:action='server AI policy reaffirmed'
     from . import ai_pause_notifications
