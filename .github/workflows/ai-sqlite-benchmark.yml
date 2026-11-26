@@ -1,0 +1,67 @@
+name: Native capped SQLite AI benchmark
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ai-sqlite-benchmark.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  capped-sqlite-fixture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      BENCHMARK_DIR: ${{ runner.temp }}/ai-sqlite-benchmark
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # PRs validate the workflow using the exact base. Manual runs use the selected ref.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.15'
+      - name: Install fixture dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-build.lock
+          python -m pip install --require-hashes --no-build-isolation -r requirements.lock
+      - name: Capture and validate six paired runs
+        shell: bash
+        run: |
+          mkdir -p "$BENCHMARK_DIR"
+          {
+            git log -1 --format='commit=%H'
+            uname -srm
+            python -VV
+            python -c 'import fcntl, sqlite3; print("flock=" + fcntl.flock.__module__); print("sqlite=" + sqlite3.sqlite_version)'
+            python -m pip freeze
+          } > "$BENCHMARK_DIR/provenance.txt"
+
+          workload=(--database sqlite --control-mode daily_cap --runs 8
+                    --provider-delay-ms 150 --ssh-delay-ms 50 --persistence-delay-ms 15
+                    --retained-history-rows 1000)
+          pairs=()
+          for pair in {1..6}; do
+            if (( pair % 2 )); then
+              order=(1 4)
+            else
+              order=(4 1)
+            fi
+            for workers in "${order[@]}"; do
+              echo "Running pair $pair with $workers worker slots"
+              python tools/benchmark_ai.py "${workload[@]}" --concurrency "$workers" \
+                > "$BENCHMARK_DIR/pair-${pair}-slots-${workers}.json"
+            done
+            pairs+=(--pair "$BENCHMARK_DIR/pair-${pair}-slots-1.json"
+                           "$BENCHMARK_DIR/pair-${pair}-slots-4.json")
+          done
+          python tools/compare_ai_benchmark_series.py "${pairs[@]}" > "$BENCHMARK_DIR/series.json"
+      - name: Upload validated captures
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-capped-sqlite-ai-benchmark
+          path: ${{ runner.temp }}/ai-sqlite-benchmark/
+          if-no-files-found: error
+          retention-days: 30
