@@ -149,7 +149,9 @@ def validate(inventory):
 # TCP wrappers access files (#1390): spawn/twist/aclexec run commands when libwrap daemons accept connections.
 # rsnapshot configuration (#1530): cmd_preexec/cmd_postexec, backup_script/backup_exec and backtick
 # include_conf commands run as the invoking user, root from the packaged cron entry.
-ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf')
+# System git configuration (#1535): aliases, pagers, editors, helpers, hooks and drivers run on
+# git invocations by every account, including root cron jobs and package hooks.
+ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
