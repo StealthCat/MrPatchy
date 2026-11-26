@@ -128,14 +128,16 @@ function fleetObservation(host,now){
 }
 async function overview(revision=renderRevision){
  const requested=location.hash.slice(1)||'overview';
- const snapshot=[...hosts],[d,spool]=await Promise.all([api('/dashboard'),api('/spool-health').catch(()=>null)]);if(!currentView(revision,'overview'))return;
+ const snapshot=[...hosts];
+ const [d,spool]=requested==='overview/findings'?[]:await Promise.all([api('/dashboard'),api('/spool-health').catch(()=>null)]);
+ if(!currentView(revision,'overview'))return;
  // A navigation that landed while the dashboard loaded owns the address; never rewrite it to #overview.
  const addressUnchanged=(location.hash.slice(1)||'overview')===requested;
  const root=$('#content'),now=Date.now()/1000,observations=snapshot.map(host=>({host,...fleetObservation(host,now)}));
  if(requested==='overview/files'&&isAdmin()){await fleetFileStatus(revision,$('#content'),'overview');return;}
- const section=requested==='overview/attention'?'attention':requested==='overview/monitoring'?'monitoring':'summary';
- if(addressUnchanged&&!['overview','overview/attention','overview/monitoring'].includes(requested))history.replaceState(null,'','#overview');
- const entries=[['summary','Summary'],['attention','Server attention'],['monitoring','Monitoring'],...(isAdmin()?[['files','File status']]:[])];
+ const section=requested==='overview/attention'?'attention':requested==='overview/monitoring'?'monitoring':requested==='overview/findings'?'findings':'summary';
+ if(addressUnchanged&&!['overview','overview/attention','overview/monitoring','overview/findings'].includes(requested))history.replaceState(null,'','#overview');
+ const entries=[['summary','Summary'],['attention','Server attention'],['monitoring','Monitoring'],['findings','Integrity findings'],...(isAdmin()?[['files','File status']]:[])];
  const labels=Object.fromEntries(entries),link=key=>key==='summary'?'#overview':'#overview/'+key;
  $('#breadcrumb').textContent='Workspace / Overview / '+labels[section];document.title=labels[section]+' · Fleet Overview · Mr Patchy';
  const navigation='<nav class="overview-sections" aria-label="Fleet overview pages">'+PatchyUI.sectionNavigation(entries,section,link,entries.map(item=>item[0]),[])+'</nav>';
@@ -147,25 +149,33 @@ async function overview(revision=renderRevision){
   const quiet=!rows&&!c.unavailable;
   return `<section class="card fleet-reading" data-fleet-spool="${quiet?'ok':'review'}"><h2>Agent event spool</h2><dl class="fleet-review-facts"><div><dt>Critical (≥90%)</dt><dd>${num(c.critical)}</dd></div><div><dt>Warning (≥70%)</dt><dd>${num(c.warning)}</dd></div><div><dt>Stale telemetry</dt><dd>${num(c.stale)}</dd></div><div><dt>No counters reported</dt><dd>${num(c.unavailable)}</dd></div><div><dt>Cumulative lost observations</dt><dd>${num(l.lost_observations)}</dd></div></dl>${rows?`<ul class="fleet-spool-list">${rows}</ul>${spool.more?`<p class="help">${num(spool.more)} more server(s) not listed.</p>`:''}`:`<p class="help">${quiet?'No enabled server reports spool pressure or recorded loss.':'No listed pressure or loss.'}</p>`}<p class="help">From the latest stored telemetry of ${num(c.total)} enabled server(s); not a live probe. Servers without counters are not treated as healthy, and cumulative loss stays visible after recovery. Open a server for queue details.</p></section>`;
  };
+ const integrityRows=()=>snapshot.filter(host=>host.enabled!==false&&!host.deleted_at)
+  .flatMap(host=>(host.integrity||[]).map(item=>({host,item})));
  const stat=(label,value,detail,icon,style='',href='')=>`<${href?'a href="'+href+'"':'div'} class="stat ${style}">${PatchyUI.icon(icon)}<label>${label}</label><strong>${esc(value)}</strong><small>${detail}</small></${href?'a':'div'}>`;
- const intro=heading(section==='summary'?'A healthier fleet starts here.':section==='attention'?'A closer look at your servers.':'Know what each signal means.',section==='summary'?'Stored signals, clear next steps, and room to investigate.':section==='attention'?'Review contact gaps and stored findings before deciding what to do.':'Expected timing does not prove that a check succeeded.','<button class="primary" data-admin data-action="add">+ Add server</button>');
+ const intro=section==='findings'
+  ?heading('Fleet integrity findings','Latest stored findings for enabled servers. Open a server to review its available records.')
+  :heading(section==='summary'?'A healthier fleet starts here.':section==='attention'?'A closer look at your servers.':'Know what each signal means.',section==='summary'?'Stored signals, clear next steps, and room to investigate.':section==='attention'?'Review contact gaps and stored findings before deciding what to do.':'Expected timing does not prove that a check succeeded.','<button class="primary" data-admin data-action="add">+ Add server</button>');
  const notice='<p class="help fleet-snapshot-note">This page combines stored snapshots, not a live health probe. Disabled servers are excluded from package totals. Contact freshness does not verify individual collectors, Docker readiness or malware protection.</p>';
  const tile=row=>`<article class="fleet-observation"><div class="fleet-observation-title">${PatchyUI.icon('servers')}<h3><a href="${serverLink(row.host.id)}">${esc(row.host.name)}</a></h3>${badge(row.kind)}</div><p class="help">${esc(row.host.address)} · ${esc(row.host.architecture||'Architecture not reported')}</p><strong>${esc(row.label)}</strong><p>${esc(row.reason)}</p><p class="help">Last contact: ${date(row.host.last_seen)}</p><a class="button" href="${serverLink(row.host.id)}">Open server →</a></article>`;
  let content='';
  if(section==='summary'){
+  const integrityCount=integrityRows().length;
   content=`<div class="stats">${stat('Recent contact',recent,'No stored integrity findings; not readiness','servers','accent')}${stat('Servers to review',attention,'Contact gaps or stored findings','investigations',attention?'warn':'')}${stat('Updates available',d.updates,esc(d.packages.toLocaleString())+' installed package records','packages','','#updates')}${stat('Past patch deadline',d.overdue,'Based on configured priority deadlines','schedules',d.overdue?'warn':'')}</div>
    <div class="quick-links" aria-label="Fleet shortcuts"><a href="#overview/attention">${PatchyUI.icon('servers')} Review server attention ${PatchyUI.icon('arrow')}</a><a href="#updates">${PatchyUI.icon('packages')} Review updates</a><a href="#investigations">${PatchyUI.icon('investigations')} Investigate behaviors</a><a href="#schedules" data-admin>${PatchyUI.icon('schedules')} Plan patching</a></div>
-   <div class="fleet-summary-grid"><section class="card fleet-reading"><div class="card-head"><h2>Review queue</h2><a class="mint" href="#overview/attention">Review servers →</a></div><dl class="fleet-review-facts"><div><dt>Stored integrity findings</dt><dd>${esc(d.integrity_alerts)}</dd></div><div><dt>Behaviors awaiting trust</dt><dd>${esc(d.investigations)}</dd></div><div><dt>Disabled servers</dt><dd>${observations.filter(row=>row.kind==='disabled').length}</dd></div></dl><p class="help">Counts are observations, not confirmed attacks. A vulnerable version or AI opinion alone does not authorize containment.</p><a href="#overview/monitoring" class="mint">Understand collection & coverage →</a></section>
+   <div class="fleet-summary-grid"><section class="card fleet-reading"><div class="card-head"><h2>Review queue</h2><a class="mint" href="#overview/attention">Review servers →</a></div><dl class="fleet-review-facts"><div><dt>Stored integrity findings</dt><dd><a class="mint" href="#overview/findings" aria-label="${integrityCount} stored integrity findings across enabled servers">${integrityCount}</a></dd></div><div><dt>Behaviors awaiting trust</dt><dd>${esc(d.investigations)}</dd></div><div><dt>Disabled servers</dt><dd>${observations.filter(row=>row.kind==='disabled').length}</dd></div></dl><p class="help">Counts are observations, not confirmed attacks. A vulnerable version or AI opinion alone does not authorize containment.</p><a href="#overview/monitoring" class="mint">Understand collection & coverage →</a></section>
    <section class="hero fleet-guide"><div><div class="eyebrow">MR PATCHY'S NEXT STEP</div><h2>${attention?'Start with the gaps.':'Keep a curious eye.'}</h2><p>${attention?'Open Server attention to review expired contact, unknown timestamps and stored findings.':'A quiet summary is useful, but it cannot certify every collector or endpoint. Review coverage before drawing conclusions.'}</p></div>${PatchyUI.mascot('welcome')}</section></div>
    ${spoolSummary()}
    <section class="card fleet-reading"><div class="card-head"><h2>Your servers</h2><a class="mint" href="#servers">View all ${snapshot.length} →</a></div>${snapshot.length?`<div class="fleet-observation-grid">${observations.slice(0,3).map(tile).join('')}</div>`:empty('Make room for your first server','Enroll a supported Linux machine, verify installation, then review its collection results.','<button data-admin data-action="add">Enroll a server →</button>')}</section>`;
  }else if(section==='attention'){
   content=`<section class="card fleet-reading"><div class="toolbar" id="fleet-review-controls"><label>Find a server<input type="search" id="fleet-review-search" value="${esc(fleetReviewContext.q)}" placeholder="Name or address"></label><label>Review group<select id="fleet-review-filter"><option value="attention">Needs review</option><option value="all">All servers</option><option value="stale">Expired contact</option><option value="unknown">Unknown freshness</option><option value="disabled">Management disabled</option><option value="recent">Recent contact</option></select></label><button id="fleet-review-reset">Reset filters</button></div><p class="help" id="fleet-review-count" role="status"></p><div id="fleet-review-cards"></div><div class="actions"><button id="fleet-review-prev">Previous</button><span class="help" id="fleet-review-page"></span><button id="fleet-review-next">Next</button></div></section>`;
+ }else if(section==='findings'){
+  content='<section class="card" id="fleet-integrity-findings"></section>';
  }else{
   content=`<div class="fleet-summary-grid"><section class="card fleet-reading"><h2>Collection & timing</h2><dl class="fleet-coverage-list"><div><dt>Repository checks</dt><dd>Configured every ${esc(d.repo_minutes)} minutes; package candidates come from central signed metadata.</dd></div><div><dt>Process observations</dt><dd>Normally sampled every 30 seconds. Short-lived activity can be missed.</dd></div><div><dt>Integrity observations</dt><dd>Managed files are normally checked every five minutes. This is bounded coverage, not a full filesystem scan.</dd></div><div><dt>Contact freshness</dt><dd>This view uses a two-minute window. Missing, expired or future timestamps cannot certify availability. Check each server's System & collector page for independent collection times.</dd></div></dl></section><section class="hero fleet-guide"><div><div class="eyebrow">A CURIOUS LITTLE CARETAKER</div><h2>Follow the evidence.</h2><p>AI triage is optional. Per-server pause and global policy govern provider calls; deterministic collection continues. Historical findings remain available.</p><a class="button" href="#servers">Choose a server →</a></div>${PatchyUI.mascot('working')}</section></div>
    <section class="card fleet-reading"><h2>Coverage has boundaries</h2><p>Recent contact is not proof that patching succeeded, a reboot took effect, an endpoint is clean, or every collector is current. Package totals describe retained inventory for enabled servers; held packages may still have candidates.</p><p>Review target errors, individual collection timestamps and operation outcomes. The deployment-health dashboard, remote readiness and expanded automatic protection remain unfinished.</p><div class="quick-links"><a href="#activity">${PatchyUI.icon('activity')} Review operation outcomes</a><a href="#servers">${PatchyUI.icon('servers')} Open server details</a>${isAdmin()?'<a href="#security">'+PatchyUI.icon('shield')+' Review security coverage</a><a href="#activity/workers">'+PatchyUI.icon('activity')+' Inspect worker reports</a>':''}</div></section>`;
  }
- root.innerHTML=intro+navigation+notice+`<div data-fleet-section="${section}">${content}</div>`;
+ root.innerHTML=intro+navigation+(section==='findings'?'':notice)+`<div data-fleet-section="${section}">${content}</div>`;
+ if(section==='findings'){renderFleetIntegrityFindings(root.querySelector('#fleet-integrity-findings'),integrityRows());return;}
  if(section!=='attention')return;
  const state=fleetReviewContext,search=$('#fleet-review-search'),filter=$('#fleet-review-filter');filter.value=state.filter;
  const draw=()=>{
@@ -177,6 +187,23 @@ async function overview(revision=renderRevision){
  search.oninput=()=>{state.q=search.value;state.offset=0;draw();};filter.onchange=()=>{state.filter=filter.value;state.offset=0;draw();};
  $('#fleet-review-reset').onclick=()=>{Object.assign(state,{q:'',filter:'attention',offset:0});search.value='';filter.value='attention';draw();search.focus();};
  bindPager(state,12,'#fleet-review',draw);
+ draw();
+}
+const fleetIntegrityContext={offset:0};
+function renderFleetIntegrityFindings(root,rows){
+ if(!rows.length){
+  root.innerHTML=empty('No stored integrity findings','Enabled servers have no findings in their latest stored snapshots. Missing or stale observations cannot verify integrity.');
+  return;
+ }
+ root.innerHTML='<p id="fleet-integrity-count" class="help" role="status"></p><div class="table-wrap"><table><thead><tr><th>Server</th><th>Path or source</th><th>Finding</th></tr></thead><tbody id="fleet-integrity-rows"></tbody></table></div><div class="actions"><button id="fleet-integrity-prev">Previous</button><span id="fleet-integrity-page" class="help"></span><button id="fleet-integrity-next">Next</button></div>';
+ const state=fleetIntegrityContext,size=50,prefix='#fleet-integrity';
+ const draw=()=>{
+  const visible=pagedRows(state,rows,size,prefix);
+  root.querySelector('#fleet-integrity-count').textContent=rows.length+' stored findings across enabled servers.';
+  root.querySelector('#fleet-integrity-rows').innerHTML=visible.map(({host,item})=>
+   '<tr><td><a href="'+serverLink(host.id,'findings')+'">'+esc(host.name)+'</a></td><td>'+esc(item.path||'Collector')+'</td><td>'+esc(item.issue||'No detail recorded')+'</td></tr>').join('');
+ };
+ bindPager(state,size,prefix,draw);
  draw();
 }
 const fleetUpdateContext={q:'',host:'',priority:'',status:'',scope:'',offset:0};
