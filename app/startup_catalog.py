@@ -188,6 +188,8 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/rsnapshot.conf'),)},
     {'id': 'git_system', 'label': 'System git aliases, pagers, helpers, hooks and drivers', 'trigger': 'event',
      'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/gitconfig'),)},
+    {'id': 'kdump', 'label': 'kdump crash-capture pre, post and emergency hooks and core collector', 'trigger': 'event',
+     'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/kdump.conf', ('rpm',)),)},
     {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),

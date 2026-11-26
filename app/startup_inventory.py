@@ -18,6 +18,7 @@ CATALOG=(
     ('tcp_wrappers_deny','TCP wrappers deny rules','/etc/hosts.deny'),
     ('rsnapshot','rsnapshot configuration','/etc/rsnapshot.conf'),
     ('git_system','System git configuration','/etc/gitconfig'),
+    ('kdump','kdump crash-capture configuration','/etc/kdump.conf'),
 )
 GAPS=[
     'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar) are not parsed into jobs; anacron and at queue parsing is described separately below.',
@@ -28,6 +29,7 @@ GAPS=[
     'TCP wrappers: /etc/hosts.allow and /etc/hosts.deny are hashed as startup files by agents that report them, but their spawn, twist and aclexec commands are not yet parsed in this view. Whether any running daemon is linked against libwrap, and which daemon names match, are not evaluated.',
     'rsnapshot: /etc/rsnapshot.conf is hashed as a startup file by agents that report it, but its cmd_preexec, cmd_postexec, backup_script, backup_exec, program-path and backtick include_conf commands are not yet parsed in this view. Files it includes, alternate configurations passed with -c and which cron entry or timer invokes rsnapshot are not evaluated.',
     'System git configuration: /etc/gitconfig is hashed as a startup file by agents that report it, but the shell aliases, pagers, editors, credential helpers, hook paths, fsmonitor hooks and diff, filter and merge drivers it can make git run are not yet parsed in this view. Files it includes, per-user, XDG and repository configuration, GIT_CONFIG_* environment overrides and which accounts or jobs run git are not evaluated.',
+    'kdump: /etc/kdump.conf is hashed as a startup file by agents that report it, but its kdump_pre, kdump_post, kdump_emergency and core_collector commands are not yet parsed in this view. The /etc/kdump/pre.d, post.d and emergency.d directories, the hook programs themselves, whether the loaded crash-capture initramfs matches the current files, and the Debian kdump-tools configuration are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
     'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
