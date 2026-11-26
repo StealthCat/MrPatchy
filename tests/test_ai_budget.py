@@ -68,6 +68,8 @@ def test_capped_unknown_pricing_fails_before_rate_or_provider(admin, monkeypatch
     assert sent == []
 
 
+# Reads the stored AI price catalog, which needs the Settings table (#1487 fails closed).
+@pytest.mark.usefixtures('client')
 def test_pricing_catalog_status_has_exact_freshness_boundaries():
     before=ai_pricing.catalog_status(ai_pricing.VERIFIED_AT-1)
     fresh=ai_pricing.catalog_status(ai_pricing.VERIFIED_AT)
@@ -216,6 +218,18 @@ def test_catalog_lifecycle_alert_only_applies_to_enabled_cap_modes(admin,mode,en
     operations.collect_alerts(ai_pricing.EXPIRES_AT)
     with Session() as session:
         assert not session.query(operations.Alert).filter_by(kind='AI pricing catalog').count()
+        assert not session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').count()
+
+
+def test_uncapped_sweep_without_catalog_notice_skips_the_catalog_read(admin, monkeypatch):
+    # Keeps the operations sweep's statement count flat when no capped alert or resolution is possible.
+    calls=[];records=[]
+    real=ai_pricing.catalog_status
+    monkeypatch.setattr(ai_pricing,'catalog_status',lambda *args,**kwargs:calls.append(1) or real(*args,**kwargs))
+    cfg={'ai_enabled':True,'ai_control_mode':'rate'}
+    with Session() as session:
+        operations._pricing_catalog_alert(session,cfg,lambda *args,**kwargs:records.append(args),ai_pricing.EXPIRES_AT)
+        assert not calls and not records
         assert not session.query(notifications.NotificationEvent).filter_by(kind='pricing-catalog').count()
 
 

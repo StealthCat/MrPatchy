@@ -230,6 +230,8 @@ def request(payload,key,timeout=60):
     encoded_body=_encode_request_body(provider_payload)
     with ExitStack() as stack:
         reservation=None
+        # One price snapshot from reservation through usage settlement (#1488).
+        stack.enter_context(ai_pricing.call_snapshot())
         try:
             with ai_runs.measure('provider_admission'):
                 stack.enter_context(ai_policy.provider())

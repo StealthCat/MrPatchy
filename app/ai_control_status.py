@@ -20,7 +20,7 @@ WINDOW_SECONDS = 3600
 
 
 PRICING_MESSAGES = {
-    'catalog': 'The bundled public-price catalog is not currently valid, so capped admission cannot reserve spend for any call.',
+    'catalog': 'The current public-price catalog is not currently valid, so capped admission cannot reserve spend for any call.',
     'model': 'The saved model has no verified catalog price, so capped admission cannot reserve spend for it.',
 }
 
@@ -126,7 +126,7 @@ def snapshot(session, now=None):
         add('credential', CREDENTIAL_MESSAGE)
     if settings['ai_enabled'] and budget['enabled'] and settings['ai_model']:
         # Disabled AI is already explained by the `disabled` gate (#735 criterion 2).
-        # Capped admission must quote every paid call from the bundled catalog;
+        # Capped admission must quote every paid call from the effective catalog;
         # an unpriced model or a stale catalog refuses all of them indefinitely.
         pricing = ai_pricing.model_status(settings['ai_model'], now)
         if not pricing['ok']:

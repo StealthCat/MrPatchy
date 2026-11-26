@@ -56,6 +56,7 @@ const assert=require('assert/strict');
     await page.route('**/api/settings/ai-models',route=>route.fulfill({json:{models:['new-model','other-model']}}));
     await require('./ui_settings.cjs')(page,capture);
     await require('./ui_settings_telemetry.cjs')(page,capture);
+    await require('./ui_settings_price_catalog.cjs')(page,capture);
     await require('./ui_settings_resource_attention.cjs')(page,capture);
     await require('./ui_settings_hash_sweep.cjs')(page,capture);
     await require('./ui_models.cjs')(page,capture);

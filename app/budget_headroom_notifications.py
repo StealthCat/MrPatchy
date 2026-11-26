@@ -52,7 +52,7 @@ def publish(session, cfg, now):
         enabled, name, _start, reset, _groups, counted, cap, _rec = ai_budget._state(session, cfg, now)
         # An unpriced model or stale catalog has its own notification; a reached cap has its own.
         if enabled and floor['ok'] and counted < cap and cap - counted < floor['amount_usd']:
-            binding = '\n'.join((name, repr(float(reset)), ai_budget._money(cap), ai_pricing.VERSION,
+            binding = '\n'.join((name, repr(float(reset)), ai_budget._money(cap), floor['pricing_version'],
                                  hashlib.sha256(model.encode('utf-8')).hexdigest()))
             subject_revision = 'headroom:' + hashlib.sha256(binding.encode('utf-8')).hexdigest()
             current = _current(session)

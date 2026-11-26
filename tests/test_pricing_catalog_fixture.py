@@ -17,6 +17,11 @@ from tests.pricing_catalog import (
     pin_fresh_pricing_catalog,
 )
 
+
+# These cases read the stored AI price catalog, which needs the Settings table: since #1487 an
+# unreadable catalog fails closed, so they must not rely on an earlier test creating the schema.
+pytestmark = pytest.mark.usefixtures('client')
+
 DAY = 86400
 # A clock well after the bundled catalog expiry (and any plausible near-term refresh).
 AFTER_EXPIRY = BUNDLED_PRICING_WINDOW[1] + 400 * DAY

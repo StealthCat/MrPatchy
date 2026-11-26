@@ -597,3 +597,7 @@ button.danger { border-color: var(--red); color: var(--red); }
 .agent-policy-option select { max-width: 100%; }
 .agent-policy-effective { margin: 6px 0 0; }
 .retriage-bulk { align-items: center; flex-wrap: wrap; margin: 0 0 14px; }.retriage-bulk .help { flex: 1 1 260px; margin: 0; }.retriage-select { font-size: 13px; margin-bottom: 6px; }.retriage-bulk-list { margin: 0 0 12px; padding-left: 20px; max-height: 220px; overflow: auto; }.retriage-bulk-list li { overflow-wrap: anywhere; }
+
+/* Administrator price confirmation (#1487): keep every rate readable in the scrolling table. */
+#price-catalog-form td input{min-width:6.5em;width:6.5em}
+#price-catalog-form td code{white-space:nowrap}

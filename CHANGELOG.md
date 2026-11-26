@@ -1,3 +1,9 @@
+## 1.106.0 — 2026-11-26
+
+1. [PR #1488](https://github.com/StealthCat/MrPatchy/pull/1488): Administrators can **Review and confirm prices** in Settings → AI. It's an audited, administrator-only confirmation of the catalogued OpenAI token rates that starts a new validity window of 1 to 30 days for capped AI admission, without waiting for a release. The newer of the bundled and confirmed catalogs applies, and expired confirmed prices still block capped calls until they are confirmed again. Each capped call is reserved and settled with the catalog in effect when it is admitted under the shared budget lock, so a confirmation affects only later calls. If the stored catalog cannot be read, capped admission is blocked and Settings shows it as unavailable instead of falling back to older rates. The expiry warning and alert now direct administrators to re-confirm prices. Compatibility: no schema migration; confirmations are stored in the existing settings table and audited. Fixes #1487.
+
+This source update does not publish a Docker image.
+
 ## 1.105.0 — 2026-11-26
 
 1. [PR #1339](https://github.com/StealthCat/MrPatchy/pull/1339): Administrators receive one in-app notice when a retained uncertain provider charge reduces the headroom under an enabled daily cap. It opens AI Settings. Ordinary sent reservations do not trigger it, and the existing exhaustion notice takes over if the cap fills. The three cap notices and their current revisions share one read. Compatibility: no schema, configuration or provider change. It uses the existing administrator-only in-app channel, SMTP and webhook delivery are unchanged, and the notice can add one to the unread count. Fixes #1337.

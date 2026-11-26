@@ -245,6 +245,8 @@ EXPECTED_ROLES = {
     ('POST','/api/settings/ai/preview'):'admin',
     ('PUT','/api/settings/ai-key'):'admin',
     ('GET','/api/settings/ai-control-status'):'admin',
+    ('GET','/api/settings/ai-price-catalog'):'admin',
+    ('POST','/api/settings/ai-price-catalog'):'admin',
     ('GET','/api/settings/ai-spend-by-purpose'):'admin',
     ('GET','/api/settings/ai-spend-history'):'admin',
     ('GET','/api/settings/ai-spend-history.csv'):'admin',

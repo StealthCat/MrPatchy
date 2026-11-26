@@ -158,18 +158,20 @@ AI_PRICING_CATALOG_SUBJECT='bundled-public-prices'
 
 def _pricing_catalog_alert(s,cfg,record,now):
     """Publish safe controller-wide lifecycle state for capped AI pricing."""
-    status=ai_pricing.catalog_status(now)
     capped=cfg['ai_enabled'] and cfg['ai_control_mode'] in ai_pricing.CAP_MODES
+    # Read the stored catalog only when a capped alert is possible or an existing
+    # notice needs its resolution metadata, so uncapped sweeps add no catalog reads.
+    status=ai_pricing.catalog_status(now) if capped else None
     warning=capped and status['state']=='fresh' and now>=status['expires_at']-AI_PRICING_CATALOG_WARNING_SECONDS
     unavailable=capped and status['state'] in ('expired','not_yet_valid')
     if warning or unavailable:
         expiry=datetime.datetime.fromtimestamp(status['expires_at'],datetime.timezone.utc).isoformat().replace('+00:00','Z')
         if warning:
             severity='medium'
-            message='AI public-price catalog '+status['version']+' expires at '+expiry+'. Review and deploy a verified catalog update before capped AI admission stops.'
+            message='AI public-price catalog '+status['version']+' expires at '+expiry+'. Re-confirm current prices in Settings or deploy a verified catalog update before capped AI admission stops.'
         else:
             severity='high'
-            message='AI public-price catalog '+status['version']+' is '+status['state'].replace('_',' ')+'. Capped AI admission is blocked until a verified catalog update or controller clock correction is deployed.'
+            message='AI public-price catalog '+status['version']+' is '+status['state'].replace('_',' ')+'. Capped AI admission is blocked until current prices are re-confirmed in Settings, a verified catalog update is deployed or the controller clock is corrected.'
         record('controller','AI pricing catalog',message,reopen_on_change=True)
         notifications.publish(s,source='ai-budget',kind='pricing-catalog',subject_type='pricing-catalog',
             subject_id=AI_PRICING_CATALOG_SUBJECT,subject_revision=status['version']+':'+status['state']+':'+str(status['expires_at']),
@@ -181,6 +183,7 @@ def _pricing_catalog_alert(s,cfg,record,now):
         notifications.NotificationEvent.subject_type=='pricing-catalog',
         notifications.NotificationEvent.subject_id==AI_PRICING_CATALOG_SUBJECT))
     if event:
+        if status is None:status=ai_pricing.catalog_status(now)
         notifications.publish(s,source='ai-budget',kind='pricing-catalog',subject_type='pricing-catalog',
             subject_id=AI_PRICING_CATALOG_SUBJECT,subject_revision=status['version']+':resolved:'+str(status['expires_at']),
             severity='info',reason='The AI public-price catalog no longer needs administrator attention.',
