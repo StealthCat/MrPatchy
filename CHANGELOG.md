@@ -1,3 +1,9 @@
+## 1.109.0 — 2026-11-26
+
+1. [PR #1571](https://github.com/StealthCat/MrPatchy/pull/1571): A pure Roadmap F syslog-ng contract (`app/syslog_ng_programs.py`) resolves which `program()` destinations, `hook-commands()` and `confgen` commands syslog-ng runs as root. It follows syslog-ng 4.3.1 and was checked by a live differential against the real daemon. Compatibility: new module only. Part of #1570.
+
+This source update does not publish a Docker image.
+
 ## 1.108.1 — 2026-11-26
 
 1. [PR #1569](https://github.com/StealthCat/MrPatchy/pull/1569): Update scoring saves one database read per nonempty batch by keeping the server IDs it selected at admission. A batch with several packages on one server still checks that server's current AI policy, acquires its lifecycle guard and records one membership on the AI run. Compatibility: no schema, API or authorization change. Fixes #1568.
