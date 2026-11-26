@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
 from app import (ai, ai_admission, ai_assessments, ai_budget, ai_claims,
                  ai_provider_backoff, ai_retry, ai_runs, known_good, worker)
@@ -304,6 +304,37 @@ def probes(monkeypatch):
 
     monkeypatch.setattr(known_good, 'exact_hit_available', counted)
     return seen
+
+
+def test_mixed_verdict_window_loads_evidence_only_for_the_probes(client, provider, fresh_cursor, probes, monkeypatch):
+    monkeypatch.setattr(ai_claims, 'FREE_HIT_SCAN', 2)
+    configure()
+    exhaust()
+    subjects = [('Z-pending', 1, 'pending'), ('a-error', 1, 'error'),
+                ('later-pending', 2, 'pending'), ('later-error', 2, 'error')]
+    for subject, first_seen, _ in subjects:
+        seed(hit=False, subject=subject, first_seen=first_seen)
+    with Session() as s:
+        for subject, _, verdict in subjects:
+            row = s.get(Behavior, subject)
+            row.verdict = verdict
+            row.evidence = {**row.evidence, 'window_fixture': 'x' * 32_000}
+        s.commit()
+
+    loaded = []
+    def record_load(row, _context):
+        loaded.append(row.id)
+
+    event.listen(Behavior, 'load', record_load)
+    try:
+        worker.investigate_one()
+    finally:
+        event.remove(Behavior, 'load', record_load)
+
+    assert probes == ['Z-pending', 'a-error']
+    assert sorted(loaded) == sorted(probes)
+    assert ai_claims._free_hit_cursor == (1, 'a-error')
+    assert provider.bodies == []
 
 
 def test_a_hit_behind_a_full_window_of_older_paid_subjects_is_found(client, provider, fresh_cursor, probes):

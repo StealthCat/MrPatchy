@@ -2334,6 +2334,13 @@ regressions verify the reduced SQL and continued refusal after lifecycle or
 evidence changes. This limits recurring lease-check I/O. Production throughput
 and the wider parallel-investigation acceptance remain open.
 
+Roadmap A checkpoint #1383 projects the enabled and deletion fields in the
+post-queue-lock claim recheck. The admission fixture returned 17 host columns
+before this change and two afterward, excluding a seeded 256 KB inventory.
+A fresh snapshot still guards lifecycle changes, and historical observations
+whose host row is absent retain their existing treatment. This measures the
+claim's database projection. Production throughput remains open.
+
 Worker checkpoint #599 adds a composite approval/verdict/first-seen/identity
 index for the real process-triage admission query. Startup adds the index
 idempotently to existing databases while retaining behavior history and existing
@@ -2342,6 +2349,13 @@ index instead of scanning every completed behavior before the existing retry,
 pause, lifecycle, capacity and oldest-first eligibility checks. This is a partial
 database performance increment; production throughput and full faster-AI
 acceptance remain open.
+
+Roadmap A checkpoint #1385 resolves the ordinary oldest eligible triage subject
+by ID. With a 48 KB evidence fixture, the real admission path now reads the full
+behavior once under the host queue gate instead of reading it during election
+and again after the gate. Pending/error ordering, retry eligibility and full
+evidence at claim time remain covered. Free known-good probes still read the
+evidence they need to match. Production throughput acceptance remains open.
 
 Worker checkpoint #647 adds a covering index on the attempt timestamp used by
 the administrator's recent-attempt status and the legacy hourly admission gate.
@@ -3451,6 +3465,16 @@ Existing deferred records keep their saved dates until their next evaluation.
 Focused cases cover both capped modes, recording on either side of reset and
 rate spacing alongside cap and provider waiters.
 
+### Read the paced rate deadline and settings together — Roadmap A checkpoint #1477
+
+Paced provider admission reloads the saved settings and rate deadline with one
+read under the existing fleet admission lock. The read uses both primary keys and
+preserves the default settings and first admission when there are no saved rows.
+It still applies settings edits made while the caller waits for the lock. Pace
+refusals preserve the saved deadline and consume no provider call. SQLite and
+MySQL tests cover grants, refusals and the adjacent configuration and contention
+cases. Fleet throughput remains open.
+
 ### Rate throttle paces smoothly and defers without a charged attempt — worker checkpoint #1021
 
 `tests/test_ai_rate_throttle_acceptance.py` covers the milestone-4 checks for the
@@ -3653,6 +3677,19 @@ Amounts remain local public-price estimates for comparison with provider billing
 records; automated provider-invoice reconciliation, long-horizon (>90 day) reports
 and the wider roadmap A acceptance remain planned.
 
+### Current-window unreconciled spend breakdown — Roadmap A checkpoint #1351
+
+AI Settings now distinguishes the counted amount still marked sent without
+reconciled usage from the counted amount with a recorded uncertain outcome.
+Both come from the same current-window budget aggregate, including any
+previously admitted reservations still counted after a timezone change.
+The existing combined uncertainty value remains available. An older API without
+the split still shows the combined total and reconciliation summary.
+
+A sent row can outlive a worker and its diagnostics. The read-only
+breakdown describes ledger state. Use provider billing records to verify
+charges.
+
 ### Stale and replayed triage results under a daily cap — milestone 4 checkpoint #1005
 
 `tests/test_ai_budget_stale_result_acceptance.py` drives the real
@@ -3716,6 +3753,16 @@ The API regressions cover a real retained earlier window, released and zero-cost
 rows, unobserved spend, and authoritative, empty and uncapped windows. The
 browser regression refreshes from a reset to a recheck and verifies the same
 activity totals and escaped text.
+
+### Conditional recording of uncertain provider outcomes — Roadmap A checkpoint #1475
+
+Provider timeouts with unknown outcomes, transport errors and unusable replies
+record the uncertain ledger state with one indexed write under the shared budget
+lock. It matches only an exact sent reservation on SQLite and MySQL. The full
+reservation stays counted along with its original receipt. A late trustworthy
+receipt can still settle it. Duplicate or stale failure reports leave the
+existing ledger state intact. The wider shared spend-control and performance
+milestones remain open.
 
 ### Spend ledger retained after AI history pruning — worker checkpoint #986
 
@@ -3980,6 +4027,7 @@ and that a sent call may still be billable. From code reading, not tested here: 
 conservative, because no transmission happened. Multi-process admission,
 stale/replayed results and before/after performance remain open.
 
+
 ### Daily-cap admission failover when the admitting process dies — milestone 4 acceptance #1285
 
 Milestone 4 acceptance for **failover** of capped admission. Every capped reservation
@@ -4004,6 +4052,21 @@ Mutation check: excluding `reserved` rows from counted spend in `ai_budget._stat
 fails all three tests. No defect found and no runtime change. The SQLite run is local;
 MySQL runs through the CI shards. Controller/coordinator failover, a database failover
 mid-admission and before/after production performance remain open.
+
+### Recover expired and orphaned investigations from one read — worker checkpoint #1461
+
+Triage admission reads expired claims and running investigations without a
+claim in one statement while holding the existing admission lock. The expired
+branch includes runs linked to a claim slated for deletion. The orphan branch
+matches running triage runs that already have no claim. Both branches project
+keys before loading the rows needed for recovery. Each pass supplies its own
+expiry cutoff to the shared statement.
+
+Acceptance covers a healthy admission with a live lease and a mixed recovery
+pass with expiry at the cutoff, missing runs, completed runs, repeated claims
+for one run and retained call receipts. Repeating recovery leaves one
+interruption event per recovered run. Cap accounting, claim fencing and the
+caller-owned commit continue to apply. Production throughput remains open.
 
 ### Lease loss across the daily-cap reset — milestone 4 acceptance #1277
 
@@ -6693,6 +6756,17 @@ action.
   AI classification and any response action. There is no schema, API, auth
   or response-authorization change.
 
+### Docker daemon.json program contract — worker checkpoint #1521 (roadmap F)
+
+- **Outcome:** `app/docker_daemon.py` is a pure, I/O-free contract. From captured `/etc/docker/daemon.json` text it reports which programs `dockerd` runs as root because of that file: each `runtimes` entry (its `path` and `runtimeArgs`, or its containerd `runtimeType` shim) and which one is the `default-runtime` used for every container that names none; the init binary (`init-path`, default `docker-init`) and whether `"init": true` starts it in every container; the userland proxy (`userland-proxy-path`, default `docker-proxy`) and whether it is enabled; and the `authorization-plugins` names. A planted default runtime or init path runs as root on every container start, so this is a startup/persistence point no earlier contract covered.
+- **Semantics, checked against a real dockerd 29.9.3** started with each case and read back through `docker info` and its generated runtime wrappers:
+  - a UTF-8 BOM and an empty file are accepted, and a repeated key keeps its last value; comments, trailing commas and non-JSON constants stop dockerd;
+  - a runtime with non-empty `runtimeArgs` runs through a generated wrapper, `#!/bin/sh` then `<path> <args joined by spaces> $@`, with nothing quoted, so `/bin/sh` re-parses the line; with no arguments the path is the runtime binary itself;
+  - dockerd refuses to start when a runtime is named `runc`, sets both or neither of `path` and `runtimeType`, combines `runtimeArgs` with `runtimeType`, or when `default-runtime` names an undefined runtime that is not a containerd shim name (`io.containerd.kata.v2` is accepted and runs `containerd-shim-kata-v2`). A refused file reports no programs, because none run.
+- **Fail closed:** blocking gaps cover wrong value types, unknown runtime keys (including case variants such as `Path`), a runtime named `io.containerd.runc.v2`, shell metacharacters, spaces or empty arguments in a wrapper line (the argv is then not guessed), and over-limit input. `complete` is false whenever one is present, and no result is a safety verdict or authorizes a response.
+- **Validation:** `tests/test_docker_daemon.py` (14 tests); the cases marked native were each run through dockerd 29.9.3. Mutating the shell-metacharacter check makes its test fail.
+- **Remaining (#1521):** native collection of `daemon.json` and of the dockerd flags in its service unit (a flag that repeats a file directive stops dockerd), rootless `~/.config/docker/daemon.json`, PATH resolution, startup-inventory wiring, provenance, UI and AI classification.
+
 ### Per-user shell startup files contract — worker checkpoint #1057
 
 Contract increment only; the startup-awareness requirement remains incomplete.
@@ -8092,6 +8166,28 @@ event (medium, linking to `#servers/<id>/agent`) per enabled, enrolled server wh
 Remaining in #342: certificate expiry, metric history, configurable thresholds,
 preflight blockers and SMART/NVMe or kernel-error signals.
 
+Worker checkpoint (issue #1297, #342 configurable-threshold slice): administrators can
+set the low-resource notification trigger in Settings → Patch policy
+(`resource_attention_percent`, whole percent 1–50, default 10).
+
+- The producer triggers at or below the configured share of free disk space, free
+  inodes or available memory. An active category clears only above the trigger plus
+  5 points, so the hysteresis band keeps its width.
+- The fixed reason text names the configured percentage. The default reproduces the
+  earlier text byte for byte, so active events gain no revision on upgrade.
+- Changing the threshold keeps an active event's categories: the percentage is
+  normalised when the text is recovered. One reworded revision follows, and unknown
+  telemetry is still not recovery.
+- A missing or invalid stored value falls back to 10%, so a bad value never silences
+  the notice.
+- Saving uses the existing admin-only, CSRF-protected patch-settings API with strict
+  integer validation. A changed value records the before and after percentages in
+  the audit log. Older clients that omit the field keep the stored value.
+
+There is no schema, SMTP/webhook, health-classification, AI or response-authorization
+change. Known limit: the endpoint-agent view's advisory flags stay at 10%. Metric
+history, certificate expiry and SMART/NVMe or kernel-error signals remain in #342.
+
 ## Planned: complete UI rework with glass styling and extensive mascot use
 
 Requested roadmap addition (2026-10-29); not yet implemented as a complete rework.
@@ -8540,6 +8636,14 @@ server query/routing, unauthorized detail navigation, literal untrusted diagnost
 missing records and delayed-response races, plus actual 320/768/1440 renders.
 Shared glass navigation, readable responsive facts and existing mascot illustrations
 are reused. No new artwork or operational/approval controls are introduced.
+
+Roadmap A checkpoint [#1435](https://github.com/StealthCat/MrPatchy/issues/1435)
+computes the AI history shared-batch flag in one database read for the visible
+runs. It combines durable links and legacy score links and counts distinct server
+IDs so repeated package scores for one server count once. Startup adds a covering
+index for the legacy association on SQLite and MySQL. Tests cover pagination,
+older scores, duplicate links, the index upgrade and query plans. The broader
+faster-triage roadmap remains in progress.
 
 This is a partial screen-family migration. Investigation evidence/details, other
 AI control/loading states, the remaining finite UI inventory, full remote worker
@@ -11619,6 +11723,12 @@ It includes sent and uncertain rows from still-counted prior windows. The
 display uses reservation time because the ledger has no separate transmission
 timestamp. No call identifiers or diagnostic evidence are needed.
 
+Roadmap A checkpoint #1389 uses one ungrouped exact spend aggregate for budget
+admission and alert gates. The grouped dashboard still reports its status and
+reconciliation breakdown. Both queries share the ledger window predicate and
+count unknown unreleased rows conservatively. Tests verify the query shape and
+nano-dollar boundary on SQLite and MySQL. Production throughput remains open.
+
 The administrator API validates a trailing 1–90 day range and performs fixed-precision
 SQL aggregation without materializing individual ledger records. Result groups are
 bounded to four persisted reset/timezone combinations per requested day (at most 360),
@@ -12267,6 +12377,12 @@ body, call/run identifier or ledger record. It performs no provider or target tr
 `can_start_now` means only that these global gates are presently open: a call-specific
 conservative price quote, provider policy, finite concurrency, per-server pause and
 lifecycle checks remain authoritative and can still refuse work.
+
+[#1443](https://github.com/StealthCat/MrPatchy/issues/1443) keeps the displayed
+settings consistent within each Investigations status, shared AI controls and
+Settings response. Each request reads the saved configuration once and reuses
+it for its budget, rate and retry details. Live admission and response
+authorization still evaluate their own settings at execution.
 
 This is an API/control-plane checkpoint, not the complete queue/spend dashboard or
 faster-AI acceptance. UI integration, call-specific preview, provider-invoice truth,
@@ -12941,6 +13057,13 @@ Roadmap A/B: the daily cap is a spend control, and an exact fleet known-good hit
 - **Unchanged:** every subject that would call the provider keeps today's deferral, with no claim, run or reservation. The rate gate, provider backoff, pause, lifecycle, data-sharing and Refresh behavior are unchanged. If evidence changes between the probe and the worker's own lookup, the atomic `ai_budget.reserve()` still refuses the provider call, so nothing is sent or charged and the existing policy-wait deferral applies. No schema, API, UI, roles or response authorization change.
 - **Validation:** `tests/test_known_good_daily_cap_hit.py` has 8 tests. Five fail on main `c5c1504`: the exhausted cap, a quote below one reservation (the issue's reproduction), an older paid subject in front of a newer hit, pause then resume, and the probe itself. The other three pass both before and after: a paid subject, a Re-triage and a revoked candidate all stay held. The related SQLite admission, budget, claims, file-status, known-good, triage, retry, pause and worker-control selection passes (419 passed).
 - **Remaining:** ~~while the cap is closed, a hit behind more than 50 older eligible subjects in its verdict range is not found until the older ones clear.~~ Addressed by the #1241 worker checkpoint below. Oversized evidence still records #1002's error before any hit probe. MySQL was not run locally.
+
+Roadmap A/B checkpoint #1387 bounds full behavior reads in a closed-gate
+known-good probe. The pending and error index ranges return IDs and timestamps.
+Admission applies the existing mixed-range ordering before reading evidence for
+the selected window. A mixed-verdict fixture at a two-probe limit materializes
+two records where it previously loaded four. Cursor rotation, full evidence
+checks and free-only admission are retained. Production throughput remains open.
 
 ### Rotating free known-good hit probe window — worker checkpoint #1241 (roadmap A/B)
 
@@ -13816,6 +13939,7 @@ keepalived runs administrator-configured programs on VRRP state changes, health 
 - **Remaining:**
   - A differential run against the real binary. Executing the 2.2.8 binary was refused in this environment, so validation is traced source semantics.
 - **Acceptance:** stays incomplete until those are delivered.
+
 ### net-snmp snmpd program contract — worker checkpoint #1327 (roadmap F, increment 1)
 
 snmpd runs configured programs whenever an SNMP manager reads, or for writable entries sets, the object identifiers they serve. On Debian and Ubuntu it runs them as `Debian-snmp`. The `extend`, `exec`, `sh`, `pass` and `pass_persist` directives are a known persistence and remote-execution surface, and the startup inventory did not model them.
@@ -14300,3 +14424,62 @@ holds, plus a normal triage investigation and its provider admission check.
 They measure five projected columns on current main and one on the revised
 paths. The admin status still includes the reason and review revision. Fleet
 throughput and exact integrated-head measurements remain open.
+
+### OpenSSH client ssh_config command contract — Roadmap F checkpoint #1509
+
+- **Outcome:** `app/ssh_client_commands.py` is a pure contract with no I/O. It takes the captured `/etc/ssh/ssh_config`, every file its `Include` lines match (with owner and mode) and the observed glob expansions. It reports which local programs the system-wide client configuration makes `ssh` run, which also covers `scp`, `sftp`, `rsync -e ssh` and `git` over SSH, for every invoking user, root included:
+  - `Match exec` commands, which run through `$SHELL -c` while the configuration is being parsed;
+  - `ProxyCommand` (`$SHELL -c "exec …"`) and `LocalCommand` (gated on `PermitLocalCommand`);
+  - `KnownHostsCommand`, exec'd directly when its argv[0] is absolute;
+  - `PKCS11Provider`/`SmartcardDevice` and `SecurityKeyProvider` libraries.
+  
+  Each item has its file, line, enclosing `Host`/`Match`/include conditions and a status: `effective`, `fallback`, `conditional`, `shadowed`, `never_applies`, `not_permitted` or `never_runs_config_fatal`.
+- **Semantics:** taken from OpenSSH portable 10.6 source.
+  - `readconf.c`: `strdelim` keyword splitting with a single `=`, and the `argv_split(…, terminate_on_comment=1)` check. Command directives keep their raw remainder.
+  - First obtained value wins, and `none` counts as a value. `Host`/`Match` activation, including `Match all` and the quirk that `Match host x all` is accepted.
+  - `Include`: relative to `/etc/ssh`, glob matches sorted. A file is entered with the includer's activation state, which is restored afterwards. A file included from an inactive block is read with `SSHCONF_NEVERMATCH`.
+  - `match_cfg_line`: `exec` is skipped only after a failed earlier criterion on the same line. It still runs in files included from inactive blocks.
+  - `readconf.c`/`ssh.c`: a `ProxyCommand` after an effective `ProxyJump` never runs. OpenSSH 9.6 and 10.2 ignore it and use the jump host, and 10.6 exits with `inconsistent options`, so the conflict is reported as version-dependent.
+  - `sshconnect.c`/`misc.c`: `KnownHostsCommand` is split with `argv_split` and goes through `subprocess()`, which requires an absolute path.
+- **Fatal outcomes:** these are reported as `config_fatal` with file, line and reason, together with the `Match exec` commands that already ran before ssh exited:
+  - an unknown keyword (honouring `IgnoreUnknown`), invalid quotes, a missing argument, a bad `Match` condition, an invalid flag value, a `~` include path or a vanished glob match (ssh finishes the file, then exits);
+  - a group- or world-writable included file, or include nesting deeper than 16 (ssh exits at once).
+- **Fails closed:** each of these is a blocking gap:
+  - unobserved files, globs, text or include permissions;
+  - an included file owned by a non-root user, which is fatal for every user except that owner;
+  - `%`/`${}` include paths that depend on the invocation;
+  - a conditional `IgnoreUnknown`, quoted keywords, NUL bytes and over-limit input.
+- **Validation:** `tests/test_ssh_client_commands.py` has 86 test cases, counting parameter cases. They were run locally with a minimal pytest-compatible shim because PyPI is unreachable from this environment. They cover:
+  - the Debian `ssh_config.d` layout, glob order and first-value-wins;
+  - `Host` and `Match` classification, `Match exec` gating, and includes from inactive blocks;
+  - include inheritance and restoration;
+  - each fatal and gap path;
+  - `PermitLocalCommand` gating, `KnownHostsCommand` argv rules, providers and the `ProxyJump` conflict;
+  - an `argv_split` port table.
+  
+  `ruff` is clean. A differential run against a locally built `ssh -G` was not possible in this environment.
+- **Not modeled:** per-user `~/.ssh/config`, which is read first and wins (stated in `limits`); `-F`/`-o` overrides; evaluating `Host`/`Match` criteria other than `Host *`/`Match all`; validating values of directives the contract does not interpret; and `RemoteCommand`, which runs remotely.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:** agent collection of the files, globs and permissions, a catalog entry, package provenance, persistence, UI and AI classification.
+
+### polkit rules.d load-order contract — worker checkpoint #1411 (roadmap F)
+
+polkitd loads every `*.rules` JavaScript file from `/etc/polkit-1/rules.d` and `/usr/share/polkit-1/rules.d` at start and whenever either directory changes. Those rules decide which privileged actions unprivileged users may perform without authenticating, and `polkit.spawn()` runs commands as the polkitd user, so a planted rule is persistent privilege configuration. The startup inventory did not model these directories.
+
+- **Change:** the pure `app/polkit_rules.py` takes captured directory metadata (state, mode, owner, entries and followed symlink targets), the polkit version and the polkitd identity. It returns the files polkitd evaluates in load order, the reason every other entry is not loaded, and owner/writability observations. It performs no I/O and never reads or parses a rule.
+- **Fidelity:** semantics come from polkit 0.120–125, in both the mozjs and duktape backends. Both directories are read, with no shadowing, so a same-named file loads twice. Only the `.rules` suffix is checked; hidden and backup names still load. Files are sorted by basename with `strcmp` and then by full path, so `/etc` comes first. polkitd reads as `User=polkitd` without `CAP_DAC_OVERRIDE`, so files or directories that the polkitd account cannot read are skipped. A compile or evaluation error skips only that file.
+- **Fail closed:** blocking gaps cover these cases, and `origin` is `not_assessed`:
+  - an unobserved or unreadable directory, an incomplete listing, or an unobserved polkit version or polkitd identity;
+  - a version outside 0.120–125, or before 0.106, which uses `.pkla` files;
+  - POSIX ACLs;
+  - FIFOs, sockets and devices named `*.rules`;
+  - malformed, duplicate or over-limit input.
+
+  A symlinked rule loads only if polkitd can search every directory along its target path, so it is reported as `conditional`.
+- **Validation:** `tests/test_polkit_rules.py` has 13 tests. There is no live differential against a running polkitd yet.
+- **Unchanged:** schema, agent, scheduling, AI, roles and response authorization.
+- **Remaining:**
+  - a live differential;
+  - agent collection;
+  - a catalog entry, package provenance, persistence, UI and AI classification of rule contents;
+  - `.pkla` local-authority files for polkit 0.105 (Ubuntu 22.04).

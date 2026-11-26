@@ -13,7 +13,7 @@ from decimal import Decimal
 from contextvars import ContextVar
 from types import SimpleNamespace
 from time import perf_counter
-from sqlalchemy import String, Double, select, func, and_, or_, union_all
+from sqlalchemy import String, Double, select, func, and_, or_, union_all, literal, bindparam
 from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base, Session, Behavior, Host, Setting, config
 from .coordination import Lock
@@ -68,16 +68,30 @@ def owner_valid(s,owner,admitting=False):
     return True
 
 
+def _recovery_query():
+    runs = ai_runs.AIRun
+    expired = select(Claim.subject.label('claim_subject'), Claim.run_id.label('run_id')).where(
+        Claim.expires <= bindparam('expiry_cutoff', type_=Double))
+    has_claim = select(Claim.subject).where(Claim.run_id == runs.id).exists()
+    orphaned = select(literal(None, String(64)), runs.id).where(
+        runs.purpose == 'triage', runs.state == 'running', ~has_claim)
+    # The expired branch already includes runs whose last claim is about to be
+    # deleted. Select only keys in each branch before loading the recovery rows.
+    recovery = union_all(expired, orphaned).subquery()
+    return (select(Claim, runs).select_from(recovery)
+            .outerjoin(Claim, Claim.subject == recovery.c.claim_subject)
+            .outerjoin(runs, runs.id == recovery.c.run_id))
+
+
+_RECOVERY_QUERY = _recovery_query()
+
+
 def reconcile(s,now):
     # Called under ai-triage. Never interrupt a different worker's live lease.
-    runs=ai_runs.AIRun
-    expired=select(Claim,runs).outerjoin(runs,runs.id==Claim.run_id).where(Claim.expires<=now)
-    for claim,run in s.execute(expired):
-        _interrupt_run(s,run);s.delete(claim)
-    s.flush()
-    live=select(Claim.run_id)
-    for run in s.scalars(select(runs).where(runs.purpose=='triage',runs.state=='running',runs.id.not_in(live))):
-        _interrupt_run(s,run)
+    for claim, run in s.execute(_RECOVERY_QUERY, {'expiry_cutoff': now}):
+        _interrupt_run(s, run)
+        if claim is not None:
+            s.delete(claim)
 
 
 def interrupt(s,run_id):
@@ -138,7 +152,7 @@ def _elect_host(s,election_filters,live_counts,signature,now):
         func.min(eligible.c.first_seen),eligible.c.host_id).limit(1))
 
 
-def _oldest(s,host_id,signature,now):
+def _oldest_subject(s,host_id,signature,now):
     # Within the elected host, keep each verdict as an equality range so the
     # admission index can skip retained completed history and satisfy
     # oldest-first ordering; the oldest member of either range is the host's
@@ -152,8 +166,8 @@ def _oldest(s,host_id,signature,now):
             *filters,Behavior.verdict==verdict).order_by(Behavior.first_seen,Behavior.id).limit(1).subquery()
         oldest.append(select(candidate.c.id,candidate.c.first_seen))
     candidates=union_all(*oldest).subquery()
-    return s.scalar(select(Behavior).join(candidates,candidates.c.id==Behavior.id).order_by(
-        candidates.c.first_seen,candidates.c.id).limit(1))
+    # The selected row is loaded with fresh evidence under the host queue gate.
+    return s.scalar(select(candidates.c.id).order_by(candidates.c.first_seen,candidates.c.id).limit(1))
 
 
 def _free_hit(s,model,election_filters):
@@ -185,13 +199,20 @@ def _free_hit(s,model,election_filters):
         return or_(Behavior.first_seen>seen,and_(Behavior.first_seen==seen,Behavior.id>subject))
 
     def window(*bounds,limit):
-        rows=[]
+        ranges=[]
         for verdict in ('pending','error'):
-            rows.extend(s.scalars(select(Behavior).outerjoin(
+            ranked=select(Behavior.id,Behavior.first_seen).outerjoin(
                 ai_retry.TriageRetry,ai_retry.TriageRetry.subject==Behavior.id).where(
                 *election_filters,*bounds,Behavior.verdict==verdict).order_by(
-                Behavior.first_seen,Behavior.id).limit(limit)))
-        return sorted(rows,key=key)[:limit]
+                    Behavior.first_seen,Behavior.id).limit(limit).subquery()
+            ranges.append(select(ranked.c.id,ranked.c.first_seen))
+        # Rank the narrow ranges together before fetching any full evidence.
+        # Python keeps the existing cross-range tie break on both databases.
+        selected=sorted(s.execute(union_all(*ranges)),key=key)[:limit]
+        subjects=[row.id for row in selected]
+        if not subjects:return []
+        rows={row.id:row for row in s.scalars(select(Behavior).where(Behavior.id.in_(subjects)))}
+        return [rows[subject] for subject in subjects if subject in rows]
 
     candidates=s.scalar(select(func.count()).select_from(known_good.Entry))
     cursor=_free_hit_cursor
@@ -314,13 +335,13 @@ def acquire(owner=None):
                 if free_only:
                     row=_free_hit(s,cfg['ai_model'],election_filters)
                     if not row:return None
-                    host_id=row.host_id
+                    subject=row.id;host_id=row.host_id
                 else:
                     host_id=_elect_host(s,election_filters,live_counts,signature,now)
                     if not host_id:return None
-                    row=_oldest(s,host_id,signature,now)
-                    if not row:return None
-                admitted=_admit(s,row,cfg,secret,owner,signature,now,free_only,claim_lock_wait)
+                    subject=_oldest_subject(s,host_id,signature,now)
+                    if subject is None:return None
+                admitted=_admit(s,subject,host_id,cfg,secret,owner,signature,now,free_only,claim_lock_wait)
                 if admitted is not _UNFUNDED:
                     # Only a real lease carries the measured lock hold time.
                     lease=admitted
@@ -343,19 +364,18 @@ def acquire(owner=None):
 _UNFUNDED=object()
 
 
-def _admit(s,row,cfg,secret,owner,signature,now,free_only,claim_lock_wait):
+def _admit(s,subject,host_id,cfg,secret,owner,signature,now,free_only,claim_lock_wait):
     from . import ai_budget,ai_pricing,known_good
     # Approval writes use this host queue gate. Re-read after acquiring
     # it, including on MySQL repeatable-read connections.
-    subject=row.id;host_id=row.host_id
     try:
         with host_lifecycle.activity([host_id],'queue'):
             s.rollback();row=s.get(Behavior,subject)
             if not row or row.approved or row.verdict not in ('pending','error'):return None
             # Legacy/test behavior rows may predate a retained Host row;
             # only a present host can carry a lifecycle transition.
-            host=s.get(Host,host_id)
-            if host is not None and not host_lifecycle.active(host):return None
+            lifecycle=s.execute(select(Host.enabled,Host.deleted_at).where(Host.id==host_id)).one_or_none()
+            if lifecycle is not None and not host_lifecycle.active(lifecycle):return None
             if free_only:
                 # Re-check under the host queue gate. A subsequent cache
                 # miss still goes through paid admission at the provider boundary.

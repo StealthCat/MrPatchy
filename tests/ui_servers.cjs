@@ -85,7 +85,8 @@ module.exports=async(page,capture)=>{
   await page.setViewportSize({width:1440,height:1000});
   await page.getByRole('link',{name:'Summary',exact:true}).click();await page.locator('[data-overview-section=summary]').waitFor();
 
-  assert.equal(await tabs.locator(':scope > a').count(),4);
+  assert.deepEqual(await tabs.locator(':scope > a').allTextContents(),
+   ['Overview','Packages','Integrity findings','Security','Settings']);
   const summary=tabs.locator('summary');
   await summary.focus();await page.keyboard.press('Enter');
   assert.equal(await tabs.locator('.section-menu').evaluate(e=>e.open),true);

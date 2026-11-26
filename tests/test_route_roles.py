@@ -166,6 +166,7 @@ EXPECTED_ROLES = {
     ('GET','/api/spool-health'):'viewer',
     ('GET','/api/hosts/{host_id}/spool-health'):'viewer',
     ('GET','/api/hosts/{host_id}/summary'):'viewer',
+    ('GET','/api/hosts/{host_id}/integrity-findings'):'viewer',
     ('GET','/api/identity'):'self-service',
     ('POST','/api/identity/mfa'):'self-service',
     ('POST','/api/identity/mfa/confirm'):'self-service',

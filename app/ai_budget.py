@@ -76,25 +76,26 @@ def _state(session,cfg,now,*,include_reconciliation=False):
     unreconciled_count=0
     oldest_reservation=None
     if enabled:
-        # At most five result rows, regardless of receipt amounts or unknown statuses.
         # SQLite's exact aggregate preserves the previous nine-place Numeric reader;
         # MySQL performs the sum in native DECIMAL without a float intermediate.
         amount=case((and_(BudgetEntry.status=='settled',BudgetEntry.actual_usd.is_not(None)),BudgetEntry.actual_usd),else_=BudgetEntry.reservation_usd)
-        bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
-        total=_aggregate(session,amount)
         # A row also counts while the window it was admitted under (its own reset_at) is still
         # open, so changing the reset timezone cannot hand back spend from that window.
-        metrics=(func.count(),func.min(BudgetEntry.created)) if include_reconciliation else ()
-        query=select(bucket,total,*metrics).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
-            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released').group_by(bucket)
-        for key,value,*summary in session.execute(query):
-            total=Decimal(value or 0);counted+=total
-            if key in groups:groups[key]+=total
-            if summary and key in ('sent','uncertain'):
-                call_count,oldest=summary
-                unreconciled_count+=call_count
-                if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
-                    oldest_reservation=oldest
+        query=select(_aggregate(session,amount)).where(or_(and_(BudgetEntry.created>=start,BudgetEntry.created<reset),
+            and_(BudgetEntry.reset_at>now,BudgetEntry.created<=now)),BudgetEntry.status!='released')
+        if include_reconciliation:
+            bucket=case((BudgetEntry.status.in_(tuple(groups)),BudgetEntry.status),else_='other')
+            detail=query.add_columns(bucket,func.count(),func.min(BudgetEntry.created)).group_by(bucket)
+            for value,key,call_count,oldest in session.execute(detail):
+                total=Decimal(value or 0);counted+=total
+                if key in groups:groups[key]=total
+                if key in ('sent','uncertain'):
+                    unreconciled_count+=call_count
+                    if oldest is not None and (oldest_reservation is None or oldest<oldest_reservation):
+                        oldest_reservation=oldest
+        else:
+            # Admission and alert gates only need the counted total.
+            counted=Decimal(session.execute(query).scalar_one() or 0)
     # Settled rows count actual cost; every other unreleased row, including an unrecognized
     # status, counts its safe ceiling so unknown durable state never becomes zero spend.
     cap=Decimal(str(cfg['ai_daily_cap_usd']))
@@ -214,11 +215,20 @@ def reconcile(identifier,values):
 
 def mark_uncertain(identifier,reason):
     if not identifier:return
+    ledger = BudgetEntry.__table__
     with Lock('ai-shared-budget'):
         with Session() as session:
-            row=session.get(BudgetEntry,identifier)
-            if row and row.status=='sent':
-                row.status='uncertain';row.updated=time.time();row.reason=str(reason)[:500];session.commit()
+            state = ledger.c.status
+            # Only an exact sent state can transition, even on MySQL's default collation.
+            if session.get_bind().dialect.name in ('mysql', 'mariadb'):
+                sent = cast(state, LargeBinary) == b'sent'
+            else:
+                sent = state.collate('BINARY') == 'sent'
+            result = session.execute(ledger.update().where(ledger.c.id == identifier, sent).values(
+                status='uncertain', updated=time.time(), reason=str(reason)[:500],
+            ))
+            if result.rowcount == 1:
+                session.commit()
 
 
 def _survives_reset(now,reset,amount):
@@ -226,8 +236,9 @@ def _survives_reset(now,reset,amount):
     return and_(BudgetEntry.created<=now,BudgetEntry.reset_at>reset,amount>0)
 
 
-def status(session,now=None):
-    now=time.time() if now is None else now;cfg=config(session)
+def status(session, now=None, *, settings=None):
+    now = time.time() if now is None else now
+    cfg = config(session) if settings is None else settings
     enabled,name,start,reset,groups,counted,cap,reconciliation=_state(session,cfg,now,include_reconciliation=True)
     unreconciled_count,oldest=reconciliation
     # A timezone change can leave a previously admitted window open beyond the
@@ -242,7 +253,8 @@ def status(session,now=None):
     uncertain=groups['sent']+groups['uncertain'];reserved=groups['reserved'];settled=groups['settled']
     return {'mode':cfg['ai_control_mode'],'enabled':enabled,'timezone':name,'cap_usd':_money(cap),
         'counted_usd':_money(counted),'settled_usd':_money(settled),'reserved_usd':_money(reserved),
-        'uncertain_usd':_money(uncertain),'remaining_usd':_money(max(Decimal(0),cap-counted)),
+        'uncertain_usd':_money(uncertain),'sent_usd':_money(groups['sent']),
+        'uncertain_outcome_usd':_money(groups['uncertain']),'remaining_usd':_money(max(Decimal(0),cap-counted)),
         'unreconciled_call_count':unreconciled_count,'oldest_unreconciled_reservation_at':oldest,
         'next_reset':reset if enabled else None,'next_reset_authoritative':enabled and not overlapping,
         'pricing_version':ai_pricing.VERSION,'pricing_source':ai_pricing.SOURCE,
