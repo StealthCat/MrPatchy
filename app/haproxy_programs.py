@@ -24,7 +24,8 @@ Ported from HAProxy 2.8:
   SHARP | WORD_EXPAND``. Words split on unquoted ``isspace`` and ``#`` starts a
   comment. ``"``/``'`` quote, and backslash handles ``\\ `` ``\\\\`` ``\\t``
   ``\\n`` ``\\r`` ``\\#`` ``\\'`` ``\\"`` ``\\$`` and ``\\xHH`` (anything else
-  stays literal). ``$VAR``/``${VAR}`` expand inside double quotes only. At most
+  stays literal). Words are C strings, so a NUL from ``\\x00`` ends the word.
+  ``$VAR``/``${VAR}`` expand inside double quotes only. At most
   64 words are allowed, and a trailing empty word is not counted.
 * ``cfgcond.c``: a ``.if`` term that ``strtol`` reads completely is a constant
   condition.
@@ -216,7 +217,8 @@ def parse_line(line: str, pseudo: dict[str, str | None]) -> list[str]:
             i += 1
     if quote:
         raise _TokenError('quote_unmatched')
-    words = [''.join(w) for w in out]
+    # Words are C strings: a NUL produced by \x00 ends the word, as strdup and strcmp see it.
+    words = [''.join(w).split('\0', 1)[0] for w in out]
     if words and words[-1] == '':
         words.pop()  # parse_line does not count a trailing empty word
     return words

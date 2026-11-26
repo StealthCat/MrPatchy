@@ -152,3 +152,18 @@ def test_input_limits():
     result = run(GLOBAL + ''.join(f'.warning "w{i}" extra\n' for i in range(40)))
     assert len(result['gaps']) == hp.MAX_GAPS + 1 and result['gaps'][-1]['code'] == 'gaps_truncated'
     assert result['not_a_verdict'] and result['unobserved']
+
+
+def test_escaped_nul_ends_the_c_string_word():
+    # Native run (Ubuntu haproxy 2.8.30-0ubuntu0.24.04.2, ``haproxy -W`` as root):
+    # HAProxy's words are C strings, so a NUL produced by \x00 cuts the word there,
+    # and a word that is only \x00 is empty and ends the command's argv.
+    assert hp.parse_line('a "ab\\x00cd" b\\x00 \\x00', {}) == ['a', 'ab', 'b']
+    result = run(GLOBAL + 'program p1\n    command rec.sh p1 "ab\\x00cd" two\n'
+                 'program p2\n    command rec.sh p2 x "\\x00" y\n')
+    assert argvs(result) == {'p1': ['rec.sh', 'p1', 'ab', 'two'], 'p2': ['rec.sh', 'p2', 'x']}
+    assert result['complete'] is True and result['gaps'] == []
+    # "'command' expects a command": rejected, so the contract is incomplete.
+    result = run(GLOBAL + 'program p3\n    command "\\x00" x\n')
+    assert {'program_malformed', 'program_without_command'} <= codes(result)
+    assert result['complete'] is False and argvs(result) == {'p3': None}
