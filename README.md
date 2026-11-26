@@ -782,11 +782,17 @@ provider invoices. Administrators can filter them by the exact IANA timezone rec
 
 The bundled public price catalog has an exact reviewed-at and expiry window shown in
 AI Settings. Daily-cap and combined-cap admission fails closed at the expiry boundary
-before consuming smooth-rate capacity or contacting the provider. A reviewed catalog
-update is therefore required before **2026-12-16 00:00 UTC** for capped calls to
-continue. During the final seven days, administrators receive a durable medium-severity
+before consuming smooth-rate capacity or contacting the provider. To continue past
+the bundled catalog's expiry (**2026-12-16 00:00 UTC**) without a release, an
+administrator can **Review and confirm prices** in AI Settings: an audited confirmation
+of the catalogued OpenAI token rates, after checking them against OpenAI's pricing page,
+starts a new validity window of 1 to 30 days. The newer of the bundled and confirmed
+catalogs applies; confirmation never adds models or tiers, and affects only calls admitted
+after it. If the stored catalog cannot be read, capped admission is blocked and Settings
+shows the catalog as unavailable rather than falling back to older rates. During the final seven days, administrators receive a durable medium-severity
 operational and in-app warning; it escalates and reopens delivery at expiry, then
-resolves after a verified refresh or when applicable cap enforcement is disabled.
+directs administrators to re-confirm prices in Settings, and
+resolves after a verified refresh or confirmation, or when applicable cap enforcement is disabled.
 Rate-only, unthrottled, legacy and globally disabled AI modes retain their existing
 controls and do not receive this spend-guard alert.
 
