@@ -354,6 +354,34 @@ def test_legacy_allowances_match_actual_admission_refusals(admin, monkeypatch):
     assert limits['triage']['state'] == 'exhausted' and limits['triage']['next_at'] == now - 30 + 3600
 
 
+@pytest.mark.parametrize('advance, limit, expected', [
+    (0, 2, (4, True, 2_000_003_550.0)),
+    (3550, 2, (1, False, None)),
+    (0, 0, (4, True, None)),
+])
+def test_legacy_triage_status_reads_both_counters_in_one_statement(admin, advance, limit, expected):
+    from app.db import engine
+
+    now = 2_000_000_000.0
+    add_history(attempts=(now - 3000, now - 2900, now - 100, now - 3600),
+                triage=(now - 2000, now - 1000, now - 50, now - 40),
+                scoring=(now - 5, now - 4, now - 3, now - 2, now - 1))
+    statements = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(engine, 'before_cursor_execute', capture)
+    try:
+        with Session() as session:
+            status = ai_control_status.legacy_triage_allowance(session, limit, now + advance)
+    finally:
+        event.remove(engine, 'before_cursor_execute', capture)
+
+    assert status == expected
+    assert len(statements) == 1
+
+
 def test_legacy_window_count_and_deadline_use_one_statement(admin):
     from sqlalchemy import event
 
