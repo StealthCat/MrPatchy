@@ -9,12 +9,14 @@ module.exports=async(page,capture)=>{
    {purpose:'update_scoring',call_count:1,settled_usd:'0',reserved_usd:'0',uncertain_usd:'0.4',counted_usd:'0.4'},
    {purpose:'<img src=x onerror=window.__purposeInjected=true>',call_count:1,settled_usd:'0',reserved_usd:'0',uncertain_usd:'0',counted_usd:'0.5'},
    {purpose:'unattributed',call_count:1,settled_usd:'0.05',reserved_usd:'0.03',uncertain_usd:'0',counted_usd:'0.111'}]};
+ const split={...capped,groups:capped.groups.map((row,index)=>({...row,
+  sent_usd:index===0?'0.3':'0',uncertain_outcome_usd:index===1?'0.4':'0'}))};
  const replies=[
   {json:capped},
   {status:503,json:{detail:'Spend fixture temporarily unavailable.'}},
   {json:{...capped,mode:'rate',enabled:false,timezone:null,window_start:null,next_reset:null,call_count:0,counted_usd:'0',groups:[]}},
   {json:{...capped,timezone:'UTC',call_count:0,counted_usd:'0',groups:[]}},
-  {json:{...capped,next_reset_authoritative:false}},
+  {json:{...split,next_reset_authoritative:false}},
  ];
  let reads=0;
  const handler=route=>route.fulfill(replies[Math.min(reads++,replies.length-1)]);
@@ -57,6 +59,12 @@ module.exports=async(page,capture)=>{
   assert.equal(await card.locator('img[src=x]').count(),0);
   assert.equal(await refresh.isEnabled(),true);
   assert.equal(reads,5);
+  await card.getByRole('columnheader',{name:'Unreconciled usage'}).waitFor();
+  const splitRows=await card.locator('tbody tr').evaluateAll(list=>list.map(row=>[...row.cells].slice(4).map(cell=>cell.innerText)));
+  assert.deepEqual(splitRows,[
+   ['Sent: $0.3\nUncertain: $0','$0.625'],['Sent: $0\nUncertain: $0.4','$0.4'],
+   ['Sent: $0\nUncertain: $0','$0.5'],['Sent: $0\nUncertain: $0','$0.111'],
+  ]);
   // Narrow screens: the card stays inside the viewport and its table scrolls in its own region.
   const size=page.viewportSize();
   await page.setViewportSize({width:320,height:800});

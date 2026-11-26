@@ -36,6 +36,46 @@ def test_investigation_limit_value_narrows_a_non_object_policy(value):
     assert ai_policy.investigation_limit_value(value) == ai_policy.MIN_CONCURRENCY
 
 
+def test_administrator_can_repair_a_bad_revision_without_resuming_ai(admin):
+    seed()
+    corrupt({'paused': 'fixture-private-value', 'revision': ['not a revision']})
+    current = admin.get(BASE)
+    assert current.status_code == 200
+    policy = current.json()
+    assert policy['paused'] and policy['needs_repair']
+    assert len(policy['revision']) == 36
+    assert 'fixture-private-value' not in current.text and 'not a revision' not in current.text
+    corrupt({'paused': 0, 'revision': 1234})
+    body = {'paused': True, 'expected_revision': policy['revision'],
+            'reason': 'Repair the malformed policy and keep server AI paused'}
+    rejected = admin.put(BASE, json=body)
+    assert rejected.status_code == 400 and 'AI state changed' in rejected.json()['detail']
+    body['expected_revision'] = admin.get(BASE).json()['revision']
+    repaired = admin.put(BASE, json=body)
+    assert repaired.status_code == 200
+    assert repaired.json()['paused'] is True
+    assert repaired.json()['needs_repair'] is False
+    with Session() as s:
+        assert s.get(Setting, ai_policy.PREFIX + 'web').value['paused'] is True
+        assert s.scalar(select(Audit.id).where(Audit.action == 'server AI policy repaired'))
+
+
+def test_api_save_with_resume_on_a_repair_revision_is_audited_as_resume(admin):
+    # The panel always repairs to paused; the API still accepts an audited
+    # resume against a repair revision, as documented in SECURITY_IMPLEMENTATION.
+    seed()
+    corrupt({'paused': 'fixture-private-value', 'revision': ['not a revision']})
+    policy = admin.get(BASE).json()
+    assert policy['needs_repair']
+    resumed = admin.put(BASE, json={'paused': False, 'expected_revision': policy['revision'],
+                                    'reason': 'Replace the malformed policy and resume server AI'})
+    assert resumed.status_code == 200
+    assert resumed.json()['paused'] is False and resumed.json()['needs_repair'] is False
+    with Session() as s:
+        assert s.scalar(select(Audit.id).where(Audit.action == 'server AI resumed'))
+        assert not s.scalar(select(Audit.id).where(Audit.action == 'server AI policy repaired'))
+
+
 def test_one_corrupt_policy_does_not_stop_automatic_plans_for_other_servers(admin, monkeypatch):
     now = seed()
     with Session() as s:

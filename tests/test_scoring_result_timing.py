@@ -2,6 +2,7 @@
 import json
 import re
 import time
+from types import SimpleNamespace
 import pytest
 import sqlalchemy.orm
 from sqlalchemy import event, select
@@ -84,6 +85,45 @@ def test_admission_timing_tracks_batch_selection_and_commit_before_provider(admi
     assert result.json()['stages']['admission'] == {
         'samples': 1, 'errors': 0, 'p50_ms': 125.0, 'p95_ms': 125.0,
     }
+
+
+@pytest.mark.parametrize(('offsets', 'expected'), [
+    ((-80, -20), 80_000.0),
+    ((0, 0), 0.0),
+    ((None, -20), None),
+    ((1, -20), None),
+])
+def test_oldest_update_age_only_uses_the_admitted_batch(admin, monkeypatch, offsets, expected):
+    seed(count=3)
+    now = int(time.time())
+    monkeypatch.setattr(update_scores, 'time', SimpleNamespace(time=lambda: now))
+    with Session.begin() as s:
+        # The oldest package already has an exact completed score and is skipped.
+        oldest = s.get(Package, 'persist-host:pkg0')
+        oldest.available_since = now - 2000
+        key = update_scores.identity(s.get(Host, oldest.host_id), oldest)
+        s.add(update_scores.UpdateScore(id=key, host_id=oldest.host_id, name=oldest.name,
+                                        installed='1', candidate='2', state='complete', score=40))
+        for index, offset in enumerate(offsets, 1):
+            s.get(Package, f'persist-host:pkg{index}').available_since = 0 if offset is None else now + offset
+
+    requests = []
+
+    def record_request(payload, key):
+        requests.extend(json.loads(payload['input']))
+        return reply(payload, key)
+
+    monkeypatch.setattr(ai, 'request', record_request)
+    update_scores.run_one()
+    assert len(requests) == 2 and {item['package'] for item in requests} == {'pkg1', 'pkg2'}
+    assert all('available_since' not in item and 'oldest_update_age' not in item for item in requests)
+    assert score_states() == ['complete', 'complete', 'complete']
+    summary = admin.get('/api/ai/triage/timings', params={'purpose': 'update_scoring'})
+    assert summary.status_code == 200
+    assert summary.json()['stages']['oldest_update_age'] == {
+        'samples': int(expected is not None), 'errors': 0, 'p50_ms': expected, 'p95_ms': expected,
+    }
+    assert 'oldest_update_age' not in admin.get('/api/ai/triage/timings').json()['stages']
 
 
 def test_idle_scoring_does_not_record_an_admission_sample(admin, monkeypatch):
