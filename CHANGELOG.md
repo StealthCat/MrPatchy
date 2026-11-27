@@ -1,3 +1,9 @@
+## 1.123.0 — 2026-11-25
+
+1. [PR #1653](https://github.com/StealthCat/MrPatchy/pull/1653): Agents collect the Dovecot configuration directory `/etc/dovecot` as built-in startup scope, recording metadata and SHA-256 only. Changes to the service executables the root master process starts now appear in startup baselines. Earlier baselines stay comparable, and saved custom paths inside the directory stay valid. Compatibility: older agents keep working. After the agent update, existing baselines show the directory as newly in scope until an administrator approves a new baseline. Refs #1620.
+
+Integrated through [PR #1658](https://github.com/StealthCat/MrPatchy/pull/1658). This source update does not publish a Docker image.
+
 ## 1.122.0 — 2026-11-25
 
 1. [PR #1647](https://github.com/StealthCat/MrPatchy/pull/1647): Startup Files shows which programs the kernel's request-key upcall runs as root. For each file `/sbin/request-key` reads, it lists the rule patterns, the command, which inputs the requester controls and whether the rule runs, plus the lines that make lookups abort. Agents parse only files request-key reads, from bytes they already hash, and run nothing. The controller strictly validates the report. Parsed detail stays out of baseline comparison. Compatibility: no schema, auth or response-authorization change; older agents show as not parsed. Increment 3 of #1632.
