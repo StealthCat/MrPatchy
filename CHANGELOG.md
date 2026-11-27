@@ -1,3 +1,9 @@
+## 1.132.1 — 2026-11-25
+
+1. [PR #1692](https://github.com/StealthCat/MrPatchy/pull/1692): The optional native AI benchmark workflow also compares serial and parallel triage under a combined rate throttle and daily spend cap, on both SQLite and MySQL. Compatibility: optional CI workflow only. It keeps `contents: read`, with no schedule and no secrets. Fixes #1691.
+
+Integrated through [PR #1695](https://github.com/StealthCat/MrPatchy/pull/1695). This source update does not publish a Docker image.
+
 ## 1.132.0 — 2026-11-25
 
 1. [PR #1678](https://github.com/StealthCat/MrPatchy/pull/1678): Agents hash PostgreSQL cluster configuration in `/etc/postgresql` (Debian family) as built-in startup scope. Changes to `archive_command`, preload libraries and similar settings now show against a baseline. The RPM data directory and `postgresql.auto.conf` are not collected; this is disclosed as a coverage gap, and they can be added as custom paths. Compatibility: older agents keep working. After the agent update, existing baselines show the directory as newly in scope until an administrator approves a new baseline. Increment 2 of #1597.
