@@ -10,7 +10,7 @@ import httpx
 import pytest
 from sqlalchemy import select,event
 from app import ai, ai_claims, ai_runs, ai_assessments, ai_policy, ai_retry, host_lifecycle, worker, worker_registry
-from app.db import Session, Host, Behavior, Setting,engine
+from app.db import Session, Host, Behavior, Package, Setting,engine
 from app.security import seal
 
 
@@ -691,9 +691,13 @@ if lease:
 def test_scheduler_bounds_slots_alternates_purposes_and_drains(admin,monkeypatch,capacity,shutdown):
     from concurrent.futures import Future
     from app import persistence,response_monitor,service_monitor,execution_scans
+    monkeypatch.setattr(worker.update_scores, '_MEMO', {})
     with Session() as session:
         session.merge(Setting(key='config', value={'ai_enabled': True, 'ai_updates_enabled': True,
                                                    'ai_model': 'fixture-model'}))
+        session.add(Host(id='score-host', name='Scoring fixture', address='192.0.2.1', fingerprint=''))
+        session.add(Package(id='score-host:fixture', host_id='score-host', name='fixture',
+                            installed='1', candidate='2'))
         session.commit()
     monkeypatch.setenv('MRPATCHY_AI_CONCURRENCY',str(capacity))
     for module in (worker.scheduling,worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
