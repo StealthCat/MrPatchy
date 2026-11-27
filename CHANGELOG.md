@@ -1,3 +1,9 @@
+## 1.119.0 — 2026-11-25
+
+1. [PR #1639](https://github.com/StealthCat/MrPatchy/pull/1639): Agents hash `/etc/request-key.conf` and the `/etc/request-key.d` drop-in directory as built-in startup files, because the kernel's key upcall runs the programs they name as root. Earlier baselines stay comparable. Saved custom paths inside the newly built-in directory stay valid, are inventoried once and are not marked as newly in scope. The coordinator resolved a conflict with #1631 in `app/startup_inventory.py`, keeping both sides. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Refs #1632.
+
+Integrated through [PR #1642](https://github.com/StealthCat/MrPatchy/pull/1642). This source update does not publish a Docker image.
+
 ## 1.118.0 — 2026-11-25
 
 1. [PR #1631](https://github.com/StealthCat/MrPatchy/pull/1631): Startup Files shows the `kdump_pre`, `kdump_post`, `kdump_emergency` and `core_collector` programs that `/etc/kdump.conf` makes kdump run as root after a crash, in capture order. When kdumpctl would refuse the configuration, it shows why instead. Updated agents parse the hashed file; nothing in it is run. It also fixes a kdump contract crash on a whitespace-only `core_collector` value. Compatibility: no schema, auth or response-authorization change. Increment 3 of #1538.
