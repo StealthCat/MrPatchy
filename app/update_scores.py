@@ -7,7 +7,7 @@ from time import perf_counter
 from typing import NamedTuple
 from sqlalchemy import String, Text, Integer, Double, Index, select, tuple_, and_, or_, update
 from sqlalchemy.orm import Mapped, load_only, mapped_column
-from sqlalchemy import Boolean, column, false, literal, true
+from sqlalchemy import Boolean, column, literal, true
 from . import host_lifecycle
 from .db import Base, Session, Host, Package, Setting, config
 from . import ai, ai_runs, ai_policy, ai_retry
@@ -252,12 +252,12 @@ def _cold_scoring_work(session):
     return session.scalar(select(or_(_running_score_exists(), _scoring_candidates_exist())))
 
 
-def _legacy_scoring_allowed(settings, now):
+def _legacy_scoring_blocked(settings, now):
     limit = math.ceil(settings['ai_update_hourly_limit'])
     if limit <= 0:
-        return false()
+        return true()
     run = ai_runs.AIRun
-    return ~select(run.started).where(
+    return select(run.started).where(
         run.purpose == 'update_scoring', run.started > now - 3600,
     ).offset(limit - 1).limit(1).exists()
 
@@ -270,7 +270,7 @@ def needs_dispatch(session):
     if settings['ai_control_mode'] == 'legacy':
         work = true() if _MEMO else _scoring_candidates_exist()
         # Reconcile interrupted runs even when no new scoring is allowed.
-        allowed_work = and_(_legacy_scoring_allowed(settings, time.time()), work)
+        allowed_work = and_(~_legacy_scoring_blocked(settings, time.time()), work)
         return session.scalar(select(or_(_running_score_exists(), allowed_work)))
     return bool(_MEMO) or _cold_scoring_work(session)
 
@@ -299,7 +299,7 @@ def run_one():
             cfg=config(s);secret=s.get(Setting,'openai_key');now=time.time()
             if not cfg['ai_enabled'] or not cfg['ai_updates_enabled'] or not cfg['ai_model'] or not secret:return
             signature=ai_retry.configuration_signature(cfg['ai_model'],secret.value)
-            if cfg['ai_control_mode'] == 'legacy' and not s.scalar(select(_legacy_scoring_allowed(cfg, now))):
+            if cfg['ai_control_mode'] == 'legacy' and s.scalar(select(_legacy_scoring_blocked(cfg, now))):
                 return
             admission_started = perf_counter()
             host_ids = set()
