@@ -1,0 +1,180 @@
+{
+  "fixture_only": true,
+  "source_commit": "20c950d5bbbfce78aa8cbf42b36712d62ca68b5c",
+  "execution": "parallel",
+  "concurrency": 4,
+  "provider_delay_ms": 150,
+  "ssh_delay_ms": 50,
+  "persistence_delay_ms": 15,
+  "queue_age_seconds": 2,
+  "runs": 8,
+  "provider_calls": 12,
+  "fixture_hosts": 8,
+  "single_server_slots": null,
+  "peak_provider_requests": 3,
+  "database": "mysql",
+  "database_version": "8.4.13",
+  "retained_history_rows": 1000,
+  "connections": 3,
+  "elapsed_seconds": 3.434,
+  "runs_per_second": 2.33,
+  "workload_fingerprint": {
+    "version": 1,
+    "sha256": "9014ae6c2139f0875c424df4f876c657b07fd161ce04d408227066f1c8273a89"
+  },
+  "persisted_assessments": {
+    "subjects": 8,
+    "input_stages": 12,
+    "follow_up_subjects": 4
+  },
+  "ai_control_mode": "daily_cap",
+  "fixture_budget": {
+    "pricing_version": "synthetic-v1",
+    "cap_usd": 10,
+    "timezone": "UTC",
+    "settled_calls": 12,
+    "settled_microusd": 240
+  },
+  "stages": {
+    "run": {
+      "count": 8,
+      "p50_ms": 1411.771,
+      "p95_ms": 2041.029
+    },
+    "one_stage": {
+      "count": 4,
+      "p50_ms": 1206.275,
+      "p95_ms": 1436.848
+    },
+    "two_stage": {
+      "count": 4,
+      "p50_ms": 1708.221,
+      "p95_ms": 2041.029
+    },
+    "provider": {
+      "count": 12,
+      "p50_ms": 303.062,
+      "p95_ms": 431.189
+    },
+    "ssh_evidence": {
+      "count": 4,
+      "p50_ms": 50.089,
+      "p95_ms": 50.13
+    },
+    "admission": {
+      "count": 8,
+      "p50_ms": 204.816,
+      "p95_ms": 391.241
+    },
+    "queue_age": {
+      "count": 8,
+      "p50_ms": 2929.588,
+      "p95_ms": 4197.378
+    },
+    "executor_wait": {
+      "count": 8,
+      "p50_ms": 611.786,
+      "p95_ms": 2032.886
+    },
+    "receipt_persistence": {
+      "count": 12,
+      "p50_ms": 24.94,
+      "p95_ms": 135.583
+    },
+    "usage_persistence": {
+      "count": 12,
+      "p50_ms": 24.476,
+      "p95_ms": 35.552
+    },
+    "budget_reservation": {
+      "count": 12,
+      "p50_ms": 50.924,
+      "p95_ms": 75.918
+    },
+    "budget_reconciliation": {
+      "count": 12,
+      "p50_ms": 39.306,
+      "p95_ms": 55.157
+    }
+  },
+  "persisted_stages": {
+    "claim_lock": {
+      "count": 8,
+      "p50_ms": 74.483,
+      "p95_ms": 240.297
+    },
+    "claim_lock_hold": {
+      "count": 8,
+      "p50_ms": 73.933,
+      "p95_ms": 109.566
+    },
+    "admission": {
+      "count": 8,
+      "p50_ms": 204.784,
+      "p95_ms": 391.212
+    },
+    "queue_age": {
+      "count": 8,
+      "p50_ms": 2929.582,
+      "p95_ms": 4197.372
+    },
+    "file_provenance": {
+      "count": 8,
+      "p50_ms": 164.707,
+      "p95_ms": 219.539
+    },
+    "known_good_lookup": {
+      "count": 8,
+      "p50_ms": 171.565,
+      "p95_ms": 182.44
+    },
+    "provider_admission": {
+      "count": 12,
+      "p50_ms": 103.089,
+      "p95_ms": 142.864
+    },
+    "receipt_persistence": {
+      "count": 12,
+      "p50_ms": 24.943,
+      "p95_ms": 135.588
+    },
+    "provider": {
+      "count": 12,
+      "p50_ms": 153.149,
+      "p95_ms": 220.859
+    },
+    "usage_persistence": {
+      "count": 12,
+      "p50_ms": 63.523,
+      "p95_ms": 90.902
+    },
+    "result_persistence": {
+      "count": 8,
+      "p50_ms": 86.109,
+      "p95_ms": 159.298
+    },
+    "run": {
+      "count": 8,
+      "p50_ms": 1113.633,
+      "p95_ms": 1599.797
+    },
+    "ssh_evidence": {
+      "count": 4,
+      "p50_ms": 54.74,
+      "p95_ms": 57.522
+    },
+    "evidence_persistence": {
+      "count": 4,
+      "p50_ms": 97.115,
+      "p95_ms": 125.457
+    }
+  },
+  "input_tokens": 1200,
+  "output_tokens": 240,
+  "completed_subjects": 8,
+  "approved_subjects": 0,
+  "errors": 0,
+  "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+  "initial_fixture_queue_age_seconds": 2,
+  "notes": "Loopback provider, SSH delay, queue age and the optional receipt/usage persistence delay are synthetic; no production/TLS/database speed claim. Admission includes lock/query/run creation; run includes persistence."
+}
