@@ -29,7 +29,7 @@ GAPS=[
     'TCP wrappers: /etc/hosts.allow and /etc/hosts.deny are hashed as startup files, and agents that report them parse their spawn, twist and aclexec commands from the hashed bytes with the libwrap 7.6.q (Debian patch set) rules: backslash continuations, the 2048-byte line limit, first-match order and option errors. Each command runs through /bin/sh -c as the daemon process user, often root, because the patched user and group options change no identity. A command after an entry that matches every daemon and client is shown as shadowed; weaker patterns are never treated as shadowing. Commands use the same best-effort redaction, are bounded to 64 per file and other option values are not stored. Whether any running daemon is linked against libwrap, which daemon and client names match a request, and what the commands do are not evaluated.',
     'rsnapshot: /etc/rsnapshot.conf is hashed as a startup file by agents that report it, but its cmd_preexec, cmd_postexec, backup_script, backup_exec, program-path and backtick include_conf commands are not yet parsed in this view. Files it includes, alternate configurations passed with -c and which cron entry or timer invokes rsnapshot are not evaluated.',
     'System git configuration: /etc/gitconfig is hashed as a startup file by agents that report it, but the shell aliases, pagers, editors, credential helpers, hook paths, fsmonitor hooks and diff, filter and merge drivers it can make git run are not yet parsed in this view. Files it includes, per-user, XDG and repository configuration, GIT_CONFIG_* environment overrides and which accounts or jobs run git are not evaluated.',
-    'kdump: /etc/kdump.conf is hashed as a startup file by agents that report it, but its kdump_pre, kdump_post, kdump_emergency and core_collector commands are not yet parsed in this view. The /etc/kdump/pre.d, post.d and emergency.d directories, the hook programs themselves, whether the loaded crash-capture initramfs matches the current files, and the Debian kdump-tools configuration are not evaluated.',
+    'kdump: /etc/kdump.conf is hashed as a startup file, and agents that report it parse its kdump_pre, kdump_post and kdump_emergency programs and core_collector argv from the hashed bytes with the kdump-utils 7bf4714 rules, in capture order. Each runs as root in the crash-capture environment after a kernel crash. Options kdumpctl rejects (unknown, deprecated, empty, repeated, a second dump target or a second --mount) are listed with their line, and such a configuration loads no capture kernel, so nothing runs. Programs use the same best-effort redaction, other option values are never stored, and text over 64 KiB, with 2048 or more lines, not UTF-8 or with NUL bytes is shown as unparsed. The /etc/kdump/pre.d, post.d and emergency.d directories are not yet listed, so their programs are missing from the sequence. The hook programs themselves, other kdumpctl checks, whether the loaded crash-capture initramfs matches the current files and the Debian kdump-tools configuration are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
     'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
@@ -100,6 +100,17 @@ def tcp_wrappers_view(entry,inventory):
     return parsed
 
 
+def kdump_state(entry):
+    """Whether parsed kdump hooks exist, were not reported (older agent) or do not apply."""
+    if 'kdump' in entry:return 'parsed'
+    return 'not_reported' if entry['kind']=='regular' and entry['path']==persistence.KDUMP_CONF else None
+
+
+def kdump_text(entry):
+    kdump=entry.get('kdump',{})
+    return ' '.join([h['source']+' '+h['program']+' '+' '.join(h['args']) for h in kdump.get('hooks',())]+[r['option'] for r in kdump.get('refusals',())])
+
+
 def tcp_wrappers_text(entry):
     return ' '.join(c['option']+' '+c['command']+' '+' '.join(c['daemons']) for c in entry.get('tcp_wrappers',{}).get('commands',()))
 
@@ -126,7 +137,7 @@ def with_at_jobs(rows,inventory,q,changes):
 
 
 def catalog_rows(inventory):
-    """Mechanism counts; the at, anacron and TCP wrappers rows also report parsed jobs/commands and older-agent files."""
+    """Mechanism counts; the at, anacron, TCP wrappers and kdump rows also report parsed jobs/commands and older-agent files."""
     result=[]
     for key,label,_ in CATALOG:
         if key=='anacron':
@@ -138,6 +149,10 @@ def catalog_rows(inventory):
             found=[e for e in inventory['entries'] if e['path']==path]
             commands=sum(len(e['tcp_wrappers']['commands']) for e in found if 'tcp_wrappers' in e)
             label+=f' · {commands} parsed command{"" if commands==1 else "s"}'+(' · not reported by this agent version' if any(tcp_wrappers_state(e)=='not_reported' for e in found) else '')
+        if key=='kdump':
+            found=[e for e in inventory['entries'] if e['path']==persistence.KDUMP_CONF]
+            hooks=sum(len(e['kdump']['hooks']) for e in found if 'kdump' in e)
+            label+=f' · {hooks} parsed hook{"" if hooks==1 else "s"}'+(' · refused by kdumpctl' if any(e.get('kdump',{}).get('starts') is False for e in found) else '')+(' · not reported by this agent version' if any(kdump_state(e)=='not_reported' for e in found) else '')
         if key=='at':
             states=[at_state(e) for e in inventory['entries']]
             parsed=states.count('parsed');missing=states.count('not_reported')
@@ -169,11 +184,14 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         state=tcp_wrappers_state(entry)
         if state:row['tcp_wrappers_state']=state
         if 'tcp_wrappers' in entry:row['tcp_wrappers']=tcp_wrappers_view(entry,inventory)
+        state=kdump_state(entry)
+        if state:row['kdump_state']=state
+        if 'kdump' in entry:row['kdump']=entry['kdump']
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and any(entry['path']==root or entry['path'].startswith(root+'/') for root in newly):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)

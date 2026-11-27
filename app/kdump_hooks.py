@@ -52,6 +52,7 @@ covered.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 CONTRACT_VERSION = 1
@@ -281,7 +282,9 @@ def assess(config_text: Any, directories: Any) -> dict[str, Any]:
         if item['runs'] is not False:
             add('pre', 'pre.d', item['path'], [], 'warn', [] if item['runs'] else ['unresolved'])
     collector_value = options.get('core_collector', DEFAULT_CORE_COLLECTOR)
-    collector = collector_value.split()
+    # The capture shell word-splits on the default IFS (space, tab, newline) only; str.split() would also
+    # split on other whitespace and leave no program for a value such as a lone vertical tab.
+    collector = [word for word in re.split('[ \t\n]+', collector_value) if word] or [collector_value]
     add('dump', 'core_collector', collector[0], collector[1:], 'dump_failed',
         ['args_rewritten_at_capture'] if 'makedumpfile' in collector_value else [])
     for item in listings['post']:
