@@ -1,3 +1,10 @@
+## 1.126.0 — 2026-11-25
+
+1. [PR #1657](https://github.com/StealthCat/MrPatchy/pull/1657): Startup Files shows the commands ClamAV runs: the clamd `VirusEvent` command and the freshclam `OnUpdateExecute`, `OnErrorExecute` and `OnOutdatedExecute` commands, with their event, account and whether they run. Updated agents parse `/etc/clamav/clamd.conf` and `freshclam.conf` with the ClamAV 1.5.4 option rules and keep only these values, with commands redacted. It sits alongside the Dovecot view from v1.125.0. Compatibility: no schema, auth or response-authorization change; older agents show as not parsed. Increment 3 of #1607.
+2. [PR #1662](https://github.com/StealthCat/MrPatchy/pull/1662): Agents hash the Debian-family `/etc/swanctl` and RPM-family `/etc/strongswan` directories as built-in startup scope, recording metadata and SHA-256 only. This tracks changes to the files whose `updown` commands charon runs as root when a CHILD_SA comes up or goes down. Earlier baselines stay comparable, and saved custom paths inside these directories stay valid. Compatibility: older agents keep working. After the agent update, existing baselines show the directories as newly in scope until an administrator approves a new baseline. Increment 2 of #1624.
+
+Integrated together through batch [PR #1665](https://github.com/StealthCat/MrPatchy/pull/1665). This source update does not publish a Docker image.
+
 ## 1.125.0 — 2026-11-25
 
 1. [PR #1660](https://github.com/StealthCat/MrPatchy/pull/1660): Startup Files evaluates the Dovecot service programs the root master process execs: non-default executables, starting account, timing, protocol and source line. The evaluation uses statements agents parse from `/etc/dovecot`, keeping only the evaluated settings, and it names its coverage gaps. Compatibility: no schema, auth or response-authorization change; older agents show as not evaluated. Increment 3 of #1620.

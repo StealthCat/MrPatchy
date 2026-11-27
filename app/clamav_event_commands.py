@@ -371,6 +371,22 @@ def _freshclam(parsed: dict[str, Any], path: str, daemon: bool | None,
     return rows
 
 
+def commands_from_values(tool: str, accepted: bool, values: dict[str, dict[str, Any]], path: str, *,
+                         started_as_root: bool | None = True,
+                         freshclam_daemon: bool | None = None) -> list[dict[str, Any]]:
+    """Event commands from already-parsed option values (``{name: {'value', 'line'}}``).
+
+    Agents parse the hashed configuration bytes with the same rules and report only the
+    values this contract reads (#1607 increment 3); the controller rebuilds the commands here.
+    """
+    if tool not in OPTIONS:
+        raise ValueError('tool must be clamd or freshclam')
+    parsed = {'accepted': accepted, 'values': values}
+    if tool == 'clamd':
+        return _clamd(parsed, path, started_as_root)
+    return _freshclam(parsed, path, freshclam_daemon, started_as_root)
+
+
 def resolve(*, clamd_conf: str | bytes | None = None, freshclam_conf: str | bytes | None = None,
             clamd_path: str = CLAMD_CONF, freshclam_path: str = FRESHCLAM_CONF,
             started_as_root: bool | None = True, freshclam_daemon: bool | None = None) -> dict[str, Any]:

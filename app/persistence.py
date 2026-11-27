@@ -262,6 +262,52 @@ def validate_request_key(report,path):
     return len(rules)
 
 
+CLAMAV_FILES={'/etc/clamav/clamd.conf':'clamd','/etc/clamav/freshclam.conf':'freshclam'}
+CLAMAV_KEYS={'parsed','accepted','error','values','redacted'}
+CLAMAV_VALUE_KEYS={'line','value','truncated','redacted'}
+CLAMAV_REASONS=('example_config','missing_argument','missing_closing_quote','empty_argument','unknown_option',
+                'incorrect_argument_format','parser_crash')
+CLAMAV_COMMANDS=('VirusEvent','OnUpdateExecute','on-update-execute','OnErrorExecute','on-error-execute',
+                 'OnOutdatedExecute','on-outdated-execute')
+CLAMAV_KEPT={'clamd':('VirusEvent','User'),
+             'freshclam':('OnUpdateExecute','on-update-execute','OnErrorExecute','on-error-execute',
+                          'OnOutdatedExecute','on-outdated-execute','DatabaseOwner','user','daemon')}
+CLAMAV_VALUE_LIMIT=256
+# fgets(1024) chunks of the 1 MiB inventory limit bound the line number.
+CLAMAV_LINES=1024*1024
+
+
+def validate_clamav(report,path):
+    """Strictly validate an optional parsed clamd.conf or freshclam.conf reported by newer agents (#1607)."""
+    tool=CLAMAV_FILES.get(path)
+    if tool is None:raise ValueError('ClamAV options outside the parsed configuration files')
+    if not isinstance(report,dict) or set(report)!=CLAMAV_KEYS:raise ValueError('Invalid ClamAV options')
+    if any(type(report[k]) is not bool for k in ('parsed','accepted','redacted')):raise ValueError('Invalid ClamAV options')
+    values,error=report['values'],report['error']
+    if not isinstance(values,dict):raise ValueError('Invalid ClamAV options')
+    if not report['parsed']:
+        if report['accepted'] or error is not None or values or report['redacted']:raise ValueError('Invalid ClamAV options')
+        return 0
+    if report['accepted']!=(error is None):raise ValueError('Invalid ClamAV options')
+    if error is not None:
+        if not isinstance(error,dict) or set(error)!={'line','reason'} or error['reason'] not in CLAMAV_REASONS:raise ValueError('Invalid ClamAV error')
+        if type(error['line']) is not int or not 1<=error['line']<=CLAMAV_LINES:raise ValueError('Invalid ClamAV error')
+    redacted=False
+    for name,item in values.items():
+        if name not in CLAMAV_KEPT[tool]:raise ValueError('ClamAV option not retained by agents')
+        if not isinstance(item,dict) or set(item)!=CLAMAV_VALUE_KEYS:raise ValueError('Invalid ClamAV option')
+        limit=CRON_COMMAND_LIMIT if name in CLAMAV_COMMANDS else CLAMAV_VALUE_LIMIT
+        if type(item['line']) is not int or not 1<=item['line']<=CLAMAV_LINES:raise ValueError('Invalid ClamAV option')
+        if error is not None and item['line']>=error['line']:raise ValueError('Invalid ClamAV option')
+        if not isinstance(item['value'],str) or len(item['value'])>limit or '\x00' in item['value']:raise ValueError('Invalid ClamAV option')
+        if type(item['truncated']) is not bool or type(item['redacted']) is not bool:raise ValueError('Invalid ClamAV option')
+        if item['redacted'] and name not in CLAMAV_COMMANDS:raise ValueError('Invalid ClamAV option')
+        redacted=redacted or item['redacted']
+    if redacted!=report['redacted']:raise ValueError('Invalid ClamAV options')
+    if len({item['line'] for item in values.values()})!=len(values):raise ValueError('Invalid ClamAV options')
+    return sum(name in CLAMAV_COMMANDS for name in values)
+
+
 AUTOFS_MASTER='/etc/auto.master'
 AUTOFS_KEYS={'text','error'}
 AUTOFS_TEXT_LIMIT=65536
@@ -325,8 +371,8 @@ def validate_dovecot(report,path):
 
 
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/Dovecot detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','dovecot')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -379,6 +425,9 @@ def validate(inventory):
         if 'autofs' in row:
             if row['kind']!='regular':raise ValueError('autofs master map requires a regular file')
             validate_autofs(row['autofs'],path)
+        if 'clamav' in row:
+            if row['kind']!='regular':raise ValueError('ClamAV options require a regular file')
+            validate_clamav(row['clamav'],path)
         if 'dovecot' in row:
             if row['kind']!='regular':raise ValueError('Dovecot statements require a regular file')
             validate_dovecot(row['dovecot'],path)
@@ -402,12 +451,14 @@ def validate(inventory):
 # On*Execute commands on update events; /etc/clamav on Debian, /etc/clamd.d and /etc/freshclam.conf on RPM.
 # Dovecot configuration (#1620): the master process runs as root and execs every service executable
 # its configuration names, as root unless drop_priv_before_exec is set; /etc/dovecot on both families.
+# strongSwan swanctl configuration (#1624): charon runs each child's updown command as root through /bin/sh
+# on CHILD_SA up/down; /etc/swanctl on Debian, /etc/strongswan (swanctl/ and strongswan.conf) on RPM.
 # runit service directories (#1628): runsvdir (as root) makes runsv exec each service's run, finish,
 # log/run and control programs; /etc/service (a symlink on Debian), /etc/runit and /etc/sv.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
                         '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
-                        '/etc/service','/etc/runit','/etc/sv')
+                        '/etc/swanctl','/etc/strongswan','/etc/service','/etc/runit','/etc/sv')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
