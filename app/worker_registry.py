@@ -35,6 +35,12 @@ def capacities():
         value=os.getenv(env,str(result[key]))
         if not re.fullmatch(r'[0-9]{1,2}',value) or not 1<=int(value)<=maximum:raise ValueError(env+' must be an integer from 1 to '+str(maximum))
         result[key]=int(value)
+    reserve_scoring=os.getenv('MRPATCHY_AI_RESERVE_SCORING_SLOT','0')
+    if reserve_scoring not in ('0','1'):
+        raise ValueError('MRPATCHY_AI_RESERVE_SCORING_SLOT must be 0 or 1')
+    if reserve_scoring=='1' and result['ai']<2:
+        raise ValueError('MRPATCHY_AI_RESERVE_SCORING_SLOT requires MRPATCHY_AI_CONCURRENCY of at least 2')
+    result['reserve_scoring']=reserve_scoring=='1'
     return result
 
 def control_key(identity):return CONTROL_PREFIX+hashlib.sha256(identity.encode()).hexdigest()
