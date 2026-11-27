@@ -170,7 +170,8 @@ def _set(report, index, **change):
     lambda r: r['statements'].insert(3, {'line': 6, 'op': 'error', 'code': 'syntax'}),
     lambda r: r['statements'].append({'line': 99, 'op': 'error', 'code': 'unterminated_quote'}),
     lambda r: r['statements'].append({'line': 99, 'op': 'error', 'code': 'other'}),
-    lambda r: r['statements'].append({'line': 99, 'op': 'include', 'pattern': ''}),
+    lambda r: r['statements'].append({'line': 99, 'op': 'include', 'pattern': None}),
+    lambda r: r['statements'].append({'line': 99, 'op': 'include', 'pattern': 'x\x00'}),
     lambda r: r.update(statements=[{'line': 1, 'op': 'close'}] * 2001),
 ])
 def test_validation_rejects_malformed_reports(mutate):
