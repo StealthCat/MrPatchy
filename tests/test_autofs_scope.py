@@ -129,7 +129,7 @@ def test_catalogs_label_master_and_state_the_gap():
     assert mechanism['parse'] == 'metadata' and mechanism['trigger'] == 'event' and mechanism['scope'] == 'system'
     assert [(loc['path'], loc['families']) for loc in mechanism['locations']] == [(MASTER, ('debian', 'rpm'))]
     assert all(MASTER in startup_catalog._all_locations(family) for family in ('debian', 'rpm'))
-    assert any(MASTER in gap and 'not yet resolved' in gap and 'auto.master.d' in gap and 'program maps' in gap
+    assert any(MASTER in gap and 'resolves the program maps' in gap and 'auto.master.d' in gap and 'incomplete' in gap
                for gap in startup_inventory.GAPS)
 
 

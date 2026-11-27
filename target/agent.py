@@ -1577,6 +1577,71 @@ def parse_tcp_wrappers(data):
     return result
 
 
+# autofs master map (#1375): the hashed /etc/auto.master bytes are reported as bounded text, with a
+# read-only stat (kind and mode, following symlinks, as automount does) of every candidate map path
+# the text names. The controller resolves program maps with app/autofs_program_maps; no map is read
+# or run here, and a path that is not stat-ed stays a blocking gap there.
+AUTOFS_MASTER='/etc/auto.master'
+AUTOFS_TEXT_LIMIT=65536
+AUTOFS_STAT_LIMIT=128
+_AUTOFS_TYPED=re.compile(r'(?:file|program|exec|sss|yp|nis|nisplus|ldap|ldaps|hesiod|userdir|dir)(?:,(?:sun|hesiod|amd))?:')
+_AUTOFS_NAME=re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.+-]{0,254}')
+
+
+def autofs_mount_points(text):
+    """The first word of every line, read as a possible mount point (over-inclusive on purpose)."""
+    mounts=set()
+    for line in text.splitlines():
+        words=line.split()
+        if words and words[0].startswith('/'):mounts.add(words[0].rstrip('/'))
+    return mounts
+
+
+def autofs_candidates(text):
+    """Candidate absolute map paths named in master-map text, in first-seen order. Over-collection is
+    harmless, but a path at or below a possible mount point is never returned: a lookup there can make
+    automount mount a map or run a program map, so it stays unobserved."""
+    found=[];mounts=autofs_mount_points(text)
+    for line in text.splitlines():
+        for word in line.split():
+            if word.startswith('#'):break
+            word=word.lstrip('+')
+            typed=_AUTOFS_TYPED.match(word)
+            if typed:word=word[typed.end():]
+            if word.startswith('/') and not word.startswith('//'):path=word.rstrip('/') or None
+            elif _AUTOFS_NAME.fullmatch(word):path='/etc/'+word
+            else:path=None
+            if not path or len(path)>4096 or '\x00' in path or path in found:continue
+            if any(m=='' or path==m or path.startswith(m+'/') for m in mounts):continue
+            found.append(path)
+    return found
+
+
+def autofs_stat(path):
+    try:
+        seen=os.stat(path)
+    except FileNotFoundError:return {'kind':'missing','mode':0}
+    except (NotADirectoryError,PermissionError,OSError):return None
+    kind='regular' if stat.S_ISREG(seen.st_mode) else 'directory' if stat.S_ISDIR(seen.st_mode) else 'other'
+    return {'kind':kind,'mode':stat.S_IMODE(seen.st_mode)}
+
+
+def parse_autofs_master(data,mode,deadline=None):
+    """Report /etc/auto.master as bounded latin-1 text plus stat observations. Nothing is run or opened."""
+    result={'text':None,'error':None,'stats':{},'stats_truncated':False}
+    if len(data)>AUTOFS_TEXT_LIMIT:result['error']='over_limit';return result
+    if b'\x00' in data:result['error']='binary';return result
+    text=data.decode('latin-1')
+    result['text']=text
+    result['stats'][AUTOFS_MASTER]={'kind':'regular','mode':mode}
+    for path in autofs_candidates(text):
+        if path in result['stats']:continue
+        if len(result['stats'])>=AUTOFS_STAT_LIMIT or (deadline is not None and time.monotonic()>deadline):result['stats_truncated']=True;break
+        seen=autofs_stat(path)
+        if seen is not None:result['stats'][path]=seen
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -1587,7 +1652,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;content=bytearray() if form or at_name or anacron or tcpw else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;autofs=cron_jobs and str(path)==AUTOFS_MASTER;content=bytearray() if form or at_name or anacron or tcpw or autofs else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1631,6 +1696,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['anacron']=parse_anacrontab(bytes(content))
             if tcpw and row['kind']=='regular':
                 row['tcp_wrappers']=parse_tcp_wrappers(bytes(content))
+            if autofs and row['kind']=='regular':
+                row['autofs']=parse_autofs_master(bytes(content),row['mode'],deadline)
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:

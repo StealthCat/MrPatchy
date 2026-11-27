@@ -140,9 +140,35 @@ def validate_tcp_wrappers(tcpw,path):
     return len(commands)
 
 
+AUTOFS_MASTER='/etc/auto.master'
+AUTOFS_KEYS={'text','error','stats','stats_truncated'}
+AUTOFS_TEXT_LIMIT=65536
+AUTOFS_STAT_LIMIT=128
+AUTOFS_STAT_KINDS=('regular','directory','other','missing')
+
+
+def validate_autofs(autofs,path,mode):
+    """Strictly validate the optional bounded master-map text and map-path stat observations (#1375)."""
+    if path!=AUTOFS_MASTER:raise ValueError('autofs master map outside /etc/auto.master')
+    if not isinstance(autofs,dict) or set(autofs)!=AUTOFS_KEYS or type(autofs['stats_truncated']) is not bool or not isinstance(autofs['stats'],dict):
+        raise ValueError('Invalid autofs master map')
+    text,error,stats=autofs['text'],autofs['error'],autofs['stats']
+    if error is not None:
+        if error not in ('over_limit','binary') or text is not None or stats or autofs['stats_truncated']:raise ValueError('Invalid autofs master map')
+        return 0
+    if not isinstance(text,str) or len(text)>AUTOFS_TEXT_LIMIT or '\x00' in text or any(ord(c)>0xFF for c in text):raise ValueError('Invalid autofs master map')
+    if not 1<=len(stats)<=AUTOFS_STAT_LIMIT or stats.get(AUTOFS_MASTER)!={'kind':'regular','mode':mode}:raise ValueError('Invalid autofs map observations')
+    for key,seen in stats.items():
+        if not isinstance(key,str) or not key.startswith('/') or key.startswith('//') or len(key)>4096 or '\x00' in key or (key!='/' and key.endswith('/')):
+            raise ValueError('Invalid autofs map observations')
+        if not isinstance(seen,dict) or set(seen)!={'kind','mode'} or seen['kind'] not in AUTOFS_STAT_KINDS or type(seen['mode']) is not int or not 0<=seen['mode']<=0o7777 or (seen['kind']=='missing' and seen['mode']):
+            raise ValueError('Invalid autofs map observations')
+    return len(stats)
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/autofs detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','autofs')} if row is not None else None
 
 
 def validate(inventory):
@@ -181,6 +207,9 @@ def validate(inventory):
         if 'tcp_wrappers' in row:
             if row['kind']!='regular':raise ValueError('TCP wrappers commands require a regular file')
             validate_tcp_wrappers(row['tcp_wrappers'],path)
+        if 'autofs' in row:
+            if row['kind']!='regular':raise ValueError('autofs master map requires a regular file')
+            validate_autofs(row['autofs'],path,row['mode'])
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
