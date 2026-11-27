@@ -200,9 +200,71 @@ def validate_kdump(kdump,path):
     return len(hooks)
 
 
+REQUEST_KEY_CONF='/etc/request-key.conf'
+REQUEST_KEY_DIR='/etc/request-key.d'
+REQUEST_KEY_KEYS={'parsed','rules','aborts','universal_abort_line','last_byte_dropped','truncated','redacted'}
+REQUEST_KEY_RULE_KEYS={'line','op','type','description','callout_info','pipe','command','command_truncated','redacted',
+                       'kernel_upcall','requester_controlled','fails_when_selected','code_runs'}
+REQUEST_KEY_ABORT_KEYS={'line','reason','scope','universal'}
+REQUEST_KEY_CONTROLLED=('callout_info','description','keysub_payload','stdin_callout_info')
+REQUEST_KEY_FAILURES=('program_without_slash','too_many_arguments','missing_macro_name','unsupported_macro','malformed_keysub')
+# fgets(4098) and the 64 KiB agent parse limit bound the line count of a parsed file.
+REQUEST_KEY_LINES=65536
+
+
+def request_key_reads(path):
+    """Whether /sbin/request-key reads this path by name (drop-ins must also be regular files)."""
+    if path==REQUEST_KEY_CONF:return True
+    parent,_,name=path.rpartition('/')
+    return parent==REQUEST_KEY_DIR and not name.startswith('.') and len(name)>=5 and name.endswith('.conf')
+
+
+def _request_key_pattern(value):
+    return isinstance(value,str) and 1<=len(value)<=256 and '\x00' not in value
+
+
+def validate_request_key(report,path):
+    """Strictly validate an optional parsed request-key configuration file reported by newer agents (#1632)."""
+    if not request_key_reads(path):raise ValueError('request-key rules outside files request-key reads')
+    if not isinstance(report,dict) or set(report)!=REQUEST_KEY_KEYS:raise ValueError('Invalid request-key rules')
+    if any(type(report[k]) is not bool for k in ('parsed','last_byte_dropped','truncated','redacted')):raise ValueError('Invalid request-key rules')
+    rules,aborts,first=report['rules'],report['aborts'],report['universal_abort_line']
+    if not isinstance(rules,list) or not isinstance(aborts,list) or len(rules)>CRON_FILE_JOBS or len(aborts)>CRON_FILE_JOBS:raise ValueError('Invalid request-key rules')
+    if not report['parsed']:
+        if rules or aborts or first is not None or report['last_byte_dropped'] or report['truncated'] or report['redacted']:raise ValueError('Invalid request-key rules')
+        return 0
+    if first is not None and (type(first) is not int or not 1<=first<=REQUEST_KEY_LINES):raise ValueError('Invalid request-key rules')
+    lines=set();universal=[]
+    for item in aborts:
+        if not isinstance(item,dict) or set(item)!=REQUEST_KEY_ABORT_KEYS or item['reason'] not in ('line_too_long','syntax_error'):raise ValueError('Invalid request-key abort')
+        if type(item['line']) is not int or not 1<=item['line']<=REQUEST_KEY_LINES or item['line'] in lines or type(item['universal']) is not bool:raise ValueError('Invalid request-key abort')
+        scope=item['scope']
+        if not isinstance(scope,list) or len(scope)>(0 if item['reason']=='line_too_long' else 4) or any(not _request_key_pattern(p) for p in scope):raise ValueError('Invalid request-key abort')
+        if item['reason']=='line_too_long' and not item['universal']:raise ValueError('Invalid request-key abort')
+        lines.add(item['line'])
+        if item['universal']:universal.append(item['line'])
+    # The first universal abort line is always recorded, even when the abort list itself is truncated.
+    if universal and first!=min(universal):raise ValueError('Invalid request-key rules')
+    if not universal and first is not None and (not report['truncated'] or len(aborts)<CRON_FILE_JOBS or first in lines):raise ValueError('Invalid request-key rules')
+    for item in rules:
+        if not isinstance(item,dict) or set(item)!=REQUEST_KEY_RULE_KEYS:raise ValueError('Invalid request-key rule')
+        if type(item['line']) is not int or not 1<=item['line']<=REQUEST_KEY_LINES or item['line'] in lines:raise ValueError('Invalid request-key rule')
+        lines.add(item['line'])
+        if any(not _request_key_pattern(item[k]) for k in ('op','type','description','callout_info')):raise ValueError('Invalid request-key rule')
+        if any(type(item[k]) is not bool for k in ('pipe','command_truncated','redacted','kernel_upcall')):raise ValueError('Invalid request-key rule')
+        if not isinstance(item['command'],str) or len(item['command'])>CRON_COMMAND_LIMIT or '\x00' in item['command']:raise ValueError('Invalid request-key rule')
+        names=item['requester_controlled']
+        if not isinstance(names,list) or names!=sorted(set(names)) or any(n not in REQUEST_KEY_CONTROLLED for n in names) or ('stdin_callout_info' in names)!=item['pipe']:raise ValueError('Invalid request-key rule')
+        failure=item['fails_when_selected']
+        if failure is not None and failure not in REQUEST_KEY_FAILURES:raise ValueError('Invalid request-key rule')
+        expected='never' if not item['kernel_upcall'] else 'fails_when_selected' if failure else 'on_matching_request'
+        if item['code_runs']!=expected:raise ValueError('Invalid request-key rule')
+    return len(rules)
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key')} if row is not None else None
 
 
 def validate(inventory):
@@ -244,6 +306,9 @@ def validate(inventory):
         if 'kdump' in row:
             if row['kind']!='regular':raise ValueError('kdump hooks require a regular file')
             validate_kdump(row['kdump'],path)
+        if 'request_key' in row:
+            if row['kind']!='regular':raise ValueError('request-key rules require a regular file')
+            validate_request_key(row['request_key'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
