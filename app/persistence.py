@@ -448,10 +448,12 @@ def validate(inventory):
 # its configuration names, as root unless drop_priv_before_exec is set; /etc/dovecot on both families.
 # strongSwan swanctl configuration (#1624): charon runs each child's updown command as root through /bin/sh
 # on CHILD_SA up/down; /etc/swanctl on Debian, /etc/strongswan (swanctl/ and strongswan.conf) on RPM.
+# lighttpd configuration (#1603): include_shell commands run as root while the configuration is parsed,
+# piped loggers and FastCGI/SCGI bin-path backends as server.username; /etc/lighttpd on both families.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
                         '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
-                        '/etc/swanctl','/etc/strongswan')
+                        '/etc/swanctl','/etc/strongswan','/etc/lighttpd')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
