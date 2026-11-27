@@ -26,7 +26,7 @@ def _function(source, name):
 
 def test_agent_upgrade_requires_confirmation_and_is_single_flight():
     script = r"""
-let modalRevision=0;const posts=[],titles=[],toasts=[],releases=[],els={};
+let modalRevision=0;const AdminTools={spoolBatchLimit(){}};const posts=[],titles=[],toasts=[],releases=[],els={};
 const dialog={open:false,close(){this.open=false;}};
 const mk=()=>({disabled:false,isConnected:true,onclick:null});
 function $(s){return s==='#modal'?dialog:els[s];}
