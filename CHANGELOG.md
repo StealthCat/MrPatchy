@@ -1,3 +1,9 @@
+## 1.130.1 — 2026-11-25
+
+1. [PR #1682](https://github.com/StealthCat/MrPatchy/pull/1682): Fixed: a swanctl `include ""`, which strongSwan ignores, or a swanctl file truncated at the statement cap made Mr Patchy reject the host's whole startup inventory. Both are now reported as incomplete strongSwan detail, and the rest of the inventory is kept. Agents count dropped values exactly, and reports from v1.128.0 agents are still accepted. Compatibility: no schema, auth or response-authorization change. Fixes #1680.
+
+Integrated through [PR #1686](https://github.com/StealthCat/MrPatchy/pull/1686). This source update does not publish a Docker image.
+
 ## 1.130.0 — 2026-11-25
 
 1. [PR #1679](https://github.com/StealthCat/MrPatchy/pull/1679): Agents hash `/etc/lvm/lvm.conf` and `/etc/lvm/lvmlocal.conf` as built-in startup files. These are the LVM2 configuration cascade that chooses which thin/cache check, dump and repair executables LVM runs and which plugins dmeventd loads as root. A custom `/etc/lvm` path saved earlier stays valid, and its baseline keeps comparing those files rather than marking them newly in scope. The coordinator resolved its overlap with the lighttpd scope from #1676 as a union. Compatibility: older agents keep working. Increment 2 of #1599.
