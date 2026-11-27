@@ -106,10 +106,11 @@ module.exports=async(page,capture)=>{
  await page.unroute('**/api/operations/*/spool');
 
  // SSO identities on Users: list, unbind, and confirm a replacement after a conflict.
- let bindings=[{subject_digest:'0123456789abcdef',username:'admin'}],bindRequests=[];
+ let bindings=[{subject_digest:'0123456789abcdef',username:'admin'}],bindRequests=[],holdNext=null;
  await page.route('**/api/operations/sso-bindings',route=>route.fulfill({json:bindings}));
  await page.route('**/api/operations/sso-bindings/*',route=>{assert.equal(route.request().method(),'DELETE');bindings=[];return route.fulfill({json:{ok:true}});});
  await page.route('**/api/operations/sso-binding',route=>{const body=route.request().postDataJSON();bindRequests.push(body);
+  if(holdNext){const held=holdNext;holdNext=null;return held.then(()=>route.fulfill({status:409,json:{detail:'This subject is already bound to admin. Resend with replace_username set to confirm the replacement.'}}));}
   return body.replace_username?route.fulfill({json:{ok:true,subject_digest:'fedcba9876543210'}}):route.fulfill({status:409,json:{detail:'This subject is already bound to admin. Resend with replace_username set to confirm the replacement.'}});});
  await page.goto(url('/#users'));
  const sso=page.locator('#sso-bindings');
@@ -139,6 +140,22 @@ module.exports=async(page,capture)=>{
  await replace.click();
  await page.locator('#toast').filter({hasText:'SSO identity bound'}).waitFor();
  assert.deepEqual(bindRequests,[{subject:'provider-subject-1',username:'admin'},{subject:'provider-subject-1',username:'admin'},{subject:'provider-subject-1',username:'admin'},{subject:'provider-subject-1',username:'admin',replace_username:'admin'}]);
+ // An edit made while the request is still pending makes it stale: its late conflict neither
+ // offers a confirmation nor rewrites the status of the form the administrator is editing.
+ let release;holdNext=new Promise(resolve=>{release=resolve;});
+ await sso.locator('summary',{hasText:'Bind an identity'}).click();
+ await sso.locator('[name=subject]').fill('provider-subject-3');
+ await sso.getByRole('button',{name:'Bind identity'}).click();
+ await sso.locator('#sso-bind-status').filter({hasText:'Saving'}).waitFor();
+ for(let i=0;i<100&&bindRequests.length<5;i++)await page.waitForTimeout(20);
+ assert.equal(bindRequests.length,5);
+ await sso.locator('[name=subject]').fill('provider-subject-4');
+ release();
+ await sso.getByRole('button',{name:'Bind identity'}).waitFor({state:'visible'});
+ await page.waitForFunction(()=>!document.querySelector('#sso-bind-form button').disabled);
+ assert.equal(await sso.getByRole('button',{name:/Replace with/}).count(),0);
+ assert.equal(await sso.locator('#sso-bind-status').textContent(),'');
+ assert.deepEqual(bindRequests[4],{subject:'provider-subject-3',username:'admin'});
  await page.unroute('**/api/operations/sso-bindings');await page.unroute('**/api/operations/sso-bindings/*');await page.unroute('**/api/operations/sso-binding');
 
  // Settings search reaches the new sections.

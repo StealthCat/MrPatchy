@@ -174,21 +174,29 @@ const AdminTools=(()=>{
   });
   const form=root.querySelector('#sso-bind-form'),status=root.querySelector('#sso-bind-status');
   // Each submit is one attempt. A replacement confirmation is pinned to the exact subject and
-  // account that attempt sent, and an edit or a newer attempt withdraws it (#1685 review).
+  // account that attempt sent. Any edit or a newer attempt makes the attempt stale, including
+  // while its request is still pending, and a stale response never writes the status or offers
+  // a confirmation (#1685 review).
   let attempt=0;
-  const withdraw=()=>{if(status.querySelector('#sso-replace')){attempt++;status.textContent='';}};
+  const withdraw=()=>{attempt++;status.textContent='';};
   form.addEventListener('input',withdraw);form.addEventListener('change',withdraw);
   const bind=async body=>{
-   const turn=++attempt;
-   const result=await run(form.querySelector('button'),status,()=>api('/operations/sso-binding','PUT',body));
-   if(turn!==attempt||!root.isConnected)return;
-   if(result){toast('SSO identity bound');await reload();return;}
-   const match=/already bound to (.+?)\. Resend/.exec(status.textContent);
-   if(match&&!body.replace_username&&status.isConnected){
-    const pinned={subject:body.subject,username:body.username,replace_username:match[1]};
-    status.innerHTML=`This subject already signs in as <strong>${esc(pinned.replace_username)}</strong>. <button type="button" id="sso-replace">Replace with ${esc(pinned.username)}</button>`;
-    status.querySelector('#sso-replace').onclick=()=>{if(turn===attempt)bind(pinned);};
+   const turn=++attempt,button=form.querySelector('button');
+   const fresh=()=>turn===attempt&&root.isConnected&&status.isConnected;
+   button.disabled=true;status.textContent='Saving…';
+   let failure;
+   try{await api('/operations/sso-binding','PUT',body);}catch(error){failure=error;}
+   finally{if(button.isConnected)button.disabled=false;}
+   if(!failure){
+    // The binding was saved even if the form changed meanwhile; say so without touching the form.
+    toast('SSO identity bound');if(fresh())await reload();return;
    }
+   if(!fresh())return;
+   const match=/already bound to (.+?)\. Resend/.exec(failure.message);
+   if(!match||body.replace_username){status.textContent=failure.message;return;}
+   const pinned={subject:body.subject,username:body.username,replace_username:match[1]};
+   status.innerHTML=`This subject already signs in as <strong>${esc(pinned.replace_username)}</strong>. <button type="button" id="sso-replace">Replace with ${esc(pinned.username)}</button>`;
+   status.querySelector('#sso-replace').onclick=()=>{if(turn===attempt)bind(pinned);};
   };
   form.onsubmit=event=>{event.preventDefault();const d=new FormData(form);bind({subject:d.get('subject'),username:d.get('username')});};
  }
