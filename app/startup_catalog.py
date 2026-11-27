@@ -202,6 +202,8 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
     {'id': 'strongswan', 'label': 'strongSwan swanctl CHILD_SA updown commands', 'trigger': 'event',
      'scope': 'system', 'parse': 'metadata',
      'locations': (_loc('/etc/swanctl', ('debian',)), _loc('/etc/strongswan', ('rpm',)))},
+    {'id': 'runit', 'label': 'runit supervised service programs', 'trigger': 'boot', 'scope': 'system',
+     'parse': 'metadata', 'locations': (_loc('/etc/service'), _loc('/etc/runit'), _loc('/etc/sv'))},
     {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),

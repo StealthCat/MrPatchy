@@ -1,3 +1,10 @@
+## 1.127.0 — 2026-11-25
+
+1. [PR #1667](https://github.com/StealthCat/MrPatchy/pull/1667): Agents hash the runit service directories (`/etc/sv`, `/etc/runit` and the `/etc/service` link) as built-in startup scope, recording metadata only, and the remaining coverage gap is labelled. Fixed: startup inventories were rejected as invalid when 8 or more custom integrity paths were saved. Compatibility: older agents keep working. After the agent update, existing baselines show the directories as newly in scope until an administrator approves a new baseline. Increment 2 of #1628; fixes #1666.
+2. [PR #1669](https://github.com/StealthCat/MrPatchy/pull/1669): CI: hosted Ubuntu jobs disable the runner image's unused `packages.microsoft.com` APT feed before refreshing package indexes. A refusal from that feed no longer fails dependency installation, including the browser job's Playwright install. Compatibility: CI only. Fixes #1668.
+
+Integrated together through batch [PR #1675](https://github.com/StealthCat/MrPatchy/pull/1675). This source update does not publish a Docker image.
+
 ## 1.126.1 — 2026-11-25
 
 1. [PR #1664](https://github.com/StealthCat/MrPatchy/pull/1664): Fixed: a worker with one AI slot gave legacy update scoring alternate turns even when scoring had reached its hourly allowance, leaving process triage waiting. The dispatcher now applies the worker's existing legacy allowance check before assigning a turn, so a zero or exhausted allowance leaves the turn to triage. Scoring resumes at the existing rolling-hour cutoff, and an interrupted scoring run still gets a turn to reconcile. The worker still rechecks under its lock. Compatibility: no configuration, schema, provider authorization or charging change. Fixes #1663.
