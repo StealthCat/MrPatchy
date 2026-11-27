@@ -329,11 +329,16 @@ def metadata(row):
     return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','dovecot')} if row is not None else None
 
 
+MAX_SCOPE=64
+
+
 def validate(inventory):
     if not isinstance(inventory,dict) or inventory.get('state') not in ('collected','incomplete'):
         raise ValueError('Invalid persistence inventory')
     scope=inventory.get('scope');entries=inventory.get('entries');gaps=inventory.get('gaps');missing=inventory.get('missing_roots')
-    if not isinstance(scope,list) or not 1<=len(scope)<=32 or not all(path_ok(p) for p in scope) or len(set(scope))!=len(scope):
+    # Built-in scope grows with each additive startup mechanism, and agents add up to 16 custom paths
+    # (target/agent.py validate_custom_paths), so the bound leaves room for both (#1666).
+    if not isinstance(scope,list) or not 1<=len(scope)<=MAX_SCOPE or not all(path_ok(p) for p in scope) or len(set(scope))!=len(scope):
         raise ValueError('Invalid persistence scope')
     if not isinstance(entries,list) or len(entries)>256 or not isinstance(gaps,list) or len(gaps)>50 or not all(isinstance(g,str) and len(g)<=8192 for g in gaps):
         raise ValueError('Invalid persistence coverage')
@@ -397,9 +402,12 @@ def validate(inventory):
 # On*Execute commands on update events; /etc/clamav on Debian, /etc/clamd.d and /etc/freshclam.conf on RPM.
 # Dovecot configuration (#1620): the master process runs as root and execs every service executable
 # its configuration names, as root unless drop_priv_before_exec is set; /etc/dovecot on both families.
+# runit service directories (#1628): runsvdir (as root) makes runsv exec each service's run, finish,
+# log/run and control programs; /etc/service (a symlink on Debian), /etc/runit and /etc/sv.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
-                        '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot')
+                        '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
+                        '/etc/service','/etc/runit','/etc/sv')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
