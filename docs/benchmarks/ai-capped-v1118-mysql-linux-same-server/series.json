@@ -1,0 +1,320 @@
+{
+  "budget_timing_differences": {
+    "budget_reconciliation": {
+      "p50_ms": {
+        "max": 17.888,
+        "median": 12.9855,
+        "min": 11.611,
+        "pair_count": 6
+      },
+      "p95_ms": {
+        "max": 24.847,
+        "median": 18.666,
+        "min": -7.538,
+        "pair_count": 6
+      }
+    },
+    "budget_reservation": {
+      "p50_ms": {
+        "max": 20.34,
+        "median": 18.6015,
+        "min": 14.863,
+        "pair_count": 6
+      },
+      "p95_ms": {
+        "max": 46.667,
+        "median": 31.598,
+        "min": 26.869,
+        "pair_count": 6
+      }
+    }
+  },
+  "capability": {
+    "fixture_budget": {
+      "cap_usd": 10,
+      "pricing_version": "synthetic-v1",
+      "settled_calls": 12,
+      "settled_microusd": 240,
+      "timezone": "UTC"
+    },
+    "input_tokens": 1200,
+    "output_tokens": 240,
+    "provider_calls": 12,
+    "runs": 8,
+    "stage_samples": {
+      "admission": 8,
+      "one_stage": 4,
+      "provider": 12,
+      "queue_age": 8,
+      "receipt_persistence": 12,
+      "run": 8,
+      "ssh_evidence": 4,
+      "two_stage": 4,
+      "usage_persistence": 12
+    },
+    "workload_fingerprint": {
+      "sha256": "4e1ca27accd9b238d272e7de57ad5995472b1694e4016c759e30f54c5069abac",
+      "version": 1
+    }
+  },
+  "capability_equivalent": true,
+  "fixture_only": true,
+  "interpretation": "Each difference is parallel minus serial within one pair. Median and range describe the spread in these disposable, synthetic fixture runs.",
+  "pair_count": 6,
+  "paired_differences": {
+    "elapsed_seconds": {
+      "absolute": {
+        "max": -2.952,
+        "median": -3.0385,
+        "min": -3.755
+      },
+      "percent": {
+        "max": -51.906,
+        "median": -53.4585,
+        "min": -59.265
+      }
+    },
+    "runs_per_second": {
+      "absolute": {
+        "max": 1.837,
+        "median": 1.625,
+        "min": 1.47
+      },
+      "percent": {
+        "max": 145.447,
+        "median": 114.815,
+        "min": 108.009
+      }
+    }
+  },
+  "pairs": [
+    {
+      "elapsed_seconds": {
+        "absolute": -3.057,
+        "baseline": 5.695,
+        "candidate": 2.638,
+        "percent": -53.679,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 4,
+      "parallel_report": "pair-1-slots-4.json",
+      "runs_per_second": {
+        "absolute": 1.628,
+        "baseline": 1.405,
+        "candidate": 3.033,
+        "percent": 115.872,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-1-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": -2.952,
+        "baseline": 5.588,
+        "candidate": 2.636,
+        "percent": -52.827,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 4,
+      "parallel_report": "pair-2-slots-4.json",
+      "runs_per_second": {
+        "absolute": 1.603,
+        "baseline": 1.432,
+        "candidate": 3.035,
+        "percent": 111.941,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-2-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": -3.027,
+        "baseline": 5.642,
+        "candidate": 2.615,
+        "percent": -53.651,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 4,
+      "parallel_report": "pair-3-slots-4.json",
+      "runs_per_second": {
+        "absolute": 1.641,
+        "baseline": 1.418,
+        "candidate": 3.059,
+        "percent": 115.726,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-3-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": -3.755,
+        "baseline": 6.336,
+        "candidate": 2.581,
+        "percent": -59.265,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 4,
+      "parallel_report": "pair-4-slots-4.json",
+      "runs_per_second": {
+        "absolute": 1.837,
+        "baseline": 1.263,
+        "candidate": 3.1,
+        "percent": 145.447,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-4-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": -3.05,
+        "baseline": 5.876,
+        "candidate": 2.826,
+        "percent": -51.906,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 4,
+      "parallel_report": "pair-5-slots-4.json",
+      "runs_per_second": {
+        "absolute": 1.47,
+        "baseline": 1.361,
+        "candidate": 2.831,
+        "percent": 108.009,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-5-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": -2.993,
+        "baseline": 5.619,
+        "candidate": 2.626,
+        "percent": -53.266,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 4,
+      "parallel_report": "pair-6-slots-4.json",
+      "runs_per_second": {
+        "absolute": 1.622,
+        "baseline": 1.424,
+        "candidate": 3.046,
+        "percent": 113.904,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-6-slots-1.json"
+    }
+  ],
+  "parallel": {
+    "ai_control_mode": "daily_cap",
+    "ai_control_mode_source": "report",
+    "concurrency": 4,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "mysql",
+    "database_version": "8.4.13",
+    "execution": "parallel",
+    "fixture_hosts": 1,
+    "persistence_delay_ms": 15,
+    "persistence_delay_source": "report",
+    "provider_delay_ms": 150,
+    "queue_age_seconds": 2,
+    "queue_age_source": "report",
+    "retained_history_rows": 1000,
+    "runs": 8,
+    "single_server_slots": 4,
+    "source_commit": "3a06f2edb48d95f781f6758fe2a8500bb4f82197",
+    "ssh_delay_ms": 50,
+    "ssh_delay_source": "report"
+  },
+  "schema_version": 1,
+  "serial": {
+    "ai_control_mode": "daily_cap",
+    "ai_control_mode_source": "report",
+    "concurrency": 1,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "mysql",
+    "database_version": "8.4.13",
+    "execution": "serial",
+    "fixture_hosts": 1,
+    "persistence_delay_ms": 15,
+    "persistence_delay_source": "report",
+    "provider_delay_ms": 150,
+    "queue_age_seconds": 2,
+    "queue_age_source": "report",
+    "retained_history_rows": 1000,
+    "runs": 8,
+    "single_server_slots": 4,
+    "source_commit": "3a06f2edb48d95f781f6758fe2a8500bb4f82197",
+    "ssh_delay_ms": 50,
+    "ssh_delay_source": "report"
+  },
+  "stage_p50_ms_differences": {
+    "admission": {
+      "max": 118.431,
+      "median": 72.45,
+      "min": 68.289
+    },
+    "claim_lock": {
+      "max": 50.633,
+      "median": 37.3375,
+      "min": 31.33,
+      "pair_count": 6
+    },
+    "claim_lock_hold": {
+      "max": 17.883,
+      "median": 15.959,
+      "min": 8.949,
+      "pair_count": 6
+    },
+    "executor_wait": {
+      "max": -1907.008,
+      "median": -1970.5515,
+      "min": -2587.237,
+      "pair_count": 6
+    },
+    "one_stage": {
+      "max": 499.426,
+      "median": 394.0425,
+      "min": 243.922
+    },
+    "provider": {
+      "max": 35.947,
+      "median": 28.3665,
+      "min": 26.533
+    },
+    "queue_age": {
+      "max": -1766.791,
+      "median": -1827.024,
+      "min": -2450.193
+    },
+    "receipt_persistence": {
+      "max": 1.764,
+      "median": 1.4795,
+      "min": 0.449
+    },
+    "run": {
+      "max": 410.554,
+      "median": 328.859,
+      "min": 166.539
+    },
+    "ssh_evidence": {
+      "max": 0.061,
+      "median": 0.0025,
+      "min": -0.001
+    },
+    "two_stage": {
+      "max": 568.777,
+      "median": 459.4805,
+      "min": 441.377
+    },
+    "usage_persistence": {
+      "max": 1.884,
+      "median": 0.8545,
+      "min": 0.407
+    }
+  }
+}
