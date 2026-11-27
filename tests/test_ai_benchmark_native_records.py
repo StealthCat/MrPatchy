@@ -7,17 +7,22 @@ from tests.test_ai_benchmark_series import run_series
 
 
 BENCHMARKS = Path(__file__).resolve().parents[1] / 'docs' / 'benchmarks'
+SAME_SERVER_SOURCE = '3a06f2edb48d95f781f6758fe2a8500bb4f82197'
 
 
 @pytest.fixture(params=[
     pytest.param(('ai-capped-v1110-sqlite-linux', 'sqlite', '3.45.1',
-                  'e8ad2b901c2becdb0de3379ffef3790c0953c690'), id='sqlite'),
+                  'e8ad2b901c2becdb0de3379ffef3790c0953c690', 8), id='sqlite'),
     pytest.param(('ai-capped-v1112-mysql-linux', 'mysql', '8.4.13',
-                  '20c950d5bbbfce78aa8cbf42b36712d62ca68b5c'), id='mysql'),
+                  '20c950d5bbbfce78aa8cbf42b36712d62ca68b5c', 8), id='mysql'),
+    pytest.param(('ai-capped-v1118-sqlite-linux-same-server', 'sqlite', '3.45.1',
+                  SAME_SERVER_SOURCE, 1), id='sqlite-same-server'),
+    pytest.param(('ai-capped-v1118-mysql-linux-same-server', 'mysql', '8.4.13',
+                  SAME_SERVER_SOURCE, 1), id='mysql-same-server'),
 ])
 def archive(request):
-    name, backend, version, source = request.param
-    return BENCHMARKS / name, backend, version, source
+    name, backend, version, source, hosts = request.param
+    return BENCHMARKS / name, backend, version, source, hosts
 
 
 @pytest.fixture
@@ -43,12 +48,14 @@ def test_retained_native_pairs_replay(archive, pairs):
 
 
 def test_retained_native_provenance_and_coverage(archive, pairs):
-    records, backend, version, source = archive
+    records, backend, version, source, hosts = archive
     expected = {'provenance.txt', 'series.json'} | {path.name for pair in pairs for path in pair}
     assert {path.name for path in records.iterdir()} == expected
     provenance = (records / 'provenance.txt').read_text(encoding='utf-8').splitlines()
     assert provenance[0] == f'commit={source}'
     assert provenance[1].startswith('Linux ')
+    if hosts == 1:
+        assert 'fixture_hosts=1' in provenance
     if backend == 'sqlite':
         assert 'flock=fcntl' in provenance
         assert f'sqlite={version}' in provenance
@@ -61,6 +68,10 @@ def test_retained_native_provenance_and_coverage(archive, pairs):
             assert report['source_commit'] == source
             assert report['database'] == backend and report['database_version'] == version
             assert report['concurrency'] == slots
+            assert report['fixture_hosts'] == hosts
+            if hosts == 1:
+                assert report['single_server_slots'] == 4
+                assert report['peak_provider_requests'] == slots
             assert report['ai_control_mode'] == 'daily_cap'
             assert report['fixture_only'] and report['errors'] == 0
             assert report['completed_subjects'] == 8 and report['approved_subjects'] == 0

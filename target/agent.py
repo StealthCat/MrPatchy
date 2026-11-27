@@ -824,10 +824,16 @@ def scan_root(path):
     finally:os.close(fd)
 
 
-def scan_entries(fd,path,report,deadline,gap,depth=0):
+def scan_entries(fd,path,report,deadline,gap,depth=0,anchors=()):
     # Keep directory handles while descending, with an explicit depth/entry budget.
-    if depth>SCAN_MAX_DEPTH:
+    # ``anchors`` are saved custom paths that a built-in root now covers (#1645): the walk
+    # always descends towards them and restarts the depth budget at each one, so each keeps
+    # the depth it had when it was traversed as its own root. Past the limit, only the saved
+    # paths and their ancestors are followed; anything else there is disclosed as a gap.
+    limited=depth>SCAN_MAX_DEPTH
+    if limited and not any(anchor.startswith(str(path)+'/') for anchor in anchors):
         gap(path,'Directory depth limit reached');return
+    skipped=False
     try:
         with os.scandir(fd) as entries:
             for entry in entries:
@@ -839,19 +845,22 @@ def scan_entries(fd,path,report,deadline,gap,depth=0):
                     gap(child,'Directory excluded from scan');continue
                 try:
                     info=entry.stat(follow_symlinks=False)
+                    if limited and str(child) not in anchors and not any(anchor.startswith(str(child)+'/') for anchor in anchors):
+                        skipped=True;continue
                     if stat.S_ISDIR(info.st_mode):
                         child_fd=os.open(entry.name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
                         try:
                             opened=os.fstat(child_fd)
                             if (opened.st_dev,opened.st_ino)!=(info.st_dev,info.st_ino):
                                 gap(child,'Directory changed during traversal');continue
-                            yield from scan_entries(child_fd,child,report,deadline,gap,depth+1)
+                            yield from scan_entries(child_fd,child,report,deadline,gap,0 if str(child) in anchors else depth+1,anchors)
                         finally:os.close(child_fd)
                     else:yield fd,path,entry.name
                 except TimeoutError:raise
                 except OSError:gap(child,'Entry inaccessible or changed during traversal')
     except TimeoutError:raise
     except OSError:gap(path,'Directory inaccessible')
+    if skipped:gap(path,'Directory depth limit reached')
 
 
 def validate_yara_rules(rules):
@@ -1764,9 +1773,11 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     try:
         for value in PERSISTENCE_ROOTS:
             path=Path(value)
+            # Saved custom paths this root now covers keep their own traversal depth.
+            anchors=tuple(p for p in paths if promoted_custom_path(p) and p.startswith(value+'/'))
             try:
                 with scan_root(path) as fd:
-                    iterator=scan_entries(fd,path,report,deadline,gap)
+                    iterator=scan_entries(fd,path,report,deadline,gap,anchors=anchors)
                     try:
                         for directory_fd,directory,name in iterator:capture(directory_fd,directory,name)
                     finally:iterator.close()

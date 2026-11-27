@@ -1,3 +1,10 @@
+## 1.121.1 — 2026-11-25
+
+1. [PR #1646](https://github.com/StealthCat/MrPatchy/pull/1646): Fixed: a saved custom path inside a newly built-in startup directory, such as `/etc/request-key.d` or `/etc/clamav`, again keeps its earlier traversal depth. Files more than 32 levels below the directory are refreshed again. Past the built-in depth limit, agents follow only saved paths and their ancestors. Unsaved regular-file, symlink and directory siblings are not collected, and each directory where something was skipped reports one `Directory depth limit reached` gap. Compatibility: agent-side traversal only. Fixes #1645.
+2. [PR #1648](https://github.com/StealthCat/MrPatchy/pull/1648): Keeps the v1.118.0 native same-server daily-cap benchmark captures for SQLite and MySQL in the repository, with replay tests. Compatibility: records and tests only. Refs #1617.
+
+Integrated together through batch [PR #1652](https://github.com/StealthCat/MrPatchy/pull/1652). This source update does not publish a Docker image.
+
 ## 1.121.0 — 2026-11-25
 
 1. [PR #1641](https://github.com/StealthCat/MrPatchy/pull/1641): Startup Files lists the autofs master-map entries in `/etc/auto.master`, with each mount point, map and an explained resolution state. Agents report only the master-map text they already hash. They never look up, read or run a map path, because a lookup under an automount point could itself mount a map or run a program. Program maps therefore stay unconfirmed, and the result is always incomplete, with blocking gaps. Compatibility: no schema, auth or response-authorization change. Increment 3 of #1375.
