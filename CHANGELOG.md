@@ -1,3 +1,15 @@
+## 1.113.2 — 2026-11-25
+
+1. [PR #1618](https://github.com/StealthCat/MrPatchy/pull/1618): The optional native capped AI benchmark workflow runs independent SQLite and MySQL 8.4 jobs on Ubuntu 24.04. Both use the same six alternating serial and four-slot fixture pairs and the existing comparator, and publish their own raw captures, accepted series and runner provenance. MySQL runs in a disposable job-local service with a schema-scoped account. Compatibility: optional workflow only. Its file path, SQLite artifact name and triggers are unchanged, with no schedule or secrets. Refs #1617.
+
+Integrated through [PR #1625](https://github.com/StealthCat/MrPatchy/pull/1625). This source update does not publish a Docker image.
+
+## 1.113.1 — 2026-11-25
+
+1. [PR #1615](https://github.com/StealthCat/MrPatchy/pull/1615): The Monit contract delivered by #1373 is reconciled with native monit 5.33.0 evidence (Ubuntu 24.04). The regression tests now replay recorded argv, uid, timeout and service results, and main's `evaluate()` matches all of them. The native escape rewrite stays a pinned `escape_sequence` gap. Fixed: a control file or include containing a NUL byte was reported as complete with the NUL inside the argv (for example `/bin/a\x00b`), although monit copies words as C strings and would run the truncated program (`/bin/a`). Such input is now a blocking `nul_byte` gap and is never complete. Compatibility: `evaluate()` results change only for text containing NUL; no caller in `app/` imports the module yet. Supersedes draft #1612. Closes #1611.
+
+Integrated through [PR #1619](https://github.com/StealthCat/MrPatchy/pull/1619). This source update does not publish a Docker image.
+
 ## 1.113.0 — 2026-11-25
 
 1. [PR #1600](https://github.com/StealthCat/MrPatchy/pull/1600): A pure Roadmap F LVM2 contract (`app/lvm_commands.py`) reports which check and repair executables, dmeventd plugins and thin/vdo event commands the `/etc/lvm` configuration makes LVM run as root. Compatibility: new module only, with no schema, route, auth, agent, scheduling or response-authorization change. Increment 1 of #1599.
