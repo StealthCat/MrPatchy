@@ -365,6 +365,8 @@ def _listing(scan_dir: dict[str, Any], result: dict[str, Any], account: str | No
     path = scan_dir['path'].rstrip('/') or '/'
     if result['directory'] is not None and result['directory'].rstrip('/') != path:
         _gap(gaps, 'directory_mismatch', path, f'runsvdir scans {result["directory"]}, not this directory.')
+        # The observed supervisor does not scan this listing, so whether and as whom it runs these is unknown.
+        account, supervised_now = None, None
     if result['directory'] is None:
         result['directory'] = path
     if scan_dir['state'] == 'unreadable':

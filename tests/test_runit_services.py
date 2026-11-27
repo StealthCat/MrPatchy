@@ -135,11 +135,26 @@ def test_control_scripts_need_owner_execute_and_a_known_letter():
 
 
 def test_non_root_supervisor_and_stopped_supervisor():
-    result = _run(_svc('a'), supervisor={'state': 'running', 'directory': '/home/u/service', 'uid': 1000})
-    assert result['exec_account'] == 'uid 1000' and 'directory_mismatch' in _codes(result)
+    result = _run(_svc('a'), supervisor={'state': 'running', 'directory': '/etc/service', 'uid': 1000})
+    assert result['exec_account'] == 'uid 1000' and result['complete'] is True
+    assert result['automatic_programs'] == ['/etc/service/a/run']
+    assert _service(result, 'a')['programs'][0]['exec_account'] == 'uid 1000'
     stopped = _run(_svc('a'), supervisor={'state': 'not_running'})
     assert stopped['automatic_programs'] == [] and _service(stopped, 'a')['starts_automatically'] is False
     assert stopped['complete'] is True
+
+
+def test_mismatched_scan_directory_leaves_automatic_execution_unknown():
+    matched = _run(_svc('a'))
+    assert _service(matched, 'a')['starts_automatically'] is True
+    assert matched['automatic_programs'] == ['/etc/service/a/run']
+    mismatched = _run(_svc('a'), supervisor={'state': 'running', 'directory': '/srv/service', 'uid': 0})
+    assert 'directory_mismatch' in _codes(mismatched) and mismatched['complete'] is False
+    svc = _service(mismatched, 'a')
+    assert svc['starts_automatically'] is None and svc['wanted_down'] is False
+    assert _programs(svc) == {'/etc/service/a/run': 'runs'}
+    assert svc['programs'][0]['automatic'] is None and svc['programs'][0]['exec_account'] is None
+    assert mismatched['automatic_programs'] == []
 
 
 @pytest.mark.parametrize('kwargs,code', [
