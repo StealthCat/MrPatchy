@@ -237,15 +237,24 @@ def _batch_scores(s, ids):
     return {row.id:row for row in s.scalars(select(UpdateScore).where(UpdateScore.id.in_(ids)))}
 
 
+def _running_score_exists():
+    run = ai_runs.AIRun
+    return select(run.id).where(
+        run.purpose == 'update_scoring', run.state == 'running',
+    ).exists()
+
+
+def _cold_scoring_work(session):
+    candidates = select(Package.id).where(*_scoring_package_filters()).exists()
+    return session.scalar(select(or_(_running_score_exists(), candidates)))
+
+
 def needs_dispatch(session):
-    """Schedule enabled scoring or recovery of a previously started run."""
+    """Keep an idle scoring pass from taking an executor slot."""
     settings = config(session)
     if settings['ai_enabled'] and settings['ai_updates_enabled']:
-        return True
-    run = ai_runs.AIRun
-    return session.scalar(select(run.id).where(
-        run.purpose == 'update_scoring', run.state == 'running',
-    ).limit(1)) is not None
+        return bool(_MEMO) or _cold_scoring_work(session)
+    return session.scalar(select(_running_score_exists()))
 
 
 def run_one():
@@ -253,11 +262,8 @@ def run_one():
         # A warm memo still uses the locked pass so an exhausted walk can prune
         # absent hosts. This probe only skips idle work. The worker rechecks
         # candidates and recovery under the same lock on a fresh session.
-        unfinished = select(ai_runs.AIRun.id).where(
-            ai_runs.AIRun.purpose == 'update_scoring', ai_runs.AIRun.state == 'running').exists()
-        candidates = select(Package.id).where(*_scoring_package_filters()).exists()
         with Session() as s:
-            if not s.scalar(select(or_(unfinished, candidates))):
+            if not _cold_scoring_work(s):
                 return
     lock=Lock('ai-update-scoring')
     if not lock.acquire(False):return
