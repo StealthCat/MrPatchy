@@ -53,3 +53,12 @@ def test_compose_passes_bounded_ai_http_connections_to_app_and_worker():
     for service in ("app", "worker"):
         block = re.search(rf"^  {service}:\n(.*?)(?=^  \w)", text, re.S | re.M).group(1)
         assert "MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}" in block
+
+
+def test_scoring_reservation_is_opt_in_for_both_worker_deployments():
+    for filename in ("compose.yaml", "compose.worker.yaml"):
+        text = (ROOT / filename).read_text()
+        worker = re.search(r"^  worker:\n(.*?)(?=^  \w|^\w|\Z)", text, re.S | re.M).group(1)
+        assert "MRPATCHY_AI_RESERVE_SCORING_SLOT: ${MRPATCHY_AI_RESERVE_SCORING_SLOT:-0}" in worker
+    for filename in (".env.example", ".env.worker.example"):
+        assert "MRPATCHY_AI_RESERVE_SCORING_SLOT=0" in (ROOT / filename).read_text().splitlines()

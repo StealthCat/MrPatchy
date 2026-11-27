@@ -14,6 +14,11 @@ window.PatchyUI=(()=>{
   shield:'<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/>',
   arrow:'<path d="M5 12h14m-6-6 6 6-6 6"/>',
   refresh:'<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 3M4 15l2 3a7 7 0 0 0 12-1"/>',
+  updates:'<circle cx="12" cy="12" r="9"/><path d="m8 12 4-4 4 4M12 8v8"/>',
+  history:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  'ai-logs':'<rect x="6" y="6" width="12" height="12" rx="2"/><path d="M10 10h4v4h-4zM9 3v3m6-3v3M9 18v3m6-3v3M3 9h3m-3 6h3m12-6h3m-3 6h3"/>',
+  files:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5M9 14l2 2 4-4"/>',
+  users:'<circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3 6"/>',
   notifications:'<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Z"/><path d="M10 21h4"/>'
  };
  const pages={files:['File status','Follow the evidence for every recorded file.'],security:['Security coverage','A clearer view of every check.'],users:['Users','Good company. Clear permissions.'],history:['Package history','Every patch leaves a footprint.'],'ai-logs':['AI run logs','A closer look at the work.'],notifications:['Notifications','Mr Patchy kept a note.'],overview:['Overview','Your fleet, in good paws.'],servers:['Server fleet','A home for every machine.'],packages:['Package inventory','Every package. Every patch.'],updates:['Available patches','Every pending update, across every server.'],repositories:['Repository sources','Good updates start at the source.'],investigations:['AI investigations','A curious raccoon. A closer look.'],schedules:['Patch schedules','A little planning goes a long way.'],activity:['Activity & audit','Follow every footprint.'],settings:['Workspace settings','Make yourself at home.']};

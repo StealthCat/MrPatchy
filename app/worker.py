@@ -971,6 +971,7 @@ def periodic_ticks(now,state):
 def _loop(reporter):
     from .worker_registry import IdentityLost,capacities
     capacity=getattr(reporter,'capacity',None) or capacities()
+    reserve_scoring_slot=getattr(reporter,'reserve_scoring',False)
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
@@ -1096,8 +1097,10 @@ def _loop(reporter):
                     # coordinator scores; any supported worker may claim triage.
                     owner=(reporter.id,reporter.boot) if hasattr(reporter,'id') else None
                     open_slots = capacity['ai'] - len(ai_tasks)
-                    scoring_available = is_leader and 'scoring' not in ai_tasks.values()
-                    scoring_turn = open_slots > 1 or (open_slots == 1 and next_ai == 'scoring')
+                    reserve_scoring = is_leader and reserve_scoring_slot
+                    scoring_active = 'scoring' in ai_tasks.values()
+                    scoring_available = is_leader and not scoring_active
+                    scoring_turn = open_slots > 1 or (open_slots == 1 and (reserve_scoring or next_ai == 'scoring'))
                     if scoring_available and scoring_turn:
                         try:
                             with Session() as s:
@@ -1107,9 +1110,14 @@ def _loop(reporter):
                             # scoring worker still checks settings and recovery.
                             log.exception('Update scoring dispatch check failed')
                     while len(ai_tasks)<capacity['ai']:
-                        if scoring_available and next_ai == 'scoring':
-                            ai_tasks[ai.submit(update_scores.run_one)]='scoring';next_ai='triage'
+                        if scoring_available and (reserve_scoring or next_ai == 'scoring'):
+                            ai_tasks[ai.submit(update_scores.run_one)] = 'scoring'
+                            scoring_active = True
+                            next_ai = 'triage'
                             scoring_available = False
+                        elif reserve_scoring and not scoring_active and len(ai_tasks) == capacity['ai'] - 1:
+                            # Keep the last slot available for the next eligible scoring batch.
+                            break
                         else:
                             ai_tasks[ai.submit(investigate_one,owner)]='triage';next_ai='scoring'
                     last_ai=now

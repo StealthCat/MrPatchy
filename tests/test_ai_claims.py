@@ -700,6 +700,7 @@ def test_scheduler_bounds_slots_alternates_purposes_and_drains(admin,monkeypatch
                             installed='1', candidate='2'))
         session.commit()
     monkeypatch.setenv('MRPATCHY_AI_CONCURRENCY',str(capacity))
+    monkeypatch.delenv('MRPATCHY_AI_RESERVE_SCORING_SLOT', raising=False)
     for module in (worker.scheduling,worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
         monkeypatch.setattr(module,'tick' if module is worker.scheduling else 'schedule_tick',lambda *a:None)
     monkeypatch.setattr(worker.incidents,'auto_plan_tick',lambda *a:None)
@@ -740,6 +741,91 @@ def test_scheduler_bounds_slots_alternates_purposes_and_drains(admin,monkeypatch
         assert submitted[0][1] is worker.update_scores.run_one
         assert any(fn is worker.investigate_one for _,fn,_ in submitted)
         assert all(args==((node.id,node.boot),) for _,fn,args in submitted if fn is worker.investigate_one)
+
+
+@pytest.mark.parametrize('role_change', [False, True])
+def test_scheduler_reserves_capacity_for_newly_eligible_scoring(admin, monkeypatch, role_change):
+    from concurrent.futures import Future
+
+    monkeypatch.setenv('MRPATCHY_AI_CONCURRENCY', '3')
+    monkeypatch.setenv('MRPATCHY_AI_RESERVE_SCORING_SLOT', '1')
+    monkeypatch.setattr(worker, 'periodic_ticks', lambda *_: None)
+    monkeypatch.setattr(worker.operations, 'collect_alerts', lambda **_: None)
+    monkeypatch.setattr(worker, 'reconcile_interrupted_advisory_jobs', lambda: None)
+    monkeypatch.setattr(worker.update_scores, '_MEMO', {})
+    submissions = []
+    tick = 0
+    now = time.time()
+
+    class Pool:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def submit(self, fn, *args):
+            future = Future()
+            if fn in (worker.investigate_one, worker.update_scores.run_one):
+                future.set_running_or_notify_cancel()
+                submissions.append((fn, future))
+            else:
+                future.set_result(None)
+            return future
+
+    class SchedulerLock:
+        def __init__(self, name):
+            assert name == 'scheduler'
+
+        def acquire(self, blocking):
+            assert not blocking
+            return self.owned()
+
+        def owned(self):
+            return not role_change or tick == 2
+
+        def release(self):
+            pass
+
+    def wait(_):
+        nonlocal tick
+        tick += 1
+        if tick == 2:
+            if role_change:
+                assert [fn for fn, _ in submissions] == [worker.investigate_one] * 3
+                submissions[-1][1].set_result(None)
+            with Session() as session:
+                session.merge(Setting(key='config', value={'ai_enabled': True,
+                    'ai_updates_enabled': True, 'ai_model': 'fixture-model'}))
+                session.add(Host(id='score-host', name='Score fixture', address='192.0.2.1',
+                                 fingerprint=''))
+                session.add(Package(id='score-host:fixture', host_id='score-host',
+                                    name='fixture', installed='1', candidate='2'))
+                session.commit()
+        if tick == 3:
+            assert [fn for fn, future in submissions if not future.done()] == [
+                worker.investigate_one, worker.investigate_one, worker.update_scores.run_one]
+            if role_change:
+                submissions[0][1].set_result(None)
+        if tick == 4:
+            active = [fn for fn, future in submissions if not future.done()]
+            assert len(active) == 3 and active.count(worker.update_scores.run_one) == 1
+            for _, future in submissions:
+                if not future.done():
+                    future.set_result(None)
+        return tick >= 4
+
+    monkeypatch.setattr(worker, 'Lock', SchedulerLock)
+    monkeypatch.setattr(worker.concurrent.futures, 'ThreadPoolExecutor', Pool)
+    monkeypatch.setattr(worker.time, 'time', lambda: now + tick * 6)
+    monkeypatch.setattr(worker.stop, 'wait', wait)
+    with worker_registry.Registration() as node:
+        worker._loop(node)
+        assert node.last_state == 'drained'
+    assert len(submissions) == (5 if role_change else 3)
 
 
 @pytest.mark.parametrize('value',[1,8])

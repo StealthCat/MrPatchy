@@ -17,6 +17,7 @@ services:
       MRPATCHY_JOB_CONCURRENCY: ${MRPATCHY_JOB_CONCURRENCY:-2}
       MRPATCHY_POLL_CONCURRENCY: ${MRPATCHY_POLL_CONCURRENCY:-8}
       MRPATCHY_AI_CONCURRENCY: ${MRPATCHY_AI_CONCURRENCY:-4}
+      MRPATCHY_AI_RESERVE_SCORING_SLOT: ${MRPATCHY_AI_RESERVE_SCORING_SLOT:-0}
       MRPATCHY_AI_HTTP_CONNECTIONS: ${MRPATCHY_AI_HTTP_CONNECTIONS:-16}
       # The coordinator tick runs in workers (the app sets DISABLE_SCHEDULER), so the expected-worker
       # and expected-controller attention notifications read these here, not on the app.

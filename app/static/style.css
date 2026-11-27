@@ -203,7 +203,7 @@ th:first-child { border-radius: 8px 0 0 8px; }th:last-child { border-radius: 0 8
 td { padding: 17px 11px; border-bottom: 1px solid #b3d2de12; vertical-align: middle; }tr:last-child td { border-bottom: 0; }tbody tr:hover { background: #a1d4d505; }
 td small { display: block; font-size: 10px; color: var(--muted); margin-top: 4px; }td strong { font-weight: 650; }
 td button { padding: 6px 10px; font-size: 11px; white-space: nowrap; }td select { min-width: 120px; }
-.actions { display: flex; gap: 9px; flex-wrap: wrap; }
+.actions { display: flex; gap: 9px; flex-wrap: wrap; align-items: center; }
 .toolbar { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: #1c344170; }
 .toolbar label { margin-bottom: 0; }.toolbar input, .toolbar select { width: auto; max-width: 340px; }.toolbar input[type=checkbox] { width: 17px; }
 input, select, textarea { width: 100%; min-width: 0; border: 1px solid #57788685; background: #0c1c26c9; color: var(--text); border-radius: 10px; padding: 11px 12px; line-height: 1.5; transition: border-color .16s, box-shadow .16s; }
@@ -601,3 +601,17 @@ button.danger { border-color: var(--red); color: var(--red); }
 /* Administrator price confirmation (#1487): keep every rate readable in the scrolling table. */
 #price-catalog-form td input{min-width:6.5em;width:6.5em}
 #price-catalog-form td code{white-space:nowrap}
+/* Administrator panels for features that were API-only (#1684). */
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+.compact-list { margin:0; padding-left:18px; }.compact-list li { margin:2px 0; }
+.fleet-query-table td small, .freeze-table td small { display:block; color:var(--muted); }
+.fleet-query-table td, .freeze-table td { vertical-align:top; }
+.probe-row, .freeze-add { border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin:0 0 12px; }
+.probe-row legend, .freeze-add legend { padding:0 6px; color:var(--muted); font-size:12px; }
+.inline-form { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }.inline-form label { flex:0 1 220px; }
+.receipt-id { font-size:11px; overflow-wrap:anywhere; }
+.sso-bind { margin-top:14px; }.sso-bind summary { cursor:pointer; font-weight:600; }
+#ai-connection-inventory table td:first-child { font-weight:600; }
+#saved-fleet-queries .card-head { flex-wrap:wrap; align-items:flex-start; }#saved-fleet-queries .card-head p { margin-bottom:0; }
+.recovery-receipt summary { cursor:pointer; list-style-position:inside; }.recovery-receipt summary h2 { display:inline; }.recovery-receipt[open] summary { margin-bottom:12px; }
+.inline-form label { margin-bottom:0; }
