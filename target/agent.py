@@ -1681,6 +1681,24 @@ def parse_kdump_conf(data):
     return result
 
 
+# autofs master map (#1375): the hashed /etc/auto.master bytes are reported as bounded latin-1 text and
+# nothing else. No map path the text names is stat-ed, opened or run: the agent cannot establish a
+# non-triggering lookup boundary (symlinks, nested automount points and the live mount topology), and a
+# lookup at or below an automount point can make automount mount a map or run a program map. Every map
+# path therefore stays unobserved and is a blocking gap in the controller view (app/autofs_program_maps).
+AUTOFS_MASTER='/etc/auto.master'
+AUTOFS_TEXT_LIMIT=65536
+
+
+def parse_autofs_master(data):
+    """Report /etc/auto.master as bounded latin-1 text. Only the already-read bytes are used; no path is looked up."""
+    result={'text':None,'error':None}
+    if len(data)>AUTOFS_TEXT_LIMIT:result['error']='over_limit';return result
+    if b'\x00' in data:result['error']='binary';return result
+    result['text']=data.decode('latin-1')
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -1691,7 +1709,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;content=bytearray() if form or at_name or anacron or tcpw or kdump else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;autofs=cron_jobs and str(path)==AUTOFS_MASTER;content=bytearray() if form or at_name or anacron or tcpw or kdump or autofs else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1737,6 +1755,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['tcp_wrappers']=parse_tcp_wrappers(bytes(content))
             if kdump and row['kind']=='regular':
                 row['kdump']=parse_kdump_conf(bytes(content))
+            if autofs and row['kind']=='regular':
+                row['autofs']=parse_autofs_master(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
