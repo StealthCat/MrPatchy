@@ -370,9 +370,60 @@ def validate_dovecot(report,path):
             if item['redacted'] and (not kept or item['key']!='executable'):raise ValueError('Invalid Dovecot setting')
 
 
+# strongSwan swanctl (#1624): the agent reduces every regular *.conf file under /etc/swanctl and
+# /etc/strongswan/swanctl to the statement stream app/strongswan_updown reads. Section names, include
+# patterns and setting keys are kept; only updown values keep their text, every other value is dropped.
+SWANCTL_DIRS=('/etc/swanctl','/etc/strongswan/swanctl')
+SWANCTL_KEYS={'parsed','statements','truncated','dropped'}
+SWANCTL_STATEMENT_KEYS={'error':{'line','op','code'},'close':{'line','op'},'include':{'line','op','pattern'},
+                        'open':{'line','op','name'},'set':{'line','op','key','value','redacted'}}
+SWANCTL_ERRORS=('syntax','unterminated_quote','escape_sequence')
+SWANCTL_STATEMENTS=2000
+SWANCTL_LINES=1024*1024+1
+SWANCTL_NAME=1024
+
+
+def swanctl_reads(path):
+    return path.endswith('.conf') and any(path.startswith(d+'/') for d in SWANCTL_DIRS)
+
+
+def _swanctl_text(value,limit=SWANCTL_NAME):
+    return isinstance(value,str) and len(value)<=limit and '\x00' not in value
+
+
+def validate_swanctl(report,path):
+    """Strictly validate one file's swanctl statement stream."""
+    if not swanctl_reads(path):raise ValueError('strongSwan statements outside the swanctl configuration')
+    if not isinstance(report,dict) or set(report)!=SWANCTL_KEYS:raise ValueError('Invalid strongSwan statements')
+    if type(report['parsed']) is not bool or type(report['truncated']) is not bool or type(report['dropped']) is not int or not 0<=report['dropped']<=SWANCTL_STATEMENTS:
+        raise ValueError('Invalid strongSwan statements')
+    items=report['statements']
+    if not isinstance(items,list) or len(items)>SWANCTL_STATEMENTS or (not report['parsed'] and (items or report['truncated'] or report['dropped'])):
+        raise ValueError('Invalid strongSwan statements')
+    last=1
+    for index,item in enumerate(items):
+        if not isinstance(item,dict) or item.get('op') not in SWANCTL_STATEMENT_KEYS or set(item)!=SWANCTL_STATEMENT_KEYS[item['op']]:
+            raise ValueError('Invalid strongSwan statement')
+        if type(item['line']) is not int or not last<=item['line']<=SWANCTL_LINES:raise ValueError('Invalid strongSwan statement')
+        last=item['line']
+        op=item['op']
+        if op=='error':
+            # Lexing gaps make strongSwan drop the whole file, so they are the only statement; a syntax gap ends the file.
+            if item['code'] not in SWANCTL_ERRORS or index!=len(items)-1 or (item['code']!='syntax' and len(items)!=1) or report['truncated']:
+                raise ValueError('Invalid strongSwan error')
+        if op=='include' and (not _swanctl_text(item['pattern']) or not item['pattern']):raise ValueError('Invalid strongSwan include')
+        if op=='open' and not _swanctl_text(item['name']):raise ValueError('Invalid strongSwan section')
+        if op=='set':
+            if not _swanctl_text(item['key']) or type(item['redacted']) is not bool:raise ValueError('Invalid strongSwan setting')
+            if item['key']=='updown':
+                if not _swanctl_text(item['value'],CRON_COMMAND_LIMIT):raise ValueError('Invalid strongSwan updown')
+            elif item['value'] is not None or item['redacted']:raise ValueError('strongSwan value not retained by agents')
+    return len(items)
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -431,6 +482,9 @@ def validate(inventory):
         if 'dovecot' in row:
             if row['kind']!='regular':raise ValueError('Dovecot statements require a regular file')
             validate_dovecot(row['dovecot'],path)
+        if 'strongswan' in row:
+            if row['kind']!='regular':raise ValueError('strongSwan statements require a regular file')
+            validate_swanctl(row['strongswan'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
