@@ -1,3 +1,9 @@
+## 1.129.0 — 2026-11-25
+
+1. [PR #1676](https://github.com/StealthCat/MrPatchy/pull/1676): Agents hash the lighttpd configuration directory `/etc/lighttpd` as built-in startup scope. The directory is additive to earlier baselines, saved custom paths inside it stay valid, and Startup Files labels it. The coverage text notes that its `include_shell`, piped-logger and FastCGI/SCGI commands are not yet parsed. The coordinator resolved its overlap with the runit scope from #1667 as a union. Compatibility: older agents keep working. After the agent update, existing baselines show the directory as newly in scope until an administrator approves a new baseline. Increment 2 of #1603.
+
+Integrated through [PR #1681](https://github.com/StealthCat/MrPatchy/pull/1681). This source update does not publish a Docker image.
+
 ## 1.128.0 — 2026-11-25
 
 1. [PR #1673](https://github.com/StealthCat/MrPatchy/pull/1673): Update scoring and the scoring queue summary parse each host's distribution metadata once per host snapshot, instead of once per package, while producing the same results. Compatibility: no API, schema, provider or authorization change. Fixes #1672.
