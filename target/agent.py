@@ -1105,7 +1105,8 @@ def security_scan(paths,yara_rules=None):
 PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/etc/cron.hourly','/etc/cron.weekly','/etc/cron.monthly',
                      '/var/spool/cron','/etc/init.d','/etc/profile.d','/etc/request-key.d',
-                     '/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl','/etc/strongswan')
+                     '/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl','/etc/strongswan',
+                     '/etc/sv','/etc/runit','/etc/service')
 PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab',
                      '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                      '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/freshclam.conf')
@@ -1119,7 +1120,11 @@ PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.d
 # as custom paths. Such a stored path is covered by the built-in directory, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
 PROMOTED_PERSISTENCE_ROOTS = ('/etc/request-key.d','/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl',
-                              '/etc/strongswan')
+                              '/etc/strongswan','/etc/sv','/etc/runit','/etc/service')
+# Built-in roots that may themselves be a symlink by design. runit's /etc/service is a directory
+# on some layouts and, on Debian and Ubuntu, the symlink runit/runsvdir/current (#1628). A
+# symlinked one is recorded as a symlink entry, never followed; a directory is walked as usual.
+SYMLINK_RECORDED_ROOTS = ('/etc/service',)
 PACKAGE_ID = r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}'
 
 
@@ -2156,6 +2161,13 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
             path=Path(value)
             # Saved custom paths this root now covers keep their own traversal depth.
             anchors=tuple(p for p in paths if promoted_custom_path(p) and p.startswith(value+'/'))
+            if value in SYMLINK_RECORDED_ROOTS:
+                try:
+                    with scan_root(path.parent) as parent:
+                        if stat.S_ISLNK(os.stat(path.name,dir_fd=parent,follow_symlinks=False).st_mode):
+                            capture(parent,path.parent,path.name);continue
+                except FileNotFoundError:report['missing_roots'].append(value);continue
+                except OSError:gap(path,'Persistence root inaccessible');continue
             try:
                 with scan_root(path) as fd:
                     iterator=scan_entries(fd,path,report,deadline,gap,anchors=anchors)
