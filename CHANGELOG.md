@@ -1,3 +1,10 @@
+## 1.114.0 — 2026-11-25
+
+1. [PR #1623](https://github.com/StealthCat/MrPatchy/pull/1623): The 12 native MySQL capped AI triage benchmark reports, their validated series and runner provenance are kept in the repository, beyond the 30-day artifact retention. Replay tests cover the full MySQL series, including its ledger latency summary, alongside the existing native SQLite coverage. Compatibility: records and tests only. Refs #1622.
+2. [PR #1626](https://github.com/StealthCat/MrPatchy/pull/1626): A pure Roadmap F Dovecot contract (`app/dovecot_services.py`) reports which non-default `service` programs the Dovecot master starts. It gives the argv, wrapper, start timing, protocol gating, and source file and line for each. The account is verified only when `drop_priv_before_exec = yes`. Every other service is reported as exec'd as root, with any later privilege drop marked unverified. Compatibility: new module only, performing no I/O and never authorizing a response. It supersedes draft #1621. Increment 1 of #1620.
+
+Integrated together through batch [PR #1627](https://github.com/StealthCat/MrPatchy/pull/1627). This source update does not publish a Docker image.
+
 ## 1.113.2 — 2026-11-25
 
 1. [PR #1618](https://github.com/StealthCat/MrPatchy/pull/1618): The optional native capped AI benchmark workflow runs independent SQLite and MySQL 8.4 jobs on Ubuntu 24.04. Both use the same six alternating serial and four-slot fixture pairs and the existing comparator, and publish their own raw captures, accepted series and runner provenance. MySQL runs in a disposable job-local service with a schema-scoped account. Compatibility: optional workflow only. Its file path, SQLite artifact name and triggers are unchanged, with no schedule or secrets. Refs #1617.
