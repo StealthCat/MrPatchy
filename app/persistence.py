@@ -511,12 +511,16 @@ def validate(inventory):
 # log/run and control programs; /etc/service (a symlink on Debian), /etc/runit and /etc/sv.
 # lighttpd configuration (#1603): include_shell commands run as root while the configuration is parsed,
 # piped loggers and FastCGI/SCGI bin-path backends as server.username; /etc/lighttpd on both families.
+# LVM2 configuration cascade (#1599): lvm commands run thin/cache check, dump and repair executables
+# and dmeventd loads plugins and runs thin/vdo commands as root; /etc/lvm/lvm.conf and lvmlocal.conf
+# only. A custom /etc/lvm saved earlier already observed them, so they keep comparing.
 # PostgreSQL configuration (#1597): the server runs archive, restore, recovery and passphrase commands
 # through /bin/sh and loads preload libraries as postgres; /etc/postgresql/<version>/<cluster> on Debian.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
                         '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
                         '/etc/swanctl','/etc/strongswan','/etc/service','/etc/runit','/etc/sv','/etc/lighttpd',
+                        '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
                         '/etc/postgresql')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
@@ -536,7 +540,8 @@ def compare(before,after):
         return {**result,'note':'Inventory scope changed; collect another complete inventory with the same scope.'}
     # Paths a later agent added to built-in scope were never observed by the earlier
     # inventory, so their files are newly covered rather than added on the host.
-    def previously_scoped(path):return within(path,removed) or not within(path,added)
+    # A built-in file inside an earlier custom directory (#1599) was observed by that directory.
+    def previously_scoped(path):return within(path,before['scope'])
     # Parsed cron detail is administrator-view data; change evidence stays metadata-only.
     old={r['path']:metadata(r) for r in before['entries']};new={r['path']:metadata(r) for r in after['entries'] if previously_scoped(r['path'])}
     changes=[]
@@ -548,7 +553,8 @@ def compare(before,after):
             changes.append({'path':path,'kind':'added' if previous is None else 'removed' if current is None else 'changed',
                             'fields':changed,'before':previous,'after':current})
     compared={'state':'compared','changes':changes,'note':'Observed changes between complete inventories, not an approved baseline or a malware verdict. Modification time alone is ignored.'}
-    if added:compared['newly_in_scope']=sorted(added)
+    newly=sorted(path for path in added if not within(path,before['scope']))
+    if newly:compared['newly_in_scope']=newly
     # Earlier custom paths now inside new built-in scope were compared, not newly covered.
     if removed:compared['previously_custom']=sorted(removed)
     return compared
