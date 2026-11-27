@@ -824,9 +824,12 @@ def scan_root(path):
     finally:os.close(fd)
 
 
-def scan_entries(fd,path,report,deadline,gap,depth=0):
+def scan_entries(fd,path,report,deadline,gap,depth=0,anchors=()):
     # Keep directory handles while descending, with an explicit depth/entry budget.
-    if depth>SCAN_MAX_DEPTH:
+    # ``anchors`` are saved custom paths that a built-in root now covers (#1645): the walk
+    # always descends towards them and restarts the depth budget at each one, so each keeps
+    # the depth it had when it was traversed as its own root.
+    if depth>SCAN_MAX_DEPTH and not any(anchor.startswith(str(path)+'/') for anchor in anchors):
         gap(path,'Directory depth limit reached');return
     try:
         with os.scandir(fd) as entries:
@@ -845,7 +848,7 @@ def scan_entries(fd,path,report,deadline,gap,depth=0):
                             opened=os.fstat(child_fd)
                             if (opened.st_dev,opened.st_ino)!=(info.st_dev,info.st_ino):
                                 gap(child,'Directory changed during traversal');continue
-                            yield from scan_entries(child_fd,child,report,deadline,gap,depth+1)
+                            yield from scan_entries(child_fd,child,report,deadline,gap,0 if str(child) in anchors else depth+1,anchors)
                         finally:os.close(child_fd)
                     else:yield fd,path,entry.name
                 except TimeoutError:raise
@@ -1742,9 +1745,11 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     try:
         for value in PERSISTENCE_ROOTS:
             path=Path(value)
+            # Saved custom paths this root now covers keep their own traversal depth.
+            anchors=tuple(p for p in paths if promoted_custom_path(p) and p.startswith(value+'/'))
             try:
                 with scan_root(path) as fd:
-                    iterator=scan_entries(fd,path,report,deadline,gap)
+                    iterator=scan_entries(fd,path,report,deadline,gap,anchors=anchors)
                     try:
                         for directory_fd,directory,name in iterator:capture(directory_fd,directory,name)
                     finally:iterator.close()
