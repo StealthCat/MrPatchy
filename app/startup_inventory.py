@@ -20,6 +20,8 @@ CATALOG=(
     ('git_system','System git configuration','/etc/gitconfig'),
     ('kdump','kdump crash-capture configuration','/etc/kdump.conf'),
     ('autofs','autofs master map','/etc/auto.master'),
+    ('request_key','keyutils request-key configuration','/etc/request-key.conf'),
+    ('request_key_d','keyutils request-key drop-ins','/etc/request-key.d'),
 )
 GAPS=[
     'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar) are not parsed into jobs; anacron and at queue parsing is described separately below.',
@@ -32,10 +34,15 @@ GAPS=[
     'autofs: /etc/auto.master is hashed as a startup file, and agents that report it also send its text (up to 64 KiB). This view lists its entries (mount point and map) with the autofs 5.1.9 master-map rules, but the agent never looks up the map paths they name, because a lookup at or below an automount point can mount a map or run a program map. Which maps are program maps that automount runs as root on each key lookup is therefore not resolved, and every entry stays unknown. Also not evaluated: the map files and their + includes and sub-maps, the /etc/auto.master.d directory, master-map + includes, the /etc/auto_master fallback, an alternate master map set in autofs.conf or on the command line, autofs.conf amd sections, nsswitch automount sources, remote (LDAP, NIS, SSS) maps and whether automount runs. The result is never complete.',
     'System git configuration: /etc/gitconfig is hashed as a startup file by agents that report it, but the shell aliases, pagers, editors, credential helpers, hook paths, fsmonitor hooks and diff, filter and merge drivers it can make git run are not yet parsed in this view. Files it includes, per-user, XDG and repository configuration, GIT_CONFIG_* environment overrides and which accounts or jobs run git are not evaluated.',
     'kdump: /etc/kdump.conf is hashed as a startup file, and agents that report it parse its kdump_pre, kdump_post and kdump_emergency programs and core_collector argv from the hashed bytes with the kdump-utils 7bf4714 rules, in capture order. Each runs as root in the crash-capture environment after a kernel crash. Options kdumpctl rejects (unknown, deprecated, empty, repeated, a second dump target or a second --mount) are listed with their line, and such a configuration loads no capture kernel, so nothing runs. Programs use the same best-effort redaction, other option values are never stored, and text over 64 KiB, with 2048 or more lines, not UTF-8 or with NUL bytes is shown as unparsed. The /etc/kdump/pre.d, post.d and emergency.d directories are not yet listed, so their programs are missing from the sequence. The hook programs themselves, other kdumpctl checks, whether the loaded crash-capture initramfs matches the current files and the Debian kdump-tools configuration are not evaluated.',
+    'keyutils request-key: /etc/request-key.conf and the /etc/request-key.d drop-in directory are hashed as startup files by agents that report them, but the rules that choose which program /sbin/request-key runs as root, with requester-chosen description and callout arguments, when the kernel asks for a missing key are not yet parsed in this view. The programs themselves, whether the kernel has key support and /sbin/request-key installed, and which processes request keys are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
     'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
 ]
+
+
+def within(path,roots):
+    return any(path==root or path.startswith(root+'/') for root in roots)
 
 
 def mechanism(path):
@@ -213,6 +220,7 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
     loading={e['path']:cron_loading.assess(e,family) for e in inventory['entries'] if cron_loading.applies(e['path'])}
     rows=[]
     newly=assessment['comparison'].get('newly_in_scope',[]) if changes is not None else []
+    earlier=assessment['comparison'].get('previously_custom',[]) if changes is not None else []
     for entry in inventory['entries']:
         key,label=mechanism(entry['path'])
         row={k:entry[k] for k in ('path','kind','uid','gid','mode','size','sha256','target') if k in entry}
@@ -233,7 +241,7 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
-        if changes is not None and any(entry['path']==root or entry['path'].startswith(root+'/') for root in newly):row['change']='not_in_baseline'
+        if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
         if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+autofs_text(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
