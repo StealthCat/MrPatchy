@@ -31,9 +31,9 @@ def test_ci_apt_preserves_signed_sources_and_is_idempotent(tmp_path, existing_so
     env = {**os.environ, 'PATH': str(binary) + os.pathsep + os.environ['PATH'],
            'MRPATCHY_CI_APT_ROOT': str(root)}
     subprocess.run(['bash', str(SCRIPT)], env=env, check=True)
-    first = {str(p.relative_to(root)): p.read_text() for p in root.rglob('*') if p.is_file()}
+    first = {p.relative_to(root).as_posix(): p.read_text() for p in root.rglob('*') if p.is_file()}
     subprocess.run(['bash', str(SCRIPT)], env=env, check=True)
-    assert first == {str(p.relative_to(root)): p.read_text() for p in root.rglob('*') if p.is_file()}
+    assert first == {p.relative_to(root).as_posix(): p.read_text() for p in root.rglob('*') if p.is_file()}
     assert first['apt.conf.d/trusted-policy'] == 'APT::Get::AllowUnauthenticated "false";\n'
     assert first['apt.conf.d/99-mrpatchy-ci-network'] == (
         'Acquire::Retries "2";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n')
@@ -83,6 +83,38 @@ def test_ci_apt_routes_regional_ec2_mirror_to_primary_archive(tmp_path):
     subprocess.run(['bash', str(SCRIPT)], env=env, check=True)
     assert (root / 'apt-mirrors.txt').read_text() == first
     assert (root / 'sources.list.d' / 'ubuntu.sources').read_text() == rewritten
+
+
+def test_ci_apt_disables_only_the_unused_runner_microsoft_feed(tmp_path):
+    root = tmp_path / 'apt'
+    sources = root / 'sources.list.d'
+    sources.mkdir(parents=True)
+    microsoft_source = sources / 'microsoft-prod.list'
+    runner_feed = (
+        'deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] '
+        'https://packages.microsoft.com/ubuntu/24.04/prod noble main\n'
+    )
+    other_feeds = (
+        '# A comment is already inactive.\n'
+        'deb https://packages.microsoft.com/ubuntu/22.04/prod jammy main\n'
+        'deb https://packages.microsoft.com/ubuntu/24.04/prod-preview noble main\n'
+        'deb https://packages.microsoft.com.example.org/ubuntu/24.04/prod noble main\n'
+    )
+    microsoft_source.write_text(runner_feed + other_feeds)
+    other_source = sources / 'other.list'
+    other_source.write_text(runner_feed)
+    binary = tmp_path / 'bin'
+    binary.mkdir()
+    sudo = binary / 'sudo'
+    sudo.write_text('#!/bin/sh\nexec "$@"\n')
+    sudo.chmod(0o755)
+    env = {**os.environ, 'PATH': str(binary) + os.pathsep + os.environ['PATH'],
+           'MRPATCHY_CI_APT_ROOT': str(root)}
+
+    for _ in range(2):
+        subprocess.run(['bash', str(SCRIPT)], env=env, check=True)
+        assert microsoft_source.read_text() == '# Disabled for Mr Patchy CI: ' + runner_feed + other_feeds
+        assert other_source.read_text() == runner_feed
 
 
 def test_browser_dependency_install_retries_bounded_attempts():
