@@ -35,7 +35,8 @@ process command line and its arguments:
   discarded"), so none of its children run anything.
 - ``include`` patterns are relative to the including file's directory; the
   default ``swanctl.conf`` includes ``conf.d/*.conf``. A pattern with no
-  match includes nothing.
+  match includes nothing. An empty pattern (``include ""``) is ignored
+  ("no include pattern specified, ignored") and the rest of the file loads.
 
 Unobserved files or listings, unsupported include patterns, unknown escapes,
 unbalanced quotes or braces, NUL bytes, over-limit input and a non-root or
@@ -54,7 +55,7 @@ import posixpath
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 SOURCE_VERSION = 'strongSwan 5.9.13 (Ubuntu 24.04 strongswan-swanctl 5.9.13-2ubuntu4.24.04.5)'
 
 DEFAULT_CONFIG = '/etc/swanctl/swanctl.conf'
@@ -169,6 +170,10 @@ class _Reader:
             self._parse(tokens, path, section, depth)
 
     def _include(self, pattern: str, path: str, line: int, section: dict[str, Any], depth: int) -> None:
+        if not pattern:
+            # Native 5.9.13: "no include pattern specified, ignored"; the rest of the file still loads (#1680).
+            self.log.note('include_pattern_empty', file=path, line=line)
+            return
         if not pattern.startswith('/'):
             pattern = posixpath.join(posixpath.dirname(path), pattern)
         pattern = posixpath.normpath(pattern)

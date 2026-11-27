@@ -2181,9 +2181,10 @@ def parse_swanctl(data):
             if key=='updown':
                 kept,redacted=redact_cron_command(joined)
                 if bounded(kept,CRON_COMMAND_LIMIT) is None:break
-            elif joined:result['dropped']+=1
             # A following '=' or '{' starts the next statement, which reports the syntax gap on its own line.
             if not add({'line':line,'op':'set','key':key,'value':kept,'redacted':redacted}):break
+            # Counted only once the setting is emitted: a setting past the statement cap is not a dropped value (#1680).
+            if key!='updown' and joined:result['dropped']+=1
             i=j;continue
         add({'line':line,'op':'error','code':'syntax'});break
     return result
