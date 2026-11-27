@@ -21,8 +21,8 @@ module.exports=async(page,capture)=>{
   await page.getByRole('heading',{name:'runit service programs (3 entries · 3 runnable)',exact:true}).waitFor();
   await page.getByText('This list is incomplete (2 blocking gaps) and is not a safety verdict.',{exact:false}).waitFor();
   const text=await page.locator('.startup-runit-services').innerText();
-  assert.match(text,/\/etc\/service\/ssh\/run Runs · Unknown: runsvdir not observed/);assert.match(text,/\/etc\/service\/ssh\/finish No: not executable/);
-  assert.match(text,/\/etc\/service\/ssh\/control\/t Runs · Only on an sv command or shutdown/);
+  assert.match(text,/\/etc\/service\/ssh\/run\s+Runs · Unknown: runsvdir not observed/);assert.match(text,/\/etc\/service\/ssh\/finish\s+No: not executable/);
+  assert.match(text,/\/etc\/service\/ssh\/control\/t\s+Runs · Only on an sv command or shutdown/);
   assert.match(text,/<img src=x onerror=window\.__runitInjected=true>\s+Wanted down/);assert.match(text,/dangling symlink/);
   await page.locator('.startup-runit-gaps summary').click();
   const gaps=await page.locator('.startup-runit-gaps').innerText();
