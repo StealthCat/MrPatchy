@@ -294,3 +294,20 @@ def test_agent_parses_the_hashed_bytes_without_running_anything(tmp_path, monkey
     assert [s['service'] for s in view['services']] == ['custom'] and view['services'][0]['exec_account'] == 'root'
     without = agent.persistence_inventory(time.monotonic() + 5, cron_jobs=False)
     assert all('dovecot' not in r for r in without['entries'])
+
+
+@pytest.mark.parametrize('include', ['!include_try linked/local.conf', '!include_try linked/*.conf', '!include_try linked/sub/*.conf',
+                                     '!include linked/local.conf', '!include linked/*.conf'])
+def test_includes_behind_a_recorded_symlink_stay_unobserved(include):
+    inventory = _inventory({CONF: include + '\n', MASTER: MASTER_TEXT})
+    inventory['entries'].append({'path': '/etc/dovecot/linked', 'kind': 'symlink', 'uid': 0, 'gid': 0, 'mode': 0o777, 'size': 4,
+                                 'mtime_ns': 1, 'target': '/srv/dovecot'})
+    persistence.validate(inventory)
+    view = startup_inventory.dovecot_view(inventory)
+    assert view['config_accepted'] is False and view['services'] == []
+    assert any(g['code'] in ('unobserved_file', 'unobserved_glob') and g['blocking'] for g in view['gaps'])
+    # A sibling path without a symlink ancestor is still an observed absence.
+    plain = _inventory({CONF: include.replace('linked/', 'other/') + '\n'})
+    plain['entries'] += inventory['entries'][2:]
+    result = startup_inventory.dovecot_view(plain)
+    assert not any(g['code'] in ('unobserved_file', 'unobserved_glob') for g in result['gaps'])

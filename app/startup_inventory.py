@@ -226,13 +226,16 @@ def dovecot_view(inventory):
     entries={e['path']:e for e in inventory['entries'] if e['path'].startswith(persistence.DOVECOT_DIR+'/')}
     complete=inventory['state']=='collected' and persistence.DOVECOT_DIR not in inventory['missing_roots']
     files={};gaps=[]
+    # The agent records a symlink without traversing it, so nothing behind one is observed.
+    links=[p for p,e in entries.items() if e['kind']=='symlink']
+    def behind_link(path):return any(path.startswith(link+'/') for link in links)
     for path,entry in entries.items():
         state=dovecot_state(entry)
         if state=='parsed' and not entry['dovecot']['truncated']:files[path]=dovecot_text(entry['dovecot'])
         elif state=='parsed':gaps.append({'code':'statements_truncated','path':path,'blocking':True})
     class Observed(dict):
         def __contains__(self,path):
-            return dict.__contains__(self,path) or (complete and path.startswith(persistence.DOVECOT_DIR+'/') and path not in entries
+            return dict.__contains__(self,path) or (complete and path.startswith(persistence.DOVECOT_DIR+'/') and path not in entries and not behind_link(path)
                                                    and not any(p.startswith(path+'/') for p in entries))
         def __getitem__(self,path):
             if dict.__contains__(self,path):return dict.__getitem__(self,path)
@@ -246,7 +249,7 @@ def dovecot_view(inventory):
             if item['op']!='include' or not re.search(r'[*?\[]',item['pattern']):continue
             pattern=posixpath.normpath(posixpath.join(posixpath.dirname(entry['path']),item['pattern']))
             directory,name=posixpath.split(pattern)
-            if not complete or re.search(r'[*?\[]',directory) or not (directory+'/').startswith(persistence.DOVECOT_DIR+'/'):continue
+            if not complete or behind_link(directory+'/') or directory in links or re.search(r'[*?\[]',directory) or not (directory+'/').startswith(persistence.DOVECOT_DIR+'/'):continue
             children={p[len(directory)+1:].split('/')[0] for p in entries if p.startswith(directory+'/')}
             matched=sorted(c for c in children if not c.startswith('.') and fnmatch.fnmatchcase(c,name))
             # A matching subdirectory is not a file Dovecot can read, and the inventory does not record it as one.
