@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence, strongswan_updown
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, lighttpd_commands, persistence, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -53,7 +53,7 @@ GAPS=[
     'Dovecot: the /etc/dovecot directory (dovecot.conf, conf.d and any other files it holds, including passdb/userdb and key files, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate the non-default service executables the root master process execs from dovecot.conf, as root unless drop_priv_before_exec is set. Only section headers, include patterns and the service and global settings the evaluation reads are stored; every other value is dropped. Included files outside /etc/dovecot (such as /usr/share/dovecot/protocols.d) and symlinked files are not observed, so an evaluation that reaches them stops with a blocking gap. /etc/passwd and /etc/group are not captured, so accounts are shown by name only. Configuration passed with -c, whether dovecot runs, the programs themselves, checkpassword passdb/userdb programs, quota_warning and sieve extprograms are not evaluated.',
     'strongSwan: the Debian-family /etc/swanctl directory (swanctl.conf, conf.d and the x509, private and other credential directories, as metadata and SHA-256 only) and the RPM-family /etc/strongswan directory (swanctl/, strongswan.conf and strongswan.d) are hashed as startup files, and agents that report them parse every *.conf file under /etc/swanctl and /etc/strongswan/swanctl from the hashed bytes with the strongSwan 5.9.13 settings rules. This view evaluates swanctl.conf and its includes and shows the updown command charon runs through /bin/sh for each connection child on CHILD_SA up and down, with its source line, shell syntax and whether swanctl discards the connection. Only section names, include patterns, setting names and updown commands are stored; every other value, including secrets, is dropped, and commands use the same best-effort redaction. Included files that are not *.conf files under those directories, symlinked files and files over 1 MiB, not UTF-8 or with NUL bytes are not observed, so an evaluation that reaches them reports a blocking gap. charon is assumed to run as root, as the packaged service does. The Debian-family /etc/strongswan.conf and /etc/strongswan.d (which can disable the updown plugin), whether the other settings of each connection load, legacy ipsec.conf leftupdown and leftfirewall, configuration passed with swanctl --file, connections loaded over vici by other clients, whether charon runs and the commands themselves are not evaluated.',
     'runit: /etc/service (on Debian and Ubuntu a symlink to runit/runsvdir/current, recorded, not followed), the /etc/runit directory (the 1, 2 and 3 stage scripts, ctrlaltdel and the runsvdir run-level directories of service links) and the /etc/sv service definitions (run, finish, log/run, down and control files) are hashed as startup files, as metadata and SHA-256 only, by agents that report them. Which programs runsvdir makes runsv run, on which event and as which account is not yet evaluated in this view. Service directories outside these paths (such as /usr/share/runit/sv or a runsvdir started with another directory), the supervise state under /run/runit, the contents of run scripts (including any chpst privilege drop), whether runsvdir runs and the programs themselves are not evaluated.',
-    'lighttpd: the /etc/lighttpd directory (lighttpd.conf, conf-available, conf-enabled and any other files it holds, including certificates and keys, as metadata and SHA-256 only) is hashed as startup files by agents that report it, but the include_shell commands lighttpd runs as root through $SHELL -c while it parses the configuration, the piped loggers (server.errorlog, server.breakagelog and accesslog.filename starting with |) and the FastCGI/SCGI bin-path backends it starts as server.username are not yet parsed in this view. include_shell output, included files outside /etc/lighttpd (such as /usr/share/lighttpd helper scripts), configuration passed with -f, cgi.assign interpreters, mod_magnet scripts, whether lighttpd runs and the commands themselves are not evaluated.',
+    'lighttpd: the /etc/lighttpd directory (lighttpd.conf, conf-available, conf-enabled and any other files it holds, including certificates and keys, as metadata and SHA-256 only) is hashed as startup files, and agents that report them reduce every *.conf file under it, from the hashed bytes, to lighttpd 1.4.74 configuration tokens. This view evaluates /etc/lighttpd/lighttpd.conf and its includes and shows the include_shell commands lighttpd runs through $SHELL -c as root while it parses the configuration, the piped loggers (server.errorlog, server.breakagelog and accesslog.filename starting with |) and the FastCGI/SCGI bin-path backends it starts as server.username, each with its source line and enclosing conditional. Keys, references and integers are kept; strings are kept only for include targets, conditional patterns, var.* values, the account, logger and syslog settings, keys the same file references, and backend extension and option names with bin-path and max-procs values. Every other string, including socket paths and bin-environment values, is dropped, and kept strings use the same best-effort redaction. include_shell output, /etc/passwd and /etc/group are not captured, so a configuration that uses include_shell or sets server.username reports a blocking gap; symlinks are followed only to a reported file under /etc/lighttpd, and included files outside it (such as /usr/share/lighttpd helper scripts), files over 1 MiB, not UTF-8 or with NUL bytes are not observed. The service is assumed to start as root with SHELL unset in /. Configuration passed with -f, cgi.assign interpreters, mod_magnet scripts, module load success, whether lighttpd runs and the commands themselves are not evaluated.',
     'LVM2: /etc/lvm/lvm.conf and /etc/lvm/lvmlocal.conf are hashed as startup files, as metadata and SHA-256 only, by agents that report them, but which thin/cache check, dump and repair executables, vdoformat and fsadm programs lvm commands run as root, the lvmlockctl kill command, and the dmeventd executable, plugin libraries and thin/vdo commands the configuration names are not yet evaluated in this view. Host-tag files (/etc/lvm/lvm_<tag>.conf), profiles, the archive, backup, cache and devices directories, configuration passed with --config or LVM_SYSTEM_DIR, copies in the initramfs, whether dmeventd runs and the programs themselves are not observed or evaluated. A custom /etc/lvm path saved earlier keeps its own scope and leaves the two files to built-in scope.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
@@ -406,6 +406,107 @@ def strongswan_text_search(entry):
     return ' '.join(i.get('pattern') or i.get('name') or i.get('value') or '' for i in entry.get('strongswan',{}).get('statements',()))
 
 
+# lighttpd configuration (#1603): agents report each /etc/lighttpd/**/*.conf file as the contract's tokens.
+LIGHTTPD_ROOT='/etc/lighttpd'
+# Strings the agent did not retain are rebuilt as this marker; a command that contains it is not trusted.
+LIGHTTPD_DROPPED='[value not retained by the agent]'
+_LIGHTTPD_ERROR_TEXT={'unterminated_string':'"','bad_conditional':'$'}
+_LIGHTTPD_GAP_KEYS=('code','blocking','path','pattern','source','line','command','key','name','user','group','directive','limit','message','detail')
+_LIGHTTPD_COMMAND_KEYS=('kind','key','extension','command','argv','account','uid','gid','runs','source','line','condition',
+                        'starts','privileged_at_service_start','max_procs')
+
+
+def _lighttpd_quote(value):
+    # lighttpd's lexer only unescapes \" inside strings, and agents never report a string ending in a backslash.
+    return '"'+value.replace('"','\\"')+'"'
+
+
+def lighttpd_text(report):
+    """Rebuild configuration text the contract tokenizes identically: every token on its reported line."""
+    out=[];line=1
+    for kind,value,end in report['tokens']:
+        if kind=='str':text=_lighttpd_quote(value)
+        elif kind=='drop':text=_lighttpd_quote(LIGHTTPD_DROPPED)
+        elif kind=='int':text=str(value)
+        elif kind=='error':text=_LIGHTTPD_ERROR_TEXT[value]
+        else:text=value
+        start=end-(value.count('\n') if kind=='str' else 0)
+        if start>line:out.append('\n'*(start-line));line=start
+        out.append(' '+text);line=end
+    # No trailing newline: an unterminated string or a lone '$' must stay on its own reported line.
+    return ''.join(out)
+
+
+def lighttpd_state(entry):
+    """Whether lighttpd tokens were reported, refused or not reported (older agent) for this file."""
+    if 'lighttpd' in entry:return 'parsed' if entry['lighttpd']['parsed'] else 'unparsed'
+    return 'not_reported' if entry['kind']=='regular' and persistence.lighttpd_reads(entry['path']) else None
+
+
+def lighttpd_view(inventory):
+    """Evaluate app/lighttpd_commands from /etc/lighttpd/lighttpd.conf over the reported tokens. Unreported,
+    unparsed and truncated files and anything outside /etc/lighttpd stay unobserved; absent paths, include
+    glob matches and symlinks to a reported file under /etc/lighttpd (Debian's conf-enabled) are observed
+    only when the stored inventory is a complete collection. include_shell output, /etc/passwd and
+    /etc/group are not captured, and the service is assumed to start with SHELL unset in /. Never a safety
+    verdict."""
+    root=LIGHTTPD_ROOT
+    entries={e['path']:e for e in inventory['entries'] if e['path'].startswith(root+'/')}
+    complete=inventory['state']=='collected' and root not in inventory['missing_roots']
+    links={p:e['target'] for p,e in entries.items() if e['kind']=='symlink'}
+    def behind_link(path):return any(path.startswith(link+'/') for link in links)
+    texts={};gaps=[]
+    for path,entry in entries.items():
+        state=lighttpd_state(entry)
+        if state=='parsed' and not entry['lighttpd']['truncated']:texts[path]=lighttpd_text(entry['lighttpd'])
+        elif state=='parsed':gaps.append({'code':'statements_truncated','path':path,'blocking':True})
+    files=dict(texts)
+    if complete:
+        # lighttpd opens a symlink's target; one that is a reported file in the same collection is observed.
+        for link,target in links.items():
+            resolved=posixpath.normpath(posixpath.join(posixpath.dirname(link),target))
+            if resolved in texts and not behind_link(resolved):files[link]=texts[resolved]
+    def absent(path):
+        return complete and path.startswith(root+'/') and path not in entries and not behind_link(path) and not any(p.startswith(path+'/') for p in entries)
+    class Observed(dict):
+        def __contains__(self,path):return dict.__contains__(self,path) or absent(path)
+        def __getitem__(self,path):
+            if dict.__contains__(self,path):return dict.__getitem__(self,path)
+            if absent(path):return None
+            raise KeyError(path)
+        def get(self,path,default=None):return dict.get(self,path) if dict.__contains__(self,path) else None if absent(path) else default
+    def matches(pattern):
+        directory,base=posixpath.split(pattern)
+        if not complete or lighttpd_commands._GLOB.search(directory) or '[' in base or not (directory+'/').startswith(root+'/'):return None
+        if directory in links or behind_link(directory):return None
+        names=sorted({p[len(directory)+1:].split('/')[0] for p in entries if p.startswith(directory+'/')})
+        # glob(3): a leading dot is matched only by a leading dot in the pattern.
+        return [directory+'/'+n for n in names if fnmatch.fnmatchcase(n,base) and (not n.startswith('.') or base.startswith('.'))]
+    observed=Observed(files);globs={}
+    for _ in range(lighttpd_commands.MAX_DEPTH+1):
+        result=lighttpd_commands.evaluate(files=observed,globs=globs,environment={},cwd='/')
+        found={g['pattern']:matches(g['pattern']) for g in result['gaps'] if g['code']=='unobserved_glob' and g['pattern'] not in globs}
+        found={k:v for k,v in found.items() if v is not None}
+        if not found:break
+        globs.update(found)
+    gaps+=[{'code':'environment_assumed','blocking':False,'detail':'lighttpd is assumed to start as root from its packaged service, with SHELL unset (so /bin/sh) in /; its environment is not observed.'}]
+    for row in result['commands']:
+        if LIGHTTPD_DROPPED in row['command']:
+            gaps.append({'code':'value_not_retained','blocking':True,'source':row['source'],'line':row['line'],
+                         'detail':'This command uses a value the agent does not retain, so the command shown is not the one lighttpd runs.'})
+    gaps+=[{k:(str(g[k])[:300] if isinstance(g[k],str) else g[k]) for k in _LIGHTTPD_GAP_KEYS if k in g} for g in result['gaps']]
+    notes=[{k:(str(n[k])[:300] if isinstance(n[k],str) else n[k]) for k in ('code','command','source','line') if k in n} for n in result['notes']]
+    return {'commands':[{k:r.get(k) for k in _LIGHTTPD_COMMAND_KEYS} for r in result['commands'][:200]],
+            'root_commands':[i for i in result['root_commands'] if i<200],'files':result['files'][:100],
+            'config_path':result['config_path'],'config_accepted':result['config_accepted'],'server_user':result['server_user'],
+            'server_uid':result['server_uid'],'config_complete':result['complete'],'complete':False,'gaps':gaps[:100],'notes':notes[:100],
+            'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
+
+
+def lighttpd_text_search(entry):
+    return ' '.join(str(v) for k,v,_ in entry.get('lighttpd',{}).get('tokens',()) if k in ('str','word'))
+
+
 def with_at_jobs(rows,inventory,q,changes):
     """Attach parsed at jobs to matching rows and add entries found only by an at account or command."""
     by_path={r['path']:r for r in rows}
@@ -466,6 +567,11 @@ def catalog_rows(inventory):
             states=[strongswan_state(e) for e in found]
             parsed=states.count('parsed')
             label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
+        if key=='lighttpd':
+            found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
+            states=[lighttpd_state(e) for e in found]
+            parsed=states.count('parsed')
+            label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
         if key=='at':
             states=[at_state(e) for e in inventory['entries']]
             parsed=states.count('parsed');missing=states.count('not_reported')
@@ -520,11 +626,15 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if state:row['strongswan_state']=state
         if state=='parsed':row['strongswan_statements']=len(entry['strongswan']['statements'])
         if entry['path'] in SWANCTL_CONFIG_PATHS and state=='parsed':row['strongswan']=strongswan_view(inventory,entry['path'])
+        state=lighttpd_state(entry)
+        if state:row['lighttpd_state']=state
+        if state=='parsed':row['lighttpd_tokens']=len(entry['lighttpd']['tokens'])
+        if entry['path']==lighttpd_commands.DEFAULT_CONFIG and state=='parsed':row['lighttpd']=lighttpd_view(inventory)
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+lighttpd_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)
