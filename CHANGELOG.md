@@ -1,3 +1,9 @@
+## 1.121.0 — 2026-11-25
+
+1. [PR #1641](https://github.com/StealthCat/MrPatchy/pull/1641): Startup Files lists the autofs master-map entries in `/etc/auto.master`, with each mount point, map and an explained resolution state. Agents report only the master-map text they already hash. They never look up, read or run a map path, because a lookup under an automount point could itself mount a map or run a program. Program maps therefore stay unconfirmed, and the result is always incomplete, with blocking gaps. Compatibility: no schema, auth or response-authorization change. Increment 3 of #1375.
+
+Integrated through [PR #1649](https://github.com/StealthCat/MrPatchy/pull/1649). This source update does not publish a Docker image.
+
 ## 1.120.0 — 2026-11-25
 
 1. [PR #1643](https://github.com/StealthCat/MrPatchy/pull/1643): Agents hash ClamAV configuration as built-in startup scope: the Debian `/etc/clamav` directory, the RPM-family `/etc/clamd.d` directory and `/etc/freshclam.conf`. ClamAV runs commands from these files on detections and database updates. Earlier baselines still compare, and saved custom paths naming these locations stay valid. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Increment 2 of #1607.

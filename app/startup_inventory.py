@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import cron_loading, persistence
+from . import autofs_program_maps, cron_loading, persistence
 from .db import Host
 from .incidents import digest
 import re
@@ -34,7 +34,7 @@ GAPS=[
     'Exception for anacron: /etc/anacrontab is hashed and its jobs are parsed into period, delay, job identifier and command from the hashed bytes by agents that report them, with the START_HOURS_RANGE and RANDOM_DELAY settings. Other environment values are counted, never stored; commands use the same best-effort redaction and are bounded to 64 jobs; lines anacron would reject are counted as unparsed. Scripts that run-parts commands execute, anacron timestamps and whether anacron runs (cron, systemd timer or boot) are not evaluated.',
     'TCP wrappers: /etc/hosts.allow and /etc/hosts.deny are hashed as startup files, and agents that report them parse their spawn, twist and aclexec commands from the hashed bytes with the libwrap 7.6.q (Debian patch set) rules: backslash continuations, the 2048-byte line limit, first-match order and option errors. Each command runs through /bin/sh -c as the daemon process user, often root, because the patched user and group options change no identity. A command after an entry that matches every daemon and client is shown as shadowed; weaker patterns are never treated as shadowing. Commands use the same best-effort redaction, are bounded to 64 per file and other option values are not stored. Whether any running daemon is linked against libwrap, which daemon and client names match a request, and what the commands do are not evaluated.',
     'rsnapshot: /etc/rsnapshot.conf is hashed as a startup file by agents that report it, but its cmd_preexec, cmd_postexec, backup_script, backup_exec, program-path and backtick include_conf commands are not yet parsed in this view. Files it includes, alternate configurations passed with -c and which cron entry or timer invokes rsnapshot are not evaluated.',
-    'autofs: /etc/auto.master is hashed as a startup file by agents that report it, but the program maps it names, which automount runs as root on each key lookup, are not yet resolved in this view. The /etc/auto.master.d directory, the map files and + includes it names, the /etc/auto_master fallback, an alternate master map set in the autofs configuration or on the command line, nsswitch automount sources, remote (LDAP, NIS, SSS) maps and whether automount runs are not evaluated.',
+    'autofs: /etc/auto.master is hashed as a startup file, and agents that report it also send its text (up to 64 KiB). This view lists its entries (mount point and map) with the autofs 5.1.9 master-map rules, but the agent never looks up the map paths they name, because a lookup at or below an automount point can mount a map or run a program map. Which maps are program maps that automount runs as root on each key lookup is therefore not resolved, and every entry stays unknown. Also not evaluated: the map files and their + includes and sub-maps, the /etc/auto.master.d directory, master-map + includes, the /etc/auto_master fallback, an alternate master map set in autofs.conf or on the command line, autofs.conf amd sections, nsswitch automount sources, remote (LDAP, NIS, SSS) maps and whether automount runs. The result is never complete.',
     'System git configuration: /etc/gitconfig is hashed as a startup file by agents that report it, but the shell aliases, pagers, editors, credential helpers, hook paths, fsmonitor hooks and diff, filter and merge drivers it can make git run are not yet parsed in this view. Files it includes, per-user, XDG and repository configuration, GIT_CONFIG_* environment overrides and which accounts or jobs run git are not evaluated.',
     'kdump: /etc/kdump.conf is hashed as a startup file, and agents that report it parse its kdump_pre, kdump_post and kdump_emergency programs and core_collector argv from the hashed bytes with the kdump-utils 7bf4714 rules, in capture order. Each runs as root in the crash-capture environment after a kernel crash. Options kdumpctl rejects (unknown, deprecated, empty, repeated, a second dump target or a second --mount) are listed with their line, and such a configuration loads no capture kernel, so nothing runs. Programs use the same best-effort redaction, other option values are never stored, and text over 64 KiB, with 2048 or more lines, not UTF-8 or with NUL bytes is shown as unparsed. The /etc/kdump/pre.d, post.d and emergency.d directories are not yet listed, so their programs are missing from the sequence. The hook programs themselves, other kdumpctl checks, whether the loaded crash-capture initramfs matches the current files and the Debian kdump-tools configuration are not evaluated.',
     'keyutils request-key: /etc/request-key.conf and the /etc/request-key.d drop-in directory are hashed as startup files, and agents that report them parse each file /sbin/request-key reads (drop-ins named *.conf, not starting with a dot, that are regular files) from the hashed bytes with the keyutils 1.6.3 rules. Each rule shows its operation, key type, description and callout patterns, whether the kernel upcall (create) reaches it, the pipe mode and the command it runs as root, with requester-controlled inputs (%d, %c, %{type:description} and piped callout information) named. Lines that abort lookups (4096 bytes or more, or ending before the program) are listed with the patterns a request must match first; one that matches every kernel lookup in any read file makes every lookup abort. Commands use the same best-effort redaction, patterns are bounded to 256 characters, rules and aborts to 64 per file, and text over 64 KiB, not UTF-8 or with NUL bytes is shown as unparsed. The readdir() order of drop-ins is not captured, so which of two equally specific rules in different files wins is not shown. The programs themselves, which key types an unprivileged requester may ask for, whether the kernel has key support and /sbin/request-key installed, and which processes request keys are not evaluated.',
@@ -157,6 +157,40 @@ def tcp_wrappers_text(entry):
     return ' '.join(c['option']+' '+c['command']+' '+' '.join(c['daemons']) for c in entry.get('tcp_wrappers',{}).get('commands',()))
 
 
+AUTOFS_CAPTURE_GAPS=(
+    {'code':'map_paths_not_observed','detail':'The agent never looks up map paths, because a lookup at or below an automount point can mount a map or run a program map; whether each named map is a program, a text map or missing is unknown.','blocking':True},
+    {'code':'nsswitch_not_observed','detail':'The automount: sources in /etc/nsswitch.conf were not captured; files is assumed, and other sources can add maps.','blocking':True},
+    {'code':'autofs_conf_not_observed','detail':'autofs.conf was not captured; master_map_name could select a different master map.','blocking':True},
+)
+
+
+def autofs_state(entry):
+    """Whether master-map entries were reported, refused, not reported (older agent) or do not apply."""
+    if 'autofs' in entry:return 'resolved' if entry['autofs']['error'] is None else entry['autofs']['error']
+    return 'not_reported' if entry['kind']=='regular' and entry['path']==persistence.AUTOFS_MASTER else None
+
+
+def autofs_view(entry):
+    """Master-map entries from the reported text. No map path is observed, so none resolves to a program; never a safety verdict."""
+    data=entry['autofs']
+    # Only the master map itself is observed (its stat is the hashed row). Every other path is unobserved.
+    stats={persistence.AUTOFS_MASTER:{'kind':'regular','mode':entry['mode']}}
+    result=autofs_program_maps.evaluate_master(files={persistence.AUTOFS_MASTER:data['text']},stats=stats)
+    gaps=[dict(g) for g in AUTOFS_CAPTURE_GAPS]
+    gaps+=result['gaps']
+    entries=[{k:e.get(k) for k in ('mount_point','type','format','map','resolved','path')} for e in result['entries']]
+    return {'programs':[{k:p[k] for k in ('path','argv','user','cwd','trigger')} for p in result['programs']],
+            'entries':entries,'gaps':[{'code':g['code'],'detail':g['detail'],'blocking':bool(g.get('blocking')),
+            **{k:str(g[k])[:200] for k in ('path','mount_point','source') if g.get(k) is not None}} for g in gaps[:autofs_program_maps.MAX_GAPS]],
+            'complete':False,'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
+
+
+def autofs_text(entry):
+    if 'autofs' not in entry or entry['autofs']['error'] is not None:return ''
+    view=autofs_view(entry)
+    return ' '.join(p['path'] for p in view['programs'])+' '+' '.join((e['mount_point'] or '')+' '+(e['map'] or '')+' '+(e['path'] or '') for e in view['entries'])
+
+
 def with_at_jobs(rows,inventory,q,changes):
     """Attach parsed at jobs to matching rows and add entries found only by an at account or command."""
     by_path={r['path']:r for r in rows}
@@ -199,6 +233,10 @@ def catalog_rows(inventory):
             found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key]
             rules=sum(len(e['request_key']['rules']) for e in found if 'request_key' in e)
             label+=f' · {rules} parsed rule{"" if rules==1 else "s"}'+(' · every lookup aborts' if any(e.get('request_key',{}).get('universal_abort_line') is not None for e in found) else '')+(' · not reported by this agent version' if any(request_key_state(e)=='not_reported' for e in found) else '')
+        if key=='autofs':
+            found=[e for e in inventory['entries'] if e['path']==persistence.AUTOFS_MASTER]
+            entries=sum(len(autofs_view(e)['entries']) for e in found if autofs_state(e)=='resolved')
+            label+=f' · {entries} master-map entr{"y" if entries==1 else "ies"} · map paths not looked up'+(' · not reported by this agent version' if any(autofs_state(e)=='not_reported' for e in found) else '')
         if key=='at':
             states=[at_state(e) for e in inventory['entries']]
             parsed=states.count('parsed');missing=states.count('not_reported')
@@ -237,11 +275,14 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         state=request_key_state(entry)
         if state:row['request_key_state']=state
         if 'request_key' in entry:row['request_key']={**entry['request_key'],'lookups':lookups}
+        state=autofs_state(entry)
+        if state:row['autofs_state']=state
+        if state=='resolved':row['autofs']=autofs_view(entry)
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)
