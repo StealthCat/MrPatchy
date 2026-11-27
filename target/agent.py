@@ -1109,13 +1109,20 @@ PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/etc/sv','/etc/runit','/etc/service')
 PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab',
                      '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
-                     '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/freshclam.conf')
+                     '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/freshclam.conf',
+                     '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf')
+# Built-in files inside a directory an administrator could previously select as a custom path
+# (#1599). Only these two LVM cascade files are built-in: the rest of /etc/lvm (archive/, backup/,
+# cache/) holds metadata backups that would consume the entry budget. A saved custom ancestor such
+# as /etc/lvm stays valid, and its traversal leaves these files to built-in scope so each is
+# inventoried once.
+NESTED_PERSISTENCE_FILES = ('/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf')
 # Built-in files that administrators could previously select as custom paths. A stored
 # custom path equal to one of them is already covered by built-in scope, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
 PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf',
                               '/etc/gitconfig','/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf',
-                              '/etc/freshclam.conf')
+                              '/etc/freshclam.conf','/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf')
 # Built-in directories that administrators could previously select, or select files inside,
 # as custom paths. Such a stored path is covered by the built-in directory, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
@@ -1146,7 +1153,7 @@ def validate_custom_paths(paths):
             continue
         if not isinstance(value,str) or not 1<len(value)<=4096 or not value.startswith('/') or value.startswith('//') or str(Path(value))!=value or '..' in Path(value).parts or any(ord(c)<32 for c in value):raise ValueError('Custom paths must be canonical absolute paths without control characters')
         if scan_excluded(Path(value)):raise ValueError('Custom path is in an excluded filesystem or quarantine directory')
-        if any(value==root or value.startswith(root+'/') or root.startswith(value+'/') for root in selected):raise ValueError('Custom paths must not overlap each other or built-in startup scope')
+        if any(value==root or value.startswith(root+'/') or (root.startswith(value+'/') and root not in NESTED_PERSISTENCE_FILES) for root in selected):raise ValueError('Custom paths must not overlap each other or built-in startup scope')
         selected.append(value)
     return selected
 
@@ -2199,7 +2206,10 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                             if (opened.st_dev,opened.st_ino)!=(info.st_dev,info.st_ino):raise ValueError('Custom directory replaced before traversal')
                             iterator=scan_entries(root,path,report,deadline,gap)
                             try:
-                                for directory_fd,directory,name in iterator:capture(directory_fd,directory,name)
+                                for directory_fd,directory,name in iterator:
+                                    # Built-in scope already inventoried these nested files (#1599).
+                                    if str(directory/name) in NESTED_PERSISTENCE_FILES:continue
+                                    capture(directory_fd,directory,name)
                             finally:iterator.close()
                             with scan_root(path) as current:
                                 after=os.fstat(current)
