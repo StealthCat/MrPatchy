@@ -209,6 +209,11 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
     {'id': 'lvm', 'label': 'LVM check/repair executables and dmeventd plugins and commands', 'trigger': 'event',
      'scope': 'system', 'parse': 'metadata',
      'locations': (_loc('/etc/lvm/lvm.conf'), _loc('/etc/lvm/lvmlocal.conf'))},
+    # Debian keeps postgresql.conf under /etc/postgresql/<version>/<cluster>; RPM keeps it in the data
+    # directory, which agents do not collect (only its configuration files belong in startup scope).
+    {'id': 'postgresql', 'label': 'PostgreSQL archive, recovery and passphrase commands and preload libraries',
+     'trigger': 'event', 'scope': 'system', 'parse': 'metadata',
+     'locations': (_loc('/etc/postgresql', ('debian',)), _loc('/var/lib/pgsql/data', ('rpm',)))},
     {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),

@@ -1,3 +1,10 @@
+## 1.132.0 — 2026-11-25
+
+1. [PR #1678](https://github.com/StealthCat/MrPatchy/pull/1678): Agents hash PostgreSQL cluster configuration in `/etc/postgresql` (Debian family) as built-in startup scope. Changes to `archive_command`, preload libraries and similar settings now show against a baseline. The RPM data directory and `postgresql.auto.conf` are not collected; this is disclosed as a coverage gap, and they can be added as custom paths. Compatibility: older agents keep working. After the agent update, existing baselines show the directory as newly in scope until an administrator approves a new baseline. Increment 2 of #1597.
+2. [PR #1688](https://github.com/StealthCat/MrPatchy/pull/1688): An opt-in `MRPATCHY_AI_RESERVE_SCORING_SLOT=1` (default 0) reserves one coordinator AI slot for update scoring. Eligible scoring batches can then start during busy triage, within the existing AI task limit. The reservation applies only while the worker holds scheduler leadership, and it requires at least two AI threads. The setting is passed through Compose and documented in README. Compatibility: off by default, with no schema, provider or authorization change. Fixes #1687.
+
+Integrated together through batch [PR #1693](https://github.com/StealthCat/MrPatchy/pull/1693). This source update does not publish a Docker image.
+
 ## 1.131.0 — 2026-11-25
 
 1. [PR #1685](https://github.com/StealthCat/MrPatchy/pull/1685): UI review. Eight administrator features that were previously API-only now have UI panels on their existing endpoints:
