@@ -86,17 +86,23 @@ def _inventory_scoring_context(inventory):
 
 class _ScoringHost(NamedTuple):
     id: str
-    inventory: dict
+    context: dict
     version_index: dict
 
 
 def evidence(host, package, index=None):
     # No host addresses, repository credentials, source files or process evidence.
     # Classification is a signal, never a claimed CVE/changelog verification.
-    if index is None and isinstance(host, _ScoringHost):
-        index = host.version_index
-    return {'package':package.name,'installed':versions(host.inventory,package.name,package.installed,index),
-            'candidate':package.candidate,**_inventory_scoring_context(host.inventory),
+    if isinstance(host, _ScoringHost):
+        context = inventory = host.context
+        if index is None:
+            index = host.version_index
+    else:
+        inventory = host.inventory
+        context = _inventory_scoring_context(inventory)
+    return {'package':package.name,'installed':versions(inventory,package.name,package.installed,index),
+            'candidate':package.candidate,'distribution':context['distribution'].copy(),
+            'package_manager':context['package_manager'],
             'priority_signal':package.priority,'priority_source':'manual override' if package.priority_manual else 'repository classification',
             'held':package.held,'package_state':package.dpkg_state,
             'evidence_limit':'Repository classification and versions only. No candidate changelog, CVE fix status, exploitability or service exposure has been verified.'}
@@ -110,7 +116,7 @@ _MEMO = {}
 _MEMO_HOSTS = 256  # Warm entries stay resident; overflow uses pass-local indexes
 
 
-def _memo(host):
+def _memo(host, context=None):
     """Reuse the per-host memo while the inventory inputs to scoring stay stable."""
     inventory = host.inventory
     entry = _MEMO.get(host.id)
@@ -118,11 +124,12 @@ def _memo(host):
         # Overflow uses a memo for this pass without evicting a warm server.
         return None, version_index(inventory), {}
 
-    context = _inventory_scoring_context(inventory)
+    if context is None:
+        context = _inventory_scoring_context(inventory)
     # RPM versions come from installed records. APT uses the package-row
     # fallback, which is already part of the per-package memo key.
     if context['package_manager'] == 'rpm':
-        context['rpm_packages'] = inventory.get('rpm_packages', [])
+        context = {**context, 'rpm_packages': inventory.get('rpm_packages', [])}
     fp = hashlib.sha256(json.dumps(context, sort_keys=True, default=str).encode()).hexdigest()
     if entry is None or entry[0] != fp:
         entry = _MEMO[host.id] = (fp, version_index(inventory), {})
@@ -157,10 +164,9 @@ def _load_scoring_hosts(s, host_ids):
     for host_id in host_ids:
         raw = raw_hosts.pop(host_id, None)
         if raw is not None:
-            memo = _memo(raw)
-            inventory = {key: raw.inventory[key] for key in ('os', 'package_manager')
-                         if key in raw.inventory}
-            prepared[host_id] = _ScoringHost(host_id, inventory, memo[1]), memo
+            context = _inventory_scoring_context(raw.inventory)
+            memo = _memo(raw, context)
+            prepared[host_id] = _ScoringHost(host_id, context, memo[1]), memo
     return prepared
 
 
@@ -357,15 +363,18 @@ def run_one():
                             if package and package.candidate:
                                 names_by_host.setdefault(score.host_id, set()).add(package.name)
                         hosts = {
-                            host.id: (host, version_index(host.inventory, names=names_by_host[host.id]))
+                            host.id: _ScoringHost(
+                                host.id, _inventory_scoring_context(host.inventory),
+                                version_index(host.inventory, names=names_by_host[host.id]),
+                            )
                             for host in s.execute(
                                 select(Host.id, Host.inventory).where(Host.id.in_(names_by_host)))
                         }
                         for item in rows:
                             row = scores[item['id']]
                             package = packages.get(package_ids[row.id])
-                            host, index = hosts.get(row.host_id, (None, None))
-                            if not package or not host or not package.candidate or identity(host,package,index)!=row.id:
+                            host = hosts.get(row.host_id)
+                            if not package or not host or not package.candidate or identity(host,package)!=row.id:
                                 row.state='superseded';row.next_at=0;row.explanation='Package evidence changed while scoring; a new assessment will be requested.';continue
                             row.score=item['score'];row.confidence='low';row.explanation=item['explanation'];row.limitations='Metadata-only estimate; CVE/advisory applicability and changelogs are not verified. '+item['limitations'];row.state='complete';row.next_at=0;row.completed=time.time()
                         s.commit()

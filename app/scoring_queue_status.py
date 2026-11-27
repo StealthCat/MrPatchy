@@ -92,7 +92,7 @@ def _current_candidates(session):
         if missing:
             for host_id, inventory in session.execute(select(Host.id, Host.inventory).where(Host.id.in_(missing))):
                 index = version_index(inventory)
-                context = {key: inventory[key] for key in ('os', 'package_manager') if key in inventory}
+                context = update_scores._inventory_scoring_context(inventory)
                 hosts[host_id] = update_scores._ScoringHost(host_id, context, index)
         for package in packages:
             host = hosts.get(package.host_id)

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 import sqlalchemy.orm
 from sqlalchemy import event, select
-from app import ai, ai_runs, update_scores
+from app import ai, ai_runs, scoring_queue_status, update_scores
 from app.db import Session, Host, Package, Setting
 from app.security import seal
 
@@ -208,3 +208,64 @@ def test_malformed_replies_record_no_result_persistence(admin, monkeypatch, malf
     run, persisted, _ = outcomes()
     assert run.state == 'error' and persisted == []
     assert 'complete' not in score_states()
+
+
+def test_queue_summary_parses_distribution_once_across_pages(admin, monkeypatch):
+    seed(count=11)
+    monkeypatch.setattr(scoring_queue_status, 'CHUNK', 2)
+    parsed = []
+    parse = update_scores._inventory_scoring_context
+
+    def observe(inventory):
+        parsed.append(inventory['os'])
+        return parse(inventory)
+
+    monkeypatch.setattr(update_scores, '_inventory_scoring_context', observe)
+    result = admin.get('/api/update-scores/status')
+    assert result.status_code == 200
+    assert result.json()['counts']['eligible'] == 11
+    assert parsed == ['ID=debian\nVERSION_ID=12']
+
+
+@pytest.mark.parametrize('manager', ['apt', 'rpm'])
+@pytest.mark.parametrize('changed', [False, True])
+def test_scoring_reuses_distribution_until_fresh_revalidation(admin, monkeypatch, manager, changed):
+    seed(count=5)
+    initial_os = 'ID=fixture\nVERSION_ID="1"\nPRETTY_NAME="Fixture Linux"'
+    fresh_os = initial_os.replace('VERSION_ID="1"', 'VERSION_ID="2"') if changed else initial_os
+    with Session.begin() as session:
+        host = session.get(Host, 'persist-host')
+        packages = list(session.scalars(select(Package).order_by(Package.available_since)))
+        host.inventory = {'os': initial_os, 'package_manager': manager}
+        if manager == 'rpm':
+            host.inventory = {**host.inventory, 'rpm_packages': [
+                {'name': 'pkg0', 'arch': 'noarch', 'evr': evr} for evr in ('0.9-1', '1.0-2')
+            ]}
+            packages[0].name = 'pkg0:noarch'
+            packages[0].id = 'persist-host:pkg0:noarch'
+        expected = [{'id': update_scores.identity(host, package), **update_scores.evidence(host, package)}
+                    for package in packages]
+    assert expected[0]['installed'] == (['0.9-1', '1.0-2'] if manager == 'rpm' else ['1'])
+
+    parsed = []
+    parse = update_scores._inventory_scoring_context
+
+    def observe(inventory):
+        parsed.append(inventory['os'])
+        return parse(inventory)
+
+    def provider(payload, key):
+        assert json.loads(payload['input']) == expected
+        if changed:
+            with Session.begin() as session:
+                host = session.get(Host, 'persist-host')
+                host.inventory = {**host.inventory, 'os': fresh_os}
+        return reply(payload, key)
+
+    monkeypatch.setattr(update_scores, '_MEMO', {})
+    monkeypatch.setattr(update_scores, '_inventory_scoring_context', observe)
+    monkeypatch.setattr(ai, 'request', provider)
+    update_scores.run_one()
+
+    assert score_states() == (['superseded'] if changed else ['complete']) * 5
+    assert parsed == [initial_os, fresh_os]
