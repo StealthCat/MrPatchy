@@ -304,3 +304,21 @@ def test_older_agent_kdump_conf_is_marked_not_reported(admin):
     row, = view['items']
     assert row['kdump_state'] == 'not_reported' and 'kdump' not in row
     assert next(c for c in view['catalog'] if c['id'] == 'kdump')['label'].endswith('not reported by this agent version')
+
+
+@pytest.mark.parametrize('text, parsed', [
+    ('\n' * 2047 + 'kdump_pre /fixture/no-execution', False),
+    ('\n' * 2046 + 'kdump_pre /fixture/no-execution\n', True),
+    ('\n' * 2046 + 'kdump_pre /fixture/no-execution', True),
+    ('\n' * 2047 + 'bogus 1', False),
+    ('\n' * 2046 + 'bogus 1', True),
+    ('\n' * 2048, False),
+])
+def test_line_cutoff_counts_an_unterminated_final_line(text, parsed):
+    """Review of a2e8f49: 2047 newlines plus a final line is 2048 lines and must not reach the controller."""
+    result = agent.parse_kdump_conf(text.encode())
+    assert result['parsed'] is parsed
+    assert agent_view(text) == contract_view(text)
+    persistence.validate(stored_inventory(text))
+    if parsed:
+        assert max([h['line'] or 0 for h in result['hooks']] + [r['line'] for r in result['refusals']]) == 2047

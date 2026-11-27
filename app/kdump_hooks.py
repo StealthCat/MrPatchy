@@ -127,6 +127,11 @@ def _gap(gaps: list[dict[str, Any]], code: str, detail: str = '', path: str | No
     gaps.append(gap)
 
 
+def _line_count(text: str) -> int:
+    """Lines including an unterminated final line, so every parsed line number is below ``MAX_LINES``."""
+    return text.count('\n') + (text != '' and not text.endswith('\n'))
+
+
 def _nbytes(text: str) -> int:
     return len(text.encode('utf-8', 'surrogateescape'))
 
@@ -230,7 +235,7 @@ def assess(config_text: Any, directories: Any) -> dict[str, Any]:
     if not isinstance(config_text, str):
         _gap(gaps, 'config_not_observed', 'The kdump.conf text was not supplied.', CONFIG_PATH)
         return result
-    if '\x00' in config_text or _nbytes(config_text) > MAX_CONFIG_BYTES or config_text.count('\n') >= MAX_LINES:
+    if '\x00' in config_text or _nbytes(config_text) > MAX_CONFIG_BYTES or _line_count(config_text) >= MAX_LINES:
         _gap(gaps, 'config_too_large', 'The configuration is over the size limit or contains NUL bytes.',
              CONFIG_PATH)
         return result

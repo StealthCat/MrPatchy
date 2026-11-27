@@ -1614,7 +1614,8 @@ def parse_kdump_conf(data):
     if len(data)>KDUMP_TEXT_LIMIT or b'\x00' in data:return result
     try:text=data.decode('utf-8')
     except UnicodeDecodeError:return result
-    if text.count('\n')>=KDUMP_LINE_LIMIT:return result
+    # An unterminated final line is a line too, so every reported line number stays below the limit.
+    if text.count('\n')+(not text.endswith('\n') and text!='')>=KDUMP_LINE_LIMIT:return result
     options={};targets=0
     for number,opt,val in _kdump_lines(text):
         if opt in _KDUMP_DEPRECATED:code='deprecated_option'
