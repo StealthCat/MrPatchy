@@ -971,6 +971,7 @@ def periodic_ticks(now,state):
 def _loop(reporter):
     from .worker_registry import IdentityLost,capacities
     capacity=getattr(reporter,'capacity',None) or capacities()
+    reserve_scoring_slot=getattr(reporter,'reserve_scoring',False)
     # Exactly one scheduler process. Pools isolate slow APT and AI from 30-second SSH collection.
     with concurrent.futures.ThreadPoolExecutor(max_workers=capacity['polls']) as polls, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['jobs']) as jobs, concurrent.futures.ThreadPoolExecutor(max_workers=capacity['ai']) as ai:
         leader=Lock('scheduler');is_leader=False
@@ -1096,7 +1097,7 @@ def _loop(reporter):
                     # coordinator scores; any supported worker may claim triage.
                     owner=(reporter.id,reporter.boot) if hasattr(reporter,'id') else None
                     open_slots = capacity['ai'] - len(ai_tasks)
-                    reserve_scoring = is_leader and capacity.get('reserve_scoring', False)
+                    reserve_scoring = is_leader and reserve_scoring_slot
                     scoring_active = 'scoring' in ai_tasks.values()
                     scoring_available = is_leader and not scoring_active
                     scoring_turn = open_slots > 1 or (open_slots == 1 and (reserve_scoring or next_ai == 'scoring'))

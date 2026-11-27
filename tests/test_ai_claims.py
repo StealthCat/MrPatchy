@@ -700,6 +700,7 @@ def test_scheduler_bounds_slots_alternates_purposes_and_drains(admin,monkeypatch
                             installed='1', candidate='2'))
         session.commit()
     monkeypatch.setenv('MRPATCHY_AI_CONCURRENCY',str(capacity))
+    monkeypatch.delenv('MRPATCHY_AI_RESERVE_SCORING_SLOT', raising=False)
     for module in (worker.scheduling,worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
         monkeypatch.setattr(module,'tick' if module is worker.scheduling else 'schedule_tick',lambda *a:None)
     monkeypatch.setattr(worker.incidents,'auto_plan_tick',lambda *a:None)
