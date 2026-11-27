@@ -260,8 +260,11 @@ def validate(inventory):
 # autofs master map (#1375): automount runs program maps it names as root on every key lookup.
 # keyutils request-key configuration (#1632): the kernel's key upcall runs /sbin/request-key as
 # root, which runs the program the best-matching rule names with requester-chosen arguments.
+# ClamAV configuration (#1607): clamd runs VirusEvent on every detection and freshclam runs its
+# On*Execute commands on update events; /etc/clamav on Debian, /etc/clamd.d and /etc/freshclam.conf on RPM.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
-                        '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d')
+                        '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
+                        '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
