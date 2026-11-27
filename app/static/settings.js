@@ -6,6 +6,8 @@ const SETTINGS_SECTIONS={
  https:['HTTPS & certificates','Internal and external TLS profiles.','tls ssl certificate acme lets encrypt local ca domain port'],
  history:['History retention','Observation and inventory retention.','retention observation inventory history days cleanup'],
  agents:['Agent maintenance','Fleet defaults for automatic agent upgrade and repair.','agent health maintenance automatic upgrade repair helper collector drift default override inherit'],
+ recovery:['Backup & recovery','Recovery readiness from recorded backup and restore drills.','backup restore recovery drill readiness receipt archive disaster key custody'],
+ integrations:['Alerts & sign-in','Webhook and SMTP alerts, SSO, key rotation and staged rollouts.','alert webhook smtp email notification sso oidc single sign-on key rotation rollout canary advisory observability ebpf'],
  malware:['Malware response','Fleet automatic-response policy for detected malware. Recorded only; not enforced yet.','malware quarantine terminate containment automatic response exclusions signature unknown policy']
 };
 function settingsMatches(query,sections=SETTINGS_SECTIONS){
@@ -155,7 +157,9 @@ async function settings(revision=renderRevision){
   const draw=()=>{hub.innerHTML=settingsHubCards(input.value);};
   input.oninput=draw;draw();return;
  }
- if(section==='ai'){renderAISettings(data,revision,container);return;}
+ if(section==='ai'){renderAISettings(data,revision,container);const usage=document.createElement('section');usage.className='card';usage.id='ai-connection-inventory';container.append(usage);AdminTools.aiConnections(usage);return;}
+ if(section==='recovery'){await AdminTools.recoveryReadiness(container,revision);return;}
+ if(section==='integrations'){AdminTools.integrations(container);return;}
  if(section==='agents'){container.innerHTML='<div class="card" id="agent-defaults"><p class="help">Loading agent maintenance defaults…</p></div>';await agentMaintenanceDefaults(revision);return;}
  if(section==='malware'){container.innerHTML='<div class="card" id="malware-policy"><p class="help">Loading malware response policy…</p></div>';await malwarePolicySettings(revision);return;}
  if(section==='database'){container.innerHTML='<div class="card" id="database-settings"><p class="help">Loading database settings…</p></div>';await databaseSettings(revision);return;}
