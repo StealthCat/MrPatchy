@@ -212,8 +212,12 @@ def clamav_view(entry):
     if not report['parsed']:return view
     values=report['values'];by_line={v['line']:v for v in values.values()}
     if 'daemon' in values:view['daemon_line']=values['daemon']['line']
-    rows=clamav_event_commands.commands_from_values(tool,report['accepted'],{n:{'value':v['value'],'line':v['line']} for n,v in values.items()},
-                                                    entry['path'],started_as_root=True,freshclam_daemon=None)
+    plain={n:{'value':v['value'],'line':v['line']} for n,v in values.items()}
+    rows=clamav_event_commands.commands_from_values(tool,report['accepted'],plain,entry['path'],started_as_root=True,freshclam_daemon=None)
+    # Outside daemon mode freshclam applies its own substitutions (OnOutdatedExecute loses its first %v)
+    # before EXIT_<n> is read, so the conditional exit comes from the contract's foreground result.
+    foreground={r['directive']:r['exit_status_instead'] for r in clamav_event_commands.commands_from_values(
+        tool,report['accepted'],plain,entry['path'],started_as_root=True,freshclam_daemon=False)} if tool=='freshclam' else {}
     for row in rows:
         source=by_line[row['line']]
         view['commands'].append({'directive':row['directive'],'line':row['line'],'trigger':row['trigger'],'runs':row['runs'],
@@ -221,7 +225,7 @@ def clamav_view(entry):
             'account':{k:row['account'][k] for k in ('name','source','line') if k in row['account']},
             'waits':row['waits'] if tool=='clamd' else None,'substitutions':row['substitutions'],
             'command_source':row.get('command_source'),
-            'exit_status_outside_daemon':clamav_event_commands.exit_status(row['configured']) if tool=='freshclam' else None})
+            'exit_status_outside_daemon':foreground.get(row['directive'])})
     return view
 
 

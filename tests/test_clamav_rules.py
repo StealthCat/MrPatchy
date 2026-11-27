@@ -277,3 +277,15 @@ def test_symlinked_configuration_is_marked_not_followed(admin):
     store(stored_inventory({}, others=[entry(CLAMD, '', parsed=False, kind='symlink')]))
     rows = {r['path']: r for r in admin.get('/api/hosts/one/security/startup-inventory').json()['items']}
     assert rows[CLAMD]['clamav_state'] == 'not_followed'
+
+
+def test_foreground_exit_follows_the_contract_substitution_order(admin):
+    """OnOutdatedExecute loses its first %v before EXIT_<n> is read outside daemon mode (review of e99fed4)."""
+    text = 'OnOutdatedExecute %vEXIT_7\nOnUpdateExecute /bin/u %vEXIT_3\nOnErrorExecute %vEXIT_4\n'
+    store(stored_inventory({FRESHCLAM: text}))
+    rows = {r['path']: r for r in admin.get('/api/hosts/one/security/startup-inventory').json()['items']}
+    fresh = {c['directive']: c for c in rows[FRESHCLAM]['clamav']['commands']}
+    contract = {c['directive']: c['exit_status_instead'] for c in
+                clamav_event_commands.resolve(freshclam_conf=text, freshclam_daemon=False)['commands']}
+    assert contract == {'OnUpdateExecute': None, 'OnErrorExecute': None, 'OnOutdatedExecute': 7}
+    assert {d: c['exit_status_outside_daemon'] for d, c in fresh.items()} == contract

@@ -387,11 +387,6 @@ def commands_from_values(tool: str, accepted: bool, values: dict[str, dict[str, 
     return _freshclam(parsed, path, freshclam_daemon, started_as_root)
 
 
-def exit_status(command: str) -> int | None:
-    """The status freshclam exits with instead of running ``command`` outside daemon mode, if any."""
-    return _exit_status(command)
-
-
 def resolve(*, clamd_conf: str | bytes | None = None, freshclam_conf: str | bytes | None = None,
             clamd_path: str = CLAMD_CONF, freshclam_path: str = FRESHCLAM_CONF,
             started_as_root: bool | None = True, freshclam_daemon: bool | None = None) -> dict[str, Any]:
