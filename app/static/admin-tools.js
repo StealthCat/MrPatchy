@@ -173,14 +173,24 @@ const AdminTools=(()=>{
    confirm.onclick=async()=>{confirm.disabled=true;try{await api('/operations/sso-bindings/'+encodeURIComponent(row.subject_digest),'DELETE');if(revision===modalRevision)$('#modal').close();toast('SSO identity unbound');if(root.isConnected)await reload();}catch(error){toast(error.message);confirm.disabled=false;}};
   });
   const form=root.querySelector('#sso-bind-form'),status=root.querySelector('#sso-bind-status');
-  const bind=async replace=>{
-   const d=new FormData(form),body={subject:d.get('subject'),username:d.get('username')};if(replace)body.replace_username=replace;
+  // Each submit is one attempt. A replacement confirmation is pinned to the exact subject and
+  // account that attempt sent, and an edit or a newer attempt withdraws it (#1685 review).
+  let attempt=0;
+  const withdraw=()=>{if(status.querySelector('#sso-replace')){attempt++;status.textContent='';}};
+  form.addEventListener('input',withdraw);form.addEventListener('change',withdraw);
+  const bind=async body=>{
+   const turn=++attempt;
    const result=await run(form.querySelector('button'),status,()=>api('/operations/sso-binding','PUT',body));
-   if(result&&root.isConnected){toast('SSO identity bound');await reload();return;}
+   if(turn!==attempt||!root.isConnected)return;
+   if(result){toast('SSO identity bound');await reload();return;}
    const match=/already bound to (.+?)\. Resend/.exec(status.textContent);
-   if(match&&status.isConnected){status.innerHTML=`This subject already signs in as <strong>${esc(match[1])}</strong>. <button type="button" id="sso-replace">Replace with ${esc(body.username)}</button>`;status.querySelector('#sso-replace').onclick=()=>bind(match[1]);}
+   if(match&&!body.replace_username&&status.isConnected){
+    const pinned={subject:body.subject,username:body.username,replace_username:match[1]};
+    status.innerHTML=`This subject already signs in as <strong>${esc(pinned.replace_username)}</strong>. <button type="button" id="sso-replace">Replace with ${esc(pinned.username)}</button>`;
+    status.querySelector('#sso-replace').onclick=()=>{if(turn===attempt)bind(pinned);};
+   }
   };
-  form.onsubmit=event=>{event.preventDefault();bind(null);};
+  form.onsubmit=event=>{event.preventDefault();const d=new FormData(form);bind({subject:d.get('subject'),username:d.get('username')});};
  }
 
  /* ---------- Recovery readiness (Settings → Backup & recovery) ---------- */
@@ -227,10 +237,15 @@ const AdminTools=(()=>{
  /* ---------- Incident case owner and notes (server Security tab) ---------- */
  async function incidentCase(hostId,incident,reload){
   const base='/hosts/'+encodeURIComponent(hostId)+'/security/incidents/'+encodeURIComponent(incident.id);
+  // Discard the responses if the administrator navigated or opened another dialog meanwhile,
+  // so a late dialog can never show one server's incident on another server's page.
+  const view=page,opened=renderRevision,dialog=modalRevision;
+  const stale=()=>!currentView(opened,view)||modalRevision!==dialog;
   let state,users;
-  try{[state,users]=await Promise.all([api(base+'/case'),api('/users')]);}catch(error){toast(error.message);return;}
+  try{[state,users]=await Promise.all([api(base+'/case'),api('/users')]);}catch(error){if(!stale())toast(error.message);return;}
+  if(stale())return;
   const admins=users.filter(u=>u.role==='admin'&&u.enabled);
-  modal('Incident case',`<p>${esc(incident.evidence?.path||incident.id)}</p><p>Owner: <strong>${esc(state.owner||'Unassigned')}</strong></p><p class="help">Ownership and notes are recorded on the incident timeline and in the audit log. They never change the incident status, evidence or response plans.</p>
+  modal('Incident case',`<p>Server: <strong>${esc(hostName(hostId))}</strong></p><p>${esc(incident.evidence?.path||incident.id)}</p><p>Owner: <strong>${esc(state.owner||'Unassigned')}</strong></p><p class="help">Ownership and notes are recorded on the incident timeline and in the audit log. They never change the incident status, evidence or response plans.</p>
    <form id="incident-owner-form"><h3>Assign owner</h3><label>Responsible administrator<select name="owner"><option value="">Unassigned</option>${admins.map(u=>`<option value="${esc(u.username)}" ${u.username===state.owner?'selected':''}>${esc(u.username)}</option>`).join('')}</select></label><label>Reason<textarea name="reason" required minlength="10" maxlength="4000"></textarea></label><button>Save owner</button><p class="help" role="status"></p></form>
    <form id="incident-note-form"><h3>Add investigator note</h3><label>Note<textarea name="note" required maxlength="4000"></textarea></label><button>Add note</button><p class="help" role="status"></p></form>`);
   const revision=modalRevision,owner=$('#incident-owner-form'),note=$('#incident-note-form');

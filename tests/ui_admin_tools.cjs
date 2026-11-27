@@ -120,9 +120,25 @@ module.exports=async(page,capture)=>{
  await sso.locator('summary',{hasText:'Bind an identity'}).click();
  await sso.locator('[name=subject]').fill('provider-subject-1');
  await sso.getByRole('button',{name:'Bind identity'}).click();
- await sso.getByRole('button',{name:'Replace with admin'}).click();
+ // Editing the subject or choosing another account withdraws the confirmation, so a
+ // replacement can never send values the confirmation did not name.
+ await sso.getByRole('button',{name:'Replace with admin'}).waitFor();
+ await sso.locator('[name=subject]').fill('provider-subject-2');
+ await sso.getByRole('button',{name:'Replace with admin'}).waitFor({state:'detached'});
+ await sso.locator('[name=subject]').fill('provider-subject-1');
+ await sso.getByRole('button',{name:'Bind identity'}).click();
+ await sso.getByRole('button',{name:'Replace with admin'}).waitFor();
+ await sso.locator('[name=username]').evaluate(select=>{select.add(new Option('other-admin · admin','other-admin'));select.value='other-admin';select.dispatchEvent(new Event('change',{bubbles:true}));});
+ await sso.getByRole('button',{name:'Replace with admin'}).waitFor({state:'detached'});
+ await sso.locator('[name=username]').selectOption('admin');
+ await sso.getByRole('button',{name:'Bind identity'}).click();
+ const replace=sso.getByRole('button',{name:'Replace with admin'});
+ await replace.waitFor();
+ // A value changed without an input event still cannot alter the pinned request.
+ await sso.locator('[name=subject]').evaluate(input=>{input.value='provider-subject-9';});
+ await replace.click();
  await page.locator('#toast').filter({hasText:'SSO identity bound'}).waitFor();
- assert.deepEqual(bindRequests,[{subject:'provider-subject-1',username:'admin'},{subject:'provider-subject-1',username:'admin',replace_username:'admin'}]);
+ assert.deepEqual(bindRequests,[{subject:'provider-subject-1',username:'admin'},{subject:'provider-subject-1',username:'admin'},{subject:'provider-subject-1',username:'admin'},{subject:'provider-subject-1',username:'admin',replace_username:'admin'}]);
  await page.unroute('**/api/operations/sso-bindings');await page.unroute('**/api/operations/sso-bindings/*');await page.unroute('**/api/operations/sso-binding');
 
  // Settings search reaches the new sections.
@@ -164,6 +180,8 @@ module.exports=async(page,capture)=>{
  await page.route(caseUrl+'owner',route=>{ownerBody=route.request().postDataJSON();return route.fulfill({status:409,json:{detail:'Case ownership changed; refresh before assigning'}});});
  await page.route(caseUrl+'notes',route=>{noteBody=route.request().postDataJSON();return route.fulfill({json:{recorded:true}});});
  await page.evaluate(hostId=>AdminTools.incidentCase(hostId,{id:'incident-1',evidence:{path:'/tmp/sample'}},null),host);
+ const serverName=await page.evaluate(hostId=>hostName(hostId),host);
+ assert.ok((await page.locator('#modal-body').textContent()).includes('Server: '+serverName),'the case dialog names its server');
  const ownerForm=page.locator('#incident-owner-form');
  await ownerForm.locator('[name=owner]').selectOption('admin');
  await ownerForm.locator('[name=reason]').fill('Taking this investigation');
@@ -177,4 +195,16 @@ module.exports=async(page,capture)=>{
  assert.deepEqual(noteBody,{note:'Hash matches a known test file.'});
  await page.locator('#close-modal').click();
  for(const suffix of ['case','owner','notes'])await page.unroute(caseUrl+suffix);
+
+ // A case dialog whose requests finish after navigation is discarded, not opened on the new page.
+ let releaseCase;const caseGate=new Promise(resolve=>releaseCase=resolve);let caseLoaded=false;
+ await page.route(caseUrl+'case',async route=>{await caseGate;caseLoaded=true;return route.fulfill({json:{owner:'',revision:0}});});
+ await page.evaluate(hostId=>{window.lateCase=AdminTools.incidentCase(hostId,{id:'incident-1',evidence:{path:'/tmp/late'}},null);},host);
+ await page.goto(url('/#servers'));
+ await page.locator('#saved-fleet-queries').getByRole('heading',{name:'Saved queries'}).waitFor();
+ releaseCase();
+ await page.evaluate(()=>window.lateCase);
+ assert.equal(caseLoaded,true);
+ assert.equal(await page.locator('#modal').evaluate(dialog=>dialog.open),false,'a late incident case dialog must not open after navigation');
+ await page.unroute(caseUrl+'case');
 };
