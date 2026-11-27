@@ -119,11 +119,46 @@ def test_values_outside_the_contract_are_dropped_and_kept_strings_redacted():
             f'mysql-vhost.pass = "{SECRET}"\nssl.pemfile = "/etc/lighttpd/{SECRET}.pem"\n')
     report = agent.parse_lighttpd(text.encode())
     persistence.validate_lighttpd(report, CONF)
-    assert SECRET not in repr(report) and report['redacted'] and report['dropped'] == 6
-    assert '/usr/bin/php-cgi' in strings(report) and 'DB_PASSWORD' in strings(report)
+    assert SECRET not in repr(report) and report['redacted'] and report['dropped'] == 7
+    assert '/usr/bin/php-cgi' in strings(report) and 'DB_PASSWORD' not in strings(report)
     assert '|/usr/bin/ship --password [REDACTED]' in strings(report)
     result = lc.evaluate(files={CONF: startup_inventory.lighttpd_text(report)})
     assert [r['command'] for r in result['commands']] == ['/usr/bin/php-cgi', '/usr/bin/ship --password [REDACTED]']
+
+
+@pytest.mark.parametrize('text', [
+    # Review of 37ac1b4: a drop-mode value that is not a well-formed rhs fell through to the bare-string branch.
+    f'mysql-vhost.pass = "pw1" "{SECRET}"\n',
+    f'mysql-vhost.pass "{SECRET}"\n',
+    f'auth.backend.plain.userfile = [ "{SECRET}" ]\n',
+    f'"{SECRET}"\n',
+    f'server.port = 80 "{SECRET}"\n',
+    f'x = $HTTP["{SECRET}"] == "{SECRET}"\n',
+    f'include "a.conf" "{SECRET}"\n',
+    f'$HTTP["host"] == "a" "{SECRET}" {{ }}\n',
+    f'$HTTP["host"] "{SECRET}" == "a" {{ }}\n',
+    f'( "{SECRET}" )\n',
+    # bin-path nested in bin-environment is an environment value, not the backend program.
+    f'fastcgi.server = ( ".php" => (( "bin-environment" => ( "bin-path" => "{SECRET}" ) )) )\n',
+    f'fastcgi.server = ( ".php" => (( "bin-environment" => ( "{SECRET}" => "x" ) )) )\n',
+    f'scgi.server = ( "/s" => ( "local" => ( "x" => ( "max-procs" => "{SECRET}" ) ) ) )\n',
+])
+def test_bare_strings_outside_contract_positions_are_dropped(text):
+    report = agent.parse_lighttpd(text.encode())
+    persistence.validate_lighttpd(report, CONF)
+    assert report['parsed'] and SECRET not in repr(report) and report['dropped'] >= 1
+
+
+def test_contract_positions_for_bare_strings_are_kept():
+    text = ('include "conf-enabled/*.conf"\ninclude env.HOME + "/x.conf"\n'
+            'include_shell "/usr/share/lighttpd/use-ipv6.pl " + server.port\n'
+            '$HTTP["host"] == "a" + var.x { } else $HTTP["url"] =~ "^/b" { }\n'
+            'server.port = 1\n$SERVER["socket"] == ":443" { }\n'
+            'fastcgi.server = ( ".php" => ( "localhost" => ( "bin-path" => "/srv/p", "max-procs" => 2 ) ) )\n')
+    report = agent.parse_lighttpd(text.encode())
+    assert strings(report) == ['conf-enabled/*.conf', '/x.conf', '/usr/share/lighttpd/use-ipv6.pl ', 'host', 'a',
+                               'url', '^/b', 'socket', ':443', '.php', 'localhost', 'bin-path', '/srv/p', 'max-procs']
+    assert report['dropped'] == 0
 
 
 @pytest.mark.parametrize('data', [b'a\x00b', b'\xff\xfe', b'#' * (1024 * 1024 + 1)])

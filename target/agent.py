@@ -2193,9 +2193,10 @@ def parse_swanctl(data):
 # lighttpd (#1603): every regular *.conf file under /etc/lighttpd is reduced, from the exact hashed bytes,
 # to the token stream app/lighttpd_commands reads (lighttpd 1.4.74 configuration lexing). Nothing is run.
 # Keys, references, operators, conditionals and integers are kept. Strings are kept only where the contract
-# reads them: include/include_shell targets and conditional patterns, var.* values, server.username and
-# server.groupname, the piped-logger and syslog keys, keys this file references, and FastCGI/SCGI extension
-# and option names with their bin-path and max-procs values. Every other string, including socket paths,
+# reads them: include/include_shell targets, conditional selector fields and patterns, var.* values,
+# server.username and server.groupname, the piped-logger and syslog keys, keys this file references, and
+# FastCGI/SCGI extension, host and option names with their bin-path and max-procs values. A bare string
+# anywhere else (including in a file lighttpd would reject) is dropped. Every other string, including socket paths,
 # bin-environment values and credentials, is replaced by a dropped marker. Kept strings use the
 # best-effort credential redaction used for cron commands.
 LIGHTTPD_DIR = '/etc/lighttpd'
@@ -2207,6 +2208,8 @@ LIGHTTPD_KEPT_KEYS = ('server.username','server.groupname','server.errorlog','se
                       'accesslog.filename','server.errorlog-use-syslog')
 LIGHTTPD_BACKEND_KEYS = ('fastcgi.server','scgi.server')
 LIGHTTPD_BACKEND_VALUES = ('bin-path','max-procs')
+LIGHTTPD_BACKEND_OPTION_DEPTH = 3
+LIGHTTPD_CONDITION_OPS = ('==','!=','=~','!~','=^','=$')
 LIGHTTPD_ASSIGN = ('=','+=',':=')
 # A word right after one of these is a reference inside an expression, never a statement's key.
 LIGHTTPD_EXPRESSION = ('=','+=',':=','+','(',',','=>','==','!=','=~','!~','=^','=$')
@@ -2283,9 +2286,14 @@ def parse_lighttpd(data):
     # rhs: the value of one assignment. mode keep|backend|drop; expect None (operator next), True (a value
     # next) or False (after a value); bin is the array depth whose bin-path/max-procs value is being read.
     rhs=None
+    # stmt tracks where a bare string sits outside an assignment. Only an include/include_shell target or a
+    # conditional pattern ('expr', continued by '+' after each 'value') and a conditional selector's field
+    # ('bracket', for a $COND that starts a statement) are kept; every other bare string is dropped.
+    stmt=None
     for index,token in enumerate(tokens):
         kind,value,line=token
         nxt=tokens[index+1][:2] if index+1<len(tokens) else None
+        prev=tokens[index-1][:2] if index else None
         if kind=='word' and len(value)>LIGHTTPD_WORD_LIMIT:result['truncated']=True;break
         if rhs is not None and rhs['expect'] is None:
             rhs['expect']=True;out.append(token);continue
@@ -2297,10 +2305,13 @@ def parse_lighttpd(data):
                 out.append(token);continue
             if kind=='str':
                 rhs['expect']=False
-                is_key=nxt==['op','=>']
+                # Backend extension and host names sit at depths 1-2 and options at depth 3; deeper keys,
+                # such as bin-environment names, are values the contract does not read.
+                is_key=nxt==['op','=>'] and rhs['depth']<=LIGHTTPD_BACKEND_OPTION_DEPTH
                 if rhs['mode']=='keep' or (rhs['mode']=='backend' and (is_key or rhs['bin']==rhs['depth'])):
                     if not keep(token):break
-                    if rhs['mode']=='backend' and is_key and value in LIGHTTPD_BACKEND_VALUES:rhs['bin']=rhs['depth']
+                    if (rhs['mode']=='backend' and is_key and rhs['depth']==LIGHTTPD_BACKEND_OPTION_DEPTH
+                            and value in LIGHTTPD_BACKEND_VALUES):rhs['bin']=rhs['depth']
                 else:drop(token)
                 continue
             if kind in ('int','word'):rhs['expect']=False;out.append(token);continue
@@ -2316,10 +2327,21 @@ def parse_lighttpd(data):
             rhs=None
         if kind=='word' and nxt is not None and nxt[0]=='op' and nxt[1] in LIGHTTPD_ASSIGN:
             mode='keep' if value.startswith('var.') or value in LIGHTTPD_KEPT_KEYS or value in referenced else 'backend' if value in LIGHTTPD_BACKEND_KEYS else 'drop'
-            rhs={'mode':mode,'depth':0,'expect':None,'bin':None};out.append(token);continue
+            rhs={'mode':mode,'depth':0,'expect':None,'bin':None};stmt=None;out.append(token);continue
         if kind=='str':
-            if not keep(token):break
+            if stmt in ('expr','bracket'):
+                if not keep(token):break
+            else:drop(token)
+            stmt='value' if stmt=='expr' else 'field' if stmt=='bracket' else None
             continue
+        if kind=='word' and value in ('include','include_shell'):stmt='expr'
+        elif kind=='cond':stmt='cond' if not (prev and prev[0]=='op' and prev[1] in LIGHTTPD_EXPRESSION) else None
+        elif stmt=='cond' and [kind,value]==['op','[']:stmt='bracket'
+        elif stmt=='field' and [kind,value]==['op',']']:stmt='close'
+        elif stmt=='close' and kind=='op' and value in LIGHTTPD_CONDITION_OPS:stmt='expr'
+        elif stmt=='expr' and kind in ('int','word'):stmt='value'
+        elif stmt=='value' and [kind,value]==['op','+']:stmt='expr'
+        else:stmt=None
         out.append(token)
     return result
 
