@@ -204,6 +204,8 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'locations': (_loc('/etc/swanctl', ('debian',)), _loc('/etc/strongswan', ('rpm',)))},
     {'id': 'runit', 'label': 'runit supervised service programs', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata', 'locations': (_loc('/etc/service'), _loc('/etc/runit'), _loc('/etc/sv'))},
+    {'id': 'lighttpd', 'label': 'lighttpd include_shell, piped-logger and FastCGI/SCGI bin-path commands',
+     'trigger': 'boot', 'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/lighttpd'),)},
     {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),
