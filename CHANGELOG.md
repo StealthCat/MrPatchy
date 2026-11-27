@@ -1,3 +1,10 @@
+## 1.115.0 — 2026-11-25
+
+1. [PR #1629](https://github.com/StealthCat/MrPatchy/pull/1629): A pure Roadmap F runit contract (`app/runit_services.py`) reports which `run`, `finish`, `log/run` and `control/` programs `runsv` starts for each supervised service. It gives the argv, working directory, event, automatic start and account at exec for each, and reports blocking coverage gaps. Compatibility: new module only. Increment 1 of #1628.
+2. [PR #1630](https://github.com/StealthCat/MrPatchy/pull/1630): A pure Roadmap F strongSwan swanctl contract (`app/strongswan_updown.py`) reports which `updown` commands charon runs as root through `/bin/sh -c` when a CHILD_SA comes up or goes down, for each connection and child. It gives the source file and line and reports blocking coverage gaps, and was checked against native strongSwan 5.9.13. Compatibility: new module only. Increment 1 of #1624.
+
+Integrated together through batch [PR #1634](https://github.com/StealthCat/MrPatchy/pull/1634). This source update does not publish a Docker image.
+
 ## 1.114.0 — 2026-11-25
 
 1. [PR #1623](https://github.com/StealthCat/MrPatchy/pull/1623): The 12 native MySQL capped AI triage benchmark reports, their validated series and runner provenance are kept in the repository, beyond the 30-day artifact retention. Replay tests cover the full MySQL series, including its ledger latency summary, alongside the existing native SQLite coverage. Compatibility: records and tests only. Refs #1622.
