@@ -12,6 +12,14 @@ for source in "$apt_root/apt-mirrors.txt" "$apt_root/sources.list" "$apt_root/so
       "$source"
   fi
 done
+# The hosted Ubuntu image installs this feed, but these jobs use Ubuntu
+# packages. A failure refreshing the unused feed blocks even those installs.
+microsoft_source="$apt_root/sources.list.d/microsoft-prod.list"
+if [ -f "$microsoft_source" ]; then
+  sudo sed -E -i \
+    '\@^[[:space:]]*deb(-src)?[[:space:]]+(\[[^]]*\][[:space:]]+)?https?://packages\.microsoft\.com/ubuntu/24\.04/prod/?([[:space:]]|$)@ s/^/# Disabled for Mr Patchy CI: /' \
+    "$microsoft_source"
+fi
 sudo mkdir -p "$apt_root/apt.conf.d"
 printf '%s\n' 'Acquire::Retries "2";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' |
   sudo tee "$apt_root/apt.conf.d/99-mrpatchy-ci-network" >/dev/null
