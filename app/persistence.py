@@ -395,7 +395,9 @@ def validate_swanctl(report,path):
     """Strictly validate one file's swanctl statement stream."""
     if not swanctl_reads(path):raise ValueError('strongSwan statements outside the swanctl configuration')
     if not isinstance(report,dict) or set(report)!=SWANCTL_KEYS:raise ValueError('Invalid strongSwan statements')
-    if type(report['parsed']) is not bool or type(report['truncated']) is not bool or type(report['dropped']) is not int or not 0<=report['dropped']<=SWANCTL_STATEMENTS:
+    # Agents before #1680 also counted the value of the setting that hit the statement cap, so a truncated
+    # file can report one more dropped value than statements; the view still blocks on truncated files.
+    if type(report['parsed']) is not bool or type(report['truncated']) is not bool or type(report['dropped']) is not int or not 0<=report['dropped']<=SWANCTL_STATEMENTS+report['truncated']:
         raise ValueError('Invalid strongSwan statements')
     items=report['statements']
     if not isinstance(items,list) or len(items)>SWANCTL_STATEMENTS or (not report['parsed'] and (items or report['truncated'] or report['dropped'])):
@@ -411,7 +413,8 @@ def validate_swanctl(report,path):
             # Lexing gaps make strongSwan drop the whole file, so they are the only statement; a syntax gap ends the file.
             if item['code'] not in SWANCTL_ERRORS or index!=len(items)-1 or (item['code']!='syntax' and len(items)!=1) or report['truncated']:
                 raise ValueError('Invalid strongSwan error')
-        if op=='include' and (not _swanctl_text(item['pattern']) or not item['pattern']):raise ValueError('Invalid strongSwan include')
+        # An empty pattern is reported as-is: strongSwan ignores it and keeps loading the file (#1680).
+        if op=='include' and not _swanctl_text(item['pattern']):raise ValueError('Invalid strongSwan include')
         if op=='open' and not _swanctl_text(item['name']):raise ValueError('Invalid strongSwan section')
         if op=='set':
             if not _swanctl_text(item['key']) or type(item['redacted']) is not bool:raise ValueError('Invalid strongSwan setting')

@@ -378,7 +378,7 @@ def strongswan_view(inventory,config_path):
     directories={}
     for entry in entries.values():
         for item in entry.get('strongswan',{}).get('statements',()):
-            if item['op']!='include':continue
+            if item['op']!='include' or not item['pattern']:continue
             pattern=item['pattern'] if item['pattern'].startswith('/') else posixpath.join(posixpath.dirname(entry['path']),item['pattern'])
             directory=posixpath.dirname(posixpath.normpath(pattern))
             if not complete or behind_link(directory) or not (directory+'/').startswith(root+'/'):continue
