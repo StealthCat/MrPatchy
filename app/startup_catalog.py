@@ -192,6 +192,8 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/kdump.conf', ('rpm',)),)},
     {'id': 'autofs', 'label': 'autofs master map and program maps', 'trigger': 'event', 'scope': 'system',
      'parse': 'metadata', 'locations': (_loc('/etc/auto.master'),)},
+    {'id': 'request_key', 'label': 'keyutils request-key upcall programs', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata', 'locations': (_loc('/etc/request-key.d'), _loc('/etc/request-key.conf'))},
     {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),
