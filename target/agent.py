@@ -1106,7 +1106,7 @@ PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/etc/cron.hourly','/etc/cron.weekly','/etc/cron.monthly',
                      '/var/spool/cron','/etc/init.d','/etc/profile.d','/etc/request-key.d',
                      '/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl','/etc/strongswan',
-                     '/etc/sv','/etc/runit','/etc/service')
+                     '/etc/sv','/etc/runit','/etc/service','/etc/postgresql')
 PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab',
                      '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                      '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/freshclam.conf')
@@ -1120,7 +1120,7 @@ PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.d
 # as custom paths. Such a stored path is covered by the built-in directory, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
 PROMOTED_PERSISTENCE_ROOTS = ('/etc/request-key.d','/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl',
-                              '/etc/strongswan','/etc/sv','/etc/runit','/etc/service')
+                              '/etc/strongswan','/etc/sv','/etc/runit','/etc/service','/etc/postgresql')
 # Built-in roots that may themselves be a symlink by design. runit's /etc/service is a directory
 # on some layouts and, on Debian and Ubuntu, the symlink runit/runsvdir/current (#1628). A
 # symlinked one is recorded as a symlink entry, never followed; a directory is walked as usual.
