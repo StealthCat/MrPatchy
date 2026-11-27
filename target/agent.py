@@ -1106,7 +1106,7 @@ PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/etc/cron.hourly','/etc/cron.weekly','/etc/cron.monthly',
                      '/var/spool/cron','/etc/init.d','/etc/profile.d','/etc/request-key.d',
                      '/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl','/etc/strongswan',
-                     '/etc/sv','/etc/runit','/etc/service','/etc/postgresql')
+                     '/etc/sv','/etc/runit','/etc/service','/etc/lighttpd','/etc/postgresql')
 PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab',
                      '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                      '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/freshclam.conf')
@@ -1120,7 +1120,7 @@ PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.d
 # as custom paths. Such a stored path is covered by the built-in directory, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
 PROMOTED_PERSISTENCE_ROOTS = ('/etc/request-key.d','/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl',
-                              '/etc/strongswan','/etc/sv','/etc/runit','/etc/service','/etc/postgresql')
+                              '/etc/strongswan','/etc/sv','/etc/runit','/etc/service','/etc/lighttpd','/etc/postgresql')
 # Built-in roots that may themselves be a symlink by design. runit's /etc/service is a directory
 # on some layouts and, on Debian and Ubuntu, the symlink runit/runsvdir/current (#1628). A
 # symlinked one is recorded as a symlink entry, never followed; a directory is walked as usual.
@@ -2086,6 +2086,102 @@ def parse_dovecot(data):
     return result
 
 
+# strongSwan swanctl (#1624): every regular *.conf file under the Debian-family /etc/swanctl and the
+# RPM-family /etc/strongswan/swanctl is reduced, from the exact hashed bytes, to the statement stream
+# app/strongswan_updown reads (strongSwan 5.9.13 settings lexing). Nothing is run. Section names, include
+# patterns and setting keys are kept; only updown values keep their text (with the best-effort credential
+# redaction used for cron commands). Every other value, including secrets{} PSKs, is dropped.
+SWANCTL_DIRS = ('/etc/swanctl','/etc/strongswan/swanctl')
+SWANCTL_TEXT_LIMIT = 1024*1024
+SWANCTL_STATEMENT_LIMIT = 2000
+SWANCTL_NAME_LIMIT = 1024
+SWANCTL_ESCAPES = {'"':'"','\\':'\\','n':'\n','t':'\t','r':'\r'}
+
+
+def swanctl_reads(path):
+    return path.endswith('.conf') and any(path.startswith(d+'/') for d in SWANCTL_DIRS)
+
+
+def _swanctl_tokens(text):
+    """Tokens exactly as app/strongswan_updown.tokenize, or ('error', code, line) on a lexing gap."""
+    out=[];i=0;line=1;n=len(text)
+    while i<n:
+        ch=text[i]
+        if ch=='\n':out.append(('nl',None,line));line+=1;i+=1
+        elif ch in ' \t\r':i+=1
+        elif ch=='#':
+            while i<n and text[i]!='\n':i+=1
+        elif ch in '{}=':out.append((ch,None,line));i+=1
+        elif ch=='"':
+            start=line;i+=1;buf=[]
+            while True:
+                if i>=n:return ('error','unterminated_quote',start)
+                ch=text[i]
+                if ch=='"':i+=1;break
+                if ch=='\\':
+                    if i+1>=n or text[i+1] not in SWANCTL_ESCAPES:return ('error','escape_sequence',line)
+                    buf.append(SWANCTL_ESCAPES[text[i+1]]);i+=2;continue
+                if ch=='\n':line+=1
+                buf.append(ch);i+=1
+            out.append(('string',''.join(buf),start))
+        else:
+            start=i
+            while i<n and text[i] not in '\n#{}=" \t\r':i+=1
+            out.append(('word',text[start:i],line))
+    return out
+
+
+def parse_swanctl(data):
+    """Reduce one swanctl configuration file to app/strongswan_updown statements. Nothing is executed."""
+    result={'parsed':False,'statements':[],'truncated':False,'dropped':0}
+    if len(data)>SWANCTL_TEXT_LIMIT or b'\x00' in data:return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:return result
+    result['parsed']=True
+    statements=result['statements']
+    tokens=_swanctl_tokens(text)
+    if isinstance(tokens,tuple):
+        statements.append({'line':tokens[2],'op':'error','code':tokens[1]});return result
+    def bounded(value,limit=SWANCTL_NAME_LIMIT):
+        if len(value)>limit:result['truncated']=True;return None
+        return value
+    def add(item):
+        if len(statements)>=SWANCTL_STATEMENT_LIMIT:result['truncated']=True;return False
+        statements.append(item);return True
+    i=0;n=len(tokens)
+    while i<n and not result['truncated']:
+        kind,value,line=tokens[i]
+        if kind=='nl':i+=1;continue
+        if kind=='}':add({'line':line,'op':'close'});i+=1;continue
+        if kind not in ('word','string'):add({'line':line,'op':'error','code':'syntax'});break
+        nxt=tokens[i+1][0] if i+1<n else None
+        if kind=='word' and value=='include' and nxt in ('word','string'):
+            j=i+1;parts=[]
+            while j<n and tokens[j][0] in ('word','string'):parts.append(tokens[j][1]);j+=1
+            pattern=bounded(' '.join(parts))
+            if pattern is not None:add({'line':line,'op':'include','pattern':pattern})
+            i=j;continue
+        if nxt=='{':
+            name=bounded(value)
+            if name is not None:add({'line':line,'op':'open','name':name})
+            i+=2;continue
+        if nxt=='=':
+            j=i+2;parts=[]
+            while j<n and tokens[j][0] in ('word','string'):parts.append(tokens[j][1]);j+=1
+            key=bounded(value)
+            if key is None:break
+            joined=' '.join(parts);kept=None;redacted=False
+            if key=='updown':
+                kept,redacted=redact_cron_command(joined)
+                if bounded(kept,CRON_COMMAND_LIMIT) is None:break
+            elif joined:result['dropped']+=1
+            # A following '=' or '{' starts the next statement, which reports the syntax gap on its own line.
+            if not add({'line':line,'op':'set','key':key,'value':kept,'redacted':redacted}):break
+            i=j;continue
+        add({'line':line,'op':'error','code':'syntax'});break
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -2099,6 +2195,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;request_key=cron_jobs and request_key_reads(str(path));autofs=cron_jobs and str(path)==AUTOFS_MASTER;clamav=CLAMAV_FILES.get(str(path)) if cron_jobs else None;content=bytearray() if form or at_name or anacron or tcpw or kdump or request_key or autofs or clamav else None
         dovecot=cron_jobs and dovecot_reads(str(path))
         if dovecot and content is None:content=bytearray()
+        swanctl=cron_jobs and swanctl_reads(str(path))
+        if swanctl and content is None:content=bytearray()
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -2152,6 +2250,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['clamav']=parse_clamav_conf(bytes(content),clamav)
             if dovecot and row['kind']=='regular':
                 row['dovecot']=parse_dovecot(bytes(content))
+            if swanctl and row['kind']=='regular':
+                row['strongswan']=parse_swanctl(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:

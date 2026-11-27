@@ -204,6 +204,8 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
      'locations': (_loc('/etc/swanctl', ('debian',)), _loc('/etc/strongswan', ('rpm',)))},
     {'id': 'runit', 'label': 'runit supervised service programs', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata', 'locations': (_loc('/etc/service'), _loc('/etc/runit'), _loc('/etc/sv'))},
+    {'id': 'lighttpd', 'label': 'lighttpd include_shell, piped-logger and FastCGI/SCGI bin-path commands',
+     'trigger': 'boot', 'scope': 'system', 'parse': 'metadata', 'locations': (_loc('/etc/lighttpd'),)},
     # Debian keeps postgresql.conf under /etc/postgresql/<version>/<cluster>; RPM keeps it in the data
     # directory, which agents do not collect (only its configuration files belong in startup scope).
     {'id': 'postgresql', 'label': 'PostgreSQL archive, recovery and passphrase commands and preload libraries',

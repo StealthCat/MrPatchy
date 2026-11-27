@@ -75,9 +75,11 @@ def test_candidate_host_reads_only_load_scoring_inputs(admin):
         full_hosts={host.id:host for host in s.scalars(select(Host))}
         for package,host,key,score,deferred in candidates:
             full_host=full_hosts[package.host_id]
-            assert host.inventory == {field: full_host.inventory[field]
-                                      for field in ('os', 'package_manager')
-                                      if field in full_host.inventory}
+            assert host.context == ({
+                'distribution': {'ID': 'almalinux', 'VERSION_ID': '9'}, 'package_manager': 'rpm',
+            } if host.id == 'bulk-1' else {
+                'distribution': {'ID': 'debian', 'VERSION_ID': '12'}, 'package_manager': 'apt',
+            })
             assert update_scores.evidence(host,package)==update_scores.evidence(full_host,package)
             assert key==update_scores.identity(full_host,package)
             assert score is None and not deferred
