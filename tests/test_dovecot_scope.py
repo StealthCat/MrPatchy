@@ -68,7 +68,8 @@ def test_agent_hashes_dovecot_files_without_running_or_parsing_them(tmp_path, mo
     assert rows[str(root / 'private' / 'dovecot.pem')]['target'] == '/etc/ssl/certs/ssl-cert-snakeoil.pem'
     assert result['missing_roots'] == [str(tmp_path / 'absent.d')]
     assert not marker.exists()
-    # Metadata and SHA-256 only: no content or parsed detail is attached, even with job parsing enabled.
+    # Metadata and SHA-256 only: no file content is attached. Dovecot statements (#1620 increment 3) are
+    # reduced only when DOVECOT_DIR matches, which this temporary root does not.
     assert all(set(row) <= {'path', 'kind', 'uid', 'gid', 'mode', 'size', 'mtime_ns', 'sha256', 'target'}
                for row in result['entries'])
     assert 'PRIVATE' not in repr(result) and 'not-a-real-key' not in repr(result)
@@ -171,7 +172,7 @@ def test_catalogs_label_paths_and_state_the_gap():
     assert mechanism['parse'] == 'metadata' and mechanism['trigger'] == 'event' and mechanism['scope'] == 'system'
     assert [(loc['path'], loc['families']) for loc in mechanism['locations']] == [(DOVECOT, ('debian', 'rpm'))]
     assert DOVECOT in startup_catalog._all_locations('debian') and DOVECOT in startup_catalog._all_locations('rpm')
-    assert any(DOVECOT in gap and 'drop_priv_before_exec' in gap and 'not yet parsed' in gap
+    assert any(DOVECOT in gap and 'drop_priv_before_exec' in gap and 'parsed statements' in gap
                and '/usr/share/dovecot/protocols.d' in gap for gap in startup_inventory.GAPS)
 
 

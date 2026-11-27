@@ -1,7 +1,9 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, cron_loading, persistence
+from . import autofs_program_maps, cron_loading, dovecot_services, persistence
 from .db import Host
 from .incidents import digest
+import fnmatch
+import posixpath
 import re
 
 CATALOG=(
@@ -42,7 +44,7 @@ GAPS=[
     'kdump: /etc/kdump.conf is hashed as a startup file, and agents that report it parse its kdump_pre, kdump_post and kdump_emergency programs and core_collector argv from the hashed bytes with the kdump-utils 7bf4714 rules, in capture order. Each runs as root in the crash-capture environment after a kernel crash. Options kdumpctl rejects (unknown, deprecated, empty, repeated, a second dump target or a second --mount) are listed with their line, and such a configuration loads no capture kernel, so nothing runs. Programs use the same best-effort redaction, other option values are never stored, and text over 64 KiB, with 2048 or more lines, not UTF-8 or with NUL bytes is shown as unparsed. The /etc/kdump/pre.d, post.d and emergency.d directories are not yet listed, so their programs are missing from the sequence. The hook programs themselves, other kdumpctl checks, whether the loaded crash-capture initramfs matches the current files and the Debian kdump-tools configuration are not evaluated.',
     'keyutils request-key: /etc/request-key.conf and the /etc/request-key.d drop-in directory are hashed as startup files, and agents that report them parse each file /sbin/request-key reads (drop-ins named *.conf, not starting with a dot, that are regular files) from the hashed bytes with the keyutils 1.6.3 rules. Each rule shows its operation, key type, description and callout patterns, whether the kernel upcall (create) reaches it, the pipe mode and the command it runs as root, with requester-controlled inputs (%d, %c, %{type:description} and piped callout information) named. Lines that abort lookups (4096 bytes or more, or ending before the program) are listed with the patterns a request must match first; one that matches every kernel lookup in any read file makes every lookup abort. Commands use the same best-effort redaction, patterns are bounded to 256 characters, rules and aborts to 64 per file, and text over 64 KiB, not UTF-8 or with NUL bytes is shown as unparsed. The readdir() order of drop-ins is not captured, so which of two equally specific rules in different files wins is not shown. The programs themselves, which key types an unprivileged requester may ask for, whether the kernel has key support and /sbin/request-key installed, and which processes request keys are not evaluated.',
     'ClamAV: the Debian-family /etc/clamav directory (clamd.conf, freshclam.conf and the onupdateexecute.d and onerrorexecute.d directories), the RPM-family /etc/clamd.d directory and /etc/freshclam.conf are hashed as startup files by agents that report them, but the VirusEvent command clamd runs through /bin/sh on every detection and the OnUpdateExecute, OnErrorExecute and OnOutdatedExecute commands freshclam runs are not yet parsed in this view. Alternate configuration files passed with --config-file, the accounts clamd and freshclam start as, whether either runs, and the commands themselves are not evaluated.',
-    'Dovecot: the /etc/dovecot directory (dovecot.conf, conf.d and any other files it holds, including passdb/userdb and key files, as metadata and SHA-256 only) is hashed as startup files by agents that report it, but the service executables the root master process execs, as root unless drop_priv_before_exec is set, are not yet parsed in this view. Included files outside /etc/dovecot (such as /usr/share/dovecot/protocols.d), configuration passed with -c, whether dovecot runs, the programs themselves, checkpassword passdb/userdb programs, quota_warning and sieve extprograms are not evaluated.',
+    'Dovecot: the /etc/dovecot directory (dovecot.conf, conf.d and any other files it holds, including passdb/userdb and key files, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate the non-default service executables the root master process execs from dovecot.conf, as root unless drop_priv_before_exec is set. Only section headers, include patterns and the service and global settings the evaluation reads are stored; every other value is dropped. Included files outside /etc/dovecot (such as /usr/share/dovecot/protocols.d) and symlinked files are not observed, so an evaluation that reaches them stops with a blocking gap. /etc/passwd and /etc/group are not captured, so accounts are shown by name only. Configuration passed with -c, whether dovecot runs, the programs themselves, checkpassword passdb/userdb programs, quota_warning and sieve extprograms are not evaluated.',
     'strongSwan: the Debian-family /etc/swanctl directory (swanctl.conf, conf.d and the x509, private and other credential directories, as metadata and SHA-256 only) and the RPM-family /etc/strongswan directory (swanctl/, strongswan.conf and strongswan.d) are hashed as startup files by agents that report them, but the updown command charon runs as root through /bin/sh for each connection child on CHILD_SA up and down is not yet parsed in this view. The Debian-family /etc/strongswan.conf and /etc/strongswan.d (which can disable the updown plugin), legacy ipsec.conf leftupdown and leftfirewall, configuration passed with swanctl --file, connections loaded over vici by other clients, whether charon runs and the commands themselves are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
@@ -196,6 +198,82 @@ def autofs_text(entry):
     return ' '.join(p['path'] for p in view['programs'])+' '+' '.join((e['mount_point'] or '')+' '+(e['map'] or '')+' '+(e['path'] or '') for e in view['entries'])
 
 
+def _dovecot_quote(value):
+    return '"'+value.replace('\\','\\\\').replace('"','\\"')+'"'
+
+
+def dovecot_text(report):
+    """Rebuild configuration text the contract reads identically: each statement on its own line number."""
+    lines={}
+    for item in report['statements']:
+        op=item['op']
+        if op=='include':text=('!include_try ' if item['optional'] else '!include ')+_dovecot_quote(item['pattern'])
+        elif op=='close':text='}'
+        elif op=='open':text=item['kind']+(' '+_dovecot_quote(item['name']) if item['name'] is not None else '')+' {'
+        elif op=='set':text=item['key']+' = '+('<not_captured' if item['file'] else _dovecot_quote(item['value'] or ''))
+        else:text='{'
+        lines[item['line']]=text
+    return '\n'.join(lines.get(n,'') for n in range(1,max(lines,default=0)+1))+'\n'
+
+
+def dovecot_state(entry):
+    """Whether Dovecot statements were reported, refused or not reported (older agent) for this file."""
+    if 'dovecot' in entry:return 'parsed' if entry['dovecot']['parsed'] else 'unparsed'
+    return 'not_reported' if entry['kind']=='regular' and entry['path'].startswith(persistence.DOVECOT_DIR+'/') else None
+
+
+def dovecot_view(inventory):
+    """Evaluate app/dovecot_services over the reported statements. Unreported, unparsed, truncated and
+    symlinked files stay unobserved; absent paths and glob matches are observed only when the stored
+    inventory is a complete collection. passwd/group are not captured. Never a safety verdict."""
+    entries={e['path']:e for e in inventory['entries'] if e['path'].startswith(persistence.DOVECOT_DIR+'/')}
+    complete=inventory['state']=='collected' and persistence.DOVECOT_DIR not in inventory['missing_roots']
+    files={};gaps=[]
+    # The agent records a symlink without traversing it, so nothing behind one is observed.
+    links=[p for p,e in entries.items() if e['kind']=='symlink']
+    def behind_link(path):return any(path.startswith(link+'/') for link in links)
+    for path,entry in entries.items():
+        state=dovecot_state(entry)
+        if state=='parsed' and not entry['dovecot']['truncated']:files[path]=dovecot_text(entry['dovecot'])
+        elif state=='parsed':gaps.append({'code':'statements_truncated','path':path,'blocking':True})
+    class Observed(dict):
+        def __contains__(self,path):
+            return dict.__contains__(self,path) or (complete and path.startswith(persistence.DOVECOT_DIR+'/') and path not in entries and not behind_link(path)
+                                                   and not any(p.startswith(path+'/') for p in entries))
+        def __getitem__(self,path):
+            if dict.__contains__(self,path):return dict.__getitem__(self,path)
+            if path in self:return None
+            raise KeyError(path)
+        def get(self,path,default=None):
+            return dict.get(self,path) if dict.__contains__(self,path) else (None if path in self else default)
+    globs={}
+    for entry in entries.values():
+        for item in entry.get('dovecot',{}).get('statements',()):
+            if item['op']!='include' or not re.search(r'[*?\[]',item['pattern']):continue
+            pattern=posixpath.normpath(posixpath.join(posixpath.dirname(entry['path']),item['pattern']))
+            directory,name=posixpath.split(pattern)
+            if not complete or behind_link(directory+'/') or directory in links or re.search(r'[*?\[]',directory) or not (directory+'/').startswith(persistence.DOVECOT_DIR+'/'):continue
+            children={p[len(directory)+1:].split('/')[0] for p in entries if p.startswith(directory+'/')}
+            matched=sorted(c for c in children if not c.startswith('.') and fnmatch.fnmatchcase(c,name))
+            # A matching subdirectory is not a file Dovecot can read, and the inventory does not record it as one.
+            if any(directory+'/'+c not in entries for c in matched):continue
+            globs[pattern]=[directory+'/'+c for c in matched]
+    result=dovecot_services.evaluate(files=Observed(files),globs=globs)
+    gaps+=[{'code':'passwd_group_not_captured','blocking':True,'detail':'/etc/passwd and /etc/group are not captured, so service accounts are shown by name without UID or GID.'}]
+    keep=('code','blocking','path','glob','source','line','service','user','group','key','section','limit')
+    gaps+=[{k:(str(g[k])[:300] if isinstance(g[k],str) else g[k]) for k in keep if k in g} for g in result['gaps'] if g['code'] not in ('passwd_not_captured','group_not_captured')]
+    return {'services':[{k:r[k] for k in ('service','builtin','argv','program','wrapper','exec_account','exec_account_basis','program_account',
+                                          'expected_drop_account','service_user','drop_priv_before_exec','protocol','enabled','starts','source','line')}
+                        for r in result['services']],
+            'root_exec':result['root_exec'],'protocols':result['protocols'],'files':[f['path'] for f in result['files']],
+            'config_accepted':result['config_accepted'],'complete':False,'gaps':gaps[:100],
+            'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
+
+
+def dovecot_text_search(entry):
+    return ' '.join(i.get('pattern') or i.get('name') or i.get('value') or '' for i in entry.get('dovecot',{}).get('statements',()))
+
+
 def with_at_jobs(rows,inventory,q,changes):
     """Attach parsed at jobs to matching rows and add entries found only by an at account or command."""
     by_path={r['path']:r for r in rows}
@@ -242,6 +320,11 @@ def catalog_rows(inventory):
             found=[e for e in inventory['entries'] if e['path']==persistence.AUTOFS_MASTER]
             entries=sum(len(autofs_view(e)['entries']) for e in found if autofs_state(e)=='resolved')
             label+=f' · {entries} master-map entr{"y" if entries==1 else "ies"} · map paths not looked up'+(' · not reported by this agent version' if any(autofs_state(e)=='not_reported' for e in found) else '')
+        if key=='dovecot':
+            found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
+            states=[dovecot_state(e) for e in found]
+            parsed=states.count('parsed')
+            label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
         if key=='at':
             states=[at_state(e) for e in inventory['entries']]
             parsed=states.count('parsed');missing=states.count('not_reported')
@@ -260,7 +343,7 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
     changes={r['path']:r['kind'] for r in assessment['comparison']['changes']} if assessment['comparison']['state']=='compared' else None
     host=s.get(Host,host_id);family=cron_loading.family_of(host.inventory if host else None)
     loading={e['path']:cron_loading.assess(e,family) for e in inventory['entries'] if cron_loading.applies(e['path'])}
-    rows=[];lookups=request_key_lookups(inventory)
+    rows=[];lookups=request_key_lookups(inventory);dovecot=None
     newly=assessment['comparison'].get('newly_in_scope',[]) if changes is not None else []
     earlier=assessment['comparison'].get('previously_custom',[]) if changes is not None else []
     for entry in inventory['entries']:
@@ -283,11 +366,17 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         state=autofs_state(entry)
         if state:row['autofs_state']=state
         if state=='resolved':row['autofs']=autofs_view(entry)
+        state=dovecot_state(entry)
+        if state:row['dovecot_state']=state
+        if state=='parsed':row['dovecot_statements']=len(entry['dovecot']['statements'])
+        if entry['path']==dovecot_services.DEFAULT_CONFIG and state=='parsed':
+            if dovecot is None:dovecot=dovecot_view(inventory)
+            row['dovecot']=dovecot
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+dovecot_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)

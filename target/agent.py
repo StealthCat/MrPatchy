@@ -1828,6 +1828,94 @@ def parse_autofs_master(data):
     return result
 
 
+# Dovecot (#1620): every regular file under /etc/dovecot is reduced, from the exact hashed bytes, to
+# the statement stream app/dovecot_services reads (Dovecot 2.3.21 lexing). Nothing is run. Section
+# headers, includes and the service/global keys the contract evaluates keep their values; every other
+# value (passwords, SQL connect strings, key material) is dropped and only its key and line are kept.
+# Executables get the best-effort credential redaction used for cron commands.
+DOVECOT_DIR = '/etc/dovecot'
+DOVECOT_TEXT_LIMIT = 1024*1024
+DOVECOT_STATEMENT_LIMIT = 2000
+DOVECOT_VALUE_LIMIT = 1024
+DOVECOT_KEPT_KEYS = frozenset(('protocols','default_internal_user','default_login_user','libexec_dir','executable',
+                               'user','group','drop_priv_before_exec','process_min_avail','protocol','chroot'))
+_DC_SECTION = re.compile(r'([A-Za-z0-9_-]+)(?:\s+("(?:[^"\\]|\\.)*"|[^\s{]+))?\s*\{(.*)$')
+_DC_ASSIGN = re.compile(r'([A-Za-z0-9_/-]+)\s*=(.*)$')
+
+
+def dovecot_reads(path):
+    return path.startswith(DOVECOT_DIR+'/')
+
+
+def _dc_strip_comment(line):
+    quote=None;i=0
+    while i<len(line):
+        c=line[i]
+        if quote:
+            if c=='\\' and quote=='"':i+=2;continue
+            if c==quote:quote=None
+        elif c in '"\'':quote=c
+        elif c=='#':return line[:i]
+        i+=1
+    return line
+
+
+def _dc_unquote(value):
+    value=value.strip()
+    if len(value)>=2 and value[0]==value[-1] and value[0] in '"\'':
+        inner=value[1:-1]
+        return re.sub(r'\\(.)',r'\1',inner) if value[0]=='"' else inner
+    return value
+
+
+def parse_dovecot(data):
+    """Reduce one Dovecot configuration file to app/dovecot_services statements. Nothing is executed."""
+    result={'parsed':False,'statements':[],'truncated':False,'dropped':0}
+    if len(data)>DOVECOT_TEXT_LIMIT or b'\x00' in data:return result
+    statements=result['statements']
+    def bounded(value):
+        if len(value)>DOVECOT_VALUE_LIMIT:result['truncated']=True;return None
+        return value
+    def add(item):
+        if len(statements)>=DOVECOT_STATEMENT_LIMIT:result['truncated']=True;return
+        statements.append(item)
+    def statement(line,number):
+        if line.startswith('!include'):
+            word,_,rest=line.partition(' ')
+            if word not in ('!include','!include_try') or not rest.strip():add({'line':number,'op':'error'});return
+            pattern=bounded(_dc_unquote(rest))
+            if pattern is None:add({'line':number,'op':'error'});return
+            add({'line':number,'op':'include','optional':word=='!include_try','pattern':pattern});return
+        if line=='}':add({'line':number,'op':'close'});return
+        match=_DC_ASSIGN.match(line)
+        if match and not match.group(2).rstrip().endswith('{'):
+            key,raw=match.group(1),match.group(2).strip()
+            kept=key in DOVECOT_KEPT_KEYS and not raw.startswith('<')
+            value=bounded(_dc_unquote(raw)) if kept else None
+            if kept and value is None:kept=False
+            if not kept and raw and not raw.startswith('<'):result['dropped']+=1
+            redacted=False
+            if kept and key=='executable':value,redacted=redact_cron_command(value)
+            add({'line':number,'op':'set','key':key[:128],'value':value,'file':raw.startswith('<'),'redacted':redacted});return
+        match=_DC_SECTION.match(line)
+        if not match or match.group(3).strip():add({'line':number,'op':'error'});return
+        name=_dc_unquote(match.group(2)) if match.group(2) is not None else None
+        if name is not None:name=bounded(name)
+        if name is None and match.group(2) is not None:add({'line':number,'op':'error'});return
+        add({'line':number,'op':'open','kind':match.group(1)[:128],'name':name})
+    pending,first='',0
+    for number,raw in enumerate(data.decode('utf-8','replace').splitlines(),1):
+        line=_dc_strip_comment(raw.strip()).strip()
+        if not line:pending='';continue
+        if not pending:first=number
+        if line.endswith('\\'):pending+=line[:-1].rstrip()+' ';continue
+        line=(pending+line).strip();pending=''
+        statement(line,first)
+    if pending:statement(pending.strip(),first)
+    result['parsed']=True
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -1839,6 +1927,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     cron_total=[0]
     def capture(directory_fd,directory,name):
         path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;request_key=cron_jobs and request_key_reads(str(path));autofs=cron_jobs and str(path)==AUTOFS_MASTER;content=bytearray() if form or at_name or anacron or tcpw or kdump or request_key or autofs else None
+        dovecot=cron_jobs and dovecot_reads(str(path))
+        if dovecot and content is None:content=bytearray()
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1888,6 +1978,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['request_key']=parse_request_key(bytes(content))
             if autofs and row['kind']=='regular':
                 row['autofs']=parse_autofs_master(bytes(content))
+            if dovecot and row['kind']=='regular':
+                row['dovecot']=parse_dovecot(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
