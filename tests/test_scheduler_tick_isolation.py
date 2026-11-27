@@ -5,7 +5,7 @@ import time
 
 import pytest
 from app import worker, persistence, response_monitor, service_monitor, execution_scans, plan_notifications, release_notifications
-from app.db import Session, Host, Job, Setting
+from app.db import Session, Host, Job, Package, Setting
 
 TICKS = (
     ('patch schedules', worker.scheduling, 'tick'),
@@ -25,6 +25,7 @@ def test_failed_tick_does_not_skip_other_ticks_or_dispatch(admin, monkeypatch, c
     with Session() as s:
         s.add(Host(id='tick-host', name='Tick fixture', address='192.0.2.2', fingerprint=''))
         s.add(Job(id='tick-job', host_id='tick-host', action='refresh'))
+        s.add(Package(id='tick-host:fixture', host_id='tick-host', name='fixture', installed='1', candidate='2'))
         s.merge(Setting(key='config', value={'ai_enabled': True, 'ai_updates_enabled': True,
                                              'ai_model': 'fixture-model'}))
         s.merge(Setting(key='openai_key', value={'encrypted': 'fixture'}))
@@ -187,17 +188,31 @@ def test_optional_producer_import_failure_does_not_skip_other_producers(monkeypa
     assert attempts == ['.persistence']
 
 
-@pytest.mark.parametrize(('enabled', 'recover', 'expected'), [
-    (False, False, ['triage', 'triage', 'triage', 'triage']),
-    (True, False, ['scoring', 'triage', 'scoring', 'triage']),
-    (False, True, ['scoring', 'triage', 'triage', 'triage']),
+@pytest.mark.parametrize(('queue', 'expected'), [
+    ('disabled', ['triage'] * 4),
+    ('empty', ['triage'] * 4),
+    ('paused', ['triage'] * 4),
+    ('inactive', ['triage'] * 4),
+    ('eligible', ['scoring', 'triage', 'scoring', 'triage']),
+    ('recovery', ['scoring', 'triage', 'triage', 'triage']),
+    ('warm', ['scoring', 'triage', 'triage', 'triage']),
 ])
-def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatch, enabled, recover, expected):
+def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatch, queue, expected):
+    enabled = queue not in ('disabled', 'recovery')
+    memo = {'absent': (None, {}, {})} if queue == 'warm' else {}
+    monkeypatch.setattr(worker.update_scores, '_MEMO', memo)
     with Session() as s:
         s.merge(Setting(key='config', value={'ai_enabled': True, 'ai_updates_enabled': enabled,
-                                             'ai_model': 'fixture-model'}))
+                                             'ai_model': 'fixture-model', 'ai_control_mode': 'unthrottled'}))
         s.merge(Setting(key='openai_key', value={'encrypted': 'fixture'}))
-        if recover:
+        if queue in ('eligible', 'inactive', 'paused'):
+            s.add(Host(id='score-host', name='Scoring fixture', address='192.0.2.1',
+                       fingerprint='', enabled=queue != 'inactive'))
+            s.add(Package(id='score-host:fixture', host_id='score-host', name='fixture',
+                          installed='1', candidate='2'))
+        if queue == 'paused':
+            s.add(Setting(key='server-ai:score-host', value={'paused': True}))
+        if queue == 'recovery':
             s.add(worker.ai_runs.AIRun(id='orphan-score', purpose='update_scoring', state='running'))
         s.commit()
 
@@ -222,7 +237,7 @@ def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatc
                 dispatched.append('triage')
             elif fn is worker.update_scores.run_one:
                 dispatched.append('scoring')
-                if recover:
+                if queue in ('recovery', 'warm'):
                     fn(*args)
             future = Future()
             future.set_result(None)
@@ -239,7 +254,9 @@ def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatc
     worker._loop(reporter)
 
     assert dispatched == expected
-    if recover:
+    if queue == 'warm':
+        assert not memo
+    if queue == 'recovery':
         with Session() as s:
             recovered = s.get(worker.ai_runs.AIRun, 'orphan-score')
             assert recovered.state == 'interrupted' and recovered.calls == 0
