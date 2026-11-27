@@ -1,3 +1,9 @@
+## 1.117.0 — 2026-11-25
+
+1. [PR #1635](https://github.com/StealthCat/MrPatchy/pull/1635): Agents hash `/etc/auto.master` as a built-in startup file, because automount runs its program maps as root on key lookups. The file is additive to existing baselines, saved custom paths naming it stay valid, and the mechanism catalog states that program maps are not yet resolved. Compatibility: older agents keep working. After the agent update, existing baselines show the file as newly in scope until an administrator approves a new baseline. Refs #1375.
+
+Integrated through [PR #1637](https://github.com/StealthCat/MrPatchy/pull/1637). This source update does not publish a Docker image.
+
 ## 1.116.0 — 2026-11-25
 
 1. [PR #1633](https://github.com/StealthCat/MrPatchy/pull/1633): A pure Roadmap F keyutils contract (`app/request_key_callouts.py`) reports which programs the kernel's `request-key` upcall runs as root, and which key type, description and callout patterns select them. It also flags which arguments carry requester-controlled data and which configuration lines make lookups abort. The parser rules were validated against native keyutils 1.6.3. Compatibility: new module only. Increment 1 of #1632.
