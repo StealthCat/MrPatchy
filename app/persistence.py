@@ -347,9 +347,11 @@ def validate(inventory):
 # root, which runs the program the best-matching rule names with requester-chosen arguments.
 # ClamAV configuration (#1607): clamd runs VirusEvent on every detection and freshclam runs its
 # On*Execute commands on update events; /etc/clamav on Debian, /etc/clamd.d and /etc/freshclam.conf on RPM.
+# Dovecot configuration (#1620): the master process runs as root and execs every service executable
+# its configuration names, as root unless drop_priv_before_exec is set; /etc/dovecot on both families.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
-                        '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf')
+                        '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
