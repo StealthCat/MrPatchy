@@ -88,11 +88,14 @@ def test_agent_hashes_cluster_files_without_running_or_following_them(tmp_path, 
     persistence.validate(result)
 
 
-@pytest.mark.skipif(not Path(CONF).is_file(), reason='native Debian PostgreSQL 16 cluster not installed')
-def test_native_debian_cluster_layout_is_hashed():
+@pytest.mark.skipif(not Path(CONF).is_file() or os.geteuid() != 0,
+                    reason='needs a native Debian PostgreSQL 16 cluster and root, as the agent runs')
+def test_native_debian_cluster_layout_is_hashed(monkeypatch):
     # Ubuntu 24.04 postgresql-16 cluster created by pg_createcluster (postgresql-common 257).
-    started = time.monotonic()
-    result = agent.persistence_inventory(started + 30)
+    # pg_hba.conf and pg_ident.conf are 0640 postgres, so only root (the agent's account) reads them.
+    monkeypatch.setattr(agent, 'PERSISTENCE_ROOTS', (PG,))
+    monkeypatch.setattr(agent, 'PERSISTENCE_FILES', ())
+    result = agent.persistence_inventory(time.monotonic() + 30)
     rows = {r['path']: r for r in result['entries']}
     names = {Path(p).name for p in rows if p.startswith(PG + '/16/main/')}
     assert {'postgresql.conf', 'pg_hba.conf', 'pg_ident.conf', 'start.conf', 'pg_ctl.conf', 'environment'} <= names
