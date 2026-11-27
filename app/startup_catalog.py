@@ -197,6 +197,8 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
     {'id': 'clamav', 'label': 'ClamAV VirusEvent and freshclam update-event commands', 'trigger': 'event',
      'scope': 'system', 'parse': 'metadata',
      'locations': (_loc('/etc/clamav', ('debian',)), _loc('/etc/clamd.d', ('rpm',)), _loc('/etc/freshclam.conf', ('rpm',)))},
+    {'id': 'dovecot', 'label': 'Dovecot master service executables', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata', 'locations': (_loc('/etc/dovecot'),)},
     {'id': 'supervisord', 'label': 'supervisord programs and event listeners', 'trigger': 'boot', 'scope': 'system',
      'parse': 'metadata',
      'locations': (_loc('/etc/supervisor', ('debian',)), _loc('/etc/supervisord.conf'),
