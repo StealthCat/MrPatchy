@@ -1,3 +1,10 @@
+## 1.118.0 — 2026-11-25
+
+1. [PR #1631](https://github.com/StealthCat/MrPatchy/pull/1631): Startup Files shows the `kdump_pre`, `kdump_post`, `kdump_emergency` and `core_collector` programs that `/etc/kdump.conf` makes kdump run as root after a crash, in capture order. When kdumpctl would refuse the configuration, it shows why instead. Updated agents parse the hashed file; nothing in it is run. It also fixes a kdump contract crash on a whitespace-only `core_collector` value. Compatibility: no schema, auth or response-authorization change. Increment 3 of #1538.
+2. [PR #1638](https://github.com/StealthCat/MrPatchy/pull/1638): The optional native capped benchmark workflow adds same-server serial and four-slot daily-cap captures on SQLite and MySQL. The existing cross-server artifacts are unchanged. Compatibility: optional workflow only. Refs #1617.
+
+Integrated together through batch [PR #1640](https://github.com/StealthCat/MrPatchy/pull/1640). This source update does not publish a Docker image.
+
 ## 1.117.0 — 2026-11-25
 
 1. [PR #1635](https://github.com/StealthCat/MrPatchy/pull/1635): Agents hash `/etc/auto.master` as a built-in startup file, because automount runs its program maps as root on key lookups. The file is additive to existing baselines, saved custom paths naming it stay valid, and the mechanism catalog states that program maps are not yet resolved. Compatibility: older agents keep working. After the agent update, existing baselines show the file as newly in scope until an administrator approves a new baseline. Refs #1375.
