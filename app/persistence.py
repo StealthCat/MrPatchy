@@ -509,10 +509,12 @@ def validate(inventory):
 # on CHILD_SA up/down; /etc/swanctl on Debian, /etc/strongswan (swanctl/ and strongswan.conf) on RPM.
 # runit service directories (#1628): runsvdir (as root) makes runsv exec each service's run, finish,
 # log/run and control programs; /etc/service (a symlink on Debian), /etc/runit and /etc/sv.
+# lighttpd configuration (#1603): include_shell commands run as root while the configuration is parsed,
+# piped loggers and FastCGI/SCGI bin-path backends as server.username; /etc/lighttpd on both families.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
                         '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
-                        '/etc/swanctl','/etc/strongswan','/etc/service','/etc/runit','/etc/sv')
+                        '/etc/swanctl','/etc/strongswan','/etc/service','/etc/runit','/etc/sv','/etc/lighttpd')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
