@@ -662,6 +662,10 @@ worker/embedded processes use the same variables. Invalid values refuse startup.
 The executor limits size the real worker pools; the HTTP setting does not raise
 task concurrency, override provider limits or guarantee throughput. Poll/notification
 work shares the poll pool; process investigations and update scoring share AI slots.
+To reserve one coordinator AI thread for update scoring, set `MRPATCHY_AI_RESERVE_SCORING_SLOT=1`
+(default 0) with `MRPATCHY_AI_CONCURRENCY` of at least 2, then recreate the workers. Idle scoring
+capacity stays reserved while that worker is coordinator; a value of 1 with fewer than two AI threads
+refuses startup.
 
 Independent servers can undergo process triage concurrently. Each server has an
 administrator-configurable process-investigation occupancy of one to four AI slots,
