@@ -196,28 +196,41 @@ def test_optional_producer_import_failure_does_not_skip_other_producers(monkeypa
     ('eligible', ['scoring', 'triage', 'scoring', 'triage']),
     ('recovery', ['scoring', 'triage', 'triage', 'triage']),
     ('warm', ['scoring', 'triage', 'triage', 'triage']),
+    ('legacy-zero', ['triage'] * 4),
+    ('legacy-full-warm', ['triage'] * 4),
+    ('legacy-cutoff', ['triage', 'triage', 'scoring', 'triage']),
+    ('legacy-recovery', ['scoring', 'triage', 'triage', 'triage']),
 ])
 def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatch, queue, expected):
     enabled = queue not in ('disabled', 'recovery')
-    memo = {'absent': (None, {}, {})} if queue == 'warm' else {}
+    memo = {'absent': (None, {}, {})} if queue in ('warm', 'legacy-full-warm') else {}
+    legacy = queue.startswith('legacy-')
+    recovery = queue in ('recovery', 'legacy-recovery')
+    legacy_limit = 0 if queue in ('legacy-zero', 'legacy-recovery') else 1
+    now = base = int(time.time())
     monkeypatch.setattr(worker.update_scores, '_MEMO', memo)
     with Session() as s:
         s.merge(Setting(key='config', value={'ai_enabled': True, 'ai_updates_enabled': enabled,
-                                             'ai_model': 'fixture-model', 'ai_control_mode': 'unthrottled'}))
+                                             'ai_model': 'fixture-model',
+                                             'ai_control_mode': 'legacy' if legacy else 'unthrottled',
+                                             'ai_update_hourly_limit': legacy_limit}))
         s.merge(Setting(key='openai_key', value={'encrypted': 'fixture'}))
-        if queue in ('eligible', 'inactive', 'paused'):
+        if queue in ('eligible', 'inactive', 'paused', 'legacy-zero', 'legacy-cutoff'):
             s.add(Host(id='score-host', name='Scoring fixture', address='192.0.2.1',
                        fingerprint='', enabled=queue != 'inactive'))
             s.add(Package(id='score-host:fixture', host_id='score-host', name='fixture',
                           installed='1', candidate='2'))
         if queue == 'paused':
             s.add(Setting(key='server-ai:score-host', value={'paused': True}))
-        if queue == 'recovery':
+        if recovery:
             s.add(worker.ai_runs.AIRun(id='orphan-score', purpose='update_scoring', state='running'))
+        if queue in ('legacy-full-warm', 'legacy-cutoff'):
+            started = base - 3590 if queue == 'legacy-cutoff' else base
+            s.add(worker.ai_runs.AIRun(id='previous-score', purpose='update_scoring',
+                                       started=started, state='complete'))
         s.commit()
 
     offsets = iter((0, 5, 10, 15))
-    now = base = time.time()
     dispatched = []
 
     def wait(_):
@@ -237,7 +250,7 @@ def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatc
                 dispatched.append('triage')
             elif fn is worker.update_scores.run_one:
                 dispatched.append('scoring')
-                if queue in ('recovery', 'warm'):
+                if recovery or queue == 'warm':
                     fn(*args)
             future = Future()
             future.set_result(None)
@@ -246,6 +259,7 @@ def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatc
     monkeypatch.setattr(worker.concurrent.futures, 'ThreadPoolExecutor', Pool)
     monkeypatch.setattr(worker.stop, 'wait', wait)
     monkeypatch.setattr(worker, 'time', SimpleNamespace(time=lambda: now, sleep=lambda _: None))
+    monkeypatch.setattr(worker.update_scores, 'time', SimpleNamespace(time=lambda: now))
     monkeypatch.setattr(worker, 'periodic_ticks', lambda *_: None)
     monkeypatch.setattr(worker, 'reconcile_interrupted_advisory_jobs', lambda: None)
     monkeypatch.setattr(worker, 'prune_history', lambda *_: None)
@@ -256,7 +270,7 @@ def test_serial_ai_dispatch_uses_scoring_turn_only_when_needed(admin, monkeypatc
     assert dispatched == expected
     if queue == 'warm':
         assert not memo
-    if queue == 'recovery':
+    if recovery:
         with Session() as s:
             recovered = s.get(worker.ai_runs.AIRun, 'orphan-score')
             assert recovered.state == 'interrupted' and recovered.calls == 0

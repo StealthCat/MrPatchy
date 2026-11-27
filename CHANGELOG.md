@@ -1,3 +1,9 @@
+## 1.126.1 — 2026-11-25
+
+1. [PR #1664](https://github.com/StealthCat/MrPatchy/pull/1664): Fixed: a worker with one AI slot gave legacy update scoring alternate turns even when scoring had reached its hourly allowance, leaving process triage waiting. The dispatcher now applies the worker's existing legacy allowance check before assigning a turn, so a zero or exhausted allowance leaves the turn to triage. Scoring resumes at the existing rolling-hour cutoff, and an interrupted scoring run still gets a turn to reconcile. The worker still rechecks under its lock. Compatibility: no configuration, schema, provider authorization or charging change. Fixes #1663.
+
+Integrated through [PR #1671](https://github.com/StealthCat/MrPatchy/pull/1671). This source update does not publish a Docker image.
+
 ## 1.126.0 — 2026-11-25
 
 1. [PR #1657](https://github.com/StealthCat/MrPatchy/pull/1657): Startup Files shows the commands ClamAV runs: the clamd `VirusEvent` command and the freshclam `OnUpdateExecute`, `OnErrorExecute` and `OnOutdatedExecute` commands, with their event, account and whether they run. Updated agents parse `/etc/clamav/clamd.conf` and `freshclam.conf` with the ClamAV 1.5.4 option rules and keep only these values, with commands redacted. It sits alongside the Dovecot view from v1.125.0. Compatibility: no schema, auth or response-authorization change; older agents show as not parsed. Increment 3 of #1607.
