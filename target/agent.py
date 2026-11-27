@@ -1690,6 +1690,171 @@ def parse_kdump_conf(data):
     return result
 
 
+# ClamAV event commands (#1607): /etc/clamav/clamd.conf and /etc/clamav/freshclam.conf are parsed
+# as data exactly as app/clamav_event_commands.parse does (ClamAV 1.5.4 optparse). Nothing is run.
+# Only whether the file loads, the reject reason and line, and the VirusEvent, On*Execute (best-effort
+# redaction), User, DatabaseOwner and daemon values are stored; every other value, including proxy
+# passwords, is dropped.
+CLAMAV_FILES = {'/etc/clamav/clamd.conf':'clamd','/etc/clamav/freshclam.conf':'freshclam'}
+CLAMAV_CHUNK = 1023
+CLAMAV_VALUE_LIMIT = 256
+CLAMAV_COMMANDS = frozenset(('VirusEvent','OnUpdateExecute','on-update-execute','OnErrorExecute','on-error-execute',
+                             'OnOutdatedExecute','on-outdated-execute'))
+CLAMAV_KEPT = {'clamd':frozenset(('VirusEvent','User')),
+               'freshclam':frozenset(('OnUpdateExecute','on-update-execute','OnErrorExecute','on-error-execute',
+                                      'OnOutdatedExecute','on-outdated-execute','DatabaseOwner','user','daemon'))}
+CLAMAV_REGEX = {'b':r'^(yes|true|1|no|false|0)(( +)?#(.*))?$','n':r'^[0-9]+((( +)?#(.*))?)$','s':r'^[0-9]+[KMG]?(( +)?#(.*))?$'}
+# Option names and long command-line names per tool and value check, from ClamAV 1.5.4 clam_options[]
+# ('-' none, 'd' deprecated, 'b'/'n'/'s' bool/number/size, or the option's own regular expression).
+_CLAMAV_GROUPS = {
+    'clamd': {
+        'b': (
+            'AlertBrokenExecutables AlertBrokenMedia AlertEncrypted AlertEncryptedArchive '
+            'AlertEncryptedDoc AlertExceedsMax AlertOLE2Macros AlertPartitionIntersection '
+            'AlertPhishingCloak AlertPhishingSSLMismatch AlgorithmicDetection AllowAllMatchScan '
+            'ArchiveBlockEncrypted BlockMax Bytecode BytecodeUnsigned ConcurrentDatabaseReload '
+            'CrossFilesystems Debug DetectPUA DevACOnly DevLiblog DevPerformance DisableCache '
+            'DisableCertCheck EnableReloadCommand EnableShutdownCommand EnableStatsCommand '
+            'EnableVersionCommand ExitOnOOM ExtendedDetectionInfo FIPSCryptoHashLimits FixStaleSocket '
+            'FollowDirectorySymlinks FollowFileSymlinks ForceToDisk Foreground GenerateMetadataJson '
+            'HeuristicAlerts HeuristicScanPrecedence JsonStoreExtraHashes JsonStoreHTMLURIs '
+            'JsonStorePDFURIs LeaveTemporaryFiles LogClean LogFileUnlock LogRotate LogSyslog LogTime '
+            'LogVerbose OLE2BlockMacros OfficialDatabaseOnly OnAccessDenyOnError OnAccessDisableDDD '
+            'OnAccessExcludeRootUID OnAccessExtraScanning OnAccessPrevention PartitionIntersection '
+            'PhishingAlwaysBlockCloak PhishingAlwaysBlockSSLMismatch PhishingScanURLs PhishingSignatures '
+            'PreludeEnable ScanArchive ScanELF ScanHTML ScanHWP3 ScanImage ScanImageFuzzyHash ScanMail '
+            'ScanOLE2 ScanOneNote ScanPDF ScanPE ScanPartialMessages ScanSWF ScanXMLDOCS StructuredCCOnly '
+            'StructuredDataDetection StructuredSSNFormatNormal StructuredSSNFormatStripped alert-broken '
+            'alert-broken-media alert-encrypted alert-encrypted-archive alert-encrypted-doc '
+            'alert-exceeds-max alert-macros alert-partition-intersection alert-phishing-cloak '
+            'alert-phishing-ssl algorithmic-detection allmatch block-encrypted block-macros block-max '
+            'bytecode bytecode-unsigned cross-fs daemon debug defaultcolors detect-pua detect-structured '
+            'dev-ac-only dev-liblog dev-performance disable-cache fdpass fips-limits force-to-disk '
+            'foreground gen-json help heuristic-alerts heuristic-scan-precedence infected install-service '
+            'json-store-extra-hashes json-store-html-uris json-store-pdf-uris kill log-rotate memory '
+            'multiscan no-summary nocerts official-db-only partition-intersection phishing-cloak '
+            'phishing-scan-urls phishing-sigs phishing-ssl prelude-enable quiet reload remove '
+            'scan-archive scan-elf scan-html scan-hwp3 scan-image scan-image-fuzzy-hash scan-mail '
+            'scan-ole2 scan-onenote scan-pdf scan-pe scan-swf scan-xmldocs service-mode stdout stream '
+            'structured-cc-mode uninstall-service unload verbose version wait '
+        ),
+        'd': (
+            'AllowSupplementaryGroups ArchiveBlockMax ArchiveLimitMemoryUsage ArchiveMaxCompressionRatio '
+            'ArchiveMaxFiles ArchiveMaxRecursion ArchiveMaxScanSize DetectBrokenExecutables '
+            'MailFollowURLs MailMaxRecursion ScanOnAccess detect-broken disable-summary mail-follow-urls '
+        ),
+        '^(Auto|ForceJIT|ForceInterpreter|Test)$': (
+            'BytecodeMode bytecode-mode '
+        ),
+        '^(TrustSigned|Paranoid)$': (
+            'BytecodeSecurity '
+        ),
+        'n': (
+            'BytecodeTimeout CacheSize CommandReadTimeout DevACDepth FailIfCvdOlderThan IdleTimeout '
+            'MaxConnectionQueueLength MaxDirectoryRecursion MaxFiles MaxIconsPE MaxPartitions MaxQueue '
+            'MaxRecHWP3 MaxRecursion MaxScanTime MaxThreads OnAccessCurlTimeout OnAccessExcludeUID '
+            'OnAccessMaxThreads OnAccessRetryAttempts PCREMatchLimit PCRERecMatchLimit ReadTimeout '
+            'SelfCheck SendBufTimeout StreamMaxPort StreamMinPort StructuredMinCreditCardCount '
+            'StructuredMinSSNCount TCPSocket bytecode-timeout cache-size dev-ac-depth '
+            'fail-if-cvd-older-than max-dir-recursion max-files max-iconspe max-partitions max-rechwp3 '
+            'max-recursion max-scantime pcre-match-limit pcre-recmatch-limit structured-cc-count '
+            'structured-ssn-count '
+        ),
+        '-': (
+            'CVDCertsDirectory DatabaseDirectory ExcludePUA ExcludePath IncludePUA LocalSocket '
+            'LocalSocketGroup LocalSocketMode LogFacility LogFile OnAccessExcludePath '
+            'OnAccessExcludeUname OnAccessIncludePath OnAccessMountPath PidFile PreludeAnalyzerName '
+            'TCPAddr TemporaryDirectory User VirusEvent config-file copy cvdcertsdir datadir exclude-pua '
+            'file-list include-pua log move pid ping prelude-analyzer-name tempdir '
+        ),
+        's': (
+            'LogFileMaxSize MaxEmbeddedPE MaxFileSize MaxHTMLNoTags MaxHTMLNormalize MaxScanSize '
+            'MaxScriptNormalize MaxZipTypeRcg OnAccessMaxFileSize PCREMaxFileSize StreamMaxLength '
+            'max-embeddedpe max-filesize max-htmlnormalize max-htmlnotags max-scansize '
+            'max-scriptnormalize max-ziptypercg pcre-max-filesize '
+        ),
+    },
+    'freshclam': {
+        'd': (
+            'AllowSupplementaryGroups SafeBrowsing http-proxy log-verbose proxy-user '
+        ),
+        'b': (
+            'Bytecode CompressLocalDatabase Debug FIPSCryptoHashLimits Foreground LogRotate LogSyslog '
+            'LogTime LogVerbose ScriptedUpdates TestDatabases daemon debug fips-limits foreground help '
+            'install-service list-mirrors log-rotate no-dns no-warnings quiet service-mode show-progress '
+            'stdout uninstall-service verbose version '
+        ),
+        '-': (
+            'CVDCertsDirectory DNSDatabaseInfo DatabaseCustomURL DatabaseDirectory DatabaseMirror '
+            'DatabaseOwner ExcludeDatabase ExtraDatabase HTTPProxyPassword HTTPProxyServer '
+            'HTTPProxyUsername HTTPUserAgent LocalIPAddress LogFacility NotifyClamd OnErrorExecute '
+            'OnOutdatedExecute OnUpdateExecute PidFile PrivateMirror UpdateLogFile config-file '
+            'cvdcertsdir daemon-notify datadir local-address log on-error-execute on-outdated-execute '
+            'on-update-execute pid update-db user '
+        ),
+        'n': (
+            'Checks ConnectTimeout HTTPProxyPort MaxAttempts ReceiveTimeout checks '
+        ),
+        's': (
+            'LogFileMaxSize '
+        ),
+    },
+}
+CLAMAV_OPTIONS = {tool:{name:kind for kind,names in groups.items() for name in ''.join(names).split()}
+                  for tool,groups in _CLAMAV_GROUPS.items()}
+
+
+def _clamav_lstrip(raw):
+    i=0
+    while i<len(raw)-1 and raw[i] in b' \t':i+=1
+    return raw[i:]
+
+
+def parse_clamav_conf(data,tool):
+    """Parse one clamd.conf or freshclam.conf as data, mirroring app/clamav_event_commands.parse.
+    Nothing is executed. Text with NUL bytes yields parsed false and nothing else."""
+    result={'parsed':False,'accepted':False,'error':None,'values':{},'redacted':False}
+    if len(data)>1024*1024 or b'\x00' in data:return result
+    result.update(parsed=True,accepted=True)
+    known=CLAMAV_OPTIONS[tool];pos=0;line=0
+    while pos<len(data):
+        end=data.find(b'\n',pos,pos+CLAMAV_CHUNK);stop=end+1 if end!=-1 else min(pos+CLAMAV_CHUNK,len(data))
+        buff=_clamav_lstrip(data[pos:stop]);pos=stop;line+=1
+        if len(buff)<=2 or buff[:1]==b'#':continue
+        reason=None
+        if buff.startswith(b'Example'):reason='example_config'
+        else:
+            cut=re.search(rb'[ \t]',buff)
+            arg=_clamav_lstrip(buff[cut.start()+1:]).rstrip(b' \t\n') if cut else b''
+            if not arg:reason='missing_argument'
+            elif arg[:1]==b'"':
+                close=arg.rfind(b'"',1)
+                if close==-1:reason='missing_closing_quote'
+                else:
+                    arg=arg[1:close]
+                    if not arg:reason='empty_argument'
+        if reason is None:
+            name=buff[:cut.start()].decode('utf-8','backslashreplace');kind=known.get(name)
+            if kind is None:reason='unknown_option'
+            elif kind=='d':continue
+            elif kind!='-' and not re.search(CLAMAV_REGEX.get(kind,kind),arg.decode('utf-8','backslashreplace'),re.IGNORECASE):
+                reason='incorrect_argument_format'
+            elif b'#' in arg:
+                token=arg.lstrip(b'#').split(b'#',1)[0]
+                if not token:reason='parser_crash'
+                else:arg=token.rstrip(b' \t')
+        if reason:
+            result.update(accepted=False,error={'line':line,'reason':reason});return result
+        if name in result['values'] or name not in CLAMAV_KEPT[tool]:continue
+        value=_tcpw_escape(arg.decode('utf-8','backslashreplace'));redacted=False
+        if name in CLAMAV_COMMANDS:
+            value,redacted=redact_cron_command(value)
+            result['redacted']=result['redacted'] or redacted
+        result['values'][name]={'line':line,'value':value[:CLAMAV_VALUE_LIMIT if name not in CLAMAV_COMMANDS else CRON_COMMAND_LIMIT],
+                                'truncated':len(value)>(CLAMAV_VALUE_LIMIT if name not in CLAMAV_COMMANDS else CRON_COMMAND_LIMIT),'redacted':redacted}
+    return result
+
+
 # autofs master map (#1375): the hashed /etc/auto.master bytes are reported as bounded latin-1 text and
 # nothing else. No map path the text names is stat-ed, opened or run: the agent cannot establish a
 # non-triggering lookup boundary (symlinks, nested automount points and the live mount topology), and a
@@ -1718,7 +1883,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;autofs=cron_jobs and str(path)==AUTOFS_MASTER;content=bytearray() if form or at_name or anacron or tcpw or kdump or autofs else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;autofs=cron_jobs and str(path)==AUTOFS_MASTER;clamav=CLAMAV_FILES.get(str(path)) if cron_jobs else None;content=bytearray() if form or at_name or anacron or tcpw or kdump or autofs or clamav else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1766,6 +1931,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['kdump']=parse_kdump_conf(bytes(content))
             if autofs and row['kind']=='regular':
                 row['autofs']=parse_autofs_master(bytes(content))
+            if clamav and row['kind']=='regular':
+                row['clamav']=parse_clamav_conf(bytes(content),clamav)
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:

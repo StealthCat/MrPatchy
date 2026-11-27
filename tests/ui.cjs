@@ -255,6 +255,7 @@ const assert=require('assert/strict');
     await require('./ui_startup_tcp_wrappers.cjs')(page,capture);
     await require('./ui_startup_kdump.cjs')(page,capture);
     await require('./ui_startup_autofs.cjs')(page,capture);
+    await require('./ui_startup_clamav.cjs')(page,capture);
     await require('./ui_server_directory.cjs')(page,capture);
     await require('./ui_server_directory_ai.cjs')(page,capture);
     await require('./ui_servers.cjs')(page,capture);
