@@ -1,3 +1,19 @@
+## 1.131.0 — 2026-11-25
+
+1. [PR #1685](https://github.com/StealthCat/MrPatchy/pull/1685): UI review. Eight administrator features that were previously API-only now have UI panels on their existing endpoints:
+   - saved fleet queries (Servers → Saved queries);
+   - change freezes (Patch schedules → Change freezes);
+   - application probes;
+   - agent spool batch size;
+   - SSO identity bindings;
+   - recovery readiness receipts;
+   - the AI connection inventory;
+   - incident case ownership and notes (Server → Security → Owner & notes).
+
+   Settings gains **Backup & recovery** and **Alerts & sign-in** sections, and each navigation item has its own icon. In the SSO binding form, a replacement confirmation is pinned to the submitted subject and destination, and is invalidated by any edit or newer submit. The incident case dialog discards stale responses after navigation. README now names the new UI paths. Compatibility: no API, schema, authentication or response-authorization change. Fixes #1684.
+
+Integrated through [PR #1689](https://github.com/StealthCat/MrPatchy/pull/1689). This source update does not publish a Docker image.
+
 ## 1.130.1 — 2026-11-25
 
 1. [PR #1682](https://github.com/StealthCat/MrPatchy/pull/1682): Fixed: a swanctl `include ""`, which strongSwan ignores, or a swanctl file truncated at the statement cap made Mr Patchy reject the host's whole startup inventory. Both are now reported as incomplete strongSwan detail, and the rest of the inventory is kept. Agents count dropped values exactly, and reports from v1.128.0 agents are still accepted. Compatibility: no schema, auth or response-authorization change. Fixes #1680.
