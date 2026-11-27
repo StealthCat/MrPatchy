@@ -1,3 +1,10 @@
+## 1.128.0 — 2026-11-25
+
+1. [PR #1673](https://github.com/StealthCat/MrPatchy/pull/1673): Update scoring and the scoring queue summary parse each host's distribution metadata once per host snapshot, instead of once per package, while producing the same results. Compatibility: no API, schema, provider or authorization change. Fixes #1672.
+2. [PR #1674](https://github.com/StealthCat/MrPatchy/pull/1674): Startup Files shows the strongSwan `updown` command charon runs as root for each swanctl connection child. Agents parse it from the hashed swanctl configuration and keep only section names, include patterns, setting names and redacted commands. The coordinator resolved a one-line coverage-text conflict with #1667. Compatibility: no schema, auth or response-authorization change; older agents show as not parsed. Increment 3 of #1624.
+
+Integrated together through batch [PR #1677](https://github.com/StealthCat/MrPatchy/pull/1677). This source update does not publish a Docker image.
+
 ## 1.127.0 — 2026-11-25
 
 1. [PR #1667](https://github.com/StealthCat/MrPatchy/pull/1667): Agents hash the runit service directories (`/etc/sv`, `/etc/runit` and the `/etc/service` link) as built-in startup scope, recording metadata only, and the remaining coverage gap is labelled. Fixed: startup inventories were rejected as invalid when 8 or more custom integrity paths were saved. Compatibility: older agents keep working. After the agent update, existing baselines show the directories as newly in scope until an administrator approves a new baseline. Increment 2 of #1628; fixes #1666.

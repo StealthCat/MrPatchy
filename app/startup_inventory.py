@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -48,7 +48,7 @@ GAPS=[
     'keyutils request-key: /etc/request-key.conf and the /etc/request-key.d drop-in directory are hashed as startup files, and agents that report them parse each file /sbin/request-key reads (drop-ins named *.conf, not starting with a dot, that are regular files) from the hashed bytes with the keyutils 1.6.3 rules. Each rule shows its operation, key type, description and callout patterns, whether the kernel upcall (create) reaches it, the pipe mode and the command it runs as root, with requester-controlled inputs (%d, %c, %{type:description} and piped callout information) named. Lines that abort lookups (4096 bytes or more, or ending before the program) are listed with the patterns a request must match first; one that matches every kernel lookup in any read file makes every lookup abort. Commands use the same best-effort redaction, patterns are bounded to 256 characters, rules and aborts to 64 per file, and text over 64 KiB, not UTF-8 or with NUL bytes is shown as unparsed. The readdir() order of drop-ins is not captured, so which of two equally specific rules in different files wins is not shown. The programs themselves, which key types an unprivileged requester may ask for, whether the kernel has key support and /sbin/request-key installed, and which processes request keys are not evaluated.',
     'ClamAV: the Debian-family /etc/clamav directory (clamd.conf, freshclam.conf and the onupdateexecute.d and onerrorexecute.d directories), the RPM-family /etc/clamd.d directory and /etc/freshclam.conf are hashed as startup files, and agents that report them parse /etc/clamav/clamd.conf and /etc/clamav/freshclam.conf from the hashed bytes with the ClamAV 1.5.4 option-parser rules. This view shows the VirusEvent command clamd runs through /bin/sh on every detection, waiting under a lock shared by every scan, and the OnUpdateExecute, OnErrorExecute and OnOutdatedExecute commands freshclam runs through system(), with their line and account. A file the parser rejects (unknown option, Example line, bad value or quoting) loads nothing, and its reason and line are shown. Commands use the same best-effort redaction and are bounded to 512 characters; the User, DatabaseOwner and daemon values are kept and every other value, including proxy passwords, is dropped. Accounts assume clamd and freshclam start as root, as the packaged units do. Whether freshclam runs in daemon mode is not observed, so which text OnOutdatedExecute runs and whether an EXIT_<n> command exits instead of running are shown as conditional. The RPM-family files are hashed but not yet parsed. Options given on the command line, alternate files passed with --config-file, the onupdateexecute.d and onerrorexecute.d scripts, whether either daemon runs, and the commands themselves are not evaluated.',
     'Dovecot: the /etc/dovecot directory (dovecot.conf, conf.d and any other files it holds, including passdb/userdb and key files, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate the non-default service executables the root master process execs from dovecot.conf, as root unless drop_priv_before_exec is set. Only section headers, include patterns and the service and global settings the evaluation reads are stored; every other value is dropped. Included files outside /etc/dovecot (such as /usr/share/dovecot/protocols.d) and symlinked files are not observed, so an evaluation that reaches them stops with a blocking gap. /etc/passwd and /etc/group are not captured, so accounts are shown by name only. Configuration passed with -c, whether dovecot runs, the programs themselves, checkpassword passdb/userdb programs, quota_warning and sieve extprograms are not evaluated.',
-    'strongSwan: the Debian-family /etc/swanctl directory (swanctl.conf, conf.d and the x509, private and other credential directories, as metadata and SHA-256 only) and the RPM-family /etc/strongswan directory (swanctl/, strongswan.conf and strongswan.d) are hashed as startup files by agents that report them, but the updown command charon runs as root through /bin/sh for each connection child on CHILD_SA up and down is not yet parsed in this view. The Debian-family /etc/strongswan.conf and /etc/strongswan.d (which can disable the updown plugin), legacy ipsec.conf leftupdown and leftfirewall, configuration passed with swanctl --file, connections loaded over vici by other clients, whether charon runs and the commands themselves are not evaluated.',
+    'strongSwan: the Debian-family /etc/swanctl directory (swanctl.conf, conf.d and the x509, private and other credential directories, as metadata and SHA-256 only) and the RPM-family /etc/strongswan directory (swanctl/, strongswan.conf and strongswan.d) are hashed as startup files, and agents that report them parse every *.conf file under /etc/swanctl and /etc/strongswan/swanctl from the hashed bytes with the strongSwan 5.9.13 settings rules. This view evaluates swanctl.conf and its includes and shows the updown command charon runs through /bin/sh for each connection child on CHILD_SA up and down, with its source line, shell syntax and whether swanctl discards the connection. Only section names, include patterns, setting names and updown commands are stored; every other value, including secrets, is dropped, and commands use the same best-effort redaction. Included files that are not *.conf files under those directories, symlinked files and files over 1 MiB, not UTF-8 or with NUL bytes are not observed, so an evaluation that reaches them reports a blocking gap. charon is assumed to run as root, as the packaged service does. The Debian-family /etc/strongswan.conf and /etc/strongswan.d (which can disable the updown plugin), whether the other settings of each connection load, legacy ipsec.conf leftupdown and leftfirewall, configuration passed with swanctl --file, connections loaded over vici by other clients, whether charon runs and the commands themselves are not evaluated.',
     'runit: /etc/service (on Debian and Ubuntu a symlink to runit/runsvdir/current, recorded, not followed), the /etc/runit directory (the 1, 2 and 3 stage scripts, ctrlaltdel and the runsvdir run-level directories of service links) and the /etc/sv service definitions (run, finish, log/run, down and control files) are hashed as startup files, as metadata and SHA-256 only, by agents that report them. Which programs runsvdir makes runsv run, on which event and as which account is not yet evaluated in this view. Service directories outside these paths (such as /usr/share/runit/sv or a runsvdir started with another directory), the supervise state under /run/runit, the contents of run scripts (including any chpst privilege drop), whether runsvdir runs and the programs themselves are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
@@ -321,6 +321,86 @@ def dovecot_text_search(entry):
     return ' '.join(i.get('pattern') or i.get('name') or i.get('value') or '' for i in entry.get('dovecot',{}).get('statements',()))
 
 
+# strongSwan swanctl configuration files and the inventory root each one's observations come from (#1624).
+SWANCTL_CONFIGS=(('/etc/swanctl/swanctl.conf','/etc/swanctl'),('/etc/strongswan/swanctl/swanctl.conf','/etc/strongswan'))
+SWANCTL_CONFIG_PATHS=frozenset(path for path,_ in SWANCTL_CONFIGS)
+_SWANCTL_ERROR_TEXT={'syntax':'=','unterminated_quote':'"','escape_sequence':'"\\q'}
+
+
+def _swanctl_quote(value):
+    return '"'+value.replace('\\','\\\\').replace('"','\\"').replace('\n','\\n').replace('\r','\\r')+'"'
+
+
+def swanctl_text(report):
+    """Rebuild configuration text the contract reads identically: each statement on its own line number."""
+    lines={}
+    for item in report['statements']:
+        op=item['op']
+        if op=='include':text='include '+_swanctl_quote(item['pattern'])
+        elif op=='close':text='}'
+        elif op=='open':text=_swanctl_quote(item['name'])+' {'
+        elif op=='set':text=_swanctl_quote(item['key'])+' = '+_swanctl_quote(item['value'] or '')
+        else:text=_SWANCTL_ERROR_TEXT[item['code']]
+        lines[item['line']]=lines[item['line']]+' '+text if item['line'] in lines else text
+    return '\n'.join(lines.get(n,'') for n in range(1,max(lines,default=0)+1))+'\n'
+
+
+def strongswan_state(entry):
+    """Whether swanctl statements were reported, refused or not reported (older agent) for this file."""
+    if 'strongswan' in entry:return 'parsed' if entry['strongswan']['parsed'] else 'unparsed'
+    return 'not_reported' if entry['kind']=='regular' and persistence.swanctl_reads(entry['path']) else None
+
+
+def strongswan_view(inventory,config_path):
+    """Evaluate app/strongswan_updown over the reported statements. Unreported, unparsed, truncated,
+    non-.conf and symlinked files stay unobserved; absent paths and include-directory listings are observed
+    only when the stored inventory is a complete collection. charon is assumed to run as root, as the
+    packaged service does, and updown plugin enablement is not assessed. Never a safety verdict."""
+    root=dict(SWANCTL_CONFIGS)[config_path]
+    entries={e['path']:e for e in inventory['entries'] if e['path'].startswith(root+'/')}
+    complete=inventory['state']=='collected' and root not in inventory['missing_roots']
+    files={};gaps=[]
+    links=[p for p,e in entries.items() if e['kind']=='symlink']
+    def behind_link(path):return any(path==link or path.startswith(link+'/') for link in links)
+    for path,entry in entries.items():
+        state=strongswan_state(entry)
+        if state=='parsed' and not entry['strongswan']['truncated']:files[path]=swanctl_text(entry['strongswan'])
+        elif state=='parsed':gaps.append({'code':'statements_truncated','path':path,'blocking':True})
+    def absent(path):
+        # A complete collection records every existing path under the root, so an unrecorded one does not exist.
+        return complete and path.startswith(root+'/') and path not in entries and not behind_link(path) and not any(p.startswith(path+'/') for p in entries)
+    class Observed(dict):
+        def __contains__(self,path):return dict.__contains__(self,path) or absent(path)
+        def __getitem__(self,path):
+            if dict.__contains__(self,path):return dict.__getitem__(self,path)
+            if absent(path):return None
+            raise KeyError(path)
+    directories={}
+    for entry in entries.values():
+        for item in entry.get('strongswan',{}).get('statements',()):
+            if item['op']!='include':continue
+            pattern=item['pattern'] if item['pattern'].startswith('/') else posixpath.join(posixpath.dirname(entry['path']),item['pattern'])
+            directory=posixpath.dirname(posixpath.normpath(pattern))
+            if not complete or behind_link(directory) or not (directory+'/').startswith(root+'/'):continue
+            # Agents record files, not directories: a recorded path here is a file or symlink, never listed.
+            if directory in entries:continue
+            directories[directory]=sorted({p[len(directory)+1:].split('/')[0] for p in entries if p.startswith(directory+'/')})
+    result=strongswan_updown.evaluate(files=Observed(files),directories=directories,config_path=config_path,charon_uid=0)
+    gaps+=[{'code':'charon_uid_assumed','blocking':False,'detail':'charon is assumed to run as root, as the packaged strongswan service does; its account is not observed.'}]
+    keep=('code','blocking','file','directory','line','pattern','limit','uid')
+    gaps+=[{k:(str(g[k])[:300] if isinstance(g[k],str) else g[k]) for k in keep if k in g} for g in result['gaps']]
+    notes=[{k:(str(n[k])[:300] if isinstance(n[k],str) else n[k]) for k in ('code','file','connection','child','line','reason') if k in n} for n in result['notes']]
+    return {'commands':[{k:r[k] for k in ('connection','child','command','argv','program','shell_metacharacters','uid','file','line','connection_discarded','runs')}
+                        for r in result['commands'][:200]],
+            'root_commands':[i for i in result['root_commands'] if i<200],'files':result['files'][:100],'config_path':config_path,
+            'config_complete':result['complete'],'complete':False,'gaps':gaps[:100],'notes':notes[:100],
+            'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
+
+
+def strongswan_text_search(entry):
+    return ' '.join(i.get('pattern') or i.get('name') or i.get('value') or '' for i in entry.get('strongswan',{}).get('statements',()))
+
+
 def with_at_jobs(rows,inventory,q,changes):
     """Attach parsed at jobs to matching rows and add entries found only by an at account or command."""
     by_path={r['path']:r for r in rows}
@@ -376,6 +456,11 @@ def catalog_rows(inventory):
             states=[dovecot_state(e) for e in found]
             parsed=states.count('parsed')
             label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
+        if key in ('strongswan','strongswan_rpm'):
+            found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
+            states=[strongswan_state(e) for e in found]
+            parsed=states.count('parsed')
+            label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
         if key=='at':
             states=[at_state(e) for e in inventory['entries']]
             parsed=states.count('parsed');missing=states.count('not_reported')
@@ -426,11 +511,15 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if entry['path']==dovecot_services.DEFAULT_CONFIG and state=='parsed':
             if dovecot is None:dovecot=dovecot_view(inventory)
             row['dovecot']=dovecot
+        state=strongswan_state(entry)
+        if state:row['strongswan_state']=state
+        if state=='parsed':row['strongswan_statements']=len(entry['strongswan']['statements'])
+        if entry['path'] in SWANCTL_CONFIG_PATHS and state=='parsed':row['strongswan']=strongswan_view(inventory,entry['path'])
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)
