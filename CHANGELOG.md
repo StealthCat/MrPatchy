@@ -1,3 +1,10 @@
+## 1.122.0 — 2026-11-25
+
+1. [PR #1647](https://github.com/StealthCat/MrPatchy/pull/1647): Startup Files shows which programs the kernel's request-key upcall runs as root. For each file `/sbin/request-key` reads, it lists the rule patterns, the command, which inputs the requester controls and whether the rule runs, plus the lines that make lookups abort. Agents parse only files request-key reads, from bytes they already hash, and run nothing. The controller strictly validates the report. Parsed detail stays out of baseline comparison. Compatibility: no schema, auth or response-authorization change; older agents show as not parsed. Increment 3 of #1632.
+2. [PR #1651](https://github.com/StealthCat/MrPatchy/pull/1651): Fixed a flaky browser test: the linked-assessments test keeps its simulated outage until Retry, so a slow runner can no longer use up the one-shot failure before the page reloads. Compatibility: tests only. Fixes #1650.
+
+Integrated together through batch [PR #1656](https://github.com/StealthCat/MrPatchy/pull/1656). This source update does not publish a Docker image.
+
 ## 1.121.1 — 2026-11-25
 
 1. [PR #1646](https://github.com/StealthCat/MrPatchy/pull/1646): Fixed: a saved custom path inside a newly built-in startup directory, such as `/etc/request-key.d` or `/etc/clamav`, again keeps its earlier traversal depth. Files more than 32 levels below the directory are refreshed again. Past the built-in depth limit, agents follow only saved paths and their ancestors. Unsaved regular-file, symlink and directory siblings are not collected, and each directory where something was skipped reports one `Directory depth limit reached` gap. Compatibility: agent-side traversal only. Fixes #1645.

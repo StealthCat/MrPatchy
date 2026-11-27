@@ -159,7 +159,7 @@ def test_catalogs_label_paths_and_state_the_gap():
     assert [loc['path'] for loc in mechanism['locations']] == [DROPINS, CONF]
     for family in ('debian', 'rpm'):
         assert CONF in startup_catalog._all_locations(family) and DROPINS in startup_catalog._all_locations(family)
-    assert any(CONF in gap and DROPINS in gap and 'not yet parsed' in gap for gap in startup_inventory.GAPS)
+    assert any(CONF in gap and DROPINS in gap and 'keyutils 1.6.3 rules' in gap for gap in startup_inventory.GAPS)
 
 
 def test_saved_monitor_policy_with_promoted_paths_is_accepted(admin):
