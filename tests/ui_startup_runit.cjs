@@ -28,6 +28,16 @@ module.exports=async(page,capture)=>{
   const gaps=await page.locator('.startup-runit-gaps').innerText();
   assert.match(gaps,/Blocking: runsvdir not observed/);assert.match(gaps,/Blocking: Link target not observed \/etc\/service\/ext/);assert.match(gaps,/Mount flags not observed/);
   assert.equal(await page.locator('#content img[src=x]').count(),0);assert.equal(await page.evaluate(()=>window.__runitInjected),undefined);
+  // A view over the display limits states what it counted but did not list.
+  const capped={...view,service_count:201,services_omitted:198,programs_omitted:200,runs:203,runs_listed:3,gaps_omitted:2,limits:{services:200,programs_per_service:64,gaps:100},
+   services:[{...view.services[0],programs_omitted:2},...view.services.slice(1)]};
+  body.items=[row('/etc/service',{runit:capped})];
+  await page.reload();await page.locator('#startup-file-items').waitFor();
+  await page.getByRole('heading',{name:'runit service programs (201 entries · 203 runnable)',exact:true}).waitFor();
+  await page.getByText('Showing 3 of 201 service entries (display limit 200 services, 64 programs each); 200 programs and 198 service entries are counted but not listed, 200 of them runnable.',{exact:true}).waitFor();
+  assert.match(await page.locator('.startup-runit-services').innerText(),/2 more programs not listed \(display limit 64\)/);
+  await page.locator('.startup-runit-gaps summary').click();
+  assert.match(await page.locator('.startup-runit-gaps').innerText(),/2 more gaps not listed \(display limit 100\)/);
   for(const width of [320,768,1440]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await capture('startup-runit-'+width);}
  }finally{await page.unroute('**/api/hosts/*/security/startup-inventory?*',handler);await page.setViewportSize({width:1440,height:1000});await page.goto(new URL('/#activity',page.url()).href);}
 };

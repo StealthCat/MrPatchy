@@ -66,6 +66,30 @@ def test_debian_layout_resolves_links_inside_the_inventory_and_reports_programs(
     assert codes(view) == {'supervisor_not_observed': True, 'mount_flags_unobserved': False, 'empty_directories_not_recorded': True}
 
 
+
+def test_display_limits_report_omitted_services_and_programs():
+    # 201 plain services with one runnable run program each: one service is evaluated but not listed.
+    many = [entry(f'{SERVICE}/s{i:03d}/run') for i in range(201)]
+    view = startup_inventory.runit_view(inventory(many, scope=(SERVICE,)))
+    assert len(view['services']) == startup_inventory.RUNIT_MAX_SERVICES == 200
+    assert view['service_count'] == 201 and view['services_omitted'] == 1 and view['programs_omitted'] == 1
+    assert view['runs'] == 201 and view['runs_listed'] == 200
+    gap = next(g for g in view['gaps'] if g['code'] == 'display_truncated')
+    assert gap['blocking'] is False and '1 services and 1 programs (1 runnable)' in gap['detail']
+    # One service with run, finish, log/run and 64 executable control files has 67 programs; 3 are not listed.
+    wide = [entry(f'{SERVICE}/w/run'), entry(f'{SERVICE}/w/finish'), entry(f'{SERVICE}/w/log/run')]
+    wide += [entry(f'{SERVICE}/w/control/{c}') for c in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_']
+    view = startup_inventory.runit_view(inventory(wide, scope=(SERVICE,)))
+    service = by_name(view)['w']
+    assert len(service['programs']) == 64 and service['programs_omitted'] == 3
+    assert view['services_omitted'] == 0 and view['programs_omitted'] == 3
+    assert view['runs_listed'] == sum(p['outcome'] == 'runs' for p in service['programs']) < view['runs']
+    assert 'display_truncated' in codes(view)
+    # Within the limits nothing is reported as omitted.
+    view = startup_inventory.runit_view(inventory(debian()))
+    assert view['services_omitted'] == view['programs_omitted'] == view['gaps_omitted'] == 0
+    assert view['runs'] == view['runs_listed'] and 'display_truncated' not in codes(view)
+
 def test_links_outside_the_roots_loops_and_dangling_targets_are_not_guessed():
     view = startup_inventory.runit_view(inventory(debian(
         link(RUNIT + '/runsvdir/default/ext', '/usr/share/runit/sv/ext'),

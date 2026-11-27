@@ -411,6 +411,10 @@ def strongswan_text_search(entry):
 RUNIT_SCAN_DIR='/etc/service'
 RUNIT_ROOTS=('/etc/service','/etc/runit','/etc/sv')
 RUNIT_MAX_HOPS=32
+# Display limits: the view lists at most this many services, programs per service and gaps, and reports what it omits.
+RUNIT_MAX_SERVICES=200
+RUNIT_MAX_PROGRAMS=64
+RUNIT_MAX_GAPS=100
 
 
 def runit_view(inventory):
@@ -505,10 +509,23 @@ def runit_view(inventory):
     def program(p):
         return {k:(list(p[k]) if k=='argv' else p[k]) for k in ('role','path','letter','argv','cwd','event','outcome','reason','automatic') if k in p}
     services=[{**{k:s[k] for k in ('name','path','outcome','reason','wanted_down','has_log','log_wanted_down') if k in s},
-               'programs':[program(p) for p in s['programs'][:64]]} for s in result['services'][:200]]
+               'programs':[program(p) for p in s['programs'][:RUNIT_MAX_PROGRAMS]],
+               'programs_omitted':max(0,len(s['programs'])-RUNIT_MAX_PROGRAMS)} for s in result['services'][:RUNIT_MAX_SERVICES]]
+    # Every count covers the whole evaluation, so a total never exceeds what the listed rows can explain silently.
+    services_omitted=max(0,len(result['services'])-RUNIT_MAX_SERVICES)
+    programs_omitted=sum(len(s['programs']) for s in result['services'])-sum(len(s['programs']) for s in services)
+    runs_listed=sum(p['outcome']=='runs' for s in services for p in s['programs'])
+    runs=sum(p['outcome']=='runs' for s in result['services'] for p in s['programs'])
+    if services_omitted or programs_omitted:
+        gaps.append({'code':'display_truncated','blocking':False,
+                     'detail':f'This view lists at most {RUNIT_MAX_SERVICES} services and {RUNIT_MAX_PROGRAMS} programs per service; '
+                              f'{services_omitted} services and {programs_omitted} programs ({runs-runs_listed} runnable) were evaluated but are not listed.'})
+    gaps_omitted=max(0,len(gaps)-RUNIT_MAX_GAPS)
     return {'directory':RUNIT_SCAN_DIR,'resolved_directory':scan_real,'services':services,
-            'runs':sum(p['outcome']=='runs' for s in result['services'] for p in s['programs']),
-            'complete':False,'gaps':gaps[:100],'origin':'not_assessed','authorizes_response':False,
+            'service_count':len(result['services']),'services_omitted':services_omitted,'programs_omitted':programs_omitted,
+            'runs':runs,'runs_listed':runs_listed,
+            'limits':{'services':RUNIT_MAX_SERVICES,'programs_per_service':RUNIT_MAX_PROGRAMS,'gaps':RUNIT_MAX_GAPS},
+            'complete':False,'gaps':gaps[:RUNIT_MAX_GAPS],'gaps_omitted':gaps_omitted,'origin':'not_assessed','authorizes_response':False,
             'contract_version':result['contract_version']}
 
 
