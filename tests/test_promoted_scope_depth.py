@@ -54,9 +54,10 @@ def test_saved_path_below_the_root_depth_limit_is_still_reached(promoted):
     result = run([saved])
     paths = observed(result)
     assert str(saved / 'fixture.conf') in paths
-    # Siblings beyond the built-in limit are not inventoried; the limit is still disclosed for them.
+    # Siblings beyond the built-in limit are not inventoried; the limit is disclosed for their directory.
     assert str(sibling / 'other.conf') not in paths
-    assert any(gap.startswith(str(sibling) + ':') and 'depth limit' in gap for gap in result['gaps'])
+    assert any(gap.startswith(str(sibling.parent) + ':') and 'depth limit' in gap for gap in result['gaps'])
+    assert result['state'] == 'incomplete'
 
 
 def test_saved_deep_file_is_still_reached(promoted):
@@ -65,6 +66,31 @@ def test_saved_deep_file_is_still_reached(promoted):
     saved.write_text('x\n')
     result = run([saved])
     assert str(saved) in observed(result)
+
+
+def test_unsaved_file_and_symlink_siblings_beyond_the_limit_are_not_collected(promoted):
+    # Reaching a saved file past the built-in limit must not inventory its unsaved neighbours.
+    deep = nested(promoted, agent.SCAN_MAX_DEPTH + 2)
+    saved = deep / 'fixture.conf'
+    saved.write_text('x\n')
+    (deep / 'other.conf').write_text('y\n')
+    (deep / 'link.conf').symlink_to('other.conf')
+    # An ancestor on the way down that is still beyond the limit keeps its files out too.
+    (deep.parent / 'ancestor.conf').write_text('z\n')
+    result = run([saved])
+    assert observed(result) == [str(saved)]
+    assert result['state'] == 'incomplete'
+    assert any(gap.startswith(str(deep) + ':') and 'depth limit' in gap for gap in result['gaps'])
+    assert any(gap.startswith(str(deep.parent) + ':') and 'depth limit' in gap for gap in result['gaps'])
+
+
+def test_saved_directory_beyond_the_limit_collects_its_own_files_only(promoted):
+    saved = nested(promoted, agent.SCAN_MAX_DEPTH + 3)
+    (saved / 'inside.conf').write_text('x\n')
+    (saved.parent / 'outside.conf').write_text('y\n')
+    result = run([saved])
+    assert observed(result) == [str(saved / 'inside.conf')]
+    assert any(gap.startswith(str(saved.parent) + ':') and 'depth limit' in gap for gap in result['gaps'])
 
 
 def test_unsaved_deep_directories_still_stop_at_the_built_in_limit(promoted):
