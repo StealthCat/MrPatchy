@@ -140,9 +140,69 @@ def validate_tcp_wrappers(tcpw,path):
     return len(commands)
 
 
+KDUMP_CONF='/etc/kdump.conf'
+KDUMP_KEYS={'parsed','starts','refusals','hooks','extra_bins','truncated','redacted'}
+KDUMP_REFUSAL_KEYS={'line','option','code'}
+KDUMP_REFUSALS=('unknown_option','deprecated_option','empty_value','duplicate_option','multiple_targets','multiple_mount_targets')
+KDUMP_HOOK_KEYS={'line','source','stage','program','args','program_truncated','redacted','on_failure','observations'}
+# source -> (stage, args, on_failure, observations that may be reported), in capture order.
+KDUMP_HOOKS={'kdump_pre':('pre',[],'skip_dump_and_run_final_action',('value_has_whitespace','relative_path','pre_failure_skips_dump')),
+             'core_collector':('dump',None,'dump_failed',('args_rewritten_at_capture',)),
+             'kdump_post':('post',['<dump status>'],'warn',('value_has_whitespace','relative_path')),
+             'kdump_emergency':('emergency',[],'warn',('value_has_whitespace','relative_path','runs_on_capture_failure'))}
+
+
+def _kdump_text(value,limit=CRON_COMMAND_LIMIT):
+    return isinstance(value,str) and 1<=len(value)<=limit and '\x00' not in value
+
+
+def validate_kdump(kdump,path):
+    """Strictly validate optional parsed /etc/kdump.conf hooks reported by newer agents (#1538)."""
+    if path!=KDUMP_CONF:raise ValueError('kdump hooks outside /etc/kdump.conf')
+    if not isinstance(kdump,dict) or set(kdump)!=KDUMP_KEYS:raise ValueError('Invalid kdump hooks')
+    if any(type(kdump[k]) is not bool for k in ('parsed','truncated','redacted')) or type(kdump['extra_bins']) is not int or not 0<=kdump['extra_bins']<=65536:
+        raise ValueError('Invalid kdump hooks')
+    refusals,hooks=kdump['refusals'],kdump['hooks']
+    if not isinstance(refusals,list) or not isinstance(hooks,list) or len(refusals)>CRON_FILE_JOBS:raise ValueError('Invalid kdump hooks')
+    if not kdump['parsed']:
+        if kdump['starts'] is not None or refusals or hooks or kdump['extra_bins'] or kdump['truncated'] or kdump['redacted']:raise ValueError('Invalid kdump hooks')
+        return 0
+    if kdump['starts'] is not (not refusals):raise ValueError('Invalid kdump hooks')
+    previous=0
+    for item in refusals:
+        if not isinstance(item,dict) or set(item)!=KDUMP_REFUSAL_KEYS or item['code'] not in KDUMP_REFUSALS:raise ValueError('Invalid kdump refusal')
+        if type(item['line']) is not int or not max(previous,1)<=item['line']<2048 or item['line']==previous:raise ValueError('Invalid kdump refusal')
+        if not _kdump_text(item['option'],64):raise ValueError('Invalid kdump refusal')
+        previous=item['line']
+    if not kdump['starts']:
+        if hooks or kdump['extra_bins']:raise ValueError('Invalid kdump hooks')
+        return 0
+    sources=[item.get('source') if isinstance(item,dict) else None for item in hooks]
+    if 'core_collector' not in sources or sources!=[s for s in KDUMP_HOOKS if s in sources]:raise ValueError('Invalid kdump hooks')
+    lines=set()
+    for item in hooks:
+        if set(item)!=KDUMP_HOOK_KEYS:raise ValueError('Invalid kdump hook')
+        stage,args,on_failure,allowed=KDUMP_HOOKS[item['source']]
+        if item['stage']!=stage or item['on_failure']!=on_failure:raise ValueError('Invalid kdump hook')
+        line=item['line']
+        if line is None:
+            if item['source']!='core_collector':raise ValueError('Invalid kdump hook')
+        elif type(line) is not int or not 1<=line<2048 or line in lines:raise ValueError('Invalid kdump hook')
+        else:lines.add(line)
+        if any(type(item[k]) is not bool for k in ('program_truncated','redacted')) or not _kdump_text(item['program']):raise ValueError('Invalid kdump hook')
+        if args is None:
+            if not isinstance(item['args'],list) or len(item['args'])>32 or any(not _kdump_text(a) for a in item['args']):raise ValueError('Invalid kdump hook')
+        elif item['args']!=args:raise ValueError('Invalid kdump hook')
+        names=item['observations']
+        if not isinstance(names,list) or any(type(n) is not str or n not in allowed for n in names) or len(set(names))!=len(names):raise ValueError('Invalid kdump hook')
+        if item['source']=='kdump_pre' and 'pre_failure_skips_dump' not in names:raise ValueError('Invalid kdump hook')
+        if item['source']=='kdump_emergency' and 'runs_on_capture_failure' not in names:raise ValueError('Invalid kdump hook')
+    return len(hooks)
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump')} if row is not None else None
 
 
 def validate(inventory):
@@ -181,6 +241,9 @@ def validate(inventory):
         if 'tcp_wrappers' in row:
             if row['kind']!='regular':raise ValueError('TCP wrappers commands require a regular file')
             validate_tcp_wrappers(row['tcp_wrappers'],path)
+        if 'kdump' in row:
+            if row['kind']!='regular':raise ValueError('kdump hooks require a regular file')
+            validate_kdump(row['kdump'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
