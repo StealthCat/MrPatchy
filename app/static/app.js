@@ -255,7 +255,7 @@ async function servers(revision=renderRevision){
  if(location.hash.startsWith('#servers/'))return serverWorkspace(revision);
  const root=$('#content'),state=serverListContext;
  root.innerHTML=heading('Your Linux fleet.','Find a server, review its signals, and open a focused workspace.','<button class="primary" data-admin data-action="add">+ Add server</button>'+(isAdmin()?'<a class="button" href="#servers/deleted">Deleted servers</a>':''))+`
- <section class="card server-directory" aria-label="Managed servers"><div class="toolbar" id="server-list-controls"><label>Find a server<input id="server-list-search" type="search" placeholder="Name, address or architecture" value="${esc(state.q)}"></label><label>Management<select id="server-list-state"><option value="all">All servers</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>${isAdmin()?'<label>Server AI<select id="server-list-ai"><option value="all">All servers</option><option value="paused">AI paused</option><option value="active">AI not paused</option></select></label>':''}<button id="server-list-clear">Reset filters</button></div>${isAdmin()?'<p class="help">Server AI shows each server\'s stored pause setting. A server that is not paused still needs global AI to be enabled and configured.</p>':''}<p class="help" id="server-list-count" role="status"></p><div id="server-list-cards"></div><div class="actions server-list-pagination"><button id="server-list-prev">Previous</button><span id="server-list-page" class="help"></span><button id="server-list-next">Next</button></div></section>`;
+ <section class="card server-directory" aria-label="Managed servers"><div class="toolbar" id="server-list-controls"><label>Find a server<input id="server-list-search" type="search" placeholder="Name, address or architecture" value="${esc(state.q)}"></label><label>Management<select id="server-list-state"><option value="all">All servers</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>${isAdmin()?'<label>Server AI<select id="server-list-ai"><option value="all">All servers</option><option value="paused">AI paused</option><option value="active">AI not paused</option></select></label>':''}<button id="server-list-clear">Reset filters</button></div>${isAdmin()?'<p class="help">Server AI shows each server\'s stored pause setting. A server that is not paused still needs global AI to be enabled and configured.</p>':''}<p class="help" id="server-list-count" role="status"></p><div id="server-list-cards"></div><div class="actions server-list-pagination"><button id="server-list-prev">Previous</button><span id="server-list-page" class="help"></span><button id="server-list-next">Next</button></div></section><section class="card" id="saved-fleet-queries"></section>`;
  const search=$('#server-list-search'),filter=$('#server-list-state'),aiFilter=$('#server-list-ai');filter.value=state.state;
  // Only administrators receive ai_paused; never let a stale AI filter hide servers from other roles.
  if(!aiFilter)state.ai='all';else aiFilter.value=state.ai;
@@ -271,6 +271,7 @@ async function servers(revision=renderRevision){
  $('#server-list-clear').onclick=()=>{Object.assign(state,{q:'',state:'all',ai:'all',offset:0});search.value='';filter.value='all';if(aiFilter)aiFilter.value='all';draw();search.focus();};
  bindPager(state,24,'#server-list',draw);
  draw();
+ AdminTools.savedFleetQueries($('#saved-fleet-queries'));
 }
 function serverDirectoryCard(h){
  const link=serverLink(h.id),id=esc(h.id);
@@ -711,8 +712,8 @@ async function operationsPanel(){
 }
 
 // API-backed expert workflows remain explicit and reviewed.
-document.addEventListener('click',async event=>{
- const button=event.target.closest('#expert-workflows');if(!button)return;
+document.addEventListener('click',event=>{if(event.target.closest('#expert-workflows'))expertWorkflows();});
+function expertWorkflows(){
  modal('Reviewed fleet workflows',`<form id="rollout-form"><label>Server IDs in rollout order (first is canary, one per line)<textarea name="hosts">${esc(hosts.map(h=>h.id).join('\n'))}</textarea></label><p class="help">${hosts.map(h=>esc(h.id+' = '+h.name)).join('<br>')}</p><label>Package names including architecture (one per line)<textarea name="packages" placeholder="openssl:amd64"></textarea></label><p class="help">Each server uses its current reviewed candidate. Later servers wait for successful patching and service-health checks on the preceding server. Maintenance windows apply. Review each server’s current reboot and rollback policy before submitting.</p><button class="primary">Queue staged rollout</button></form><h3>Advisory matching</h3><form id="advisory-form"><label>Server<select name="host">${hosts.map(h=>`<option value="${h.id}">${esc(h.name)}</option>`).join('')}</select></label><label>Installed package names (up to 100, one per line)<textarea name="packages"></textarea></label><p class="help">This sends selected source package names/versions and distro release to OSV. Unsupported derivatives are reported rather than assumed safe.</p><button>Query advisory IDs</button></form><div id="advisory-applicability" aria-live="polite"></div><details><summary>Raw advisory result</summary><pre id="advisory-result"></pre></details>`);
  const lines=value=>value.split('\n').map(x=>x.trim()).filter(Boolean);
  $('#rollout-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target),hostIds=lines(f.get('hosts')),packageNames=lines(f.get('packages'));try{
@@ -721,7 +722,7 @@ document.addEventListener('click',async event=>{
  $('#confirm-rollout').onclick=async()=>{const confirmButton=$('#confirm-rollout');confirmButton.disabled=true;try{const result=await api('/operations/rollouts','POST',{hosts:hostIds,packages:packageNames,expected_recovery_policies:policies});$('#modal').close();toast('Rollout queued: '+result.jobs.length+' servers');}catch(error){confirmButton.disabled=false;toast(error.message);}};
  }catch(error){toast(error.message);}};
  $('#advisory-form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{const result=await api('/operations/'+f.get('host')+'/advisories','POST',{packages:lines(f.get('packages'))});$('#advisory-applicability').innerHTML=advisoryApplicability(result);$('#advisory-result').textContent=JSON.stringify(result,null,2);}catch(error){toast(error.message);}};
-});
+}
 (async()=>{try{if((await api('/sso')).enabled){const link=document.createElement('a');link.href='/auth/sso';link.textContent='Sign in with your organization';$('#login-form').append(link);}}catch{}})();
 // Version applicability only: "affected" is not exploitation evidence and "uncertain" is never shown as safe.
 // Advisory record dates are UTC calendar days; an unknown or invalid date renders nothing rather than a guess.
