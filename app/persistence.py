@@ -194,8 +194,9 @@ def validate(inventory):
 # git invocations by every account, including root cron jobs and package hooks.
 # kdump configuration (#1538): kdump_pre, kdump_post, kdump_emergency and core_collector run as
 # root in the crash-capture environment after a kernel crash.
+# autofs master map (#1375): automount runs program maps it names as root on every key lookup.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
-                        '/etc/kdump.conf')
+                        '/etc/kdump.conf','/etc/auto.master')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
