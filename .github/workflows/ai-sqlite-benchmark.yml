@@ -1,4 +1,4 @@
-name: Native capped SQLite AI benchmark
+name: Native capped AI benchmark
 on:
   workflow_dispatch:
   pull_request:
@@ -9,9 +9,26 @@ permissions:
   contents: read
 
 jobs:
-  capped-sqlite-fixture:
+  capped-fixture:
+    name: Capped fixture (${{ matrix.database }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, mysql]
+    services:
+      mysql:
+        image: ${{ matrix.database == 'mysql' && 'mysql:8.4' || '' }}
+        env:
+          MYSQL_ROOT_PASSWORD: disposable-root-password
+          MYSQL_DATABASE: mrpatchy_benchmark
+          MYSQL_USER: mrpatchy_benchmark
+          MYSQL_PASSWORD: disposable-benchmark-password
+        ports: ['3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 --protocol=tcp"
+          --health-interval=5s --health-timeout=5s --health-retries=20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -27,18 +44,28 @@ jobs:
           python -m pip install --require-hashes --no-build-isolation -r requirements.lock
       - name: Capture and validate six paired runs
         shell: bash
+        env:
+          BENCHMARK_DATABASE: ${{ matrix.database }}
+          BENCHMARK_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
         run: |
-          BENCHMARK_DIR="$RUNNER_TEMP/ai-sqlite-benchmark"
+          BENCHMARK_DIR="$RUNNER_TEMP/ai-${BENCHMARK_DATABASE}-benchmark"
           mkdir -p "$BENCHMARK_DIR"
+          if [[ "$BENCHMARK_DATABASE" == mysql ]]; then
+            : "${BENCHMARK_MYSQL_PORT:?Missing fixture MySQL port}"
+            export AI_BENCHMARK_MYSQL_URL="mysql+pymysql://mrpatchy_benchmark:disposable-benchmark-password@127.0.0.1:$BENCHMARK_MYSQL_PORT/mrpatchy_benchmark"
+          fi
           {
             git log -1 --format='commit=%H'
             uname -srm
             python -VV
-            python -c 'import fcntl, sqlite3; print("flock=" + fcntl.flock.__module__); print("sqlite=" + sqlite3.sqlite_version)'
+            printf 'database=%s\n' "$BENCHMARK_DATABASE"
+            if [[ "$BENCHMARK_DATABASE" == sqlite ]]; then
+              python -c 'import fcntl, sqlite3; print("flock=" + fcntl.flock.__module__); print("sqlite=" + sqlite3.sqlite_version)'
+            fi
             python -m pip freeze
           } > "$BENCHMARK_DIR/provenance.txt"
 
-          workload=(--database sqlite --control-mode daily_cap --runs 8
+          workload=(--database "$BENCHMARK_DATABASE" --control-mode daily_cap --runs 8
                     --provider-delay-ms 150 --ssh-delay-ms 50 --persistence-delay-ms 15
                     --retained-history-rows 1000)
           pairs=()
@@ -60,7 +87,7 @@ jobs:
       - name: Upload validated captures
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: native-capped-sqlite-ai-benchmark
-          path: ${{ runner.temp }}/ai-sqlite-benchmark/
+          name: native-capped-${{ matrix.database }}-ai-benchmark
+          path: ${{ runner.temp }}/ai-${{ matrix.database }}-benchmark/
           if-no-files-found: error
           retention-days: 30
