@@ -204,7 +204,7 @@ def test_catalogs_label_paths_and_state_the_gap():
                                                                                   (RPM, ('rpm',))]
     assert SWANCTL in startup_catalog._all_locations('debian') and RPM not in startup_catalog._all_locations('debian')
     assert RPM in startup_catalog._all_locations('rpm') and SWANCTL not in startup_catalog._all_locations('rpm')
-    assert any(SWANCTL in gap and RPM in gap and 'updown' in gap and 'not yet parsed' in gap
+    assert any(SWANCTL in gap and RPM in gap and 'updown' in gap and 'This view evaluates swanctl.conf' in gap and 'secrets, is dropped' in gap
                and '/etc/strongswan.conf' in gap and 'leftupdown' in gap for gap in startup_inventory.GAPS)
 
 
