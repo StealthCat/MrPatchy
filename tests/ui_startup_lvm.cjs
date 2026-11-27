@@ -12,7 +12,7 @@ module.exports=async(page,capture)=>{
  await page.route('**/api/hosts/*/security/startup-inventory?*',handler);
  try{
   await page.goto(new URL('/#servers/'+host+'/startup/files',page.url()).href);await page.locator('#startup-file-items').waitFor();
-  await page.getByRole('heading',{name:'LVM programs and libraries run as root (15 settings · 3 changed from the build default)',exact:true}).waitFor();
+  await page.getByRole('heading',{name:'LVM programs and libraries run as root (17 settings · 3 changed from the build default)',exact:true}).waitFor();
   const table=await page.locator('.startup-lvm-settings').first().innerText();
   assert.match(table,/global\/thin_check_executable\s+<img src=x onerror=window\.__lvmInjected=true>\s+thin pool activation and deactivation gate\s+\/etc\/lvm\/lvm\.conf/);
   assert.match(table,/dmeventd\/thin_command\s+\/usr\/local\/bin\/grow pool\s+thin pool fill above 50 percent each 5 percent · execvp\(\) of the whole value, with vg\/lv as its argument/);
