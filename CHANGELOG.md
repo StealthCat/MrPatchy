@@ -1,3 +1,15 @@
+## 1.125.0 — 2026-11-25
+
+1. [PR #1660](https://github.com/StealthCat/MrPatchy/pull/1660): Startup Files evaluates the Dovecot service programs the root master process execs: non-default executables, starting account, timing, protocol and source line. The evaluation uses statements agents parse from `/etc/dovecot`, keeping only the evaluated settings, and it names its coverage gaps. Compatibility: no schema, auth or response-authorization change; older agents show as not evaluated. Increment 3 of #1620.
+
+Integrated through [PR #1661](https://github.com/StealthCat/MrPatchy/pull/1661). This source update does not publish a Docker image.
+
+## 1.124.0 — 2026-11-25
+
+1. [PR #1655](https://github.com/StealthCat/MrPatchy/pull/1655): With update scoring enabled, an idle scoring queue no longer takes alternate scheduler turns from process triage. The scheduler now checks scoring eligibility and interrupted-run recovery before assigning an executor slot, so an empty, paused-only or inactive-only queue leaves the turn to triage. Eligible scoring work, recovery while scoring is disabled, and warm memo cleanup still get their turns. The worker still rechecks under its lock, and a candidate arriving after a negative check is picked up at the next tick. Compatibility: the executor bound, rate and daily-spend admission, provider checks, host policy and response authorization are unchanged. Fixes #1654.
+
+Integrated through [PR #1659](https://github.com/StealthCat/MrPatchy/pull/1659). This source update does not publish a Docker image.
+
 ## 1.123.0 — 2026-11-25
 
 1. [PR #1653](https://github.com/StealthCat/MrPatchy/pull/1653): Agents collect the Dovecot configuration directory `/etc/dovecot` as built-in startup scope, recording metadata and SHA-256 only. Changes to the service executables the root master process starts now appear in startup baselines. Earlier baselines stay comparable, and saved custom paths inside the directory stay valid. Compatibility: older agents keep working. After the agent update, existing baselines show the directory as newly in scope until an administrator approves a new baseline. Refs #1620.

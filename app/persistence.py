@@ -325,9 +325,54 @@ def validate_autofs(autofs,path):
     return 1
 
 
+# Dovecot (#1620): the agent reduces every regular file under /etc/dovecot to the statement stream
+# app/dovecot_services reads. Only section headers, include patterns and the global/service keys the
+# contract evaluates keep values; every other value is dropped by the agent.
+DOVECOT_DIR='/etc/dovecot'
+DOVECOT_KEYS={'parsed','statements','truncated','dropped'}
+DOVECOT_KEPT_KEYS=frozenset(('protocols','default_internal_user','default_login_user','libexec_dir','executable',
+                             'user','group','drop_priv_before_exec','process_min_avail','protocol','chroot'))
+DOVECOT_STATEMENT_KEYS={'error':{'line','op'},'close':{'line','op'},'include':{'line','op','optional','pattern'},
+                        'open':{'line','op','kind','name'},'set':{'line','op','key','value','file','redacted'}}
+DOVECOT_STATEMENTS=2000
+DOVECOT_LINES=1024*1024
+DOVECOT_VALUE=1024
+
+
+def _dovecot_text(value,limit=DOVECOT_VALUE):
+    return isinstance(value,str) and len(value)<=limit and '\x00' not in value and '\n' not in value and '\r' not in value
+
+
+def validate_dovecot(report,path):
+    """Strictly validate one file's Dovecot statement stream."""
+    if not path.startswith(DOVECOT_DIR+'/'):raise ValueError('Dovecot statements outside /etc/dovecot')
+    if not isinstance(report,dict) or set(report)!=DOVECOT_KEYS:raise ValueError('Invalid Dovecot statements')
+    if type(report['parsed']) is not bool or type(report['truncated']) is not bool or type(report['dropped']) is not int or not 0<=report['dropped']<=DOVECOT_LINES:
+        raise ValueError('Invalid Dovecot statements')
+    items=report['statements']
+    if not isinstance(items,list) or len(items)>DOVECOT_STATEMENTS or (not report['parsed'] and (items or report['truncated'] or report['dropped'])):
+        raise ValueError('Invalid Dovecot statements')
+    last=0
+    for item in items:
+        if not isinstance(item,dict) or item.get('op') not in DOVECOT_STATEMENT_KEYS or set(item)!=DOVECOT_STATEMENT_KEYS[item['op']]:
+            raise ValueError('Invalid Dovecot statement')
+        if type(item['line']) is not int or not last<item['line']<=DOVECOT_LINES:raise ValueError('Invalid Dovecot statement')
+        last=item['line']
+        if item['op']=='include' and (type(item['optional']) is not bool or not _dovecot_text(item['pattern']) or not item['pattern'].strip()):
+            raise ValueError('Invalid Dovecot include')
+        if item['op']=='open' and (not isinstance(item['kind'],str) or not re.fullmatch('[A-Za-z0-9_-]{1,128}',item['kind']) or (item['name'] is not None and not _dovecot_text(item['name']))):
+            raise ValueError('Invalid Dovecot section')
+        if item['op']=='set':
+            if not isinstance(item['key'],str) or not re.fullmatch('[A-Za-z0-9_/-]{1,128}',item['key']) or type(item['file']) is not bool or type(item['redacted']) is not bool:
+                raise ValueError('Invalid Dovecot setting')
+            kept=item['value'] is not None
+            if kept and (item['key'] not in DOVECOT_KEPT_KEYS or item['file'] or not _dovecot_text(item['value'])):raise ValueError('Invalid Dovecot setting')
+            if item['redacted'] and (not kept or item['key']!='executable'):raise ValueError('Invalid Dovecot setting')
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot')} if row is not None else None
 
 
 def validate(inventory):
@@ -378,6 +423,9 @@ def validate(inventory):
         if 'clamav' in row:
             if row['kind']!='regular':raise ValueError('ClamAV options require a regular file')
             validate_clamav(row['clamav'],path)
+        if 'dovecot' in row:
+            if row['kind']!='regular':raise ValueError('Dovecot statements require a regular file')
+            validate_dovecot(row['dovecot'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
