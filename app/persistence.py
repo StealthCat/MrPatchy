@@ -200,9 +200,26 @@ def validate_kdump(kdump,path):
     return len(hooks)
 
 
+AUTOFS_MASTER='/etc/auto.master'
+AUTOFS_KEYS={'text','error'}
+AUTOFS_TEXT_LIMIT=65536
+
+
+def validate_autofs(autofs,path):
+    """Strictly validate the optional bounded master-map text (#1375). Map paths are never observed."""
+    if path!=AUTOFS_MASTER:raise ValueError('autofs master map outside /etc/auto.master')
+    if not isinstance(autofs,dict) or set(autofs)!=AUTOFS_KEYS:raise ValueError('Invalid autofs master map')
+    text,error=autofs['text'],autofs['error']
+    if error is not None:
+        if error not in ('over_limit','binary') or text is not None:raise ValueError('Invalid autofs master map')
+        return 0
+    if not isinstance(text,str) or len(text)>AUTOFS_TEXT_LIMIT or '\x00' in text or any(ord(c)>0xFF for c in text):raise ValueError('Invalid autofs master map')
+    return 1
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/autofs detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','autofs')} if row is not None else None
 
 
 def validate(inventory):
@@ -244,6 +261,9 @@ def validate(inventory):
         if 'kdump' in row:
             if row['kind']!='regular':raise ValueError('kdump hooks require a regular file')
             validate_kdump(row['kdump'],path)
+        if 'autofs' in row:
+            if row['kind']!='regular':raise ValueError('autofs master map requires a regular file')
+            validate_autofs(row['autofs'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
