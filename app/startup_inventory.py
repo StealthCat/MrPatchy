@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, cron_loading, dovecot_services, persistence
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -41,7 +41,7 @@ GAPS=[
     'System git configuration: /etc/gitconfig is hashed as a startup file by agents that report it, but the shell aliases, pagers, editors, credential helpers, hook paths, fsmonitor hooks and diff, filter and merge drivers it can make git run are not yet parsed in this view. Files it includes, per-user, XDG and repository configuration, GIT_CONFIG_* environment overrides and which accounts or jobs run git are not evaluated.',
     'kdump: /etc/kdump.conf is hashed as a startup file, and agents that report it parse its kdump_pre, kdump_post and kdump_emergency programs and core_collector argv from the hashed bytes with the kdump-utils 7bf4714 rules, in capture order. Each runs as root in the crash-capture environment after a kernel crash. Options kdumpctl rejects (unknown, deprecated, empty, repeated, a second dump target or a second --mount) are listed with their line, and such a configuration loads no capture kernel, so nothing runs. Programs use the same best-effort redaction, other option values are never stored, and text over 64 KiB, with 2048 or more lines, not UTF-8 or with NUL bytes is shown as unparsed. The /etc/kdump/pre.d, post.d and emergency.d directories are not yet listed, so their programs are missing from the sequence. The hook programs themselves, other kdumpctl checks, whether the loaded crash-capture initramfs matches the current files and the Debian kdump-tools configuration are not evaluated.',
     'keyutils request-key: /etc/request-key.conf and the /etc/request-key.d drop-in directory are hashed as startup files, and agents that report them parse each file /sbin/request-key reads (drop-ins named *.conf, not starting with a dot, that are regular files) from the hashed bytes with the keyutils 1.6.3 rules. Each rule shows its operation, key type, description and callout patterns, whether the kernel upcall (create) reaches it, the pipe mode and the command it runs as root, with requester-controlled inputs (%d, %c, %{type:description} and piped callout information) named. Lines that abort lookups (4096 bytes or more, or ending before the program) are listed with the patterns a request must match first; one that matches every kernel lookup in any read file makes every lookup abort. Commands use the same best-effort redaction, patterns are bounded to 256 characters, rules and aborts to 64 per file, and text over 64 KiB, not UTF-8 or with NUL bytes is shown as unparsed. The readdir() order of drop-ins is not captured, so which of two equally specific rules in different files wins is not shown. The programs themselves, which key types an unprivileged requester may ask for, whether the kernel has key support and /sbin/request-key installed, and which processes request keys are not evaluated.',
-    'ClamAV: the Debian-family /etc/clamav directory (clamd.conf, freshclam.conf and the onupdateexecute.d and onerrorexecute.d directories), the RPM-family /etc/clamd.d directory and /etc/freshclam.conf are hashed as startup files by agents that report them, but the VirusEvent command clamd runs through /bin/sh on every detection and the OnUpdateExecute, OnErrorExecute and OnOutdatedExecute commands freshclam runs are not yet parsed in this view. Alternate configuration files passed with --config-file, the accounts clamd and freshclam start as, whether either runs, and the commands themselves are not evaluated.',
+    'ClamAV: the Debian-family /etc/clamav directory (clamd.conf, freshclam.conf and the onupdateexecute.d and onerrorexecute.d directories), the RPM-family /etc/clamd.d directory and /etc/freshclam.conf are hashed as startup files, and agents that report them parse /etc/clamav/clamd.conf and /etc/clamav/freshclam.conf from the hashed bytes with the ClamAV 1.5.4 option-parser rules. This view shows the VirusEvent command clamd runs through /bin/sh on every detection, waiting under a lock shared by every scan, and the OnUpdateExecute, OnErrorExecute and OnOutdatedExecute commands freshclam runs through system(), with their line and account. A file the parser rejects (unknown option, Example line, bad value or quoting) loads nothing, and its reason and line are shown. Commands use the same best-effort redaction and are bounded to 512 characters; the User, DatabaseOwner and daemon values are kept and every other value, including proxy passwords, is dropped. Accounts assume clamd and freshclam start as root, as the packaged units do. Whether freshclam runs in daemon mode is not observed, so which text OnOutdatedExecute runs and whether an EXIT_<n> command exits instead of running are shown as conditional. The RPM-family files are hashed but not yet parsed. Options given on the command line, alternate files passed with --config-file, the onupdateexecute.d and onerrorexecute.d scripts, whether either daemon runs, and the commands themselves are not evaluated.',
     'Dovecot: the /etc/dovecot directory (dovecot.conf, conf.d and any other files it holds, including passdb/userdb and key files, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate the non-default service executables the root master process execs from dovecot.conf, as root unless drop_priv_before_exec is set. Only section headers, include patterns and the service and global settings the evaluation reads are stored; every other value is dropped. Included files outside /etc/dovecot (such as /usr/share/dovecot/protocols.d) and symlinked files are not observed, so an evaluation that reaches them stops with a blocking gap. /etc/passwd and /etc/group are not captured, so accounts are shown by name only. Configuration passed with -c, whether dovecot runs, the programs themselves, checkpassword passdb/userdb programs, quota_warning and sieve extprograms are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
@@ -195,6 +195,49 @@ def autofs_text(entry):
     return ' '.join(p['path'] for p in view['programs'])+' '+' '.join((e['mount_point'] or '')+' '+(e['map'] or '')+' '+(e['path'] or '') for e in view['entries'])
 
 
+def clamav_state(entry):
+    """Whether parsed ClamAV options exist, were not reported (older agent), the symlink is not followed, or the RPM file is not parsed."""
+    if 'clamav' in entry:return 'parsed'
+    path=entry['path']
+    if path in persistence.CLAMAV_FILES:return 'not_reported' if entry['kind']=='regular' else 'not_followed'
+    if entry['kind']=='regular' and (path=='/etc/freshclam.conf' or (path.startswith('/etc/clamd.d/') and path.endswith('.conf'))):return 'not_parsed_family'
+    return None
+
+
+def clamav_view(entry):
+    """The commands clamd or freshclam runs, rebuilt by the contract from the agent's parsed values.
+
+    Accounts assume the daemon starts as root, as the packaged units do; freshclam daemon mode is not
+    observed. Never a safety verdict and never authorizes a response."""
+    report=entry['clamav'];tool=persistence.CLAMAV_FILES[entry['path']]
+    view={'tool':tool,'parsed':report['parsed'],'accepted':report['accepted'],'error':report['error'],'redacted':report['redacted'],
+          'commands':[],'daemon_line':None,'origin':'not_assessed','authorizes_response':False,
+          'contract_version':clamav_event_commands.CONTRACT_VERSION}
+    if not report['parsed']:return view
+    values=report['values'];by_line={v['line']:v for v in values.values()}
+    if 'daemon' in values:view['daemon_line']=values['daemon']['line']
+    plain={n:{'value':v['value'],'line':v['line']} for n,v in values.items()}
+    rows=clamav_event_commands.commands_from_values(tool,report['accepted'],plain,entry['path'],started_as_root=True,freshclam_daemon=None)
+    # Outside daemon mode freshclam applies its own substitutions (OnOutdatedExecute loses its first %v)
+    # before EXIT_<n> is read, so the conditional exit comes from the contract's foreground result.
+    foreground={r['directive']:r['exit_status_instead'] for r in clamav_event_commands.commands_from_values(
+        tool,report['accepted'],plain,entry['path'],started_as_root=True,freshclam_daemon=False)} if tool=='freshclam' else {}
+    for row in rows:
+        source=by_line[row['line']]
+        view['commands'].append({'directive':row['directive'],'line':row['line'],'trigger':row['trigger'],'runs':row['runs'],
+            'command':row['configured'],'truncated':source['truncated'],'redacted':source['redacted'],'argv':row['argv'],
+            'account':{k:row['account'][k] for k in ('name','source','line') if k in row['account']},
+            'waits':row['waits'] if tool=='clamd' else None,'substitutions':row['substitutions'],
+            'command_source':row.get('command_source'),
+            'exit_status_outside_daemon':foreground.get(row['directive'])})
+    return view
+
+
+def clamav_text(entry):
+    if 'clamav' not in entry:return ''
+    return ' '.join(c['directive']+' '+c['command']+' '+(c['account']['name'] or '') for c in clamav_view(entry)['commands'])
+
+
 def _dovecot_quote(value):
     return '"'+value.replace('\\','\\\\').replace('"','\\"')+'"'
 
@@ -293,7 +336,7 @@ def with_at_jobs(rows,inventory,q,changes):
 
 
 def catalog_rows(inventory):
-    """Mechanism counts; the at, anacron, TCP wrappers, kdump and request-key rows also report parsed jobs/commands and older-agent files."""
+    """Mechanism counts; the at, anacron, TCP wrappers, kdump, request-key and ClamAV rows also report parsed jobs/commands and older-agent files."""
     result=[]
     for key,label,_ in CATALOG:
         if key=='anacron':
@@ -317,6 +360,10 @@ def catalog_rows(inventory):
             found=[e for e in inventory['entries'] if e['path']==persistence.AUTOFS_MASTER]
             entries=sum(len(autofs_view(e)['entries']) for e in found if autofs_state(e)=='resolved')
             label+=f' · {entries} master-map entr{"y" if entries==1 else "ies"} · map paths not looked up'+(' · not reported by this agent version' if any(autofs_state(e)=='not_reported' for e in found) else '')
+        if key=='clamav':
+            found=[e for e in inventory['entries'] if e['path'] in persistence.CLAMAV_FILES]
+            commands=sum(len(clamav_view(e)['commands']) for e in found if 'clamav' in e)
+            label+=f' · {commands} parsed event command{"" if commands==1 else "s"}'+(' · rejected by the option parser' if any(e.get('clamav',{}).get('error') for e in found) else '')+(' · not reported by this agent version' if any(clamav_state(e)=='not_reported' for e in found) else '')
         if key=='dovecot':
             found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
             states=[dovecot_state(e) for e in found]
@@ -363,6 +410,9 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         state=autofs_state(entry)
         if state:row['autofs_state']=state
         if state=='resolved':row['autofs']=autofs_view(entry)
+        state=clamav_state(entry)
+        if state:row['clamav_state']=state
+        if 'clamav' in entry:row['clamav']=clamav_view(entry)
         state=dovecot_state(entry)
         if state:row['dovecot_state']=state
         if state=='parsed':row['dovecot_statements']=len(entry['dovecot']['statements'])
@@ -373,7 +423,7 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+dovecot_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)
