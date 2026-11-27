@@ -194,8 +194,10 @@ def validate(inventory):
 # git invocations by every account, including root cron jobs and package hooks.
 # kdump configuration (#1538): kdump_pre, kdump_post, kdump_emergency and core_collector run as
 # root in the crash-capture environment after a kernel crash.
+# keyutils request-key configuration (#1632): the kernel's key upcall runs /sbin/request-key as
+# root, which runs the program the best-matching rule names with requester-chosen arguments.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
-                        '/etc/kdump.conf')
+                        '/etc/kdump.conf','/etc/request-key.conf','/etc/request-key.d')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
@@ -206,11 +208,15 @@ def compare(before,after):
     except ValueError:return result
     if before['state']!='collected' or after['state']!='collected':return result
     added=set(after['scope'])-set(before['scope'])
-    if set(before['scope'])-set(after['scope']) or not added<=set(ADDITIVE_BUILTIN_SCOPE):
+    def within(path,roots):return any(path==root or path.startswith(root+'/') for root in roots)
+    # A custom path inside a directory that built-in scope added later is covered by it,
+    # so a later agent stops listing it separately; that is not a narrower scope.
+    removed=set(before['scope'])-set(after['scope'])
+    if not added<=set(ADDITIVE_BUILTIN_SCOPE) or not all(within(path,added) for path in removed):
         return {**result,'note':'Inventory scope changed; collect another complete inventory with the same scope.'}
     # Paths a later agent added to built-in scope were never observed by the earlier
     # inventory, so their files are newly covered rather than added on the host.
-    def previously_scoped(path):return not any(path==root or path.startswith(root+'/') for root in added)
+    def previously_scoped(path):return within(path,removed) or not within(path,added)
     # Parsed cron detail is administrator-view data; change evidence stays metadata-only.
     old={r['path']:metadata(r) for r in before['entries']};new={r['path']:metadata(r) for r in after['entries'] if previously_scoped(r['path'])}
     changes=[]
@@ -223,6 +229,8 @@ def compare(before,after):
                             'fields':changed,'before':previous,'after':current})
     compared={'state':'compared','changes':changes,'note':'Observed changes between complete inventories, not an approved baseline or a malware verdict. Modification time alone is ignored.'}
     if added:compared['newly_in_scope']=sorted(added)
+    # Earlier custom paths now inside new built-in scope were compared, not newly covered.
+    if removed:compared['previously_custom']=sorted(removed)
     return compared
 
 

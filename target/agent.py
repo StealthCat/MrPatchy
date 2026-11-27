@@ -1095,23 +1095,36 @@ def security_scan(paths,yara_rules=None):
 # Explicit scope only: this inventory is not a complete enumeration of persistence.
 PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/etc/cron.hourly','/etc/cron.weekly','/etc/cron.monthly',
-                     '/var/spool/cron','/etc/init.d','/etc/profile.d')
+                     '/var/spool/cron','/etc/init.d','/etc/profile.d','/etc/request-key.d')
 PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab',
                      '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
-                     '/etc/kdump.conf')
+                     '/etc/kdump.conf','/etc/request-key.conf')
 # Built-in files that administrators could previously select as custom paths. A stored
 # custom path equal to one of them is already covered by built-in scope, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
 PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf',
-                              '/etc/gitconfig','/etc/kdump.conf')
+                              '/etc/gitconfig','/etc/kdump.conf','/etc/request-key.conf')
+# Built-in directories that administrators could previously select, or select files inside,
+# as custom paths. Such a stored path is covered by the built-in directory, so it is
+# accepted and inventoried once instead of failing saved policies after an upgrade.
+PROMOTED_PERSISTENCE_ROOTS = ('/etc/request-key.d',)
 PACKAGE_ID = r'[A-Za-z0-9][A-Za-z0-9+_.:-]{0,199}'
+
+
+def promoted_custom_path(value):
+    """A stored custom path that built-in scope added later now covers."""
+    if not isinstance(value,str):return False
+    if value in PROMOTED_PERSISTENCE_FILES:return True
+    # Only canonical paths inside a promoted directory; anything else is validated normally.
+    canonical=len(value)<=4096 and str(Path(value))==value and '..' not in Path(value).parts and not any(ord(c)<32 for c in value)
+    return canonical and any(value==root or value.startswith(root+'/') for root in PROMOTED_PERSISTENCE_ROOTS)
 
 
 def validate_custom_paths(paths):
     if not isinstance(paths,list) or len(paths)>16:raise ValueError('Select up to 16 custom file or directory paths')
     selected=list(PERSISTENCE_ROOTS)+list(PERSISTENCE_FILES)
     for value in paths:
-        if value in PROMOTED_PERSISTENCE_FILES:
+        if promoted_custom_path(value):
             if paths.count(value)>1:raise ValueError('Custom paths must not overlap each other or built-in startup scope')
             continue
         if not isinstance(value,str) or not 1<len(value)<=4096 or not value.startswith('/') or value.startswith('//') or str(Path(value))!=value or '..' in Path(value).parts or any(ord(c)<32 for c in value):raise ValueError('Custom paths must be canonical absolute paths without control characters')
@@ -1656,7 +1669,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
             except FileNotFoundError:report['missing_roots'].append(value)
             except OSError:gap(path,'Persistence file parent inaccessible')
         for value in paths:
-            if value in PROMOTED_PERSISTENCE_FILES:continue
+            if promoted_custom_path(value):continue
             path=Path(value);selected=False
             try:
                 with scan_root(path.parent) as parent:
