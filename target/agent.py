@@ -1690,6 +1690,125 @@ def parse_kdump_conf(data):
     return result
 
 
+# keyutils request-key (#1632): /etc/request-key.conf and the /etc/request-key.d/*.conf drop-ins
+# /sbin/request-key reads, parsed per file as data exactly as app/request_key_callouts does
+# (keyutils 1.6.3). Nothing is run. Only rule patterns, the command (best-effort redaction) and
+# the facts needed to explain which requests reach it are stored.
+REQUEST_KEY_CONF = '/etc/request-key.conf'
+REQUEST_KEY_DIR = '/etc/request-key.d'
+REQUEST_KEY_TEXT_LIMIT = 65536
+REQUEST_KEY_LINE_ABORT = 4096
+REQUEST_KEY_PATTERN_LIMIT = 256
+REQUEST_KEY_MAX_ARGC = 253
+_RK_SPACE = ' \t\n\v\f\r'
+_RK_MACROS = frozenset('oktdcugTPS')
+_RK_CONTROLLED = {'d':'description','c':'callout_info'}
+
+
+def request_key_reads(path):
+    """Whether /sbin/request-key reads this path (the name rules only; the caller checks the kind)."""
+    if path==REQUEST_KEY_CONF:return True
+    parent,_,name=path.rpartition('/')
+    return parent==REQUEST_KEY_DIR and not name.startswith('.') and len(name)>=5 and name.endswith('.conf')
+
+
+def _rk_match(pattern,datum):
+    pat,dat=pattern.encode('utf-8'),datum.encode('utf-8');star=pat.find(b'*')
+    if star<0:return pat==dat
+    if len(dat)<len(pat)-1:return False
+    if star==0:return not pat[1:] or dat[len(dat)-len(pat)+1:]==pat[1:]
+    if dat[:star]!=pat[:star]:return False
+    rest=len(pat)-star-1
+    return not rest or dat[len(dat)-rest:]==pat[:rest]
+
+
+def _rk_universal(pattern,index):
+    return _rk_match(pattern,'create') if index==0 else pattern=='*'
+
+
+def _rk_scan_line(s):
+    i,n,pats=0,len(s),[]
+    for field in range(4):
+        if field:
+            while i<n and s[i] in _RK_SPACE:i+=1
+            if i==n:return pats,None
+        start=i
+        while i<n and s[i] not in _RK_SPACE:i+=1
+        if i==n:return pats,None
+        pats.append(s[start:i]);i+=1
+    while i<n and s[i] in _RK_SPACE:i+=1
+    return (pats,None) if i==n else (pats,s[i:])
+
+
+def _rk_command(command):
+    pipe=command.startswith('|')
+    if pipe:command=command[1:]
+    i=0
+    while i<len(command) and command[i] not in _RK_SPACE:i+=1
+    program=command[:i];words=[w for w in re.split('[ \t\n\v\f\r]+',command[i:]) if w]
+    failure=None if '/' in program else 'program_without_slash';controlled=set()
+    for count,word in enumerate(words):
+        if count>=REQUEST_KEY_MAX_ARGC:failure=failure or 'too_many_arguments';break
+        if not word.startswith('%'):continue
+        q=word[1:]
+        if not q:failure=failure or 'missing_macro_name'
+        elif q[0]=='%':continue
+        elif len(q)==1:
+            if q in _RK_MACROS:
+                if q in _RK_CONTROLLED:controlled.add(_RK_CONTROLLED[q])
+            else:failure=failure or 'unsupported_macro'
+        elif q[0]=='{':
+            body=q[1:];colon=body.find(':');end=body.find('}',colon+1) if colon>=0 else -1
+            if colon<0 or end<0 or end!=len(body)-1 or not body[:colon] or colon+1==end:failure=failure or 'malformed_keysub'
+            else:controlled.add('keysub_payload')
+    if pipe:controlled.add('stdin_callout_info')
+    return program,pipe,words,failure,sorted(controlled)
+
+
+def parse_request_key(data):
+    """Parse one request-key configuration file as data, mirroring app/request_key_callouts for that
+    file. Nothing is executed. Lines that abort lookups record their line, reason and the patterns a
+    request must match first. Text that is over 64 KiB, not UTF-8 or contains NUL bytes yields
+    parsed false and nothing else."""
+    result={'parsed':False,'rules':[],'aborts':[],'universal_abort_line':None,'last_byte_dropped':False,'truncated':False,'redacted':False}
+    if len(data)>REQUEST_KEY_TEXT_LIMIT or b'\x00' in data:return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:return result
+    result['parsed']=True
+    lines=text.split('\n');newline_last=bool(lines) and lines[-1]==''
+    if newline_last:lines.pop()
+
+    def pattern(value):
+        value=_tcpw_escape(value)
+        result['truncated']=result['truncated'] or len(value)>REQUEST_KEY_PATTERN_LIMIT
+        return value[:REQUEST_KEY_PATTERN_LIMIT]
+
+    def abort(number,reason,pats,universal):
+        if universal and result['universal_abort_line'] is None:result['universal_abort_line']=number
+        if len(result['aborts'])>=CRON_FILE_JOBS:result['truncated']=True;return
+        result['aborts'].append({'line':number,'reason':reason,'scope':[pattern(p) for p in pats],'universal':universal})
+
+    for number,line in enumerate(lines,1):
+        newline=number<len(lines) or newline_last
+        size=len(line.encode('utf-8'))+(1 if newline else 0)
+        if size>=REQUEST_KEY_LINE_ABORT:abort(number,'line_too_long',[],True);continue
+        if size==1 or line[:1]=='#' or (line[:1] and line[0] in _RK_SPACE):continue
+        if not newline:
+            result['last_byte_dropped']=True;line=line[:-1]
+        pats,command=_rk_scan_line(line)
+        if command is None:abort(number,'syntax_error',pats,all(_rk_universal(p,k) for k,p in enumerate(pats)));continue
+        if len(result['rules'])>=CRON_FILE_JOBS:result['truncated']=True;continue
+        program,pipe,words,failure,controlled=_rk_command(command)
+        shown,redacted=redact_cron_command(_tcpw_escape(' '.join([program]+words)))
+        result['redacted']=result['redacted'] or redacted
+        upcall=_rk_match(pats[0],'create')
+        result['rules'].append({'line':number,'op':pattern(pats[0]),'type':pattern(pats[1]),'description':pattern(pats[2]),
+            'callout_info':pattern(pats[3]),'pipe':pipe,'command':shown[:CRON_COMMAND_LIMIT],'command_truncated':len(shown)>CRON_COMMAND_LIMIT,
+            'redacted':redacted,'kernel_upcall':upcall,'requester_controlled':controlled,'fails_when_selected':failure,
+            'code_runs':'never' if not upcall else 'fails_when_selected' if failure else 'on_matching_request'})
+    return result
+
+
 # autofs master map (#1375): the hashed /etc/auto.master bytes are reported as bounded latin-1 text and
 # nothing else. No map path the text names is stat-ed, opened or run: the agent cannot establish a
 # non-triggering lookup boundary (symlinks, nested automount points and the live mount topology), and a
@@ -1718,7 +1837,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;autofs=cron_jobs and str(path)==AUTOFS_MASTER;content=bytearray() if form or at_name or anacron or tcpw or kdump or autofs else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;request_key=cron_jobs and request_key_reads(str(path));autofs=cron_jobs and str(path)==AUTOFS_MASTER;content=bytearray() if form or at_name or anacron or tcpw or kdump or request_key or autofs else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1764,6 +1883,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['tcp_wrappers']=parse_tcp_wrappers(bytes(content))
             if kdump and row['kind']=='regular':
                 row['kdump']=parse_kdump_conf(bytes(content))
+            if request_key and row['kind']=='regular':
+                row['request_key']=parse_request_key(bytes(content))
             if autofs and row['kind']=='regular':
                 row['autofs']=parse_autofs_master(bytes(content))
             report['entries'].append(row)

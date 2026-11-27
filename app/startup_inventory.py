@@ -37,7 +37,7 @@ GAPS=[
     'autofs: /etc/auto.master is hashed as a startup file, and agents that report it also send its text (up to 64 KiB). This view lists its entries (mount point and map) with the autofs 5.1.9 master-map rules, but the agent never looks up the map paths they name, because a lookup at or below an automount point can mount a map or run a program map. Which maps are program maps that automount runs as root on each key lookup is therefore not resolved, and every entry stays unknown. Also not evaluated: the map files and their + includes and sub-maps, the /etc/auto.master.d directory, master-map + includes, the /etc/auto_master fallback, an alternate master map set in autofs.conf or on the command line, autofs.conf amd sections, nsswitch automount sources, remote (LDAP, NIS, SSS) maps and whether automount runs. The result is never complete.',
     'System git configuration: /etc/gitconfig is hashed as a startup file by agents that report it, but the shell aliases, pagers, editors, credential helpers, hook paths, fsmonitor hooks and diff, filter and merge drivers it can make git run are not yet parsed in this view. Files it includes, per-user, XDG and repository configuration, GIT_CONFIG_* environment overrides and which accounts or jobs run git are not evaluated.',
     'kdump: /etc/kdump.conf is hashed as a startup file, and agents that report it parse its kdump_pre, kdump_post and kdump_emergency programs and core_collector argv from the hashed bytes with the kdump-utils 7bf4714 rules, in capture order. Each runs as root in the crash-capture environment after a kernel crash. Options kdumpctl rejects (unknown, deprecated, empty, repeated, a second dump target or a second --mount) are listed with their line, and such a configuration loads no capture kernel, so nothing runs. Programs use the same best-effort redaction, other option values are never stored, and text over 64 KiB, with 2048 or more lines, not UTF-8 or with NUL bytes is shown as unparsed. The /etc/kdump/pre.d, post.d and emergency.d directories are not yet listed, so their programs are missing from the sequence. The hook programs themselves, other kdumpctl checks, whether the loaded crash-capture initramfs matches the current files and the Debian kdump-tools configuration are not evaluated.',
-    'keyutils request-key: /etc/request-key.conf and the /etc/request-key.d drop-in directory are hashed as startup files by agents that report them, but the rules that choose which program /sbin/request-key runs as root, with requester-chosen description and callout arguments, when the kernel asks for a missing key are not yet parsed in this view. The programs themselves, whether the kernel has key support and /sbin/request-key installed, and which processes request keys are not evaluated.',
+    'keyutils request-key: /etc/request-key.conf and the /etc/request-key.d drop-in directory are hashed as startup files, and agents that report them parse each file /sbin/request-key reads (drop-ins named *.conf, not starting with a dot, that are regular files) from the hashed bytes with the keyutils 1.6.3 rules. Each rule shows its operation, key type, description and callout patterns, whether the kernel upcall (create) reaches it, the pipe mode and the command it runs as root, with requester-controlled inputs (%d, %c, %{type:description} and piped callout information) named. Lines that abort lookups (4096 bytes or more, or ending before the program) are listed with the patterns a request must match first; one that matches every kernel lookup in any read file makes every lookup abort. Commands use the same best-effort redaction, patterns are bounded to 256 characters, rules and aborts to 64 per file, and text over 64 KiB, not UTF-8 or with NUL bytes is shown as unparsed. The readdir() order of drop-ins is not captured, so which of two equally specific rules in different files wins is not shown. The programs themselves, which key types an unprivileged requester may ask for, whether the kernel has key support and /sbin/request-key installed, and which processes request keys are not evaluated.',
     'ClamAV: the Debian-family /etc/clamav directory (clamd.conf, freshclam.conf and the onupdateexecute.d and onerrorexecute.d directories), the RPM-family /etc/clamd.d directory and /etc/freshclam.conf are hashed as startup files by agents that report them, but the VirusEvent command clamd runs through /bin/sh on every detection and the OnUpdateExecute, OnErrorExecute and OnOutdatedExecute commands freshclam runs are not yet parsed in this view. Alternate configuration files passed with --config-file, the accounts clamd and freshclam start as, whether either runs, and the commands themselves are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
@@ -124,6 +124,35 @@ def kdump_text(entry):
     return ' '.join([h['source']+' '+h['program']+' '+' '.join(h['args']) for h in kdump.get('hooks',())]+[r['option'] for r in kdump.get('refusals',())])
 
 
+def request_key_state(entry):
+    """Whether parsed request-key rules exist, were not reported (older agent), or request-key skips the file."""
+    if 'request_key' in entry:return 'parsed'
+    path=entry['path']
+    if persistence.request_key_reads(path):
+        if entry['kind']=='regular':return 'not_reported'
+        # request-key opens request-key.conf with fopen(), which follows a symlink the inventory does not.
+        return 'skipped_kind' if path!=persistence.REQUEST_KEY_CONF else 'not_followed'
+    if path.startswith(persistence.REQUEST_KEY_DIR+'/'):
+        return 'skipped_subdirectory' if '/' in path[len(persistence.REQUEST_KEY_DIR)+1:] else 'skipped_name'
+    return None
+
+
+def request_key_lookups(inventory):
+    """Lines in any read file that make every kernel lookup abort, and whether every read file was parsed."""
+    aborts=[];complete=True
+    for entry in inventory['entries']:
+        state=request_key_state(entry)
+        if state in ('not_reported','not_followed') or (state=='parsed' and not entry['request_key']['parsed']):complete=False
+        if state=='parsed' and entry['request_key']['universal_abort_line'] is not None:
+            aborts.append(f"{entry['path']}:{entry['request_key']['universal_abort_line']}")
+    return {'universal_aborts':sorted(aborts),'complete':complete}
+
+
+def request_key_text(entry):
+    report=entry.get('request_key',{})
+    return ' '.join(' '.join((r['op'],r['type'],r['description'],r['callout_info'],r['command'])) for r in report.get('rules',()))
+
+
 def tcp_wrappers_text(entry):
     return ' '.join(c['option']+' '+c['command']+' '+' '.join(c['daemons']) for c in entry.get('tcp_wrappers',{}).get('commands',()))
 
@@ -184,7 +213,7 @@ def with_at_jobs(rows,inventory,q,changes):
 
 
 def catalog_rows(inventory):
-    """Mechanism counts; the at, anacron, TCP wrappers and kdump rows also report parsed jobs/commands and older-agent files."""
+    """Mechanism counts; the at, anacron, TCP wrappers, kdump and request-key rows also report parsed jobs/commands and older-agent files."""
     result=[]
     for key,label,_ in CATALOG:
         if key=='anacron':
@@ -200,6 +229,10 @@ def catalog_rows(inventory):
             found=[e for e in inventory['entries'] if e['path']==persistence.KDUMP_CONF]
             hooks=sum(len(e['kdump']['hooks']) for e in found if 'kdump' in e)
             label+=f' · {hooks} parsed hook{"" if hooks==1 else "s"}'+(' · refused by kdumpctl' if any(e.get('kdump',{}).get('starts') is False for e in found) else '')+(' · not reported by this agent version' if any(kdump_state(e)=='not_reported' for e in found) else '')
+        if key in ('request_key','request_key_d'):
+            found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key]
+            rules=sum(len(e['request_key']['rules']) for e in found if 'request_key' in e)
+            label+=f' · {rules} parsed rule{"" if rules==1 else "s"}'+(' · every lookup aborts' if any(e.get('request_key',{}).get('universal_abort_line') is not None for e in found) else '')+(' · not reported by this agent version' if any(request_key_state(e)=='not_reported' for e in found) else '')
         if key=='autofs':
             found=[e for e in inventory['entries'] if e['path']==persistence.AUTOFS_MASTER]
             entries=sum(len(autofs_view(e)['entries']) for e in found if autofs_state(e)=='resolved')
@@ -222,7 +255,7 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
     changes={r['path']:r['kind'] for r in assessment['comparison']['changes']} if assessment['comparison']['state']=='compared' else None
     host=s.get(Host,host_id);family=cron_loading.family_of(host.inventory if host else None)
     loading={e['path']:cron_loading.assess(e,family) for e in inventory['entries'] if cron_loading.applies(e['path'])}
-    rows=[]
+    rows=[];lookups=request_key_lookups(inventory)
     newly=assessment['comparison'].get('newly_in_scope',[]) if changes is not None else []
     earlier=assessment['comparison'].get('previously_custom',[]) if changes is not None else []
     for entry in inventory['entries']:
@@ -239,6 +272,9 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         state=kdump_state(entry)
         if state:row['kdump_state']=state
         if 'kdump' in entry:row['kdump']=entry['kdump']
+        state=request_key_state(entry)
+        if state:row['request_key_state']=state
+        if 'request_key' in entry:row['request_key']={**entry['request_key'],'lookups':lookups}
         state=autofs_state(entry)
         if state:row['autofs_state']=state
         if state=='resolved':row['autofs']=autofs_view(entry)
@@ -246,7 +282,7 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+autofs_text(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)
