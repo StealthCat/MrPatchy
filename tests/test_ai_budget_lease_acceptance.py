@@ -25,7 +25,9 @@ from app import (
     ai_budget,
     ai_claims,
     ai_policy,
+
     ai_pricing,
+    ai_provider_backoff,
     ai_retry,
     ai_runs,
     worker,
@@ -137,6 +139,11 @@ def test_late_result_after_lease_loss_stays_counted_but_is_never_accepted(admin,
 
 
 def test_hung_worker_charge_blocks_a_successor_at_the_cap_until_reset(admin,monkeypatch,ssh):
+    # Start just before UTC reset so the provider backoff crosses it.
+    real_time = time.time
+    started = real_time()
+    offset = (int(started) // 86400 + 1) * 86400 - 15 - started
+    monkeypatch.setattr(time, 'time', lambda: real_time() + offset)
     # Room for the hung call's reservation only.
     cap=first_quote()*Decimal('1.5')
     seed(cap=cap)
@@ -170,9 +177,19 @@ def test_hung_worker_charge_blocks_a_successor_at_the_cap_until_reset(admin,monk
         assert s.get(ai_runs.AIRun,hung_run).state=='interrupted'
         assert not list(s.scalars(select(ai_assessments.Assessment)))
         assert s.get(Behavior,SUBJECT).verdict!='low'
-    # After the reset the subject is admitted again with a fresh reservation.
-    real=time.time;shift=reset-real()+5
-    monkeypatch.setattr(time,'time',lambda:real()+shift)
+    # The reset releases budget headroom, but the independent provider floor still applies.
+    with Session() as s:
+        provider_until = ai_provider_backoff.waiting(s, time.time())
+    assert provider_until > reset + 5
+    offset = reset + 5 - real_time()
+    worker.investigate_one()
+    assert len(provider.sent) == 1
+    with Session() as s:
+        assert [row.status for row in ledger(s)] == ['uncertain']
+        assert Decimal(ai_budget.status(s)['counted_usd']) == 0
+
+    # Once both gates are open, the successor takes a fresh reservation.
+    offset = provider_until + 5 - real_time()
     worker.investigate_one()
     with Session() as s:
         rows=ledger(s);assert len(rows)==2 and rows[1].reset_at>reset
