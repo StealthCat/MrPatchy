@@ -17,14 +17,21 @@ jobs:
       fail-fast: false
       matrix:
         database: [sqlite, mysql]
-        layout: [cross-server, same-server]
+        layout: [cross-server, same-server, cross-server-paced]
         include:
           - layout: cross-server
             hosts: 8
             artifact-suffix: ''
+            control-mode: daily_cap
           - layout: same-server
             hosts: 1
             artifact-suffix: -same-server
+            control-mode: daily_cap
+          - layout: cross-server-paced
+            hosts: 8
+            artifact-suffix: -paced
+            control-mode: rate_and_daily
+            starts-per-hour: 1000
     services:
       mysql:
         image: ${{ matrix.database == 'mysql' && 'mysql:8.4' || '' }}
@@ -55,6 +62,8 @@ jobs:
         env:
           BENCHMARK_DATABASE: ${{ matrix.database }}
           BENCHMARK_HOSTS: ${{ matrix.hosts }}
+          BENCHMARK_CONTROL_MODE: ${{ matrix.control-mode }}
+          BENCHMARK_RATE: ${{ matrix.starts-per-hour }}
           BENCHMARK_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
         run: |
           BENCHMARK_DIR="$RUNNER_TEMP/ai-${BENCHMARK_DATABASE}-benchmark"
@@ -69,16 +78,23 @@ jobs:
             python -VV
             printf 'database=%s\n' "$BENCHMARK_DATABASE"
             printf 'fixture_hosts=%s\n' "$BENCHMARK_HOSTS"
+            printf 'ai_control_mode=%s\n' "$BENCHMARK_CONTROL_MODE"
+            if [[ -n "$BENCHMARK_RATE" ]]; then
+              printf 'starts_per_hour=%s\n' "$BENCHMARK_RATE"
+            fi
             if [[ "$BENCHMARK_DATABASE" == sqlite ]]; then
               python -c 'import fcntl, sqlite3; print("flock=" + fcntl.flock.__module__); print("sqlite=" + sqlite3.sqlite_version)'
             fi
             python -m pip freeze
           } > "$BENCHMARK_DIR/provenance.txt"
 
-          workload=(--database "$BENCHMARK_DATABASE" --control-mode daily_cap --runs 8
+          workload=(--database "$BENCHMARK_DATABASE" --control-mode "$BENCHMARK_CONTROL_MODE" --runs 8
                     --servers "$BENCHMARK_HOSTS"
                     --provider-delay-ms 150 --ssh-delay-ms 50 --persistence-delay-ms 15
                     --retained-history-rows 1000)
+          if [[ -n "$BENCHMARK_RATE" ]]; then
+            workload+=(--rate-per-hour "$BENCHMARK_RATE")
+          fi
           pairs=()
           for pair in {1..6}; do
             if (( pair % 2 )); then
@@ -95,16 +111,23 @@ jobs:
                            "$BENCHMARK_DIR/pair-${pair}-slots-4.json")
           done
           python tools/compare_ai_benchmark_series.py "${pairs[@]}" > "$BENCHMARK_DIR/series.json"
-          python - "$BENCHMARK_DIR/series.json" "$BENCHMARK_HOSTS" <<'PY'
+          python - "$BENCHMARK_DIR/series.json" "$BENCHMARK_HOSTS" "$BENCHMARK_CONTROL_MODE" "$BENCHMARK_RATE" <<'PY'
           import json
           import sys
           from pathlib import Path
 
           series = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           expected_hosts = int(sys.argv[2])
+          expected_mode = sys.argv[3]
+          expected_rate = int(sys.argv[4]) if sys.argv[4] else None
           for mode in ("serial", "parallel"):
-              if series[mode]["fixture_hosts"] != expected_hosts:
+              side = series[mode]
+              if side["fixture_hosts"] != expected_hosts:
                   raise SystemExit(f"{mode}: expected {expected_hosts} fixture hosts")
+              if side["ai_control_mode"] != expected_mode:
+                  raise SystemExit(f"{mode}: expected {expected_mode} AI control mode")
+              if side.get("fixture_rate", {}).get("starts_per_hour") != expected_rate:
+                  raise SystemExit(f"{mode}: expected starts_per_hour={expected_rate}")
           PY
       - name: Upload validated captures
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
