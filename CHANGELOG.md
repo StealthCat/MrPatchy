@@ -1,3 +1,9 @@
+## 1.116.0 — 2026-11-25
+
+1. [PR #1633](https://github.com/StealthCat/MrPatchy/pull/1633): A pure Roadmap F keyutils contract (`app/request_key_callouts.py`) reports which programs the kernel's `request-key` upcall runs as root, and which key type, description and callout patterns select them. It also flags which arguments carry requester-controlled data and which configuration lines make lookups abort. The parser rules were validated against native keyutils 1.6.3. Compatibility: new module only. Increment 1 of #1632.
+
+Integrated through [PR #1636](https://github.com/StealthCat/MrPatchy/pull/1636). This source update does not publish a Docker image.
+
 ## 1.115.0 — 2026-11-25
 
 1. [PR #1629](https://github.com/StealthCat/MrPatchy/pull/1629): A pure Roadmap F runit contract (`app/runit_services.py`) reports which `run`, `finish`, `log/run` and `control/` programs `runsv` starts for each supervised service. It gives the argv, working directory, event, automatic start and account at exec for each, and reports blocking coverage gaps. Compatibility: new module only. Increment 1 of #1628.
