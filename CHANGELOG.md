@@ -1,3 +1,9 @@
+## 1.120.0 — 2026-11-25
+
+1. [PR #1643](https://github.com/StealthCat/MrPatchy/pull/1643): Agents hash ClamAV configuration as built-in startup scope: the Debian `/etc/clamav` directory, the RPM-family `/etc/clamd.d` directory and `/etc/freshclam.conf`. ClamAV runs commands from these files on detections and database updates. Earlier baselines still compare, and saved custom paths naming these locations stay valid. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Increment 2 of #1607.
+
+Integrated through [PR #1644](https://github.com/StealthCat/MrPatchy/pull/1644). This source update does not publish a Docker image.
+
 ## 1.119.0 — 2026-11-25
 
 1. [PR #1639](https://github.com/StealthCat/MrPatchy/pull/1639): Agents hash `/etc/request-key.conf` and the `/etc/request-key.d` drop-in directory as built-in startup files, because the kernel's key upcall runs the programs they name as root. Earlier baselines stay comparable. Saved custom paths inside the newly built-in directory stay valid, are inventoried once and are not marked as newly in scope. The coordinator resolved a conflict with #1631 in `app/startup_inventory.py`, keeping both sides. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Refs #1632.
