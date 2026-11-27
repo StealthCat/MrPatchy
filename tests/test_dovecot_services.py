@@ -106,7 +106,9 @@ class DovecotServicesTest(unittest.TestCase):
         rows = _by_name(result)
         self.assertEqual(sorted(rows), ['dropped', 'internal', 'lazy', 'rawexe', 'rootexe', 'scr'])
         for name in ('rawexe', 'rootexe', 'internal'):
-            self.assertEqual((rows[name]['exec_uid'], rows[name]['program_account']), (0, 'root'), name)
+            self.assertEqual((rows[name]['exec_uid'], rows[name]['program_account']), (0, None), name)
+            self.assertEqual(rows[name]['program_account_basis'], 'post_exec_drop_unverified')
+            self.assertIsNone(rows[name]['expected_drop_account'], name)
             self.assertEqual(rows[name]['starts'], 'master_start')
         self.assertEqual(rows['rawexe']['argv'], [REC, 'rawexe', 'a1'])
         self.assertEqual(rows['rawexe']['service_user'], 'nobody')
@@ -114,16 +116,23 @@ class DovecotServicesTest(unittest.TestCase):
         self.assertEqual(rows['lazy']['starts'], 'on_demand')
         self.assertEqual((rows['dropped']['exec_uid'], rows['dropped']['exec_gid']), (65534, 65534))
         self.assertEqual(rows['dropped']['program_account'], 'nobody')
+        self.assertEqual(rows['dropped']['program_account_basis'], 'restricted_before_exec')
         scr = rows['scr']
         self.assertEqual(scr['wrapper'], 'script')
         self.assertEqual(scr['program'], '/usr/lib/dovecot/script')
         self.assertEqual(scr['wrapped']['argv'], [REC, 'scr'])
         self.assertTrue(scr['wrapped']['appends_client_arguments'])
-        self.assertEqual((scr['exec_uid'], scr['program_account'], scr['program_uid']), (0, 'nobody', 65534))
-        root_names = sorted(result['services'][i]['service'] for i in result['root_programs'])
-        self.assertEqual(root_names, ['internal', 'lazy', 'rawexe', 'rootexe'])
+        # The wrapper is exec'd as root; its expected drop to nobody is not verified by a path.
+        self.assertEqual((scr['exec_uid'], scr['program_account'], scr['program_uid']), (0, None, None))
+        self.assertEqual(scr['expected_drop_account'], 'nobody')
+        names = result['services']
+        root_names = sorted(names[i]['service'] for i in result['root_exec'])
+        self.assertEqual(root_names, ['internal', 'lazy', 'rawexe', 'rootexe', 'scr'])
+        unverified = sorted(names[i]['service'] for i in result['unverified_program_accounts'])
+        self.assertEqual(unverified, root_names)
         codes = [g['code'] for g in result['gaps']]
         self.assertEqual(codes.count('service_user_not_applied'), 2)
+        self.assertEqual(codes.count('post_exec_account_unverified'), 3)
         self.assertFalse(result['authorizes_response'])
         self.assertEqual(result['origin'], 'not_assessed')
 
@@ -155,8 +164,15 @@ class DovecotServicesTest(unittest.TestCase):
         rows = _by_name(result)
         self.assertEqual(rows['imap']['argv'], ['imap', 'imap-postlogin'])
         self.assertTrue(rows['imap']['enabled'])
-        self.assertEqual(rows['imap']['exec_account_basis'], 'dovecot_binary_drops_after_start')
-        self.assertEqual(rows['imap-postlogin']['program_account'], 'authenticated_mail_user')
+        self.assertEqual(rows['imap']['exec_account_basis'], 'dovecot_binary_path_not_dropped_before_exec')
+        self.assertEqual(rows['imap']['exec_account'], 'root')
+        self.assertIsNone(rows['imap']['program_account'])
+        post = rows['imap-postlogin']
+        self.assertIsNone(post['program_account'])
+        self.assertEqual(post['program_account_basis'], 'post_login_switch_unverified')
+        self.assertEqual(post['expected_drop_account'], 'authenticated_mail_user')
+        root_names = sorted(result['services'][i]['service'] for i in result['root_exec'])
+        self.assertEqual(root_names, ['imap', 'imap-postlogin', 'qw'])
         self.assertEqual(rows['qw']['argv'], ['/x/qw', '--flag'])
         self.assertEqual((rows['qw']['starts'], rows['qw']['process_min_avail']), ('master_start', 2))
         self.assertEqual(rows['qw']['line'], 9)
@@ -167,7 +183,23 @@ class DovecotServicesTest(unittest.TestCase):
     def test_protocol_disabled_service(self):
         rows = _by_name(_one('service pop3 {\n  executable = /x/pop3\n}\n'))
         self.assertFalse(rows['pop3']['enabled'])
-        self.assertEqual(_one('service pop3 {\n  executable = /x/pop3\n}\n')['root_programs'], [])
+        result = _one('service pop3 {\n  executable = /x/pop3\n}\n')
+        self.assertEqual((result['root_exec'], result['unverified_program_accounts']), ([], []))
+
+    def test_root_exec_is_separate_from_expected_drop(self):
+        # A libexec path is not provenance: the expected drop is reported, never the verified account.
+        lib = _by_name(_one('service q {\n  executable = q\n  user = nobody\n  process_min_avail = 1\n}\n'))['q']
+        self.assertEqual((lib['program'], lib['exec_account']), ('/usr/lib/dovecot/q', 'root'))
+        self.assertEqual((lib['program_account'], lib['expected_drop_account']), (None, 'nobody'))
+        result = _one('service q {\n  executable = /x/q\n  user = root\n  drop_priv_before_exec = yes\n}\n')
+        row = result['services'][0]
+        self.assertEqual((row['exec_account'], row['program_account']), ('root', 'root'))
+        self.assertEqual((result['root_exec'], result['unverified_program_accounts']), ([0], []))
+        self.assertNotIn('post_exec_account_unverified', [g['code'] for g in result['gaps']])
+        wrapped = _by_name(_one('service s {\n  executable = script /x/s.sh\n  user = nobody\n'
+                                '  drop_priv_before_exec = yes\n}\n'))['s']
+        self.assertEqual((wrapped['exec_uid'], wrapped['program_account']), (65534, 'nobody'))
+        self.assertIsNone(wrapped['expected_drop_account'])
 
     def test_parser_rules_match_doveconf(self):
         # doveconf -n: "/x/a#b c" -> "/x/a"; quoted '#' kept; "\\\"" unescaped; single quotes kept verbatim.
@@ -235,6 +267,9 @@ class DovecotServicesTest(unittest.TestCase):
         a = _one('service q {\n  executable = /x/q\n  user = nobody\n}\n')
         b = _one('service q {\n  executable = /x/q\n  user = nobody\n  drop_priv_before_exec = yes\n}\n')
         self.assertNotEqual(a['service_sha256'], b['service_sha256'])
+        c = _one('service q {\n  executable = q\n  user = nobody\n}\n')
+        d = _one('service q {\n  executable = q\n  user = dovecot\n}\n')
+        self.assertNotEqual(c['service_sha256'], d['service_sha256'])
         self.assertEqual(a['service_sha256'], _one('service q {\n  executable = /x/q\n  user = nobody\n}\n')['service_sha256'])
 
 

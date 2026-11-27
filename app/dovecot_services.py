@@ -5,12 +5,18 @@ every ``service`` section, either at master start (``process_min_avail``
 above zero) or when the first client connects to one of its listeners.
 
 The service ``user`` does not make the master drop privileges before it
-execs the program. Dovecot's own binaries read the target account from
-the environment and drop privileges after they start. A program that is not
-a Dovecot binary therefore runs as **root** unless the service sets
-``drop_priv_before_exec = yes``, even when ``user = nobody`` is configured.
-The ``script`` wrapper is a Dovecot binary: it drops to the service user and
-then execs its program with the client's arguments appended.
+execs the program. The master passes the restriction settings in the
+environment and applies them before exec only when the service sets
+``drop_priv_before_exec = yes``. Otherwise every program is **exec'd as
+root**, even when ``user = nobody`` is configured. Dovecot's own binaries
+drop to the service user after they start, but a path under ``libexec_dir``
+names a file, not verified provenance, so that later drop is reported as
+``expected_drop_account`` and the verified ``program_account`` is unknown
+(None). ``root_exec`` lists every enabled service exec'd as root, whatever
+its expected later drop; ``unverified_program_accounts`` lists those whose
+post-exec account is not verified. The ``script`` wrapper is a Dovecot
+binary: it is expected to drop to the service user and then exec its
+program with the client's arguments appended.
 
 This module turns captured configuration text, captured ``!include`` glob
 matches and captured ``/etc/passwd`` and ``/etc/group`` text into the
@@ -294,7 +300,8 @@ def _yes(value: str) -> bool:
 
 
 def _fingerprint(rows: list[dict[str, Any]]) -> str:
-    material = [{k: row[k] for k in ('service', 'argv', 'exec_account', 'program_account', 'enabled', 'starts')}
+    material = [{k: row[k] for k in ('service', 'argv', 'exec_account', 'program_account',
+                                  'program_account_basis', 'expected_drop_account', 'enabled', 'starts')}
                 for row in rows]
     return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
 
@@ -348,17 +355,27 @@ def _service_row(name: str, entry: dict[str, Any], reader: _Reader,
     service_account = {'account': account_name, 'uid': uid, 'gid': gid}
     root = {'account': 'root', 'uid': 0, 'gid': 0}
     target: dict[str, Any] | None = None
+    expected: dict[str, Any] | None = None
     if drop_priv:
+        # The master applies the restriction settings before exec, so the program starts as this account.
         exec_account, basis = service_account, 'drop_priv_before_exec'
-    elif dovecot_binary:
-        # The master execs Dovecot binaries as root; they drop to the service user after init.
-        exec_account, basis = root, 'dovecot_binary_drops_after_start'
+        program_account, program_basis = service_account, 'restricted_before_exec'
     else:
-        exec_account, basis = root, 'not_dropped_before_exec'
+        # The master execs as root. Any later drop is the program's own behaviour, which the
+        # captured configuration does not verify: the path names a file, not its provenance.
+        exec_account = root
+        program_account, program_basis = None, 'post_exec_drop_unverified'
+        if dovecot_binary:
+            basis = 'dovecot_binary_path_not_dropped_before_exec'
+            expected = service_account
+        else:
+            basis = 'not_dropped_before_exec'
+            if account_name != 'root':
+                reader.gap('service_user_not_applied', blocking=False, service=name, user=account_name,
+                           detail='a non-Dovecot executable runs as root unless drop_priv_before_exec = yes')
         if account_name != 'root':
-            reader.gap('service_user_not_applied', blocking=False, service=name, user=account_name,
-                       detail='a non-Dovecot executable runs as root unless drop_priv_before_exec = yes')
-    program_account = service_account if (drop_priv or dovecot_binary) else root
+            reader.gap('post_exec_account_unverified', blocking=False, service=name, exec_account='root',
+                       expected_account=account_name if dovecot_binary else None)
     if wrapper:
         args = argv[1:]
         while args and args[0].startswith('-'):
@@ -371,7 +388,8 @@ def _service_row(name: str, entry: dict[str, Any], reader: _Reader,
             if not args[0].startswith('/'):
                 reader.gap('relative_wrapper_program', blocking=False, service=name, program=args[0])
         if wrapper == 'script-login':
-            program_account = {'account': 'authenticated_mail_user', 'uid': None, 'gid': None}
+            expected = {'account': 'authenticated_mail_user', 'uid': None, 'gid': None}
+            program_account, program_basis = None, 'post_login_switch_unverified'
             reader.gap('script_login_account_not_traced', blocking=False, service=name)
     protocols = reader.settings['protocols'].split()
     enabled = not protocol or protocol in protocols
@@ -388,8 +406,10 @@ def _service_row(name: str, entry: dict[str, Any], reader: _Reader,
         'exec_uid': exec_account['uid'],
         'exec_gid': exec_account['gid'],
         'exec_account_basis': basis,
-        'program_account': program_account['account'],
-        'program_uid': program_account['uid'],
+        'program_account': program_account['account'] if program_account else None,
+        'program_uid': program_account['uid'] if program_account else None,
+        'program_account_basis': program_basis,
+        'expected_drop_account': expected['account'] if expected else None,
         'service_user': account_name,
         'drop_priv_before_exec': drop_priv,
         'chroot': value('chroot', '') or None,
@@ -448,8 +468,9 @@ def evaluate(*, files: Mapping[str, str | bytes | None], globs: Mapping[str, Seq
         'protocols': reader.settings['protocols'].split(),
         'files': reader.read,
         'services': rows,
-        'root_programs': [i for i, row in enumerate(rows)
-                          if row['enabled'] and row['program_account'] == 'root'],
+        'root_exec': [i for i, row in enumerate(rows) if row['enabled'] and row['exec_account'] == 'root'],
+        'unverified_program_accounts': [i for i, row in enumerate(rows)
+                                        if row['enabled'] and row['program_account'] is None],
         'gaps': gaps,
         'origin': 'not_assessed',
         'authorizes_response': False,
