@@ -15,7 +15,8 @@ CONTROLLER_FILES = ("compose.controller.yaml", "compose.controller.gcp.yaml")
 # Read only by compose.worker.yaml / the bundled worker, or by native worker processes.
 WORKER_ONLY_KEYS = ("MRPATCHY_WORKER_ID", "MRPATCHY_WORKER_MEM_LIMIT", "MRPATCHY_WORKER_STOP_GRACE_PERIOD",
                     "MRPATCHY_JOB_CONCURRENCY", "MRPATCHY_POLL_CONCURRENCY", "MRPATCHY_AI_CONCURRENCY",
-                    "MRPATCHY_CONTROLLER_DATA_VOLUME", "MRPATCHY_REQUIRE_CONTROLLER_STATE")
+                    "MRPATCHY_AI_RESERVE_SCORING_SLOT", "MRPATCHY_CONTROLLER_DATA_VOLUME",
+                    "MRPATCHY_REQUIRE_CONTROLLER_STATE")
 PLACEHOLDERS = ("ADMIN_PASSWORD", "DOMAIN", "PUBLIC_URL")
 VARIABLE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)")
 

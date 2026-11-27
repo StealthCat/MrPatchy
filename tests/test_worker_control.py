@@ -107,6 +107,14 @@ def test_invalid_concurrency_refuses_start(env,value,monkeypatch):
     with pytest.raises(ValueError,match=env):registry.Registration()
 
 
+@pytest.mark.parametrize('concurrency, reservation', [('4', 'invalid'), ('1', '1')])
+def test_invalid_scoring_reservation_refuses_start(monkeypatch, concurrency, reservation):
+    monkeypatch.setenv('MRPATCHY_AI_CONCURRENCY', concurrency)
+    monkeypatch.setenv('MRPATCHY_AI_RESERVE_SCORING_SLOT', reservation)
+    with pytest.raises(ValueError, match='MRPATCHY_AI_RESERVE_SCORING_SLOT'):
+        registry.Registration()
+
+
 def test_scheduler_drain_releases_coordinator_finishes_assigned_and_resumes(admin,monkeypatch):
     from app import worker,persistence,response_monitor,service_monitor,execution_scans
     for module in (worker.scheduling,worker.incidents,persistence,response_monitor,service_monitor,execution_scans):
