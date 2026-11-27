@@ -1,3 +1,9 @@
+## 1.130.0 — 2026-11-25
+
+1. [PR #1679](https://github.com/StealthCat/MrPatchy/pull/1679): Agents hash `/etc/lvm/lvm.conf` and `/etc/lvm/lvmlocal.conf` as built-in startup files. These are the LVM2 configuration cascade that chooses which thin/cache check, dump and repair executables LVM runs and which plugins dmeventd loads as root. A custom `/etc/lvm` path saved earlier stays valid, and its baseline keeps comparing those files rather than marking them newly in scope. The coordinator resolved its overlap with the lighttpd scope from #1676 as a union. Compatibility: older agents keep working. Increment 2 of #1599.
+
+Integrated through [PR #1683](https://github.com/StealthCat/MrPatchy/pull/1683). This source update does not publish a Docker image.
+
 ## 1.129.0 — 2026-11-25
 
 1. [PR #1676](https://github.com/StealthCat/MrPatchy/pull/1676): Agents hash the lighttpd configuration directory `/etc/lighttpd` as built-in startup scope. The directory is additive to earlier baselines, saved custom paths inside it stay valid, and Startup Files labels it. The coverage text notes that its `include_shell`, piped-logger and FastCGI/SCGI commands are not yet parsed. The coordinator resolved its overlap with the runit scope from #1667 as a union. Compatibility: older agents keep working. After the agent update, existing baselines show the directory as newly in scope until an administrator approves a new baseline. Increment 2 of #1603.
