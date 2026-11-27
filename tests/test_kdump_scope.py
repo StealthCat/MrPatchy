@@ -125,7 +125,8 @@ def test_catalogs_label_conf_and_state_the_gap():
     assert mechanism['parse'] == 'metadata' and mechanism['trigger'] == 'event' and mechanism['scope'] == 'system'
     assert [(loc['path'], loc['families']) for loc in mechanism['locations']] == [(CONF, ('rpm',))]
     assert CONF in startup_catalog._all_locations('rpm') and CONF not in startup_catalog._all_locations('debian')
-    assert any(CONF in gap and 'not yet parsed' in gap and 'kdump_pre' in gap and 'pre.d' in gap
+    # Increment 3 (#1538) parses the configuration; the hook directories remain an explicit gap.
+    assert any(CONF in gap and 'kdump_pre' in gap and 'pre.d' in gap and 'not yet listed' in gap
                for gap in startup_inventory.GAPS)
 
 

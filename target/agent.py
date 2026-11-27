@@ -1577,68 +1577,110 @@ def parse_tcp_wrappers(data):
     return result
 
 
-# autofs master map (#1375): the hashed /etc/auto.master bytes are reported as bounded text, with a
-# read-only stat (kind and mode, following symlinks, as automount does) of every candidate map path
-# the text names. The controller resolves program maps with app/autofs_program_maps; no map is read
-# or run here, and a path that is not stat-ed stays a blocking gap there.
+# kdump (#1538): kdump_pre, kdump_post, kdump_emergency and core_collector in /etc/kdump.conf,
+# parsed as data exactly as app/kdump_hooks.assess() does (kdump-utils 7bf4714). Nothing is run.
+KDUMP_CONF = '/etc/kdump.conf'
+KDUMP_TEXT_LIMIT = 65536
+KDUMP_LINE_LIMIT = 2048
+KDUMP_ARGS = 32
+KDUMP_DEFAULT_COLLECTOR = 'makedumpfile -l --message-level 7 -d 31'
+_KDUMP_SPACE = ' \t\n\r\v\f'
+_KDUMP_TARGETS = frozenset({'raw','ext2','ext3','ext4','minix','btrfs','xfs','nfs','ssh','virtiofs'})
+_KDUMP_ACCEPTED = frozenset({'path','core_collector','kdump_post','kdump_pre','kdump_emergency','extra_bins','extra_modules',
+    'failure_action','final_action','force_rebuild','force_no_rebuild','fence_kdump_args','fence_kdump_nodes',
+    'auto_reset_crashkernel','sshkey','default','dracut_args'})|_KDUMP_TARGETS
+_KDUMP_DEPRECATED = frozenset({'net','options','link_delay','disk_timeout','debug_mem_level','blacklist'})
+
+
+def _kdump_lines(text):
+    for number,line in enumerate(text.split('\n'),1):
+        stripped=line.lstrip(_KDUMP_SPACE)
+        if not stripped.strip(_KDUMP_SPACE) or stripped.startswith('#'):continue
+        body=line.strip(' \t')
+        cut=min((i for i in (body.find(' '),body.find('\t')) if i>=0),default=len(body))
+        opt,val=body[:cut],body[cut:].lstrip(' \t')
+        if '#' in val:val=val.split('#',1)[0].rstrip(_KDUMP_SPACE)
+        if len(val)>=2 and val.startswith('"') and val.endswith('"'):val=val[1:-1]
+        yield number,opt,val.strip(' \t')
+
+
+def parse_kdump_conf(data):
+    """Parse /etc/kdump.conf as data, mirroring app/kdump_hooks.assess() for the configuration alone.
+    Nothing is executed. Only the kdump_pre/kdump_post/kdump_emergency programs and the core_collector
+    argv are stored (best-effort redaction); other option values are never stored. Refusals record the
+    line, option name and reason only. Text that is over 64 KiB, has 2048 or more lines, is not UTF-8 or
+    contains NUL bytes yields parsed false and nothing else."""
+    result={'parsed':False,'starts':None,'refusals':[],'hooks':[],'extra_bins':0,'truncated':False,'redacted':False}
+    if len(data)>KDUMP_TEXT_LIMIT or b'\x00' in data:return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:return result
+    # An unterminated final line is a line too, so every reported line number stays below the limit.
+    if text.count('\n')+(not text.endswith('\n') and text!='')>=KDUMP_LINE_LIMIT:return result
+    options={};targets=0
+    for number,opt,val in _kdump_lines(text):
+        if opt in _KDUMP_DEPRECATED:code='deprecated_option'
+        elif opt not in _KDUMP_ACCEPTED:code='unknown_option'
+        elif not val:code='empty_value'
+        else:
+            code=None;key='failure_action' if opt=='default' else opt
+            if opt=='dracut_args' and val.count('--mount')>1:code='multiple_mount_targets'
+            elif opt in _KDUMP_TARGETS or (opt=='dracut_args' and '--mount' in val):
+                targets+=1
+                if targets>1:code='multiple_targets'
+            if code is None and key in options and opt not in _KDUMP_TARGETS:code='duplicate_option'
+            if code is None:options[key]=(number,val)
+        if code:
+            if len(result['refusals'])>=CRON_FILE_JOBS:result['truncated']=True
+            else:
+                name=_tcpw_escape(opt)
+                result['truncated']=result['truncated'] or len(name)>64
+                result['refusals'].append({'line':number,'option':name[:64],'code':code})
+    result['parsed']=True
+    if result['refusals']:result['starts']=False;return result
+    result['starts']=True
+
+    def shown(value):
+        text,redacted=redact_cron_command(_tcpw_escape(value))
+        result['redacted']=result['redacted'] or redacted
+        return text,redacted
+
+    def hook(source,stage,args,on_failure,extra):
+        if source not in options:return
+        line,value=options[source];program,redacted=shown(value)
+        observations=(['value_has_whitespace'] if any(c in value for c in ' \t') else [])+([] if value.startswith('/') else ['relative_path'])+extra
+        result['hooks'].append({'line':line,'source':source,'stage':stage,'program':program[:CRON_COMMAND_LIMIT],'args':args,
+            'program_truncated':len(program)>CRON_COMMAND_LIMIT,'redacted':redacted,'on_failure':on_failure,'observations':observations})
+
+    hook('kdump_pre','pre',[],'skip_dump_and_run_final_action',['pre_failure_skips_dump'])
+    line,value=options.get('core_collector',(None,KDUMP_DEFAULT_COLLECTOR))
+    text,redacted=shown(value)
+    # The capture shell word-splits on the default IFS (space, tab, newline) only.
+    words=[w for w in re.split('[ \t\n]+',text) if w] or [text]
+    truncated=len(words)>KDUMP_ARGS+1 or any(len(w)>CRON_COMMAND_LIMIT for w in words)
+    result['hooks'].append({'line':line,'source':'core_collector','stage':'dump','program':words[0][:CRON_COMMAND_LIMIT],
+        'args':[w[:CRON_COMMAND_LIMIT] for w in words[1:KDUMP_ARGS+1]],'program_truncated':truncated,'redacted':redacted,
+        'on_failure':'dump_failed','observations':['args_rewritten_at_capture'] if 'makedumpfile' in value else []})
+    hook('kdump_post','post',['<dump status>'],'warn',[])
+    hook('kdump_emergency','emergency',[],'warn',['runs_on_capture_failure'])
+    if 'extra_bins' in options:result['extra_bins']=len(options['extra_bins'][1].split())
+    return result
+
+
+# autofs master map (#1375): the hashed /etc/auto.master bytes are reported as bounded latin-1 text and
+# nothing else. No map path the text names is stat-ed, opened or run: the agent cannot establish a
+# non-triggering lookup boundary (symlinks, nested automount points and the live mount topology), and a
+# lookup at or below an automount point can make automount mount a map or run a program map. Every map
+# path therefore stays unobserved and is a blocking gap in the controller view (app/autofs_program_maps).
 AUTOFS_MASTER='/etc/auto.master'
 AUTOFS_TEXT_LIMIT=65536
-AUTOFS_STAT_LIMIT=128
-_AUTOFS_TYPED=re.compile(r'(?:file|program|exec|sss|yp|nis|nisplus|ldap|ldaps|hesiod|userdir|dir)(?:,(?:sun|hesiod|amd))?:')
-_AUTOFS_NAME=re.compile(r'[A-Za-z0-9_][A-Za-z0-9_.+-]{0,254}')
 
 
-def autofs_mount_points(text):
-    """The first word of every line, read as a possible mount point (over-inclusive on purpose)."""
-    mounts=set()
-    for line in text.splitlines():
-        words=line.split()
-        if words and words[0].startswith('/'):mounts.add(words[0].rstrip('/'))
-    return mounts
-
-
-def autofs_candidates(text):
-    """Candidate absolute map paths named in master-map text, in first-seen order. Over-collection is
-    harmless, but a path at or below a possible mount point is never returned: a lookup there can make
-    automount mount a map or run a program map, so it stays unobserved."""
-    found=[];mounts=autofs_mount_points(text)
-    for line in text.splitlines():
-        for word in line.split():
-            if word.startswith('#'):break
-            word=word.lstrip('+')
-            typed=_AUTOFS_TYPED.match(word)
-            if typed:word=word[typed.end():]
-            if word.startswith('/') and not word.startswith('//'):path=word.rstrip('/') or None
-            elif _AUTOFS_NAME.fullmatch(word):path='/etc/'+word
-            else:path=None
-            if not path or len(path)>4096 or '\x00' in path or path in found:continue
-            if any(m=='' or path==m or path.startswith(m+'/') for m in mounts):continue
-            found.append(path)
-    return found
-
-
-def autofs_stat(path):
-    try:
-        seen=os.stat(path)
-    except FileNotFoundError:return {'kind':'missing','mode':0}
-    except (NotADirectoryError,PermissionError,OSError):return None
-    kind='regular' if stat.S_ISREG(seen.st_mode) else 'directory' if stat.S_ISDIR(seen.st_mode) else 'other'
-    return {'kind':kind,'mode':stat.S_IMODE(seen.st_mode)}
-
-
-def parse_autofs_master(data,mode,deadline=None):
-    """Report /etc/auto.master as bounded latin-1 text plus stat observations. Nothing is run or opened."""
-    result={'text':None,'error':None,'stats':{},'stats_truncated':False}
+def parse_autofs_master(data):
+    """Report /etc/auto.master as bounded latin-1 text. Only the already-read bytes are used; no path is looked up."""
+    result={'text':None,'error':None}
     if len(data)>AUTOFS_TEXT_LIMIT:result['error']='over_limit';return result
     if b'\x00' in data:result['error']='binary';return result
-    text=data.decode('latin-1')
-    result['text']=text
-    result['stats'][AUTOFS_MASTER]={'kind':'regular','mode':mode}
-    for path in autofs_candidates(text):
-        if path in result['stats']:continue
-        if len(result['stats'])>=AUTOFS_STAT_LIMIT or (deadline is not None and time.monotonic()>deadline):result['stats_truncated']=True;break
-        seen=autofs_stat(path)
-        if seen is not None:result['stats'][path]=seen
+    result['text']=data.decode('latin-1')
     return result
 
 
@@ -1652,7 +1694,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;autofs=cron_jobs and str(path)==AUTOFS_MASTER;content=bytearray() if form or at_name or anacron or tcpw or autofs else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;autofs=cron_jobs and str(path)==AUTOFS_MASTER;content=bytearray() if form or at_name or anacron or tcpw or kdump or autofs else None
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -1696,8 +1738,10 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['anacron']=parse_anacrontab(bytes(content))
             if tcpw and row['kind']=='regular':
                 row['tcp_wrappers']=parse_tcp_wrappers(bytes(content))
+            if kdump and row['kind']=='regular':
+                row['kdump']=parse_kdump_conf(bytes(content))
             if autofs and row['kind']=='regular':
-                row['autofs']=parse_autofs_master(bytes(content),row['mode'],deadline)
+                row['autofs']=parse_autofs_master(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
