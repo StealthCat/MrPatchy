@@ -483,9 +483,78 @@ def validate_lighttpd(report,path):
     return len(items)
 
 
+# PostgreSQL (#1597): the agent reduces every regular file under /etc/postgresql to the statement stream
+# app/postgresql_commands reads. Include directives and the settings the contract evaluates keep values;
+# other assignments are dropped and counted, syntax errors keep only their line.
+POSTGRESQL_DIR='/etc/postgresql'
+POSTGRESQL_KEYS={'parsed','statements','truncated','dropped'}
+POSTGRESQL_STATEMENT_KEYS={'error':{'line','op'},'include':{'line','op','directive','value'},
+                           'set':{'line','op','name','value','redacted'}}
+POSTGRESQL_COMMANDS=frozenset(('archive_command','restore_command','recovery_end_command','archive_cleanup_command',
+                               'ssl_passphrase_command'))
+POSTGRESQL_KEPT=frozenset(POSTGRESQL_COMMANDS|{'shared_preload_libraries','session_preload_libraries','local_preload_libraries',
+                                               'archive_mode','wal_level','ssl','ssl_passphrase_command_supports_reload',
+                                               'archive_library','data_directory','dynamic_library_path'})
+POSTGRESQL_INCLUDES=('include','include_if_exists','include_dir')
+POSTGRESQL_STATEMENTS=2000
+POSTGRESQL_LINES=1024*1024+1
+POSTGRESQL_VALUE=4096
+POSTGRESQL_LISTING=256
+POSTGRESQL_ENTRY_KINDS=('file','dir','other','unstatable')
+
+
+def _postgresql_value(value):
+    return isinstance(value,str) and len(value)<=POSTGRESQL_VALUE
+
+
+def validate_postgresql(report,path):
+    """Strictly validate one file's PostgreSQL statement stream."""
+    if not path.startswith(POSTGRESQL_DIR+'/'):raise ValueError('PostgreSQL statements outside /etc/postgresql')
+    if not isinstance(report,dict) or set(report)!=POSTGRESQL_KEYS:raise ValueError('Invalid PostgreSQL statements')
+    if type(report['parsed']) is not bool or type(report['truncated']) is not bool or type(report['dropped']) is not int or not 0<=report['dropped']<=POSTGRESQL_LINES:
+        raise ValueError('Invalid PostgreSQL statements')
+    items=report['statements']
+    if not isinstance(items,list) or len(items)>POSTGRESQL_STATEMENTS or (not report['parsed'] and (items or report['truncated'] or report['dropped'])):
+        raise ValueError('Invalid PostgreSQL statements')
+    last=0;errors=0
+    for item in items:
+        op=item.get('op') if isinstance(item,dict) else None
+        expected=POSTGRESQL_STATEMENT_KEYS.get(op)
+        if expected is None or set(item)!=(expected|{'listing'} if op=='include' and item.get('directive')=='include_dir' else expected):
+            raise ValueError('Invalid PostgreSQL statement')
+        # guc-file.l accepts at most one statement per line.
+        if type(item['line']) is not int or not last<item['line']<=POSTGRESQL_LINES:raise ValueError('Invalid PostgreSQL statement')
+        last=item['line']
+        if op=='error':
+            errors+=1
+            if errors>100:raise ValueError('Invalid PostgreSQL statement')
+        elif op=='include':
+            if item['directive'] not in POSTGRESQL_INCLUDES or not _postgresql_value(item['value']):raise ValueError('Invalid PostgreSQL include')
+            if 'listing' in item and item['listing'] is not None:
+                listing=item['listing']
+                if not isinstance(listing,dict) or set(listing)!={'state','entries'} or listing['state'] not in ('present','absent','unreadable'):
+                    raise ValueError('Invalid PostgreSQL directory listing')
+                entries=listing['entries']
+                if not isinstance(entries,list) or len(entries)>POSTGRESQL_LISTING or (listing['state']!='present' and entries):
+                    raise ValueError('Invalid PostgreSQL directory listing')
+                names=set()
+                for entry in entries:
+                    if not isinstance(entry,dict) or set(entry)!={'name','kind'} or entry['kind'] not in POSTGRESQL_ENTRY_KINDS:
+                        raise ValueError('Invalid PostgreSQL directory entry')
+                    name=entry['name']
+                    if not isinstance(name,str) or not 0<len(name)<=255 or '/' in name or '\x00' in name or name in ('.','..') or name in names:
+                        raise ValueError('Invalid PostgreSQL directory entry')
+                    names.add(name)
+        else:
+            if item['name'] not in POSTGRESQL_KEPT or not _postgresql_value(item['value']) or type(item['redacted']) is not bool:
+                raise ValueError('Invalid PostgreSQL setting')
+            if item['redacted'] and item['name'] not in POSTGRESQL_COMMANDS:raise ValueError('Invalid PostgreSQL setting')
+    return len(items)
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/lighttpd detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lighttpd')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/lighttpd/PostgreSQL detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lighttpd','postgresql')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -550,6 +619,9 @@ def validate(inventory):
         if 'lighttpd' in row:
             if row['kind']!='regular':raise ValueError('lighttpd tokens require a regular file')
             validate_lighttpd(row['lighttpd'],path)
+        if 'postgresql' in row:
+            if row['kind']!='regular':raise ValueError('PostgreSQL statements require a regular file')
+            validate_postgresql(row['postgresql'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
@@ -581,12 +653,16 @@ def validate(inventory):
 # only. A custom /etc/lvm saved earlier already observed them, so they keep comparing.
 # PostgreSQL configuration (#1597): the server runs archive, restore, recovery and passphrase commands
 # through /bin/sh and loads preload libraries as postgres; /etc/postgresql/<version>/<cluster> on Debian.
+# ISC dhcpd configuration (#1593): dhcpd runs execute() programs on lease commit, release and expiry
+# as its process user, and global-scope ones as root at every start; /etc/dhcp/dhcpd.conf and
+# dhcpd6.conf, and the Debian-family /etc/default/isc-dhcp-server command-line defaults, only.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
                         '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
                         '/etc/swanctl','/etc/strongswan','/etc/service','/etc/runit','/etc/sv','/etc/lighttpd',
                         '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
-                        '/etc/postgresql')
+                        '/etc/postgresql',
+                        '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 

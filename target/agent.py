@@ -1110,19 +1110,25 @@ PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
 PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab',
                      '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                      '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/freshclam.conf',
-                     '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf')
+                     '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
+                     '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server')
 # Built-in files inside a directory an administrator could previously select as a custom path
 # (#1599). Only these two LVM cascade files are built-in: the rest of /etc/lvm (archive/, backup/,
 # cache/) holds metadata backups that would consume the entry budget. A saved custom ancestor such
 # as /etc/lvm stays valid, and its traversal leaves these files to built-in scope so each is
 # inventoried once.
-NESTED_PERSISTENCE_FILES = ('/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf')
+# The ISC dhcpd configuration files and the Debian-family command-line defaults file (#1593) are
+# built-in the same way: /etc/dhcp also holds dhclient hooks and leases, and /etc/default holds
+# every package's defaults, so neither directory is built-in and a saved custom one stays valid.
+NESTED_PERSISTENCE_FILES = ('/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
+                            '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server')
 # Built-in files that administrators could previously select as custom paths. A stored
 # custom path equal to one of them is already covered by built-in scope, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
 PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf',
                               '/etc/gitconfig','/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf',
-                              '/etc/freshclam.conf','/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf')
+                              '/etc/freshclam.conf','/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
+                              '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server')
 # Built-in directories that administrators could previously select, or select files inside,
 # as custom paths. Such a stored path is covered by the built-in directory, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
@@ -2093,6 +2099,193 @@ def parse_dovecot(data):
     return result
 
 
+# PostgreSQL (#1597): every regular file under /etc/postgresql is reduced, from the exact hashed bytes, to
+# the statement stream app/postgresql_commands reads, with a port of its guc-file.l lexer (PostgreSQL 16).
+# Nothing is run. Only include directives and the settings the contract evaluates keep their values;
+# every other assignment is dropped and counted, and syntax errors keep only their line. Command values
+# get the best-effort credential redaction used for cron commands. An include_dir directory under
+# /etc/postgresql is listed (names and stat kinds only, read-only) so an empty conf.d is observed.
+POSTGRESQL_DIR = '/etc/postgresql'
+POSTGRESQL_STATEMENT_LIMIT = 2000
+POSTGRESQL_VALUE_LIMIT = 4096
+POSTGRESQL_LISTING_LIMIT = 256
+POSTGRESQL_SYNTAX_ERRORS = 100
+POSTGRESQL_COMMANDS = frozenset(('archive_command','restore_command','recovery_end_command','archive_cleanup_command',
+                                 'ssl_passphrase_command'))
+POSTGRESQL_KEPT = frozenset(POSTGRESQL_COMMANDS|{'shared_preload_libraries','session_preload_libraries','local_preload_libraries',
+                                                 'archive_mode','wal_level','ssl','ssl_passphrase_command_supports_reload',
+                                                 'archive_library','data_directory','dynamic_library_path'})
+POSTGRESQL_INCLUDES = ('include','include_if_exists','include_dir')
+_PG_DIGITS = frozenset(b'0123456789');_PG_HEX = frozenset(b'0123456789abcdefABCDEF')
+_PG_ALPHA = frozenset(b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz')
+_PG_LETTER = frozenset(_PG_ALPHA|{ord('_')}|set(range(0x80,0x100)));_PG_LETTER_DIGIT = frozenset(_PG_LETTER|_PG_DIGITS)
+_PG_USTRING = frozenset(_PG_LETTER_DIGIT|set(b'-._:/'))
+
+
+def postgresql_reads(path):
+    return path.startswith(POSTGRESQL_DIR+'/')
+
+
+def _pg_run(buf,i,allowed):
+    while i<len(buf) and buf[i] in allowed:i+=1
+    return i
+
+
+def _pg_tokens(buf):
+    """Yield (kind,raw,line) exactly like app/postgresql_commands._tokens, then (None,b'',line)."""
+    i=0;line=1;n=len(buf)
+    def ident(i):return _pg_run(buf,i+1,_PG_LETTER_DIGIT) if i<n and buf[i] in _PG_LETTER else i
+    def integer(i):
+        j=i+1 if i<n and buf[i] in b'+-' else i
+        if buf[j:j+2]==b'0x' and j+2<n and buf[j+2] in _PG_HEX:k=_pg_run(buf,j+2,_PG_HEX)
+        else:
+            k=_pg_run(buf,j,_PG_DIGITS)
+            if k==j:return i
+        return _pg_run(buf,k,_PG_ALPHA)
+    def real(i):
+        j=i+1 if i<n and buf[i] in b'+-' else i
+        k=_pg_run(buf,j,_PG_DIGITS)
+        if k>=n or buf[k]!=0x2E:return i
+        k=_pg_run(buf,k+1,_PG_DIGITS)
+        if k<n and buf[k] in b'Ee':
+            m=k+1+(1 if k+1<n and buf[k+1] in b'+-' else 0);e=_pg_run(buf,m,_PG_DIGITS)
+            if e>m:k=e
+        return k
+    def string(i):
+        if i>=n or buf[i]!=0x27:return i
+        j=i+1
+        while j<n:
+            c=buf[j]
+            if c==0x27:
+                if buf[j+1:j+2]==b"'":j+=2;continue
+                return j+1
+            if c==0x0A:return i
+            if c==0x5C:
+                if j+1>=n or buf[j+1]==0x0A:return i
+                j+=2;continue
+            j+=1
+        return i
+    while i<n:
+        c=buf[i]
+        if c==0x0A:yield 'eol',b'\n',line;line+=1;i+=1;continue
+        if c in b' \t\r':i+=1;continue
+        if c==0x23:
+            nl=buf.find(b'\n',i);i=n if nl<0 else nl;continue
+        end=ident(i);qual=end
+        if end>i and buf[end:end+1]==b'.':
+            second=ident(end+1);qual=second if second>end+1 else end
+        length,kind=0,'err'
+        for size,token in ((end-i,'id'),(qual-i if qual>end else 0,'qid'),(string(i)-i,'string'),
+                           (_pg_run(buf,i+1,_PG_USTRING)-i if c in _PG_LETTER else 0,'ustring'),
+                           (integer(i)-i,'int'),(real(i)-i,'real'),(1 if c==0x3D else 0,'eq')):
+            if size>length:length,kind=size,token
+        if length==0:length=1
+        yield kind,buf[i:i+length],line;i+=length
+    yield None,b'',line
+
+
+def _pg_deescape(raw):
+    body=raw[1:-1];out=bytearray();i=0
+    simple={ord('b'):8,ord('f'):12,ord('n'):10,ord('r'):13,ord('t'):9}
+    while i<len(body):
+        c=body[i]
+        if c==0x5C and i+1<len(body):
+            nxt=body[i+1]
+            if nxt in simple:out.append(simple[nxt]);i+=2
+            elif 0x30<=nxt<=0x37:
+                j=i+1;value=0
+                while j<len(body) and j<i+4 and 0x30<=body[j]<=0x37:value=value*8+body[j]-0x30;j+=1
+                out.append(value&0xFF);i=j
+            else:out.append(nxt);i+=2
+        elif c==0x27 and body[i+1:i+2]==b"'":out.append(0x27);i+=2
+        else:out.append(c);i+=1
+    return bytes(out)
+
+
+def _pg_listing(path):
+    """Names and lstat kinds of one include_dir directory, opened under POSTGRESQL_DIR without following links.
+
+    Every component is opened with O_NOFOLLOW relative to its parent descriptor, so the directory listed
+    and every entry inspected are inside the permitted root. A path that is not lexically normal, leaves
+    the root, passes through a symlink or contains a symlinked entry is not observed (None); PostgreSQL
+    would follow those links, so the controller reports the directory as unobserved instead of guessing."""
+    if not path.startswith(POSTGRESQL_DIR+'/') or os.path.normpath(path)!=path:return None
+    parts=path.split('/')[1:]
+    if any(part in ('','.','..') for part in parts):return None
+    try:fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+    except OSError:return None
+    try:
+        for part in parts:
+            try:child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            except FileNotFoundError:return {'state':'absent','entries':[]}
+            except PermissionError:return {'state':'unreadable','entries':[]}
+            except OSError:return None
+            os.close(fd);fd=child
+        found=[]
+        try:
+            with os.scandir(fd) as listing:
+                for entry in listing:
+                    if len(found)>=POSTGRESQL_LISTING_LIMIT or len(entry.name)>255:return None
+                    try:mode=os.stat(entry.name,dir_fd=fd,follow_symlinks=False).st_mode
+                    except OSError:mode=None
+                    if mode is not None and stat.S_ISLNK(mode):return None
+                    kind='unstatable' if mode is None else 'file' if stat.S_ISREG(mode) else 'dir' if stat.S_ISDIR(mode) else 'other'
+                    found.append({'name':entry.name,'kind':kind})
+        except PermissionError:return {'state':'unreadable','entries':[]}
+        except OSError:return None
+        return {'state':'present','entries':sorted(found,key=lambda e:e['name'])}
+    finally:os.close(fd)
+
+
+def parse_postgresql(data,path):
+    """Reduce one file to app/postgresql_commands statements (PostgreSQL 16 guc-file.l). Nothing is executed."""
+    result={'parsed':False,'statements':[],'truncated':False,'dropped':0}
+    if b'\x00' in data:return result
+    try:data.decode('utf-8')
+    except UnicodeDecodeError:return result
+    statements=result['statements'];stream=_pg_tokens(data);errors=0
+    def add(item):
+        if len(statements)>=POSTGRESQL_STATEMENT_LIMIT:result['truncated']=True;return False
+        statements.append(item);return True
+    while True:
+        token,raw,line=next(stream)
+        if token is None:break
+        if token=='eol':continue
+        failed=token not in ('id','qid')
+        if not failed:
+            name=raw.decode('utf-8','backslashreplace');token,raw,_=next(stream)
+            if token=='eq':token,raw,_=next(stream)
+            if token not in ('id','string','int','real','ustring'):failed=True
+        if not failed:
+            value=(_pg_deescape(raw) if token=='string' else raw).decode('utf-8','backslashreplace')
+            token,raw,_=next(stream)
+            if token not in ('eol',None):failed=True
+        if failed:
+            if not add({'line':line,'op':'error'}):break
+            errors+=1
+            if errors>=POSTGRESQL_SYNTAX_ERRORS:break
+            while token not in ('eol',None):token,raw,_=next(stream)
+            if token is None:break
+            continue
+        low=name.lower()
+        if low in POSTGRESQL_INCLUDES:
+            if len(value)>POSTGRESQL_VALUE_LIMIT:result['truncated']=True;break
+            item={'line':line,'op':'include','directive':low,'value':value}
+            if low=='include_dir':
+                target=value if value.startswith('/') else os.path.normpath(os.path.join(os.path.dirname(path),value))
+                item['listing']=_pg_listing(target) if value.strip(' \t\r\n') else None
+            if not add(item):break
+        elif low in POSTGRESQL_KEPT:
+            redacted=False
+            if low in POSTGRESQL_COMMANDS:value,redacted=redact_cron_command(value)
+            if len(value)>POSTGRESQL_VALUE_LIMIT:result['truncated']=True;break
+            if not add({'line':line,'op':'set','name':low,'value':value,'redacted':redacted}):break
+        else:result['dropped']+=1
+        if token is None:break
+    result['parsed']=True
+    return result
+
+
 # strongSwan swanctl (#1624): every regular *.conf file under the Debian-family /etc/swanctl and the
 # RPM-family /etc/strongswan/swanctl is reduced, from the exact hashed bytes, to the statement stream
 # app/strongswan_updown reads (strongSwan 5.9.13 settings lexing). Nothing is run. Section names, include
@@ -2385,6 +2578,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if swanctl and content is None:content=bytearray()
         lighttpd=cron_jobs and lighttpd_reads(str(path))
         if lighttpd and content is None:content=bytearray()
+        postgresql=cron_jobs and postgresql_reads(str(path))
+        if postgresql and content is None:content=bytearray()
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -2442,6 +2637,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['strongswan']=parse_swanctl(bytes(content))
             if lighttpd and row['kind']=='regular':
                 row['lighttpd']=parse_lighttpd(bytes(content))
+            if postgresql and row['kind']=='regular':
+                row['postgresql']=parse_postgresql(bytes(content),str(path))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
