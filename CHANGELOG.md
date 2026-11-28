@@ -1,3 +1,9 @@
+## 1.133.0 — 2026-11-25
+
+1. [PR #1690](https://github.com/StealthCat/MrPatchy/pull/1690): Startup Files evaluates runit service directories. For each service in `/etc/service` it shows which `run`, `finish`, `log/run` and `control` programs runsv runs. The view is built from reported metadata only, with symlinks resolved through recorded entries. It discloses the runsvdir, mount-flag and empty-directory gaps, and shows when results are limited for display. Compatibility: no agent, schema, auth or response-authorization change. Increment 3 of #1628.
+
+Integrated through [PR #1701](https://github.com/StealthCat/MrPatchy/pull/1701). This source update does not publish a Docker image.
+
 ## 1.132.1 — 2026-11-25
 
 1. [PR #1692](https://github.com/StealthCat/MrPatchy/pull/1692): The optional native AI benchmark workflow also compares serial and parallel triage under a combined rate throttle and daily spend cap, on both SQLite and MySQL. Compatibility: optional CI workflow only. It keeps `contents: read`, with no schedule and no secrets. Fixes #1691.

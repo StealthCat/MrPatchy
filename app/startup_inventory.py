@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence, postgresql_commands, strongswan_updown
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence, postgresql_commands, runit_services, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -53,7 +53,7 @@ GAPS=[
     'ClamAV: the Debian-family /etc/clamav directory (clamd.conf, freshclam.conf and the onupdateexecute.d and onerrorexecute.d directories), the RPM-family /etc/clamd.d directory and /etc/freshclam.conf are hashed as startup files, and agents that report them parse /etc/clamav/clamd.conf and /etc/clamav/freshclam.conf from the hashed bytes with the ClamAV 1.5.4 option-parser rules. This view shows the VirusEvent command clamd runs through /bin/sh on every detection, waiting under a lock shared by every scan, and the OnUpdateExecute, OnErrorExecute and OnOutdatedExecute commands freshclam runs through system(), with their line and account. A file the parser rejects (unknown option, Example line, bad value or quoting) loads nothing, and its reason and line are shown. Commands use the same best-effort redaction and are bounded to 512 characters; the User, DatabaseOwner and daemon values are kept and every other value, including proxy passwords, is dropped. Accounts assume clamd and freshclam start as root, as the packaged units do. Whether freshclam runs in daemon mode is not observed, so which text OnOutdatedExecute runs and whether an EXIT_<n> command exits instead of running are shown as conditional. The RPM-family files are hashed but not yet parsed. Options given on the command line, alternate files passed with --config-file, the onupdateexecute.d and onerrorexecute.d scripts, whether either daemon runs, and the commands themselves are not evaluated.',
     'Dovecot: the /etc/dovecot directory (dovecot.conf, conf.d and any other files it holds, including passdb/userdb and key files, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate the non-default service executables the root master process execs from dovecot.conf, as root unless drop_priv_before_exec is set. Only section headers, include patterns and the service and global settings the evaluation reads are stored; every other value is dropped. Included files outside /etc/dovecot (such as /usr/share/dovecot/protocols.d) and symlinked files are not observed, so an evaluation that reaches them stops with a blocking gap. /etc/passwd and /etc/group are not captured, so accounts are shown by name only. Configuration passed with -c, whether dovecot runs, the programs themselves, checkpassword passdb/userdb programs, quota_warning and sieve extprograms are not evaluated.',
     'strongSwan: the Debian-family /etc/swanctl directory (swanctl.conf, conf.d and the x509, private and other credential directories, as metadata and SHA-256 only) and the RPM-family /etc/strongswan directory (swanctl/, strongswan.conf and strongswan.d) are hashed as startup files, and agents that report them parse every *.conf file under /etc/swanctl and /etc/strongswan/swanctl from the hashed bytes with the strongSwan 5.9.13 settings rules. This view evaluates swanctl.conf and its includes and shows the updown command charon runs through /bin/sh for each connection child on CHILD_SA up and down, with its source line, shell syntax and whether swanctl discards the connection. Only section names, include patterns, setting names and updown commands are stored; every other value, including secrets, is dropped, and commands use the same best-effort redaction. Included files that are not *.conf files under those directories, symlinked files and files over 1 MiB, not UTF-8 or with NUL bytes are not observed, so an evaluation that reaches them reports a blocking gap. charon is assumed to run as root, as the packaged service does. The Debian-family /etc/strongswan.conf and /etc/strongswan.d (which can disable the updown plugin), whether the other settings of each connection load, legacy ipsec.conf leftupdown and leftfirewall, configuration passed with swanctl --file, connections loaded over vici by other clients, whether charon runs and the commands themselves are not evaluated.',
-    'runit: /etc/service (on Debian and Ubuntu a symlink to runit/runsvdir/current, recorded, not followed), the /etc/runit directory (the 1, 2 and 3 stage scripts, ctrlaltdel and the runsvdir run-level directories of service links) and the /etc/sv service definitions (run, finish, log/run, down and control files) are hashed as startup files, as metadata and SHA-256 only, by agents that report them. Which programs runsvdir makes runsv run, on which event and as which account is not yet evaluated in this view. Service directories outside these paths (such as /usr/share/runit/sv or a runsvdir started with another directory), the supervise state under /run/runit, the contents of run scripts (including any chpst privilege drop), whether runsvdir runs and the programs themselves are not evaluated.',
+    'runit: /etc/service (on Debian and Ubuntu a symlink to runit/runsvdir/current, recorded, not followed), the /etc/runit directory (the 1, 2 and 3 stage scripts, ctrlaltdel and the runsvdir run-level directories of service links) and the /etc/sv service definitions (run, finish, log/run, down and control files) are hashed as startup files, as metadata and SHA-256 only, by agents that report them. Startup Files evaluates which run, finish, log/run and control programs runsv runs for each service in /etc/service, from this recorded metadata only: symlinks are resolved through recorded entries inside these paths, never on the host, and a link leading elsewhere stays unobserved. Directories are known only from files recorded beneath them, so an empty down, log or control directory looks absent. Service directories outside these paths (such as /usr/share/runit/sv or a runsvdir started with another directory), the supervise state under /run/runit, the contents of run scripts (including any chpst privilege drop), whether runsvdir runs (and so whether programs start automatically and as which account), noexec mounts and the programs themselves are not evaluated.',
     'lighttpd: the /etc/lighttpd directory (lighttpd.conf, conf-available, conf-enabled and any other files it holds, including certificates and keys, as metadata and SHA-256 only) is hashed as startup files by agents that report it, but the include_shell commands lighttpd runs as root through $SHELL -c while it parses the configuration, the piped loggers (server.errorlog, server.breakagelog and accesslog.filename starting with |) and the FastCGI/SCGI bin-path backends it starts as server.username are not yet parsed in this view. include_shell output, included files outside /etc/lighttpd (such as /usr/share/lighttpd helper scripts), configuration passed with -f, cgi.assign interpreters, mod_magnet scripts, whether lighttpd runs and the commands themselves are not evaluated.',
     'LVM2: /etc/lvm/lvm.conf and /etc/lvm/lvmlocal.conf are hashed as startup files, as metadata and SHA-256 only, by agents that report them, but which thin/cache check, dump and repair executables, vdoformat and fsadm programs lvm commands run as root, the lvmlockctl kill command, and the dmeventd executable, plugin libraries and thin/vdo commands the configuration names are not yet evaluated in this view. Host-tag files (/etc/lvm/lvm_<tag>.conf), profiles, the archive, backup, cache and devices directories, configuration passed with --config or LVM_SYSTEM_DIR, copies in the initramfs, whether dmeventd runs and the programs themselves are not observed or evaluated. A custom /etc/lvm path saved earlier keeps its own scope and leaves the two files to built-in scope.',
     'PostgreSQL: the Debian-family /etc/postgresql directory (postgresql.conf, conf.d, pg_hba.conf, pg_ident.conf, start.conf, pg_ctl.conf and environment for each version and cluster, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate, for each /etc/postgresql/<version>/<cluster>/postgresql.conf, which archive, restore, recovery and ssl_passphrase commands the server runs through /bin/sh -c and which archive and preload libraries it loads as the postgres account, with the PostgreSQL 16 rules. Only include directives and the settings the evaluation reads keep their values; every other value is dropped, and lines PostgreSQL rejects keep only their line number. Commands use the same best-effort credential redaction as cron commands. postgresql.auto.conf (written by ALTER SYSTEM, read last) lives in the data directory and is not collected, so every evaluation has a blocking gap for it; nor is the RPM-family data directory (/var/lib/pgsql/data or /var/lib/pgsql/<version>/data) that holds postgresql.conf there. Included files outside /etc/postgresql and symlinked files are not observed. /etc/postgresql-common, settings passed on the command line, recovery and standby signal files, whether the server runs and the commands themselves are not evaluated.',
@@ -480,6 +480,129 @@ def strongswan_text_search(entry):
     return ' '.join(i.get('pattern') or i.get('name') or i.get('value') or '' for i in entry.get('strongswan',{}).get('statements',()))
 
 
+# runit service directories (#1628): the scan directory Debian's runit.service starts runsvdir with, and the roots whose
+# metadata the view may read. Symlinks are resolved only through recorded inventory entries, never on the host.
+RUNIT_SCAN_DIR='/etc/service'
+RUNIT_ROOTS=('/etc/service','/etc/runit','/etc/sv')
+RUNIT_MAX_HOPS=32
+# Display limits: the view lists at most this many services, programs per service and gaps, and reports what it omits.
+RUNIT_MAX_SERVICES=200
+RUNIT_MAX_PROGRAMS=64
+RUNIT_MAX_GAPS=100
+
+
+def runit_view(inventory):
+    """Evaluate app/runit_services over the metadata already reported for /etc/service, /etc/runit and /etc/sv.
+
+    Nothing is read from the host. A symlink is followed only through recorded entries inside RUNIT_ROOTS; a
+    target outside them, an unrecorded or looping target, and absence in an incomplete collection stay
+    unobserved, so they produce blocking contract gaps. Agents record files and symlinks, not directories: a
+    directory is known only from a recorded path beneath it, and an empty directory cannot be told from a missing
+    path. The runsvdir process, its account and mount flags are not observed. Never a safety verdict."""
+    entries={e['path']:e for e in inventory['entries'] if within(e['path'],RUNIT_ROOTS)}
+    # Roots this agent walked; a root it reported missing is observed absent. A root outside the reported scope
+    # (an older agent) is not observed at all.
+    walked=[root for root in RUNIT_ROOTS if root in inventory['scope'] and root not in inventory['missing_roots']]
+    gone=[root for root in RUNIT_ROOTS if root in inventory['scope'] and root in inventory['missing_roots']]
+    collected=inventory['state']=='collected'
+    ancestors={'/','/etc'}
+    children={}
+    for path in entries:
+        parent,name=posixpath.split(path)
+        while within(parent,RUNIT_ROOTS):
+            children.setdefault(parent,set()).add(name)
+            parent,name=posixpath.split(parent)
+    def resolve(path):
+        """The path with recorded symlinks substituted, or None when it leaves the roots, loops or ends in an empty target."""
+        parts=[p for p in path.split('/') if p];current='/';hops=0
+        while parts:
+            part=parts.pop(0)
+            if part=='.':continue
+            current=posixpath.dirname(current) if part=='..' else posixpath.join(current,part)
+            if current not in ancestors and not within(current,RUNIT_ROOTS):return None
+            entry=entries.get(current)
+            if entry is None or entry['kind']!='symlink':continue
+            hops+=1
+            if hops>RUNIT_MAX_HOPS or not entry.get('target'):return None
+            parts=[p for p in entry['target'].split('/') if p]+parts
+            current='/' if entry['target'].startswith('/') else posixpath.dirname(current)
+        return current
+    def kind(path):
+        """'file' with its mode, 'directory', 'absent', or None when a stat that follows links is not observed."""
+        real=resolve(path)
+        if real is None or real in ancestors:return None
+        if within(real,gone):return ('absent',None)
+        entry=entries.get(real)
+        if entry is not None:return ('file',entry['mode']) if entry['kind']=='regular' else None
+        if real in children:return ('directory',None)
+        # A complete collection records every file and symlink under a walked root, so an unrecorded path is absent
+        # (or an empty directory, which the gap below discloses).
+        return ('absent',None) if collected and within(real,walked) else None
+    def meta(path):
+        found=kind(path)
+        # Directory modes are not recorded; the contract does not read them for run, finish, down or log.
+        return None if found is None else {'type':found[0],'mode':found[1] if found[0]=='file' else 0}
+    def listing(path):
+        found=kind(path)
+        if found is None:return None
+        state={'absent':'absent','file':'not_directory','directory':'listed'}[found[0]]
+        return {'state':state,'entries':sorted(children.get(resolve(path),())) if state=='listed' else []}
+    def control_entry(path,name):
+        found=kind(path)
+        if found is None:return {'name':name}
+        # stat and the owner execute bit decide; a directory's mode is not recorded, so it stays unresolved.
+        return {'name':name,'type':found[0],'mode':found[1]}
+    gaps=[{'code':'supervisor_not_observed','blocking':True,'detail':'Whether runsvdir runs, which directory it scans and as which account are not observed. /etc/service is the directory the packaged runit.service scans.'},
+          {'code':'mount_flags_unobserved','blocking':False,'detail':'Whether a noexec mount stops a program is not observed.'},
+          {'code':'empty_directories_not_recorded','blocking':True,'detail':'Agents record files and symlinks, not directories, so an empty down, log or control directory looks absent.'}]
+    if not collected:
+        gaps.append({'code':'collection_incomplete','blocking':True,'detail':'The stored collection is incomplete, so a path that was not recorded may still exist.'})
+    scan=listing(RUNIT_SCAN_DIR);scan_real=resolve(RUNIT_SCAN_DIR)
+    scan_dir=None
+    if scan is not None:
+        scan_dir={'path':RUNIT_SCAN_DIR,'state':scan['state'],'truncated':False,'entries':[]}
+        for name in scan['entries']:
+            base=RUNIT_SCAN_DIR+'/'+name
+            found=kind(base);item={'name':name}
+            own=entries.get(scan_real+'/'+name)
+            if own is not None and own['kind']=='symlink':
+                item['type']='symlink'
+                if found is not None:item['target']=None if found[0]=='absent' else {'type':found[0]}
+            elif found is not None:item['type']=found[0]
+            if found is not None and found[0]=='directory':
+                log=listing(base+'/log');control=listing(base+'/control')
+                item['service']={'state':'listed','files':{k:meta(base+'/'+k) for k in ('run','finish','down','log')},
+                                 'log':{'state':'listed','files':{k:meta(base+'/log/'+k) for k in ('run','down')}} if log is not None and log['state']=='listed' else None,
+                                 'control':None if control is None else {'state':control['state'],'entries':[control_entry(base+'/control/'+c,c) for c in control['entries']]}}
+            scan_dir['entries'].append(item)
+    else:
+        gaps.append({'code':'scan_directory_not_observed','blocking':True,'path':RUNIT_SCAN_DIR,'detail':'/etc/service, or the directory its symlinks lead to, is not observed in this inventory.'})
+    result=runit_services.assess(scan_dir)
+    gaps+=[{**{k:str(g[k])[:300] for k in ('code','path','detail') if k in g},'blocking':g['code'] in runit_services.BLOCKING}
+           for g in result['gaps'] if g['code'] not in ('supervisor_not_observed','mount_flags_unobserved','directory_not_observed')]
+    def program(p):
+        return {k:(list(p[k]) if k=='argv' else p[k]) for k in ('role','path','letter','argv','cwd','event','outcome','reason','automatic') if k in p}
+    services=[{**{k:s[k] for k in ('name','path','outcome','reason','wanted_down','has_log','log_wanted_down') if k in s},
+               'programs':[program(p) for p in s['programs'][:RUNIT_MAX_PROGRAMS]],
+               'programs_omitted':max(0,len(s['programs'])-RUNIT_MAX_PROGRAMS)} for s in result['services'][:RUNIT_MAX_SERVICES]]
+    # Every count covers the whole evaluation, so a total never exceeds what the listed rows can explain silently.
+    services_omitted=max(0,len(result['services'])-RUNIT_MAX_SERVICES)
+    programs_omitted=sum(len(s['programs']) for s in result['services'])-sum(len(s['programs']) for s in services)
+    runs_listed=sum(p['outcome']=='runs' for s in services for p in s['programs'])
+    runs=sum(p['outcome']=='runs' for s in result['services'] for p in s['programs'])
+    if services_omitted or programs_omitted:
+        gaps.append({'code':'display_truncated','blocking':False,
+                     'detail':f'This view lists at most {RUNIT_MAX_SERVICES} services and {RUNIT_MAX_PROGRAMS} programs per service; '
+                              f'{services_omitted} services and {programs_omitted} programs ({runs-runs_listed} runnable) were evaluated but are not listed.'})
+    gaps_omitted=max(0,len(gaps)-RUNIT_MAX_GAPS)
+    return {'directory':RUNIT_SCAN_DIR,'resolved_directory':scan_real,'services':services,
+            'service_count':len(result['services']),'services_omitted':services_omitted,'programs_omitted':programs_omitted,
+            'runs':runs,'runs_listed':runs_listed,
+            'limits':{'services':RUNIT_MAX_SERVICES,'programs_per_service':RUNIT_MAX_PROGRAMS,'gaps':RUNIT_MAX_GAPS},
+            'complete':False,'gaps':gaps[:RUNIT_MAX_GAPS],'gaps_omitted':gaps_omitted,'origin':'not_assessed','authorizes_response':False,
+            'contract_version':result['contract_version']}
+
+
 def with_at_jobs(rows,inventory,q,changes):
     """Attach parsed at jobs to matching rows and add entries found only by an at account or command."""
     by_path={r['path']:r for r in rows}
@@ -610,6 +733,9 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+postgresql_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
+    # One runit evaluation (#1628), on the first matching runit row: /etc/service itself when it was recorded.
+    holder=next((r for r in rows if r['path']==RUNIT_SCAN_DIR),None) or next((r for r in rows if r['mechanism'] in ('runit','runit_stages','runit_sv')),None)
+    if holder is not None:holder['runit']=runit_view(inventory)
     catalog=catalog_rows(inventory)
     parsed=[e for e in inventory['entries'] if 'cron' in e]
     cron={'files':len(parsed),'jobs':sum(len(e['cron']['jobs']) for e in parsed),'unparsed':sum(e['cron']['unparsed'] for e in parsed),

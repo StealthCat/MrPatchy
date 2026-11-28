@@ -239,7 +239,7 @@ def test_catalogs_label_paths_and_state_the_gap():
     assert [loc['path'] for loc in mechanism['locations']] == list(RUNIT_PATHS)
     for family in ('debian', 'rpm'):
         assert set(RUNIT_PATHS) <= set(startup_catalog._all_locations(family))
-    assert any(SERVICE in gap and 'not yet evaluated' in gap and '/usr/share/runit/sv' in gap and 'chpst' in gap
+    assert any(SERVICE in gap and 'never on the host' in gap and 'empty down' in gap and '/usr/share/runit/sv' in gap and 'chpst' in gap
                for gap in startup_inventory.GAPS)
 
 
