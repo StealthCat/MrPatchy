@@ -277,3 +277,50 @@ def test_string_punctuation_lookalikes_are_not_syntax():
         assert result['rejected_by_parser'], text
         if reason:
             assert reason in [e['reason'] for e in result['config_errors']], text
+
+
+def test_case_label_skip_tracks_parentheses_around_hex_constants():
+    # #1719: a colon-separated hex constant (parse_cshl) inside a parenthesized or argument
+    # case expression does not end the label; only a depth-0 ':' does.
+    template = ('on commit { switch (hardware) { case %s: execute("/bin/a"); '
+                'default: execute("/bin/b"); } }\n')
+    for label in ('concat("a", 1:2)', '(1:2:3)', 'substring(option host-name, 0, 1)'):
+        result = run(template % label)
+        assert [p['program'] for p in result['programs']] == ['/bin/a', '/bin/b'], label
+        assert not result['rejected_by_parser'], label
+        assert result['config_errors'] == [], label
+        assert result['complete'] is True, label
+        assert result['gaps'] == [], label
+
+
+def test_case_label_ending_in_bare_hex_constant_is_a_blocking_gap():
+    # #1719: parse_cshl consumes a ':' after a bare number or hex name in a data switch, and a
+    # numeric switch ends the label there instead. Which applies depends on the switch
+    # expression's type, which is not modelled, so the result discloses a blocking gap.
+    template = ('on commit { switch (hardware) { case %s: execute("/bin/a"); '
+                'default: execute("/bin/b"); } }\n')
+    for label in ('1:2:3', '1', 'beef', '01:00:5e'):
+        result = run(template % label)
+        assert result['complete'] is False, label
+        gaps = [g for g in result['gaps'] if g['code'] == 'case_label_hex_colon']
+        assert len(gaps) == 1 and gaps[0]['blocking'] and gaps[0]['line'] == 1, label
+        # Nothing is under-reported: the statements after the first depth-0 ':' are parsed.
+        assert '/bin/b' in [p['program'] for p in result['programs']], label
+    # A parenthesized or string label is bounded with confidence: no gap.
+    for label in ('(1:2:3)', '"a:b"', 'concat(1:2, "x")'):
+        result = run(template % label)
+        assert not [g for g in result['gaps'] if g['code'] == 'case_label_hex_colon'], label
+
+
+def test_case_label_without_colon_is_rejected_not_skipped_across_statements():
+    # parse_case_statement requires ':' after the expression ("colon expected."); the label skip
+    # must not run past ';' or '}' to a later statement's ':'.
+    result = run('on commit { switch (option host-name) { case "a" execute("/bin/a"); '
+                 'default: execute("/bin/b"); } }\n')
+    assert result['rejected_by_parser']
+    assert 'colon_expected' in [e['reason'] for e in result['config_errors']]
+    result = run('on commit { switch (option host-name) { case "a" } }\n'
+                 'on commit { execute("/bin/after"); }\n')
+    assert result['rejected_by_parser']
+    assert 'colon_expected' in [e['reason'] for e in result['config_errors']]
+    assert '/bin/after' in [p['program'] for p in result['programs']]

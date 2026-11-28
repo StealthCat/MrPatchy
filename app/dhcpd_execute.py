@@ -64,10 +64,11 @@ BLOCKING = frozenset({
     'file_state_not_modelled', 'file_text_missing', 'include', 'unterminated_string',
     'token_over_buffer', 'unusual_escape', 'unbalanced_brace', 'unterminated_block',
     'nesting_too_deep', 'nested_on_statement', 'execute_in_data_block', 'gaps_truncated',
+    'case_label_hex_colon',
 })
 NOT_MODELLED = (
     'include files', 'dhcpd6.conf event timing', 'class and host matching for a client',
-    'argument expression evaluation', 'failover peer state',
+    'argument expression evaluation', 'failover peer state', 'switch data or numeric context',
 )
 
 
@@ -324,6 +325,40 @@ def assess_config(files: list[dict[str, Any]] | None, *, config_path: str = DEFA
             k += 1
         return k, False
 
+    def parse_case_label(k: int) -> int:
+        """Skip a ``case``/``default`` label (``parse_case_statement``); returns the next index.
+
+        Only a punctuation ``:`` at parenthesis depth 0 ends the label: a string ``":"`` (#1716)
+        and a hex list inside parentheses or arguments (#1719) are part of the expression.
+        """
+        line = toks[k].line
+        k += 1
+        depth = 0
+        while k < len(toks):
+            t = toks[k]
+            if t.kind == 'punct':
+                if t.value == '(':
+                    depth += 1
+                elif t.value == ')':
+                    depth = max(0, depth - 1)
+                elif depth == 0 and t.value == ':':
+                    break
+                elif depth == 0 and t.value in ';{}':
+                    break
+            k += 1
+        t = at(k)
+        if t is None or t.value != ':':
+            # "colon expected.": parse_case_statement fails, so dhcpd rejects the file.
+            reject(line, 'colon_expected', 'case label')
+            return k
+        prev = toks[k - 1]
+        if prev.kind == 'number' or (
+                prev.kind == 'name' and all(c in '0123456789abcdefABCDEF' for c in prev.value)):
+            # parse_cshl consumes a ':' after a bare number or hex name in a data switch, while a
+            # numeric switch ends the label here. The switch type is not modelled.
+            gap('case_label_hex_colon', line, _source(toks[k - 1:k + 1]))
+        return k + 1
+
     def parse_execute(k: int, scope: tuple[str, ...], events: tuple[str, ...] | None,
                       conditions: tuple[str, ...]) -> int:
         line = toks[k].line
@@ -483,11 +518,7 @@ def assess_config(files: list[dict[str, Any]] | None, *, config_path: str = DEFA
                                 False)
                 continue
             if word in ('case', 'default') and block_kind == 'switch':
-                k += 1
-                # Only a punctuation ':' ends the label; a string ":" is the case expression (#1716).
-                while k < len(toks) and not (toks[k].kind == 'punct' and toks[k].value == ':'):
-                    k += 1
-                k += 1
+                k = parse_case_label(k)
                 continue
             # Declarations and parameters: skip to ';' or descend into a block.
             line = tok.line
