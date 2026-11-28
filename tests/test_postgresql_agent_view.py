@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import random
 import time
 
@@ -338,3 +339,112 @@ def test_startup_rows_carry_the_view_only_for_main_configuration_files():
     assert hba['parsed'] and [i['op'] for i in hba['statements']] == ['error'] and 'peer' not in repr(hba)
     assert startup_inventory.POSTGRESQL_MAIN.fullmatch(CONF)
     assert not startup_inventory.POSTGRESQL_MAIN.fullmatch('/etc/postgresql/16/main/conf.d/postgresql.conf')
+
+
+# Containment of include_dir listings (review of 627959d): the directory listed and every entry
+# inspected must be inside POSTGRESQL_DIR, reached without following any symbolic link.
+@pytest.fixture
+def pg_root(tmp_path, monkeypatch):
+    root = tmp_path.resolve() / 'postgresql'
+    (root / '16' / 'main' / 'conf.d').mkdir(parents=True)
+    monkeypatch.setattr(agent, 'POSTGRESQL_DIR', str(root))
+    return root
+
+
+def test_listing_keeps_the_empty_in_scope_directory_and_lstat_kinds(pg_root):
+    confd = pg_root / '16' / 'main' / 'conf.d'
+    assert agent._pg_listing(str(confd)) == {'state': 'present', 'entries': []}
+    (confd / 'b.conf').write_text('x = 1\n')
+    (confd / 'a.conf').mkdir()
+    os.mkfifo(confd / 'c.conf')
+    assert agent._pg_listing(str(confd)) == {'state': 'present', 'entries': [
+        {'name': 'a.conf', 'kind': 'dir'}, {'name': 'b.conf', 'kind': 'file'}, {'name': 'c.conf', 'kind': 'other'}]}
+    assert agent._pg_listing(str(confd / 'missing')) == {'state': 'absent', 'entries': []}
+
+
+def test_listing_through_a_symlinked_directory_is_unobserved_and_never_read(pg_root, tmp_path):
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'secret-name.conf').write_text('x = 1\n')
+    (pg_root / '16' / 'main' / 'linked').symlink_to(outside)
+    (pg_root / '17').symlink_to(pg_root / '16')
+    assert agent._pg_listing(str(pg_root / '16' / 'main' / 'linked')) is None
+    assert agent._pg_listing(str(pg_root / '17' / 'main' / 'conf.d')) is None
+
+
+def test_listing_with_a_symlinked_entry_is_unobserved_without_following_it(pg_root, tmp_path, monkeypatch):
+    confd = pg_root / '16' / 'main' / 'conf.d'
+    (confd / 'a.conf').write_text('x = 1\n')
+    (confd / 'z.conf').symlink_to(tmp_path / 'elsewhere')
+    followed = []
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if kwargs.get('follow_symlinks', True):
+            followed.append(path)
+        return real_stat(path, *args, **kwargs)
+    monkeypatch.setattr(agent.os, 'stat', stat)
+    assert agent._pg_listing(str(confd)) is None
+    assert followed == []
+
+
+@pytest.mark.parametrize('suffix', ['16/main/../../../outside', '16/./main/conf.d', '16//main/conf.d', '16/main/conf.d/'])
+def test_listing_rejects_paths_that_are_not_lexically_inside_the_root(pg_root, suffix, monkeypatch):
+    opened = []
+    monkeypatch.setattr(agent.os, 'open', lambda *a, **k: opened.append(a) or (_ for _ in ()).throw(AssertionError))
+    assert agent._pg_listing(str(pg_root) + '/' + suffix) is None
+    assert agent._pg_listing('/etc/postgresqlx/conf.d') is None
+    assert opened == []
+
+
+def test_listing_opens_every_component_relative_to_its_parent_with_nofollow(pg_root, monkeypatch):
+    calls = []
+    real_open = os.open
+
+    def recording(path, flags, *args, dir_fd=None, **kwargs):
+        calls.append((path, flags, dir_fd))
+        return real_open(path, flags, *args, dir_fd=dir_fd, **kwargs)
+    monkeypatch.setattr(agent.os, 'open', recording)
+    target = pg_root / '16' / 'main' / 'conf.d'
+    assert agent._pg_listing(str(target))['state'] == 'present'
+    assert [c[0] for c in calls] == ['/'] + str(target).split('/')[1:]
+    assert all(c[1] & os.O_NOFOLLOW and c[1] & os.O_DIRECTORY for c in calls)
+    assert calls[0][2] is None and all(c[2] is not None for c in calls[1:])
+
+
+@pytest.mark.parametrize('error,expected', [
+    (FileNotFoundError, {'state': 'absent', 'entries': []}),
+    (PermissionError, {'state': 'unreadable', 'entries': []}),
+    (NotADirectoryError, None),
+    (OSError, None),
+])
+def test_listing_open_errors_map_to_observed_states_or_unobserved(pg_root, monkeypatch, error, expected):
+    real_open = os.open
+    target = str(pg_root / '16' / 'main' / 'conf.d')
+
+    def failing(path, flags, *args, dir_fd=None, **kwargs):
+        if path == 'conf.d':
+            raise error(40, 'mocked')
+        return real_open(path, flags, *args, dir_fd=dir_fd, **kwargs)
+    monkeypatch.setattr(agent.os, 'open', failing)
+    assert agent._pg_listing(target) == expected
+
+
+def test_listing_over_the_entry_limit_is_unobserved(pg_root, monkeypatch):
+    confd = pg_root / '16' / 'main' / 'conf.d'
+    monkeypatch.setattr(agent, 'POSTGRESQL_LISTING_LIMIT', 3)
+    for i in range(3):
+        (confd / f'{i}.conf').write_text('')
+    assert len(agent._pg_listing(str(confd))['entries']) == 3
+    (confd / '3.conf').write_text('')
+    assert agent._pg_listing(str(confd)) is None
+
+
+def test_symlinked_include_dir_is_unobserved_in_the_parsed_report(pg_root, tmp_path, monkeypatch):
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    cluster = pg_root / '16' / 'main'
+    (cluster / 'linked').symlink_to(outside)
+    result = agent.parse_postgresql(b"include_dir = 'linked'\n", str(cluster / 'postgresql.conf'))
+    assert result['statements'][0]['listing'] is None
+    assert 'outside' not in repr(result['statements'][0]['listing'])

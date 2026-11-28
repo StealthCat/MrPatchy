@@ -2197,22 +2197,38 @@ def _pg_deescape(raw):
 
 
 def _pg_listing(path):
-    """Names and stat kinds (following symlinks, as PostgreSQL's stat does) of one include_dir directory."""
-    if not path.startswith(POSTGRESQL_DIR+'/'):return None
-    try:names=os.listdir(path)
-    except FileNotFoundError:return {'state':'absent','entries':[]}
-    except PermissionError:return {'state':'unreadable','entries':[]}
+    """Names and lstat kinds of one include_dir directory, opened under POSTGRESQL_DIR without following links.
+
+    Every component is opened with O_NOFOLLOW relative to its parent descriptor, so the directory listed
+    and every entry inspected are inside the permitted root. A path that is not lexically normal, leaves
+    the root, passes through a symlink or contains a symlinked entry is not observed (None); PostgreSQL
+    would follow those links, so the controller reports the directory as unobserved instead of guessing."""
+    if not path.startswith(POSTGRESQL_DIR+'/') or os.path.normpath(path)!=path:return None
+    parts=path.split('/')[1:]
+    if any(part in ('','.','..') for part in parts):return None
+    try:fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
     except OSError:return None
-    if len(names)>POSTGRESQL_LISTING_LIMIT:return None
-    entries=[]
-    for name in sorted(names):
-        if len(name)>255:return None
+    try:
+        for part in parts:
+            try:child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)
+            except FileNotFoundError:return {'state':'absent','entries':[]}
+            except PermissionError:return {'state':'unreadable','entries':[]}
+            except OSError:return None
+            os.close(fd);fd=child
+        found=[]
         try:
-            info=os.stat(os.path.join(path,name))
-            kind='file' if stat.S_ISREG(info.st_mode) else 'dir' if stat.S_ISDIR(info.st_mode) else 'other'
-        except OSError:kind='unstatable'
-        entries.append({'name':name,'kind':kind})
-    return {'state':'present','entries':entries}
+            with os.scandir(fd) as listing:
+                for entry in listing:
+                    if len(found)>=POSTGRESQL_LISTING_LIMIT or len(entry.name)>255:return None
+                    try:mode=os.stat(entry.name,dir_fd=fd,follow_symlinks=False).st_mode
+                    except OSError:mode=None
+                    if mode is not None and stat.S_ISLNK(mode):return None
+                    kind='unstatable' if mode is None else 'file' if stat.S_ISREG(mode) else 'dir' if stat.S_ISDIR(mode) else 'other'
+                    found.append({'name':entry.name,'kind':kind})
+        except PermissionError:return {'state':'unreadable','entries':[]}
+        except OSError:return None
+        return {'state':'present','entries':sorted(found,key=lambda e:e['name'])}
+    finally:os.close(fd)
 
 
 def parse_postgresql(data,path):
