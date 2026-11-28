@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, lvm_commands, persistence, postgresql_commands, rsnapshot_commands, runit_services, strongswan_updown
+from . import autofs_program_maps, clamav_event_commands, collectd_exec, cron_loading, dovecot_services, lvm_commands, persistence, postgresql_commands, rsnapshot_commands, runit_services, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -70,7 +70,7 @@ GAPS=[
     'ISC dhcpd: /etc/dhcp/dhcpd.conf, /etc/dhcp/dhcpd6.conf and the Debian-family /etc/default/isc-dhcp-server command-line defaults are hashed as startup files, as metadata and SHA-256 only (dhcpd.conf can hold TSIG and OMAPI key secrets, which are never stored), by agents that report them, but which execute() programs dhcpd runs on lease commit, release and expiry, as the -user account it drops to, and which global-scope ones it runs as root at every start and dhcpd -t, are not yet evaluated in this view. Files named by include statements, the rest of /etc/dhcp (dhclient hooks are described separately, leases are not captured), /etc/ltsp/dhcpd.conf (which the Debian-family unit prefers when present), the RPM-family /etc/sysconfig/dhcpd, configuration passed with -cf, whether dhcpd runs and the programs themselves are not observed or evaluated. A custom /etc/dhcp or /etc/default path saved earlier keeps its own scope and leaves these files to built-in scope.',
     'PostgreSQL: the Debian-family /etc/postgresql directory (postgresql.conf, conf.d, pg_hba.conf, pg_ident.conf, start.conf, pg_ctl.conf and environment for each version and cluster, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate, for each /etc/postgresql/<version>/<cluster>/postgresql.conf, which archive, restore, recovery and ssl_passphrase commands the server runs through /bin/sh -c and which archive and preload libraries it loads as the postgres account, with the PostgreSQL 16 rules. Only include directives and the settings the evaluation reads keep their values; every other value is dropped, and lines PostgreSQL rejects keep only their line number. Commands use the same best-effort credential redaction as cron commands. postgresql.auto.conf (written by ALTER SYSTEM, read last) lives in the data directory and is not collected, so every evaluation has a blocking gap for it; nor is the RPM-family data directory (/var/lib/pgsql/data or /var/lib/pgsql/<version>/data) that holds postgresql.conf there. Included files outside /etc/postgresql and symlinked files are not observed. /etc/postgresql-common, settings passed on the command line, recovery and standby signal files, whether the server runs and the commands themselves are not evaluated.',
     'syslog-ng: the /etc/syslog-ng directory (syslog-ng.conf, conf.d, scl.conf, patterndb.d and any other files it holds, as metadata and SHA-256 only) and the Debian-family /etc/default/syslog-ng or RPM-family /etc/sysconfig/syslog-ng option files (which supply SYSLOGNG_OPTS, such as --user and -f) are hashed as startup files by agents that report them, but which program() sources and destinations, hook-commands() and confgen exec() commands syslog-ng runs, and as which account, are not yet evaluated in this view. The SCL under /usr/share/syslog-ng/include, included files outside /etc/syslog-ng, options set in the service unit or passed on the command line, whether syslog-ng runs and the commands themselves are not observed or evaluated. A custom /etc/default or /etc/sysconfig path saved earlier keeps its own scope and leaves these files to built-in scope.',
-    'collectd: the Debian-family /etc/collectd directory (collectd.conf, collectd.conf.d, collection.conf, filters.conf and thresholds.conf), the RPM-family /etc/collectd.conf and the /etc/collectd.d directory are hashed as startup files, as metadata and SHA-256 only (network plugin passwords and other values are never stored), by agents that report them. Which Exec programs the exec plugin starts at every daemon start and which NotificationExec programs it runs on every notification, with which argv and as which user[:group], are not yet evaluated in this view. Files named by Include outside these paths, configuration passed with -C, the python and perl plugin modules, whether collectd runs and the programs themselves are not observed or evaluated.',
+    'collectd: the Debian-family /etc/collectd directory (collectd.conf, collectd.conf.d, collection.conf, filters.conf and thresholds.conf), the RPM-family /etc/collectd.conf and the /etc/collectd.d directory are hashed as startup files, as metadata and SHA-256 only (network plugin passwords and other values are never stored), by agents that report them, and agents that report parsed items let this view evaluate, for /etc/collectd/collectd.conf and /etc/collectd.conf, which Exec programs the exec plugin starts and which NotificationExec programs it runs on every notification, with which argv and as which user[:group], with the collectd 5.12.0 rules. Only top-level Include (with Filter), LoadPlugin, AutoLoadPlugin and PluginDir items and <Plugin exec> blocks keep their values; every other value, including network plugin passwords, is dropped. Exec arguments use the same best-effort credential redaction as cron commands. /etc/passwd and /etc/group are not captured, so accounts are shown by name and whether collectd refuses a root or unknown user is not assessed. Files named by Include outside these paths, symlinked or non-UTF-8 files, configuration passed with -C, the python and perl plugin modules, whether collectd runs and the programs themselves are not observed or evaluated.',
     'Samba: the /etc/samba directory (smb.conf, files it includes there, and any other files it holds, such as smbpasswd or lmhosts, as metadata and SHA-256 only) and the RPM-family /etc/sysconfig/samba options file (which supplies SMBDOPTIONS and NMBDOPTIONS) are hashed as startup files by agents that report them, but which root preexec/postexec commands smbd runs as root, which preexec/postexec commands it runs as the connecting user, for which share, and which global add/delete/change scripts, panic action and other configured programs it runs are not yet evaluated in this view. Files included from outside /etc/samba, the registry configuration backend, the private and state directories under /var/lib/samba, options set in the service unit or passed on the command line, whether smbd runs and the commands themselves are not observed or evaluated. A custom /etc/sysconfig path saved earlier keeps its own scope and leaves the options file to built-in scope.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
@@ -456,6 +456,103 @@ def dovecot_view(inventory):
             'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
 
 
+COLLECTD_ROOTS=(persistence.COLLECTD_DIRS[0],persistence.COLLECTD_FILE,persistence.COLLECTD_DIRS[1])
+COLLECTD_CONFIGS=(collectd_exec.DEFAULT_CONFIG,persistence.COLLECTD_FILE)
+
+
+def collectd_state(entry):
+    """Whether collectd items were parsed, rejected by the parser, refused (NUL/UTF-8), truncated or not reported (older agent)."""
+    if 'collectd' in entry:
+        report=entry['collectd']
+        if not report['parsed']:return 'undecodable'
+        return 'syntax_error' if report['syntax_error'] else 'truncated' if report['truncated'] else 'parsed'
+    return 'not_reported' if entry['kind']=='regular' and persistence.collectd_reads(entry['path']) else None
+
+
+def _collectd_values(values):
+    return [(kind,collectd_exec._strtod(raw) if kind=='number' else raw) for kind,raw in (values or ())]
+
+
+def collectd_items(report):
+    """The items app/collectd_exec.parse returns for the file, from the agent's reduced items."""
+    def convert(item):
+        children=[convert(c) for c in item['children']]
+        # A block whose children the agent withheld still is a block (exec_option_is_block).
+        if item['block'] and not children:children=[{'key':'withheld','values':[],'children':[],'line':item['line']}]
+        return {'key':item['key'],'values':_collectd_values(item['values']),'children':children,'line':item['line']}
+    items=[convert(i) for i in report['items']]
+    # Withheld items still count: a file whose kept items expand to nothing is not empty to collectd.
+    if report['dropped']:items.append({'key':'withheld','values':[],'children':[],'line':1})
+    return items
+
+
+def _collectd_within(path):
+    return any(path==root or path.startswith(root+'/') for root in COLLECTD_ROOTS)
+
+
+def collectd_view(inventory,config):
+    """Evaluate app/collectd_exec for one main configuration file over the agent-reported items. Unreported,
+    refused, truncated and symlinked files stay unobserved; directory listings and absent paths come only
+    from a complete collection. passwd/group are not captured. Never a safety verdict."""
+    entries={e['path']:e for e in inventory['entries'] if _collectd_within(e['path'])}
+    complete=inventory['state']=='collected'
+    links=[p for p,e in entries.items() if e['kind']=='symlink']
+    def behind_link(path):return any(path.startswith(link+'/') for link in links)
+    files={};parsed={};directories={};gaps=[]
+    for path,entry in entries.items():
+        state=collectd_state(entry)
+        if state=='parsed':files[path]='';parsed[path]=collectd_items(entry['collectd'])
+        elif state=='syntax_error':
+            error=entry['collectd']['syntax_error'];files[path]='';parsed[path]=collectd_exec.ParseError(error['line'],error['reason'])
+        elif state=='undecodable':files[path]='\x00'
+        elif state=='truncated':gaps.append({'code':'items_truncated','path':path,'blocking':True})
+        elif state=='not_reported':gaps.append({'code':'not_reported_by_agent','path':path,'blocking':True})
+    if complete:
+        for path in entries:
+            parts=path.split('/')
+            for depth in range(2,len(parts)):
+                directory='/'.join(parts[:depth])
+                if _collectd_within(directory) and directory not in links and not behind_link(directory):
+                    directories.setdefault(directory,set()).add(parts[depth])
+        for root in COLLECTD_ROOTS:
+            if root in inventory['missing_roots']:files.setdefault(root,None)
+            elif root!=persistence.COLLECTD_FILE and root not in directories and root not in entries:directories[root]=set()
+        named=[v[1] for e in entries.values() for i in e.get('collectd',{}).get('items',()) if i['key'].lower()=='include'
+               for v in (i['values'] or ())[:1] if v[0]=='string']
+        for value in named:
+            path=collectd_exec._norm(value)
+            for candidate,kind in ((path,files),(collectd_exec._norm(path.rpartition('/')[0] or '/'),directories)):
+                if (_collectd_within(candidate) and candidate not in files and candidate not in directories and not behind_link(candidate)
+                        and candidate not in entries and not any(p.startswith(candidate+'/') for p in entries)):
+                    kind[candidate]=None
+    result=collectd_exec.evaluate(files=files,directories={k:(sorted(v) if v is not None else None) for k,v in directories.items()},
+                                  parsed=parsed,config_path=config,collectd_uid=0)
+    gaps.append({'code':'passwd_group_not_captured','blocking':True,'detail':'/etc/passwd and /etc/group are not captured, so each program shows the user[:group] it names, without UID, GID or whether collectd refuses it.'})
+    def bounded(g):
+        return {k:(v[:300] if isinstance(v,str) else [str(x)[:300] for x in v[:64]] if isinstance(v,list) else v)
+                for k,v in g.items() if isinstance(v,(str,int,bool,list)) or v is None}
+    gaps+=[bounded(g) for g in result['gaps'] if g['code'] not in ('passwd_not_supplied','group_not_supplied')]
+    notes=[bounded(n) for n in result['notes']]
+    reports=[e['collectd'] for e in entries.values() if 'collectd' in e]
+    programs=[{k:(v[:300] if isinstance(v,str) else v) for k,v in r.items() if k in ('kind','file','line','option','user','group','executable','path_search')}
+              |{'argv':[a[:300] for a in r['argv'][:64]],'starts':r['starts']} for r in result['programs'][:128]]
+    return {'config_file':config,'config_accepted':result['config_accepted'],'exec_plugin_loaded':result['exec_plugin_loaded'],
+            'programs':programs,'program_count':len(result['programs']),'files':[bounded(f) for f in result['files'][:64]],
+            'path_search_note':result['path_search_note'],'run_as':'collectd runs as root under the packaged service; each program runs as the user[:group] its line names',
+            'redacted':any(r['redacted'] for r in reports),'dropped':sum(r['dropped'] for r in reports),
+            'notes':notes[:50],'complete':False,'gaps':gaps[:100],'origin':'not_assessed','authorizes_response':False,
+            'contract_version':result['contract_version']}
+
+
+def collectd_text_search(entry):
+    found=[]
+    def walk(items):
+        for item in items:
+            found.append(item['key']);found.extend(str(v[1]) for v in (item['values'] or ()) if v[0]=='string');walk(item['children'])
+    walk(entry.get('collectd',{}).get('items',()))
+    return ' '.join(found)
+
+
 POSTGRESQL_MAIN=re.compile(r'/etc/postgresql/[^/]+/[^/]+/postgresql\.conf')
 
 
@@ -806,6 +903,11 @@ def catalog_rows(inventory):
             states=[postgresql_state(e) for e in found]
             parsed=states.count('parsed')
             label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
+        if key in ('collectd','collectd_rpm','collectd_d'):
+            found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
+            states=[collectd_state(e) for e in found]
+            parsed=states.count('parsed')
+            label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · rejected by the collectd parser' if 'syntax_error' in states else '')+(' · not reported by this agent version' if 'not_reported' in states else '')
         if key in ('strongswan','strongswan_rpm'):
             found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
             states=[strongswan_state(e) for e in found]
@@ -875,11 +977,15 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if state:row['postgresql_state']=state
         if state=='parsed':row['postgresql_statements']=len(entry['postgresql']['statements'])
         if state=='parsed' and POSTGRESQL_MAIN.fullmatch(entry['path']):row['postgresql']=postgresql_view(inventory,entry['path'])
+        state=collectd_state(entry)
+        if state:row['collectd_state']=state
+        if state=='parsed':row['collectd_items']=len(entry['collectd']['items'])
+        if entry['path'] in COLLECTD_CONFIGS and entry['kind']=='regular' and state:row['collectd']=collectd_view(inventory,entry['path'])
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+lvm_text_search(entry)+' '+postgresql_text_search(entry)+' '+rsnapshot_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+lvm_text_search(entry)+' '+postgresql_text_search(entry)+' '+rsnapshot_text_search(entry)+' '+collectd_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     # One runit evaluation (#1628), on the first matching runit row: /etc/service itself when it was recorded.

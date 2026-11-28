@@ -2649,6 +2649,233 @@ def parse_swanctl(data):
     return result
 
 
+# collectd (#1551): every regular file under the Debian-family /etc/collectd, the RPM-family /etc/collectd.conf
+# and /etc/collectd.d is reduced, from the exact hashed bytes, to the configuration items app/collectd_exec
+# reads, with a port of its liboconfig scanner and parser (collectd 5.12.0). Nothing is run and no Include is
+# opened. Only top-level Include (with Filter), LoadPlugin, AutoLoadPlugin and PluginDir items and <Plugin exec>
+# blocks keep their values; Exec/NotificationExec arguments after the program get the best-effort credential
+# redaction used for cron commands. Every other item, including network plugin passwords, is dropped and counted.
+COLLECTD_FILE = '/etc/collectd.conf'
+COLLECTD_DIRS = ('/etc/collectd','/etc/collectd.d')
+COLLECTD_ITEM_LIMIT = 2000
+COLLECTD_VALUE_LIMIT = 4096
+COLLECTD_VALUES = 64
+_CD_IP_BYTE = r'(?:2(?:5[0-5]|[0-4][0-9])|1[0-9][0-9]|[1-9]?[0-9])'
+_CD_PORT = (r'(?:6(?:5(?:5(?:3[0-5]|[0-2][0-9])|[0-4][0-9][0-9])|[0-4][0-9][0-9][0-9])'
+            r'|[1-5][0-9][0-9][0-9][0-9]|[1-9][0-9]?[0-9]?[0-9]?)')
+_CD_IPV4 = _CD_IP_BYTE+r'\.'+_CD_IP_BYTE+r'\.'+_CD_IP_BYTE+r'\.'+_CD_IP_BYTE+r'(?::'+_CD_PORT+')?'
+_CD_V6P = r'(?:[0-9A-Fa-f]{1,4}:[0-9A-Fa-f]{1,4}|'+_CD_IPV4+')'
+_CD_IPV6 = ('(?:(?:H:){6}P|::(?:H:){5}P|(?:H)?::(?:H:){4}P|(?:(?:H:){0,1}H)?::(?:H:){3}P'
+            '|(?:(?:H:){0,2}H)?::(?:H:){2}P|(?:(?:H:){0,3}H)?::H:P|(?:(?:H:){0,4}H)?::P'
+            '|(?:(?:H:){0,5}H)?::H|(?:(?:H:){0,6}H)?::)').replace('H','[0-9A-Fa-f]{1,4}').replace('P',_CD_V6P)
+_CD_IP_RULES = (re.compile(_CD_IPV4),re.compile(_CD_IPV6+r'|\['+_CD_IPV6+r'\](?::'+_CD_PORT+')?'))
+_CD_IP_CHARS = re.compile(r'[0-9A-Fa-f:.\[\]]{1,80}')
+_CD_NUMBERS = (re.compile(r'[+-]?[0-9]*\.[0-9]+(?:[eE][+-][0-9]+)?'),re.compile(r'0[xX][0-9a-fA-F]+'),
+               re.compile(r'0[0-7]+'),re.compile(r'[+-]?[0-9]+'))
+_CD_UNQUOTED = re.compile(r'[0-9A-Za-z_]+')
+_CD_BOOLS = (('true',True),('yes',True),('on',True),('false',False),('no',False),('off',False))
+_CD_BLANK = ' \t\b'
+
+
+def collectd_reads(path):
+    return path==COLLECTD_FILE or any(path.startswith(d+'/') for d in COLLECTD_DIRS)
+
+
+class CollectdSyntax(Exception):
+    def __init__(self,line,reason):
+        Exception.__init__(self,reason);self.line=line;self.reason=reason
+
+
+def _cd_quoted_scan(text,start):
+    i=start;n=len(text);cont=None
+    while i<n:
+        ch=text[i]
+        if ch=='"':return i+1,cont
+        if ch=='\\':
+            if text.startswith('\n',i+1):return None,i+2
+            if text.startswith('\r\n',i+1):cont=i+3
+            if i+1>=n:return None,cont
+            i+=2;continue
+        i+=1
+    return None,cont
+
+
+def _cd_unquote(raw):
+    if len(raw)<2 or raw[0]!='"' or raw[-1]!='"':return raw
+    body=raw[1:-1];out=[];i=0
+    while i<len(body):
+        if body[i]=='\\':
+            i+=1
+            if i>=len(body):break
+        out.append(body[i]);i+=1
+    return ''.join(out)
+
+
+def _cd_words(text,pos):
+    found=[]
+    for word,value in _CD_BOOLS:
+        if text.startswith(word,pos):found.append((len(word),7,'BOOL',value));break
+    run=_CD_IP_CHARS.match(text,pos)
+    if run and ('.' in run.group() or ':' in run.group()):
+        for priority,rule in enumerate(_CD_IP_RULES):
+            for end in range(run.end(),pos,-1):
+                if rule.fullmatch(text,pos,end):found.append((end-pos,9+priority,'UNQUOTED',text[pos:end]));break
+    longest=None
+    for rule in _CD_NUMBERS:
+        m=rule.match(text,pos)
+        if m and (longest is None or m.end()>longest.end()):longest=m
+    # Numbers keep their literal; the controller reads it with strtod rules.
+    if longest:found.append((longest.end()-pos,11,'NUMBER',longest.group()))
+    m=_CD_UNQUOTED.match(text,pos)
+    if m:found.append((m.end()-pos,13,'UNQUOTED',m.group()))
+    return found
+
+
+def _cd_tokens(text):
+    """(kind,value,line) exactly as app/collectd_exec.tokenize, with number literals unconverted."""
+    tokens=[];state={'pos':0,'line':1};n=len(text);multiline=None;ml_line=0
+    def advance(end):
+        state['line']+=text.count('\n',state['pos'],end);state['pos']=end
+    while state['pos']<n:
+        pos=state['pos'];line=state['line']
+        if multiline is not None:
+            best=None
+            if pos==0 or text[pos-1]=='\n':
+                end=pos
+                while end<n and text[end] in _CD_BLANK:end+=1
+                if end>pos:best=(end,0,'blank')
+            if text[pos] not in _CD_BLANK:
+                close,cont=_cd_quoted_scan(text,pos+1)
+                for end,priority,kind in ((cont,1,'more'),(close,2,'close')):
+                    if end is not None and (best is None or end>best[0]):best=(end,priority,kind)
+            if best is None:advance(pos+1);continue
+            end,_,kind=best;piece=text[pos:end]
+            if kind=='more':multiline.append(piece[:-3] if piece.endswith('\r\n') else piece[:-2])
+            elif kind=='close':
+                multiline.append(piece);tokens.append(('QUOTED',_cd_unquote(''.join(multiline)),ml_line));multiline=None
+            advance(end);continue
+        ch=text[pos]
+        if ch in _CD_BLANK:advance(pos+1)
+        elif ch=='#':
+            end=text.find('\n',pos);advance(n if end<0 else end)
+        elif ch=='\\' and (text.startswith('\n',pos+1) or text.startswith('\r\n',pos+1)):
+            advance(pos+(2 if text[pos+1]=='\n' else 3))
+        elif ch=='\n' or text.startswith('\r\n',pos):
+            tokens.append(('EOL',None,line));advance(pos+(1 if ch=='\n' else 2))
+        elif ch in '/<>':
+            tokens.append(({'/':'SLASH','<':'OPEN','>':'CLOSE'}[ch],ch,line));advance(pos+1)
+        elif ch=='"':
+            close,cont=_cd_quoted_scan(text,pos+1)
+            if close is not None and (cont is None or close>=cont):
+                tokens.append(('QUOTED',_cd_unquote(text[pos:close]),line));advance(close)
+            elif cont is not None:
+                piece=text[pos:cont];multiline=[piece[:-3] if piece.endswith('\r\n') else piece[:-2]];ml_line=line;advance(cont)
+            else:advance(pos+1)
+        else:
+            candidates=_cd_words(text,pos)
+            if not candidates:advance(pos+1);continue
+            length,_,kind,value=max(candidates,key=lambda c:(c[0],-c[1]))
+            tokens.append((kind,value,line));advance(pos+length)
+    return tokens
+
+
+def _cd_parse(text):
+    """Top-level items as app/collectd_exec.parse returns them; raises CollectdSyntax like yyparse."""
+    tokens=_cd_tokens(text);last_line=text.count('\n')+1;state={'pos':0}
+    def peek(offset=0):
+        i=state['pos']+offset
+        return tokens[i] if i<len(tokens) else None
+    def expect(kind,reason):
+        tok=peek()
+        if tok is None or tok[0]!=kind:raise CollectdSyntax(tok[2] if tok else last_line,reason)
+        state['pos']+=1;return tok
+    def arguments():
+        values=[]
+        while True:
+            tok=peek()
+            if tok is None or tok[0] not in ('NUMBER','BOOL','QUOTED','UNQUOTED'):return values
+            values.append(['number' if tok[0]=='NUMBER' else 'boolean' if tok[0]=='BOOL' else 'string',tok[1]]);state['pos']+=1
+    def statements(inside):
+        items=[]
+        while True:
+            tok=peek()
+            if tok is None:break
+            if tok[0]=='EOL':state['pos']+=1
+            elif tok[0]=='UNQUOTED':
+                state['pos']+=1;values=arguments()
+                if not values:raise CollectdSyntax(tok[2],'option_without_value')
+                expect('EOL','expecting_eol');items.append({'key':tok[1],'values':values,'children':[],'line':tok[2]})
+            elif tok[0]=='OPEN':
+                following=peek(1)
+                if following is not None and following[0]=='SLASH':
+                    if inside:return items
+                    raise CollectdSyntax(tok[2],'unexpected_block_end')
+                state['pos']+=1;name=expect('UNQUOTED','block_name_expected');values=arguments()
+                expect('CLOSE','expecting_close_bracket');expect('EOL','expecting_eol')
+                children=statements(True)
+                expect('OPEN','block_not_closed');expect('SLASH','block_not_closed')
+                end_name=expect('UNQUOTED','block_not_closed');expect('CLOSE','block_not_closed');expect('EOL','expecting_eol')
+                if end_name[1]!=name[1]:raise CollectdSyntax(end_name[2],'block_not_closed')
+                if values or children:items.append({'key':name[1],'values':values,'children':children,'line':tok[2]})
+            else:raise CollectdSyntax(tok[2],'unexpected_token')
+        if inside:raise CollectdSyntax(last_line,'block_not_closed')
+        return items
+    return statements(False)
+
+
+def parse_collectd(data):
+    """Reduce one collectd configuration file to the items app/collectd_exec evaluates. Nothing is executed."""
+    result={'parsed':False,'error':None,'syntax_error':None,'items':[],'dropped':0,'truncated':False,'redacted':False}
+    if b'\x00' in data:result['error']='nul_byte';return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:result['error']='invalid_utf8';return result
+    result['parsed']=True
+    try:items=_cd_parse(text)
+    except CollectdSyntax as error:
+        result['syntax_error']={'line':error.line,'reason':error.reason};return result
+    except RecursionError:
+        result['parsed']=False;result['error']='too_deep';return result
+    count=[0]
+    def bounded(values):
+        if len(values)>COLLECTD_VALUES:return None
+        for kind,value in values:
+            if kind!='boolean' and len(value)>COLLECTD_VALUE_LIMIT:return None
+        return values
+    def keep(item,values,children):
+        if count[0]>=COLLECTD_ITEM_LIMIT or (values is not None and bounded(values) is None):result['truncated']=True;return None
+        count[0]+=1
+        return {'key':item['key'],'line':item['line'],'values':values,'children':children,'block':bool(item['children'])}
+    for item in items:
+        low=item['key'].lower();values=item['values']
+        if low=='include':
+            children=[]
+            for child in item['children']:
+                kept=keep(child,child['values'] if child['key'].lower()=='filter' else None,[])
+                if kept is None:break
+                children.append(kept)
+            kept=None if result['truncated'] else keep(item,values,children)
+        elif low in ('loadplugin','autoloadplugin','plugindir'):
+            kept=keep(item,values,[]);result['dropped']+=len(item['children'])
+        elif low=='plugin' and values and values[0][0]=='string' and values[0][1].lower()=='exec':
+            children=[]
+            for child in item['children']:
+                if child['key'].lower() in ('exec','notificationexec'):
+                    args=[]
+                    for index,(kind,value) in enumerate(child['values']):
+                        if index>=2 and kind=='string':
+                            value,redacted=redact_cron_command(value);result['redacted']=result['redacted'] or redacted
+                        args.append([kind,value])
+                    kept=keep(child,args,[])
+                else:kept=keep(child,None,[]);result['dropped']+=1
+                if kept is None:break
+                children.append(kept)
+            kept=None if result['truncated'] else keep(item,values,children)
+        else:result['dropped']+=1;continue
+        if kept is None:break
+        result['items'].append(kept)
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -2666,6 +2893,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if swanctl and content is None:content=bytearray()
         postgresql=cron_jobs and postgresql_reads(str(path))
         if postgresql and content is None:content=bytearray()
+        collectd=cron_jobs and collectd_reads(str(path))
+        if collectd and content is None:content=bytearray()
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -2727,6 +2956,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['strongswan']=parse_swanctl(bytes(content))
             if postgresql and row['kind']=='regular':
                 row['postgresql']=parse_postgresql(bytes(content),str(path))
+            if collectd and row['kind']=='regular':
+                row['collectd']=parse_collectd(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:
