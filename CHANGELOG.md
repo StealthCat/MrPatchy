@@ -1,3 +1,10 @@
+## 1.137.0 — 2026-11-25
+
+1. [PR #1696](https://github.com/StealthCat/MrPatchy/pull/1696): Startup Files shows the programs and plugin libraries that `lvm.conf` and `lvmlocal.conf` make LVM run as root. That covers the thin/cache check, dump and repair executables, vdoformat, fsadm, the lvmlockctl kill command, and the dmeventd executable, libraries and thin/vdo commands. Each entry shows its effective value and source, a rejected file shows its reason and line, and coverage gaps are listed. Agents report only these settings from the configuration. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1599.
+2. [PR #1705](https://github.com/StealthCat/MrPatchy/pull/1705): Agents hash the collectd configuration (Debian `/etc/collectd`; RPM `/etc/collectd.conf` and `/etc/collectd.d`) as metadata-only built-in startup files. The paths are additive to earlier baselines, and saved custom paths inside them stay valid. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Increment 2 of #1551.
+
+Integrated together through batch [PR #1709](https://github.com/StealthCat/MrPatchy/pull/1709). This source update does not publish a Docker image.
+
 ## 1.136.0 — 2026-11-25
 
 1. [PR #1704](https://github.com/StealthCat/MrPatchy/pull/1704): Agents hash the syslog-ng configuration (`/etc/syslog-ng`) and the `/etc/default/syslog-ng` (Debian) or `/etc/sysconfig/syslog-ng` (RPM) option files as metadata-only built-in startup files. Saved custom `/etc/syslog-ng`, `/etc/default` or `/etc/sysconfig` paths stay valid. Startup Files labels them and states that their `program()`, `hook-commands()` and confgen commands are not yet evaluated. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Refs #1570.
