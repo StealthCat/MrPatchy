@@ -2207,6 +2207,10 @@ LIGHTTPD_WORD_LIMIT = 256
 LIGHTTPD_KEPT_KEYS = ('server.username','server.groupname','server.errorlog','server.breakagelog',
                       'accesslog.filename','server.errorlog-use-syslog')
 LIGHTTPD_BACKEND_KEYS = ('fastcgi.server','scgi.server')
+# Keys whose values can carry credentials (auth.backend.*.bind-pw/pass, mysql-vhost.pass, secdownload.secret,
+# ssl.* key material, or a var.* named like a secret). Their values are dropped even when the same file
+# references them, so a command built from one shows a blocking value_not_retained gap instead of the value.
+LIGHTTPD_CREDENTIAL_KEY = re.compile(r'(?i)pass|pw|secret|token|cred|key|^auth\.|^secdownload\.|^mysql-vhost\.|^ssl\.')
 LIGHTTPD_BACKEND_VALUES = ('bin-path','max-procs')
 LIGHTTPD_BACKEND_OPTION_DEPTH = 3
 LIGHTTPD_CONDITION_OPS = ('==','!=','=~','!~','=^','=$')
@@ -2326,7 +2330,8 @@ def parse_lighttpd(data):
                 rhs['depth']-=1;out.append(token);continue
             rhs=None
         if kind=='word' and nxt is not None and nxt[0]=='op' and nxt[1] in LIGHTTPD_ASSIGN:
-            mode='keep' if value.startswith('var.') or value in LIGHTTPD_KEPT_KEYS or value in referenced else 'backend' if value in LIGHTTPD_BACKEND_KEYS else 'drop'
+            mode=('keep' if value in LIGHTTPD_KEPT_KEYS or ((value.startswith('var.') or value in referenced) and not LIGHTTPD_CREDENTIAL_KEY.search(value))
+                  else 'backend' if value in LIGHTTPD_BACKEND_KEYS else 'drop')
             rhs={'mode':mode,'depth':0,'expect':None,'bin':None};stmt=None;out.append(token);continue
         if kind=='str':
             if stmt in ('expr','bracket'):
