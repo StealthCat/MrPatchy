@@ -522,13 +522,17 @@ def validate(inventory):
 # ISC dhcpd configuration (#1593): dhcpd runs execute() programs on lease commit, release and expiry
 # as its process user, and global-scope ones as root at every start; /etc/dhcp/dhcpd.conf and
 # dhcpd6.conf, and the Debian-family /etc/default/isc-dhcp-server command-line defaults, only.
+# Samba configuration (#1580): smbd runs root preexec/postexec as root, preexec/postexec as the
+# connecting user and global scripts from smb.conf; /etc/samba on both families, and the RPM-family
+# /etc/sysconfig/samba options file only.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
                         '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
                         '/etc/swanctl','/etc/strongswan','/etc/service','/etc/runit','/etc/sv','/etc/lighttpd',
                         '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
                         '/etc/postgresql',
-                        '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server')
+                        '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server',
+                        '/etc/samba','/etc/sysconfig/samba')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
