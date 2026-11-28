@@ -329,7 +329,9 @@ def assess(files: list[dict[str, Any]] | None, *, hostname: str | None = None,
 
     ``files`` holds records ``{'path', 'state', 'text'}`` for ``lvm.conf``,
     ``lvmlocal.conf`` and any ``lvm_<tag>.conf``. ``state`` is one of
-    ``FILE_STATES``. ``text`` is required for ``regular`` files. ``hostname`` is
+    ``FILE_STATES``. ``text`` is required for ``regular`` files, unless the
+    record carries ``parse_error`` (``{'reason', 'line'}``) for a file an agent
+    already parsed with these rules and rejected. ``hostname`` is
     the node name LVM sees from ``uname(2)``. It is needed only to evaluate
     ``hosttags`` and ``host_list``.
     """
@@ -369,6 +371,18 @@ def assess(files: list[dict[str, Any]] | None, *, hostname: str | None = None,
             return None
         if file_state != 'regular':
             gap('file_' + file_state, path=path)
+            return None
+        reported = record.get('parse_error')
+        if isinstance(reported, dict):
+            # The agent parsed the hashed bytes with this module's rules and kept only the error.
+            reason = str(reported.get('reason'))[:80]
+            if reason in ('nul_byte', 'invalid_utf8'):
+                gap(reason, path=path)
+                return None
+            line = reported.get('line') if type(reported.get('line')) is int else None
+            entry['parse_error'] = {'reason': reason, 'line': line}
+            result['lvm_starts'] = False
+            gap('parse_error_lvm_commands_fail', path=path, line=line, detail=reason)
             return None
         text = record.get('text')
         if isinstance(text, bytes):

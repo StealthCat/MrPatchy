@@ -424,6 +424,88 @@ def validate_swanctl(report,path):
     return len(items)
 
 
+
+# LVM2 program settings (#1599): agents parse /etc/lvm/lvm.conf and lvmlocal.conf and keep only the reduced
+# tree app/lvm_commands evaluates (target/agent.py parse_lvm_conf).
+LVM_FILES=('/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf')
+LVM_KEYS={'parsed','error','sections','inexact','nodename'}
+LVM_SETTINGS={'global':('thin_check_executable','thin_dump_executable','thin_repair_executable','cache_check_executable',
+                        'cache_dump_executable','cache_repair_executable','vdo_format_executable','fsadm_executable',
+                        'lvmlockctl_kill_command','tags'),
+              'dmeventd':('executable','mirror_library','raid_library','snapshot_library','thin_library','vdo_library',
+                          'thin_command','vdo_command','tags')}
+LVM_REASONS=('nul_byte','invalid_utf8','unterminated_string','expected_value','unexpected_token','empty_section_identifier','nesting_limit')
+LVM_LINES=1024*1024
+LVM_VALUES=64
+LVM_TAGS=64
+
+
+def _lvm_text(value,limit):
+    return isinstance(value,str) and len(value)<=limit and '\x00' not in value
+
+
+def _lvm_values(values):
+    if not isinstance(values,list) or not 1<=len(values)<=LVM_VALUES:raise ValueError('Invalid LVM value')
+    for item in values:
+        if not isinstance(item,list) or len(item)!=2:raise ValueError('Invalid LVM value')
+        kind,value=item
+        if kind=='string':ok=_lvm_text(value,CRON_COMMAND_LIMIT)
+        elif kind=='int':ok=type(value) is int and -(1<<63)<=value<(1<<64)
+        elif kind=='float':ok=isinstance(value,str) and 1<=len(value)<=64 and re.fullmatch(r'[0-9.+-]+',value) is not None
+        elif kind=='empty_array':ok=value is None and len(values)==1
+        else:ok=False
+        if not ok:raise ValueError('Invalid LVM value')
+
+
+def _lvm_assignments(items,allowed):
+    if not isinstance(items,list) or len(items)>len(allowed):raise ValueError('Invalid LVM section')
+    keys=[]
+    for item in items:
+        if not isinstance(item,dict) or set(item)!={'key','values'} or item['key'] not in allowed:raise ValueError('LVM value not retained by agents')
+        if item['values'] is not None or item['key']!='tags' or 'hosttags' in allowed or 'host_list' in allowed:_lvm_values(item['values'])
+        keys.append(item['key'])
+    if len(set(keys))!=len(keys):raise ValueError('Duplicate LVM value')
+
+
+def validate_lvm(report,path):
+    """Strictly validate the reduced LVM configuration tree reported by newer agents (#1599)."""
+    if path not in LVM_FILES:raise ValueError('LVM settings outside /etc/lvm')
+    if not isinstance(report,dict) or set(report)!=LVM_KEYS or type(report['parsed']) is not bool:raise ValueError('Invalid LVM settings')
+    if report['nodename'] is not None and not (_lvm_text(report['nodename'],255) and report['nodename']):raise ValueError('Invalid LVM node name')
+    inexact=report['inexact'];sections=report['sections'];error=report['error']
+    if not isinstance(inexact,list) or len(inexact)>LVM_VALUES or not all(_lvm_text(i,600) and i for i in inexact):raise ValueError('Invalid LVM inexact values')
+    if not isinstance(sections,list):raise ValueError('Invalid LVM settings')
+    if not report['parsed']:
+        if not isinstance(error,dict) or set(error)!={'reason','line'} or error['reason'] not in LVM_REASONS:raise ValueError('Invalid LVM error')
+        if error['reason'] in ('nul_byte','invalid_utf8'):
+            if error['line'] is not None:raise ValueError('Invalid LVM error')
+        elif type(error['line']) is not int or not 1<=error['line']<=LVM_LINES:raise ValueError('Invalid LVM error')
+        if sections or inexact:raise ValueError('Rejected LVM configuration retains settings')
+        return 0
+    if error is not None or len(sections)>3:raise ValueError('Invalid LVM settings')
+    keys=[]
+    for section in sections:
+        if not isinstance(section,dict) or section.get('key') not in ('global','dmeventd','tags'):raise ValueError('LVM section not retained by agents')
+        keys.append(section['key'])
+        if section['key']=='tags':
+            if set(section)!={'key','values','tags'}:raise ValueError('Invalid LVM tags')
+            _lvm_assignments(section['values'],('hosttags',))
+            tags=section['tags']
+            if not isinstance(tags,list) or len(tags)>LVM_TAGS:raise ValueError('Invalid LVM tags')
+            names=[]
+            for tag in tags:
+                if not isinstance(tag,dict) or set(tag)!={'key','values'} or not _lvm_text(tag['key'],255) or not tag['key']:raise ValueError('Invalid LVM tag')
+                names.append(tag['key'])
+                if not isinstance(tag['values'],list) or len(tag['values'])>2:raise ValueError('Invalid LVM tag')
+                _lvm_assignments(tag['values'],('host_list','host_filter'))
+            if len(set(names))!=len(names):raise ValueError('Duplicate LVM tag')
+        else:
+            if set(section)!={'key','values'}:raise ValueError('Invalid LVM section')
+            _lvm_assignments(section['values'],LVM_SETTINGS[section['key']])
+    if len(set(keys))!=len(keys):raise ValueError('Duplicate LVM section')
+    return sum(len(s['values']) for s in sections if s['key']!='tags')
+
+
 # PostgreSQL (#1597): the agent reduces every regular file under /etc/postgresql to the statement stream
 # app/postgresql_commands reads. Include directives and the settings the contract evaluates keep values;
 # other assignments are dropped and counted, syntax errors keep only their line.
@@ -494,8 +576,8 @@ def validate_postgresql(report,path):
 
 
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/PostgreSQL detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','postgresql')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -551,6 +633,9 @@ def validate(inventory):
         if 'clamav' in row:
             if row['kind']!='regular':raise ValueError('ClamAV options require a regular file')
             validate_clamav(row['clamav'],path)
+        if 'lvm' in row:
+            if row['kind']!='regular':raise ValueError('LVM settings require a regular file')
+            validate_lvm(row['lvm'],path)
         if 'dovecot' in row:
             if row['kind']!='regular':raise ValueError('Dovecot statements require a regular file')
             validate_dovecot(row['dovecot'],path)

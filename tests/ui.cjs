@@ -257,6 +257,7 @@ const assert=require('assert/strict');
     await require('./ui_startup_request_key.cjs')(page,capture);
     await require('./ui_startup_autofs.cjs')(page,capture);
     await require('./ui_startup_clamav.cjs')(page,capture);
+    await require('./ui_startup_lvm.cjs')(page,capture);
     await require('./ui_startup_dovecot.cjs')(page,capture);
     await require('./ui_startup_postgresql.cjs')(page,capture);
     await require('./ui_startup_strongswan.cjs')(page,capture);

@@ -2000,6 +2000,200 @@ def parse_clamav_conf(data,tool):
     return result
 
 
+# LVM2 program settings (#1599): /etc/lvm/lvm.conf and /etc/lvm/lvmlocal.conf are parsed as data from
+# the hashed bytes, exactly as app/lvm_commands.parse does (lvm2 2.03.16 libdm-config). Nothing is run.
+# Only a reduced tree is stored: the global/* and dmeventd/* program settings, each top-level section's
+# tags filter and the tags section (hosttags, tag subsections and their host_list/host_filter). Every
+# other value is dropped. Command settings get best-effort redaction, and values over 512 characters are
+# cut; both are flagged as inexact so the controller view is not complete.
+LVM_FILES = ('/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf')
+LVM_SETTINGS = {'global':frozenset(('thin_check_executable','thin_dump_executable','thin_repair_executable',
+                                    'cache_check_executable','cache_dump_executable','cache_repair_executable',
+                                    'vdo_format_executable','fsadm_executable','lvmlockctl_kill_command','tags')),
+                'dmeventd':frozenset(('executable','mirror_library','raid_library','snapshot_library','thin_library',
+                                      'vdo_library','thin_command','vdo_command','tags'))}
+LVM_COMMANDS = frozenset(('global/lvmlockctl_kill_command','dmeventd/thin_command','dmeventd/vdo_command'))
+LVM_DEPTH = 64
+LVM_VALUES = 64
+LVM_TAGS = 64
+LVM_SPACE = ' \t\n\v\f\r'
+
+
+class LvmParseError(Exception):
+    def __init__(self,reason,line):
+        super().__init__(reason);self.reason=reason;self.line=line
+
+
+def _lvm_unescape(text):
+    out=[];i=0
+    while i<len(text):
+        if text[i]=='\\' and i+1<len(text) and text[i+1] in '"\\':i+=1
+        out.append(text[i]);i+=1
+    return ''.join(out)
+
+
+def _lvm_tokens(text):
+    pos=0;line=1;end=len(text);prev=None
+    simple={'{':'section_b','}':'section_e','[':'array_b',']':'array_e',',':'comma','=':'eq'}
+    while True:
+        while pos<end:
+            ch=text[pos]
+            if ch=='#':
+                while pos<end and text[pos]!='\n':pos+=1
+            elif ch in LVM_SPACE:
+                if ch=='\n':line+=1
+                pos+=1
+            else:break
+        if pos>=end:
+            yield ('eof','',line);return
+        values=prev in ('eq','array_b','comma');start=pos;ch=text[pos]
+        if ch in simple:kind=simple[ch];pos+=1
+        elif ch in '"\'':
+            kind='escaped' if ch=='"' else 'string';pos+=1
+            while pos<end and text[pos]!=ch:
+                if ch=='"' and text[pos]=='\\' and pos+1<end:pos+=1
+                pos+=1
+            if pos>=end:raise LvmParseError('unterminated_string',line)
+            pos+=1
+        elif values and (ch.isdigit() or ch in '.+-') and ch.isascii():
+            kind='float' if ch=='.' else 'int';pos+=1
+            while pos<end:
+                c=text[pos]
+                if not (c.isascii() and c.isdigit()):
+                    if c=='.' and kind!='float':kind='float';pos+=1;continue
+                    break
+                pos+=1
+        else:
+            kind='bare' if values else 'identifier'
+            while pos<end and text[pos] not in LVM_SPACE and text[pos] not in '#={}':pos+=1
+        raw=text[start:pos]
+        yield (kind,raw,line)
+        line+=raw.count('\n');prev=kind
+
+
+def _lvm_node(key):
+    return {'key':key,'value':None,'children':[]}
+
+
+def _lvm_find(node,key):
+    for child in node['children']:
+        if child['key']==key:return child
+    return None
+
+
+def parse_lvm_tree(text):
+    """Parse one LVM configuration file into a tree like app/lvm_commands.parse; raise LvmParseError."""
+    tokens=_lvm_tokens(text);tok=[next(tokens)]
+    def advance():tok[0]=next(tokens)
+    def scalar():
+        kind,raw,line=tok[0]
+        if kind=='int':
+            body=raw.lstrip('+-')
+            try:value=int(raw,0) if body[:1]!='0' or len(body)==1 else int(raw,8)
+            except ValueError:value=0
+            advance();return ['int',value]
+        if kind=='float':advance();return ['float',raw]
+        if kind in ('string','escaped'):
+            advance();body=raw[1:-1]
+            return ['string',_lvm_unescape(body) if kind=='escaped' else body]
+        if kind=='bare':advance();return ['string',raw]
+        raise LvmParseError('expected_value',line)
+    def find_or_make(parent,path):
+        while True:
+            path=path.lstrip('/');cut=path.find('/');seg=path if cut<0 else path[:cut]
+            node=_lvm_find(parent,seg)
+            if node is None:node=_lvm_node(seg);parent['children'].append(node)
+            if cut<0:return node
+            parent=node;path=path[cut:]
+    def section(parent,depth):
+        if depth>LVM_DEPTH:raise LvmParseError('nesting_limit',tok[0][2])
+        kind,raw,line=tok[0]
+        if kind=='escaped':key=_lvm_unescape(raw[1:-1])
+        elif kind=='string':key=raw[1:-1]
+        elif kind=='identifier':key=raw
+        else:raise LvmParseError('unexpected_token',line)
+        advance()
+        if not key:raise LvmParseError('empty_section_identifier',line)
+        node=find_or_make(parent,key)
+        if tok[0][0]=='section_b':
+            advance()
+            while tok[0][0]!='section_e':section(node,depth+1)
+            advance();return
+        if tok[0][0]!='eq':raise LvmParseError('unexpected_token',tok[0][2])
+        advance()
+        if tok[0][0]=='array_b':
+            advance();values=[]
+            while tok[0][0]!='array_e':
+                values.append(scalar())
+                if tok[0][0]=='comma':advance()
+            advance();node['value']=values or [['empty_array',None]]
+        else:node['value']=[scalar()]
+    root=_lvm_node('<root>')
+    while tok[0][0]!='eof':section(root,0)
+    return root
+
+
+def parse_lvm_conf(data):
+    """Reduce one hashed lvm.conf or lvmlocal.conf to the settings app/lvm_commands evaluates."""
+    result={'parsed':False,'error':None,'sections':[],'inexact':[],'nodename':None}
+    try:result['nodename']=os.uname().nodename[:255] or None
+    except (AttributeError,OSError):pass
+    if b'\x00' in data:result['error']={'reason':'nul_byte','line':None};return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:result['error']={'reason':'invalid_utf8','line':None};return result
+    try:root=parse_lvm_tree(text)
+    except LvmParseError as exc:result['error']={'reason':exc.reason,'line':exc.line};return result
+    result['parsed']=True
+    def kept(values,name):
+        out=[]
+        for kind,value in values[:LVM_VALUES]:
+            # The contract reads only a number's type and whether it is zero, so bounding keeps every outcome:
+            # integers clamp to signed 64 bits (sign and non-zero kept), and decimal text is cut to 64 characters.
+            if kind=='int':value=max(-(1<<63),min((1<<63)-1,value))
+            elif kind=='float':value=value[:64]
+            elif kind=='string':
+                if name in LVM_COMMANDS:
+                    value,redacted=redact_cron_command(value)
+                    if redacted and name not in result['inexact']:result['inexact'].append(name)
+                if len(value)>CRON_COMMAND_LIMIT:
+                    value=value[:CRON_COMMAND_LIMIT]
+                    if name not in result['inexact']:result['inexact'].append(name)
+            out.append([kind,value])
+        if len(values)>LVM_VALUES and name not in result['inexact']:result['inexact'].append(name)
+        return out
+    for top in root['children']:
+        # A node can hold both a value and children ("global = 1" then "global/x = ..."); merge reads the children.
+        if top['key'] in LVM_SETTINGS:
+            # A tags subsection (no value) still makes merge_config_tree skip the whole section.
+            children=[{'key':c['key'],'values':kept(c['value'],top['key']+'/'+c['key']) if c['value'] is not None else None}
+                      for c in top['children'] if c['key'] in LVM_SETTINGS[top['key']] and (c['value'] is not None or c['key']=='tags')]
+            result['sections'].append({'key':top['key'],'values':children})
+        elif top['key']=='tags':
+            values=[{'key':c['key'],'values':kept(c['value'],'tags/'+c['key'])}
+                    for c in top['children'] if c['value'] is not None and c['key']=='hosttags']
+            tags=[];cut=set()
+            for c in top['children']:
+                if c['value'] is not None:continue
+                key=c['key']
+                if len(key)>255:
+                    # A cut name is no longer the tag LVM uses; it is flagged, and dropped below if it collides.
+                    key=key[:255]
+                    if 'tags' not in result['inexact']:result['inexact'].append('tags')
+                    cut.add(len(tags))
+                tags.append({'key':key,'values':[{'key':s['key'],'values':kept(s['value'],'tags/'+key+'/'+s['key'])}
+                                                 for s in c['children'] if s['value'] is not None and s['key'] in ('host_list','host_filter')]})
+            exact={t['key'] for i,t in enumerate(tags) if i not in cut};seen=set();unique=[]
+            for i,tag in enumerate(tags):
+                if i in cut and (tag['key'] in exact or tag['key'] in seen):continue
+                seen.add(tag['key']);unique.append(tag)
+            tags=unique
+            if len(tags)>LVM_TAGS:
+                tags=tags[:LVM_TAGS]
+                if 'tags' not in result['inexact']:result['inexact'].append('tags')
+            result['sections'].append({'key':'tags','values':values,'tags':tags})
+    result['inexact']=result['inexact'][:LVM_VALUES]
+    return result
+
 # autofs master map (#1375): the hashed /etc/auto.master bytes are reported as bounded latin-1 text and
 # nothing else. No map path the text names is stat-ed, opened or run: the agent cannot establish a
 # non-triggering lookup boundary (symlinks, nested automount points and the live mount topology), and a
@@ -2400,7 +2594,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;request_key=cron_jobs and request_key_reads(str(path));autofs=cron_jobs and str(path)==AUTOFS_MASTER;clamav=CLAMAV_FILES.get(str(path)) if cron_jobs else None;content=bytearray() if form or at_name or anacron or tcpw or kdump or request_key or autofs or clamav else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;request_key=cron_jobs and request_key_reads(str(path));autofs=cron_jobs and str(path)==AUTOFS_MASTER;clamav=CLAMAV_FILES.get(str(path)) if cron_jobs else None;lvm=cron_jobs and str(path) in LVM_FILES;content=bytearray() if form or at_name or anacron or tcpw or kdump or request_key or autofs or clamav or lvm else None
         dovecot=cron_jobs and dovecot_reads(str(path))
         if dovecot and content is None:content=bytearray()
         swanctl=cron_jobs and swanctl_reads(str(path))
@@ -2458,6 +2652,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['autofs']=parse_autofs_master(bytes(content))
             if clamav and row['kind']=='regular':
                 row['clamav']=parse_clamav_conf(bytes(content),clamav)
+            if lvm and row['kind']=='regular':
+                row['lvm']=parse_lvm_conf(bytes(content))
             if dovecot and row['kind']=='regular':
                 row['dovecot']=parse_dovecot(bytes(content))
             if swanctl and row['kind']=='regular':

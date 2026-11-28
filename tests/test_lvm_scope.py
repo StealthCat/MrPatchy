@@ -138,7 +138,7 @@ def test_catalogs_label_files_and_state_the_gap():
     assert startup_inventory.mechanism(LVM_LOCAL) == ('lvm_local', 'LVM local configuration')
     assert startup_inventory.mechanism(LVM_DIR + '/profile/thin.profile')[0] == 'additional'
     gap = next(g for g in startup_inventory.GAPS if g.startswith('LVM2:'))
-    assert 'not yet evaluated' in gap and 'lvm_<tag>.conf' in gap and 'archive' in gap
+    assert 'are not collected yet' in gap and 'lvm_<tag>.conf' in gap and 'archive' in gap and 'parse both from the hashed bytes' in gap
     mechanism = next(m for m in startup_catalog._MECHANISMS if m['id'] == 'lvm')
     assert [loc['path'] for loc in mechanism['locations']] == list(NEW)
 
