@@ -1,3 +1,9 @@
+## 1.138.0 — 2026-11-25
+
+1. [PR #1708](https://github.com/StealthCat/MrPatchy/pull/1708): Agents hash the Samba configuration (`/etc/samba`) and the RPM-family `/etc/sysconfig/samba` options file as metadata-only built-in startup files. Saved custom `/etc/samba` or `/etc/sysconfig` paths stay valid. Startup Files labels them and states that the share preexec/postexec and global script commands are not yet evaluated. The coordinator resolved its overlap with the collectd scope from #1705 as a union. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Refs #1580.
+
+Integrated through [PR #1712](https://github.com/StealthCat/MrPatchy/pull/1712). This source update does not publish a Docker image.
+
 ## 1.137.0 — 2026-11-25
 
 1. [PR #1696](https://github.com/StealthCat/MrPatchy/pull/1696): Startup Files shows the programs and plugin libraries that `lvm.conf` and `lvmlocal.conf` make LVM run as root. That covers the thin/cache check, dump and repair executables, vdoformat, fsadm, the lvmlockctl kill command, and the dmeventd executable, libraries and thin/vdo commands. Each entry shows its effective value and source, a rejected file shows its reason and line, and coverage gaps are listed. Agents report only these settings from the configuration. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1599.
