@@ -15,7 +15,8 @@ module.exports=async(page,capture)=>{
  let body=respond([row('/etc/dhcp/dhcpd.conf',{dhcpd_state:'parsed',dhcpd:view()})]);
  const handler=route=>route.fulfill({json:body});
  await page.route('**/api/hosts/*/security/startup-inventory?*',handler);
- const open=async()=>{await page.goto(new URL('/#servers/'+host+'/startup/files',page.url()).href);await page.locator('#startup-file-items').waitFor();};
+ // Leave the page first: the same hash does not re-render.
+ const open=async()=>{await page.goto(new URL('/#activity',page.url()).href);await page.goto(new URL('/#servers/'+host+'/startup/files',page.url()).href);await page.locator('#startup-file-items').waitFor();};
  try{
   await open();
   await page.getByRole('heading',{name:'dhcpd execute() programs (3 configured · 1 run as root)',exact:true}).waitFor();
