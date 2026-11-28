@@ -8,21 +8,26 @@ from tests.test_ai_benchmark_series import run_series
 
 BENCHMARKS = Path(__file__).resolve().parents[1] / 'docs' / 'benchmarks'
 SAME_SERVER_SOURCE = '3a06f2edb48d95f781f6758fe2a8500bb4f82197'
+PACED_SOURCE = '1994e4ad7f50fec2773c95f146ef5dfeb8f143a2'
 
 
 @pytest.fixture(params=[
     pytest.param(('ai-capped-v1110-sqlite-linux', 'sqlite', '3.45.1',
-                  'e8ad2b901c2becdb0de3379ffef3790c0953c690', 8), id='sqlite'),
+                  'e8ad2b901c2becdb0de3379ffef3790c0953c690', 8, 'daily_cap'), id='sqlite'),
     pytest.param(('ai-capped-v1112-mysql-linux', 'mysql', '8.4.13',
-                  '20c950d5bbbfce78aa8cbf42b36712d62ca68b5c', 8), id='mysql'),
+                  '20c950d5bbbfce78aa8cbf42b36712d62ca68b5c', 8, 'daily_cap'), id='mysql'),
     pytest.param(('ai-capped-v1118-sqlite-linux-same-server', 'sqlite', '3.45.1',
-                  SAME_SERVER_SOURCE, 1), id='sqlite-same-server'),
+                  SAME_SERVER_SOURCE, 1, 'daily_cap'), id='sqlite-same-server'),
     pytest.param(('ai-capped-v1118-mysql-linux-same-server', 'mysql', '8.4.13',
-                  SAME_SERVER_SOURCE, 1), id='mysql-same-server'),
+                  SAME_SERVER_SOURCE, 1, 'daily_cap'), id='mysql-same-server'),
+    pytest.param(('ai-paced-v1132-sqlite-linux', 'sqlite', '3.45.1',
+                  PACED_SOURCE, 8, 'rate_and_daily'), id='sqlite-paced'),
+    pytest.param(('ai-paced-v1132-mysql-linux', 'mysql', '8.4.13',
+                  PACED_SOURCE, 8, 'rate_and_daily'), id='mysql-paced'),
 ])
 def archive(request):
-    name, backend, version, source, hosts = request.param
-    return BENCHMARKS / name, backend, version, source, hosts
+    name, *configuration = request.param
+    return (BENCHMARKS / name, *configuration)
 
 
 @pytest.fixture
@@ -48,12 +53,16 @@ def test_retained_native_pairs_replay(archive, pairs):
 
 
 def test_retained_native_provenance_and_coverage(archive, pairs):
-    records, backend, version, source, hosts = archive
+    records, backend, version, source, hosts, control_mode = archive
     expected = {'provenance.txt', 'series.json'} | {path.name for pair in pairs for path in pair}
     assert {path.name for path in records.iterdir()} == expected
     provenance = (records / 'provenance.txt').read_text(encoding='utf-8').splitlines()
     assert provenance[0] == f'commit={source}'
     assert provenance[1].startswith('Linux ')
+    if control_mode == 'rate_and_daily':
+        assert 'ai_control_mode=rate_and_daily' in provenance
+        assert 'starts_per_hour=1000' in provenance
+        assert f'fixture_hosts={hosts}' in provenance
     if hosts == 1:
         assert 'fixture_hosts=1' in provenance
     if backend == 'sqlite':
@@ -72,7 +81,17 @@ def test_retained_native_provenance_and_coverage(archive, pairs):
             if hosts == 1:
                 assert report['single_server_slots'] == 4
                 assert report['peak_provider_requests'] == slots
-            assert report['ai_control_mode'] == 'daily_cap'
+            assert report['ai_control_mode'] == control_mode
+            if control_mode == 'rate_and_daily':
+                rate = report['fixture_rate']
+                assert rate['starts_per_hour'] == 1000
+                assert rate['admitted_starts'] == 8
+                assert report['peak_provider_requests'] == 1
+                assert report['persisted_assessments'] == {
+                    'subjects': 8, 'input_stages': 12, 'follow_up_subjects': 4,
+                }
+            else:
+                assert 'fixture_rate' not in report
             assert report['fixture_only'] and report['errors'] == 0
             assert report['completed_subjects'] == 8 and report['approved_subjects'] == 0
             assert report['stages']['two_stage']['count'] == 4

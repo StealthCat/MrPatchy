@@ -1,0 +1,328 @@
+{
+  "budget_timing_differences": {
+    "budget_reconciliation": {
+      "p50_ms": {
+        "max": 0.309,
+        "median": 0.0375,
+        "min": -0.256,
+        "pair_count": 6
+      },
+      "p95_ms": {
+        "max": 7.271,
+        "median": 0.891,
+        "min": -0.593,
+        "pair_count": 6
+      }
+    },
+    "budget_reservation": {
+      "p50_ms": {
+        "max": 0.344,
+        "median": -0.0525,
+        "min": -0.297,
+        "pair_count": 6
+      },
+      "p95_ms": {
+        "max": 2.204,
+        "median": -0.1195,
+        "min": -5.348,
+        "pair_count": 6
+      }
+    }
+  },
+  "capability": {
+    "fixture_budget": {
+      "cap_usd": 10,
+      "pricing_version": "synthetic-v1",
+      "settled_calls": 12,
+      "settled_microusd": 240,
+      "timezone": "UTC"
+    },
+    "input_tokens": 1200,
+    "output_tokens": 240,
+    "provider_calls": 12,
+    "runs": 8,
+    "stage_samples": {
+      "admission": 8,
+      "one_stage": 4,
+      "provider": 12,
+      "queue_age": 8,
+      "receipt_persistence": 12,
+      "run": 8,
+      "ssh_evidence": 4,
+      "two_stage": 4,
+      "usage_persistence": 12
+    },
+    "workload_fingerprint": {
+      "sha256": "9014ae6c2139f0875c424df4f876c657b07fd161ce04d408227066f1c8273a89",
+      "version": 1
+    }
+  },
+  "capability_equivalent": true,
+  "fixture_only": true,
+  "interpretation": "Each difference is parallel minus serial within one pair. Median and range describe the spread in these disposable, synthetic fixture runs.",
+  "pair_count": 6,
+  "paired_differences": {
+    "elapsed_seconds": {
+      "absolute": {
+        "max": 0.016,
+        "median": -0.0015,
+        "min": -0.018
+      },
+      "percent": {
+        "max": 0.057,
+        "median": -0.0055,
+        "min": -0.064
+      }
+    },
+    "runs_per_second": {
+      "absolute": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": -0.001
+      },
+      "percent": {
+        "max": 0.0,
+        "median": 0.0,
+        "min": -0.353
+      }
+    }
+  },
+  "pairs": [
+    {
+      "elapsed_seconds": {
+        "absolute": 0.016,
+        "baseline": 28.314,
+        "candidate": 28.33,
+        "percent": 0.057,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 1,
+      "parallel_report": "pair-1-slots-4.json",
+      "runs_per_second": {
+        "absolute": -0.001,
+        "baseline": 0.283,
+        "candidate": 0.282,
+        "percent": -0.353,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-1-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": 0.007,
+        "baseline": 28.3,
+        "candidate": 28.307,
+        "percent": 0.025,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 1,
+      "parallel_report": "pair-2-slots-4.json",
+      "runs_per_second": {
+        "absolute": 0.0,
+        "baseline": 0.283,
+        "candidate": 0.283,
+        "percent": 0.0,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-2-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": -0.009,
+        "baseline": 28.311,
+        "candidate": 28.302,
+        "percent": -0.032,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 1,
+      "parallel_report": "pair-3-slots-4.json",
+      "runs_per_second": {
+        "absolute": 0.0,
+        "baseline": 0.283,
+        "candidate": 0.283,
+        "percent": 0.0,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-3-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": 0.0,
+        "baseline": 28.293,
+        "candidate": 28.293,
+        "percent": 0.0,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 1,
+      "parallel_report": "pair-4-slots-4.json",
+      "runs_per_second": {
+        "absolute": 0.0,
+        "baseline": 0.283,
+        "candidate": 0.283,
+        "percent": 0.0,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-4-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": -0.003,
+        "baseline": 28.308,
+        "candidate": 28.305,
+        "percent": -0.011,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 1,
+      "parallel_report": "pair-5-slots-4.json",
+      "runs_per_second": {
+        "absolute": 0.0,
+        "baseline": 0.283,
+        "candidate": 0.283,
+        "percent": 0.0,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-5-slots-1.json"
+    },
+    {
+      "elapsed_seconds": {
+        "absolute": -0.018,
+        "baseline": 28.337,
+        "candidate": 28.319,
+        "percent": -0.064,
+        "percent_unavailable": null
+      },
+      "parallel_peak_provider_requests": 1,
+      "parallel_report": "pair-6-slots-4.json",
+      "runs_per_second": {
+        "absolute": 0.0,
+        "baseline": 0.282,
+        "candidate": 0.282,
+        "percent": 0.0,
+        "percent_unavailable": null
+      },
+      "serial_peak_provider_requests": 1,
+      "serial_report": "pair-6-slots-1.json"
+    }
+  ],
+  "parallel": {
+    "ai_control_mode": "rate_and_daily",
+    "ai_control_mode_source": "report",
+    "concurrency": 4,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "mysql",
+    "database_version": "8.4.13",
+    "execution": "parallel",
+    "fixture_hosts": 8,
+    "fixture_rate": {
+      "admitted_starts": 8,
+      "starts_per_hour": 1000
+    },
+    "persistence_delay_ms": 15,
+    "persistence_delay_source": "report",
+    "provider_delay_ms": 150,
+    "queue_age_seconds": 2,
+    "queue_age_source": "report",
+    "retained_history_rows": 1000,
+    "runs": 8,
+    "single_server_slots": null,
+    "source_commit": "1994e4ad7f50fec2773c95f146ef5dfeb8f143a2",
+    "ssh_delay_ms": 50,
+    "ssh_delay_source": "report"
+  },
+  "schema_version": 1,
+  "serial": {
+    "ai_control_mode": "rate_and_daily",
+    "ai_control_mode_source": "report",
+    "concurrency": 1,
+    "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+    "database": "mysql",
+    "database_version": "8.4.13",
+    "execution": "serial",
+    "fixture_hosts": 8,
+    "fixture_rate": {
+      "admitted_starts": 8,
+      "starts_per_hour": 1000
+    },
+    "persistence_delay_ms": 15,
+    "persistence_delay_source": "report",
+    "provider_delay_ms": 150,
+    "queue_age_seconds": 2,
+    "queue_age_source": "report",
+    "retained_history_rows": 1000,
+    "runs": 8,
+    "single_server_slots": null,
+    "source_commit": "1994e4ad7f50fec2773c95f146ef5dfeb8f143a2",
+    "ssh_delay_ms": 50,
+    "ssh_delay_source": "report"
+  },
+  "stage_p50_ms_differences": {
+    "admission": {
+      "max": 3.641,
+      "median": -0.1455,
+      "min": -4.497
+    },
+    "claim_lock": {
+      "max": 0.123,
+      "median": 0.012,
+      "min": -0.147,
+      "pair_count": 6
+    },
+    "claim_lock_hold": {
+      "max": 1.133,
+      "median": 0.1525,
+      "min": -4.061,
+      "pair_count": 6
+    },
+    "executor_wait": {
+      "max": 0.017,
+      "median": -0.002,
+      "min": -0.025,
+      "pair_count": 6
+    },
+    "one_stage": {
+      "max": 1.04,
+      "median": -3.421,
+      "min": -9.596
+    },
+    "provider": {
+      "max": 0.951,
+      "median": -0.02,
+      "min": -0.178
+    },
+    "queue_age": {
+      "max": 8.4,
+      "median": -3.264,
+      "min": -40.401
+    },
+    "receipt_persistence": {
+      "max": 0.273,
+      "median": 0.003,
+      "min": -0.266
+    },
+    "run": {
+      "max": 18.212,
+      "median": 6.26,
+      "min": -16.564
+    },
+    "ssh_evidence": {
+      "max": 0.006,
+      "median": -0.0035,
+      "min": -0.012
+    },
+    "two_stage": {
+      "max": 11.328,
+      "median": 5.715,
+      "min": -9.527
+    },
+    "usage_persistence": {
+      "max": 0.291,
+      "median": 0.0475,
+      "min": -0.156
+    }
+  }
+}

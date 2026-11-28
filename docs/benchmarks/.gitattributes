@@ -1,0 +1,2 @@
+# Keep archived capture bytes identical to the hosted artifacts on every platform.
+ai-paced-v1132-*-linux/** -text
