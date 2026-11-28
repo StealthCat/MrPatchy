@@ -1,3 +1,10 @@
+## 1.139.1 — 2026-11-25
+
+1. [PR #1723](https://github.com/StealthCat/MrPatchy/pull/1723): The paired triage benchmark and its comparator accept synthetic provider delays of up to 5,000 ms, so slower provider responses can be exercised. The default, workload-equivalence checks, report format, rate controls and budget validation are unchanged. Compatibility: benchmark tooling only. Fixes #1722.
+2. [PR #1724](https://github.com/StealthCat/MrPatchy/pull/1724): Fixed: the PostgreSQL Startup Files view dropped settings from absolute includes written with `//` or `/./`. A non-canonical include path is now unobserved, with a blocking gap, instead of being treated as absent. Compatibility: view evaluation only, with no agent, schema or authorization change. Fixes #1721.
+
+Integrated together through batch [PR #1726](https://github.com/StealthCat/MrPatchy/pull/1726). This source update does not publish a Docker image.
+
 ## 1.139.0 — 2026-11-25
 
 1. [PR #1715](https://github.com/StealthCat/MrPatchy/pull/1715): Startup Files shows the commands and program paths `/etc/rsnapshot.conf` makes rsnapshot run: pre/post-exec hooks, `backup_script`, `backup_exec` and backtick `include_conf`. Each shows its argv or shell, trigger, failure effect, parser rejection and coverage gaps. Newer agents parse the lines and keep values only for the directives the view evaluates. Commands get best-effort redaction, and any redacted or truncated line is a blocking gap. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1530.

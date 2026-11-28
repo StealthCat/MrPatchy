@@ -448,3 +448,31 @@ def test_symlinked_include_dir_is_unobserved_in_the_parsed_report(pg_root, tmp_p
     result = agent.parse_postgresql(b"include_dir = 'linked'\n", str(cluster / 'postgresql.conf'))
     assert result['statements'][0]['listing'] is None
     assert 'outside' not in repr(result['statements'][0]['listing'])
+
+
+@pytest.mark.parametrize('include', ['/etc/postgresql/16/main//extra.conf', '/etc/postgresql/16/main/./extra.conf',
+                                     '/etc/postgresql/16/main/x/../extra.conf', '//etc/postgresql/16/main/extra.conf',
+                                     '/etc/postgresql/16/main/extra.conf/', '/etc/postgresql/16/main/../../postgresql/16/main/gone.conf'])
+@pytest.mark.parametrize('directive', ['include', 'include_if_exists'])
+def test_non_canonical_absolute_include_is_unobserved_not_absent(include, directive):
+    # PostgreSQL opens an absolute include unchanged and the kernel resolves '//', '.' and '..' (#1721).
+    # Only an exact canonical path can be proven absent; '..' is not resolved lexically (symlinked directories).
+    texts = {CONF: f"{directive} = '{include}'\n",
+             '/etc/postgresql/16/main/extra.conf': "archive_mode = on\narchive_command = '/bin/evil %p'\n"}
+    view = startup_inventory.postgresql_view(_inventory(texts), CONF)
+    assert view['server_starts'] is True and view['errors'] == []
+    assert ('file_unknown', include) in {(g['code'], g.get('path')) for g in view['gaps']}
+    assert all(g['blocking'] for g in view['gaps'])
+
+
+@pytest.mark.parametrize('directive', ['include', 'include_if_exists'])
+def test_canonical_absolute_include_still_reads_or_proves_absence(directive):
+    texts = {CONF: f"{directive} = '/etc/postgresql/16/main/extra.conf'\n{directive} = '/etc/postgresql/16/main/gone.conf'\n",
+             '/etc/postgresql/16/main/extra.conf': "archive_mode = on\narchive_command = '/bin/evil %p'\n"}
+    view = startup_inventory.postgresql_view(_inventory(texts), CONF)
+    assert [c['command'] for c in view['commands']] == ['/bin/evil %p']
+    assert not any(g.get('path', '').endswith('gone.conf') for g in view['gaps'])
+    if directive == 'include':
+        assert view['server_starts'] is False and view['errors'][0]['reason'] == 'could_not_open_file'
+    else:
+        assert view['server_starts'] is True

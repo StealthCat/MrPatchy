@@ -16,6 +16,7 @@ MAX_ELAPSED_SECONDS = 86_400
 MAX_THROUGHPUT = 1_000_000
 MAX_STAGE_MS = MAX_ELAPSED_SECONDS * 1000
 MAX_QUEUE_AGE_SECONDS = 86_400
+MAX_PROVIDER_DELAY_MS = 5_000
 LEGACY_QUEUE_AGE_SECONDS = 2
 MAX_SINGLE_SERVER_SLOTS = 4
 DATABASES = ('sqlite', 'mysql')
@@ -196,7 +197,8 @@ def _validate(report, label):
             raise ComparisonError(f'{label}.concurrency exceeds shared_server_slots')
     elif shared_server_slots is not None:
         raise ComparisonError(f'{label}.shared_server_slots requires a shared layout across several servers')
-    provider_delay = _bounded(report.get('provider_delay_ms'), f'{label}.provider_delay_ms', 1, 1000)
+    provider_delay = _bounded(report.get('provider_delay_ms'), f'{label}.provider_delay_ms',
+                              1, MAX_PROVIDER_DELAY_MS)
     provider_calls = _integer(report.get('provider_calls'), f'{label}.provider_calls', positive=True)
     transport = None
     if 'connections' in report:

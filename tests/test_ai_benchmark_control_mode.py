@@ -159,6 +159,24 @@ def test_budget_evidence_cannot_be_attached_to_an_uncapped_report():
         compare(report(), report('parallel', 4, fixture_budget=capped_budget()))
 
 
+def test_paced_capped_fixture_accepts_provider_delay_longer_than_the_start_interval():
+    result = run('--runs', '2', '--concurrency', '2', '--control-mode', 'rate_and_daily',
+                 '--rate-per-hour', '1000', '--provider-delay-ms', '4500')
+    assert result.returncode == 0, result.stderr
+    sample = json.loads(result.stdout)
+    assert sample['provider_delay_ms'] == 4500
+    assert sample['fixture_rate']['admitted_starts'] == sample['completed_subjects'] == 2
+    assert sample['provider_calls'] == sample['fixture_budget']['settled_calls'] == 3
+    assert sample['persisted_assessments'] == {'subjects': 2, 'input_stages': 3, 'follow_up_subjects': 1}
+    assert sample['approved_subjects'] == sample['errors'] == 0
+
+
+def test_benchmark_refuses_provider_delay_above_the_fixture_bound():
+    result = run('--provider-delay-ms', '5001', timeout=10)
+    assert result.returncode == 2 and result.stdout == ''
+    assert '--provider-delay-ms must be between 1 and 5000' in result.stderr
+
+
 @pytest.mark.parametrize('layout', [(), ('--same-server',)], ids=['cross-server', 'same-server'])
 def test_daily_cap_serial_and_parallel_settle_all_calls_without_changing_the_workload(layout):
     serial = _benchmark(1, '--control-mode', 'daily_cap', *layout)
