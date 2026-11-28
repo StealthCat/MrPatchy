@@ -434,10 +434,12 @@ def test_scoring_revalidates_five_results_in_two_evidence_queries(admin, monkeyp
     assess = ai.request
     response_returned = False
     reads = []
+    package_columns = []
 
     def change_evidence(*args, **kwargs):
         nonlocal response_returned
         with Session() as session:
+            session.get(Package, packages[0]).origin = 'unrelated repository metadata changed'
             session.get(Package, packages[1]).candidate = '3'
             session.get(Host, 'bulk-2').inventory = {'os': 'ID=debian\nVERSION_ID=13'}
             session.delete(session.get(Package, packages[3]))
@@ -452,6 +454,7 @@ def test_scoring_revalidates_five_results_in_two_evidence_queries(admin, monkeyp
         if response_returned and query.lstrip().startswith('select'):
             if 'from packages ' in query or 'from packages\n' in query:
                 reads.append('package')
+                package_columns.append(query.partition('from packages')[0])
             if 'from hosts ' in query or 'from hosts\n' in query:
                 reads.append('host')
 
@@ -470,6 +473,8 @@ def test_scoring_revalidates_five_results_in_two_evidence_queries(admin, monkeyp
         f'bulk-{index}': ('superseded', None) for index in range(1, 5)
     }}
     assert sorted(reads) == ['host', 'package']
+    for unused in ('origin', 'repository_priority', 'available_since'):
+        assert f'packages.{unused}' not in package_columns[0]
 
 
 def test_equal_age_candidates_keep_id_tiebreak_order_across_chunks(admin,monkeypatch):

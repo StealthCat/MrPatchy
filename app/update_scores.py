@@ -175,12 +175,16 @@ def _scoring_package_filters():
             Package.host_id.in_(host_lifecycle.active_ids()))
 
 
+_SCORING_PACKAGE_FIELDS = (
+    Package.id, Package.name, Package.installed, Package.candidate, Package.priority,
+    Package.priority_manual, Package.held, Package.dpkg_state,
+)
+
+
 def scoring_package_page(session, cursor, limit):
     """Read the ordered scoring inputs shared by scheduling and queue status."""
     query = select(Package).options(load_only(
-        Package.id, Package.host_id, Package.name, Package.installed, Package.candidate,
-        Package.priority, Package.priority_manual, Package.available_since, Package.held,
-        Package.dpkg_state, raiseload=True,
+        *_SCORING_PACKAGE_FIELDS, Package.host_id, Package.available_since, raiseload=True,
     )).where(*_scoring_package_filters())
     if cursor is not None:
         query = query.where(or_(Package.available_since > cursor[0],
@@ -369,7 +373,8 @@ def run_one():
                         package_ids = {identifier: score.host_id + ':' + score.name
                                        for identifier, score in scores.items()}
                         packages = {package.id: package for package in s.scalars(
-                            select(Package).where(Package.id.in_(package_ids.values())))}
+                            select(Package).options(load_only(*_SCORING_PACKAGE_FIELDS, raiseload=True))
+                            .where(Package.id.in_(package_ids.values())))}
                         names_by_host = {}
                         for score in scores.values():
                             package = packages.get(package_ids[score.id])

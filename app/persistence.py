@@ -747,6 +747,9 @@ def validate(inventory):
 # collectd configuration (#1551): the exec plugin starts Exec programs at every daemon start and
 # NotificationExec programs on every notification, as the user[:group] each line names; /etc/collectd
 # (collectd.conf and collectd.conf.d) on Debian, /etc/collectd.conf and /etc/collectd.d on RPM.
+# Samba configuration (#1580): smbd runs root preexec/postexec as root, preexec/postexec as the
+# connecting user and global scripts from smb.conf; /etc/samba on both families, and the RPM-family
+# /etc/sysconfig/samba options file only.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
                         '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
@@ -755,7 +758,8 @@ ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','
                         '/etc/postgresql',
                         '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server',
                         '/etc/syslog-ng','/etc/default/syslog-ng','/etc/sysconfig/syslog-ng',
-                        '/etc/collectd','/etc/collectd.conf','/etc/collectd.d')
+                        '/etc/collectd','/etc/collectd.conf','/etc/collectd.d',
+                        '/etc/samba','/etc/sysconfig/samba')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
