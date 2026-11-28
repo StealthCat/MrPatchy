@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence, postgresql_commands, runit_services, strongswan_updown
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, lvm_commands, persistence, postgresql_commands, runit_services, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -43,6 +43,9 @@ CATALOG=(
     ('syslog_ng','syslog-ng configuration','/etc/syslog-ng'),
     ('syslog_ng_defaults','syslog-ng command-line defaults','/etc/default/syslog-ng'),
     ('syslog_ng_sysconfig','syslog-ng command-line options','/etc/sysconfig/syslog-ng'),
+    ('collectd','collectd configuration','/etc/collectd'),
+    ('collectd_rpm','collectd main configuration','/etc/collectd.conf'),
+    ('collectd_d','collectd configuration drop-ins','/etc/collectd.d'),
 )
 GAPS=[
     'Cron jobs are parsed only from crontab-format files (/etc/crontab, /etc/cron.d and user spool crontabs) by agents that report them. Command redaction is best-effort and pattern-based, so unusual credential forms can remain; commands are bounded, standard input after an unescaped % is not stored, control characters are shown escaped, and environment values are not exported, and run-parts scripts (cron.daily and similar) are not parsed into jobs; anacron and at queue parsing is described separately below.',
@@ -61,10 +64,11 @@ GAPS=[
     'strongSwan: the Debian-family /etc/swanctl directory (swanctl.conf, conf.d and the x509, private and other credential directories, as metadata and SHA-256 only) and the RPM-family /etc/strongswan directory (swanctl/, strongswan.conf and strongswan.d) are hashed as startup files, and agents that report them parse every *.conf file under /etc/swanctl and /etc/strongswan/swanctl from the hashed bytes with the strongSwan 5.9.13 settings rules. This view evaluates swanctl.conf and its includes and shows the updown command charon runs through /bin/sh for each connection child on CHILD_SA up and down, with its source line, shell syntax and whether swanctl discards the connection. Only section names, include patterns, setting names and updown commands are stored; every other value, including secrets, is dropped, and commands use the same best-effort redaction. Included files that are not *.conf files under those directories, symlinked files and files over 1 MiB, not UTF-8 or with NUL bytes are not observed, so an evaluation that reaches them reports a blocking gap. charon is assumed to run as root, as the packaged service does. The Debian-family /etc/strongswan.conf and /etc/strongswan.d (which can disable the updown plugin), whether the other settings of each connection load, legacy ipsec.conf leftupdown and leftfirewall, configuration passed with swanctl --file, connections loaded over vici by other clients, whether charon runs and the commands themselves are not evaluated.',
     'runit: /etc/service (on Debian and Ubuntu a symlink to runit/runsvdir/current, recorded, not followed), the /etc/runit directory (the 1, 2 and 3 stage scripts, ctrlaltdel and the runsvdir run-level directories of service links) and the /etc/sv service definitions (run, finish, log/run, down and control files) are hashed as startup files, as metadata and SHA-256 only, by agents that report them. Startup Files evaluates which run, finish, log/run and control programs runsv runs for each service in /etc/service, from this recorded metadata only: symlinks are resolved through recorded entries inside these paths, never on the host, and a link leading elsewhere stays unobserved. Directories are known only from files recorded beneath them, so an empty down, log or control directory looks absent. Service directories outside these paths (such as /usr/share/runit/sv or a runsvdir started with another directory), the supervise state under /run/runit, the contents of run scripts (including any chpst privilege drop), whether runsvdir runs (and so whether programs start automatically and as which account), noexec mounts and the programs themselves are not evaluated.',
     'lighttpd: the /etc/lighttpd directory (lighttpd.conf, conf-available, conf-enabled and any other files it holds, including certificates and keys, as metadata and SHA-256 only) is hashed as startup files by agents that report it, but the include_shell commands lighttpd runs as root through $SHELL -c while it parses the configuration, the piped loggers (server.errorlog, server.breakagelog and accesslog.filename starting with |) and the FastCGI/SCGI bin-path backends it starts as server.username are not yet parsed in this view. include_shell output, included files outside /etc/lighttpd (such as /usr/share/lighttpd helper scripts), configuration passed with -f, cgi.assign interpreters, mod_magnet scripts, whether lighttpd runs and the commands themselves are not evaluated.',
-    'LVM2: /etc/lvm/lvm.conf and /etc/lvm/lvmlocal.conf are hashed as startup files, as metadata and SHA-256 only, by agents that report them, but which thin/cache check, dump and repair executables, vdoformat and fsadm programs lvm commands run as root, the lvmlockctl kill command, and the dmeventd executable, plugin libraries and thin/vdo commands the configuration names are not yet evaluated in this view. Host-tag files (/etc/lvm/lvm_<tag>.conf), profiles, the archive, backup, cache and devices directories, configuration passed with --config or LVM_SYSTEM_DIR, copies in the initramfs, whether dmeventd runs and the programs themselves are not observed or evaluated. A custom /etc/lvm path saved earlier keeps its own scope and leaves the two files to built-in scope.',
+    'LVM2: /etc/lvm/lvm.conf and /etc/lvm/lvmlocal.conf are hashed as startup files, and agents that report them parse both from the hashed bytes with the lvm2 2.03.16 libdm-config rules. This view shows the thin/cache check, dump and repair executables, vdoformat and fsadm programs lvm commands run as root, the lvmlockctl kill command, and the dmeventd executable, plugin libraries and thin/vdo commands, with each value\'s source after the lvm.conf, lvmlocal.conf and host-tag merge. Agents keep only those settings, section tags filters and the tags section; every other value is dropped, command settings use best-effort redaction and values are bounded to 512 characters. A file LVM would reject is shown with its reason and line, because every LVM command then fails. Host-tag files (/etc/lvm/lvm_<tag>.conf) are not collected yet, so a cascade that names a host tag stays incomplete. Profiles, the archive, backup, cache and devices directories, configuration passed with --config or LVM_SYSTEM_DIR, copies in the initramfs, whether dmeventd runs, which volumes are thin, cache, VDO or monitored, and the programs themselves are not observed or evaluated. A custom /etc/lvm path saved earlier keeps its own scope and leaves the two files to built-in scope.',
     'ISC dhcpd: /etc/dhcp/dhcpd.conf, /etc/dhcp/dhcpd6.conf and the Debian-family /etc/default/isc-dhcp-server command-line defaults are hashed as startup files, as metadata and SHA-256 only (dhcpd.conf can hold TSIG and OMAPI key secrets, which are never stored), by agents that report them, but which execute() programs dhcpd runs on lease commit, release and expiry, as the -user account it drops to, and which global-scope ones it runs as root at every start and dhcpd -t, are not yet evaluated in this view. Files named by include statements, the rest of /etc/dhcp (dhclient hooks are described separately, leases are not captured), /etc/ltsp/dhcpd.conf (which the Debian-family unit prefers when present), the RPM-family /etc/sysconfig/dhcpd, configuration passed with -cf, whether dhcpd runs and the programs themselves are not observed or evaluated. A custom /etc/dhcp or /etc/default path saved earlier keeps its own scope and leaves these files to built-in scope.',
     'PostgreSQL: the Debian-family /etc/postgresql directory (postgresql.conf, conf.d, pg_hba.conf, pg_ident.conf, start.conf, pg_ctl.conf and environment for each version and cluster, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate, for each /etc/postgresql/<version>/<cluster>/postgresql.conf, which archive, restore, recovery and ssl_passphrase commands the server runs through /bin/sh -c and which archive and preload libraries it loads as the postgres account, with the PostgreSQL 16 rules. Only include directives and the settings the evaluation reads keep their values; every other value is dropped, and lines PostgreSQL rejects keep only their line number. Commands use the same best-effort credential redaction as cron commands. postgresql.auto.conf (written by ALTER SYSTEM, read last) lives in the data directory and is not collected, so every evaluation has a blocking gap for it; nor is the RPM-family data directory (/var/lib/pgsql/data or /var/lib/pgsql/<version>/data) that holds postgresql.conf there. Included files outside /etc/postgresql and symlinked files are not observed. /etc/postgresql-common, settings passed on the command line, recovery and standby signal files, whether the server runs and the commands themselves are not evaluated.',
     'syslog-ng: the /etc/syslog-ng directory (syslog-ng.conf, conf.d, scl.conf, patterndb.d and any other files it holds, as metadata and SHA-256 only) and the Debian-family /etc/default/syslog-ng or RPM-family /etc/sysconfig/syslog-ng option files (which supply SYSLOGNG_OPTS, such as --user and -f) are hashed as startup files by agents that report them, but which program() sources and destinations, hook-commands() and confgen exec() commands syslog-ng runs, and as which account, are not yet evaluated in this view. The SCL under /usr/share/syslog-ng/include, included files outside /etc/syslog-ng, options set in the service unit or passed on the command line, whether syslog-ng runs and the commands themselves are not observed or evaluated. A custom /etc/default or /etc/sysconfig path saved earlier keeps its own scope and leaves these files to built-in scope.',
+    'collectd: the Debian-family /etc/collectd directory (collectd.conf, collectd.conf.d, collection.conf, filters.conf and thresholds.conf), the RPM-family /etc/collectd.conf and the /etc/collectd.d directory are hashed as startup files, as metadata and SHA-256 only (network plugin passwords and other values are never stored), by agents that report them. Which Exec programs the exec plugin starts at every daemon start and which NotificationExec programs it runs on every notification, with which argv and as which user[:group], are not yet evaluated in this view. Files named by Include outside these paths, configuration passed with -C, the python and perl plugin modules, whether collectd runs and the programs themselves are not observed or evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
     'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
@@ -259,6 +263,82 @@ def clamav_text(entry):
     if 'clamav' not in entry:return ''
     return ' '.join(c['directive']+' '+c['command']+' '+(c['account']['name'] or '') for c in clamav_view(entry)['commands'])
 
+
+
+def lvm_state(entry):
+    """Whether the reduced LVM tree was parsed, rejected, not reported (older agent) or behind a symlink."""
+    if entry['path'] not in persistence.LVM_FILES:return None
+    if 'lvm' in entry:return 'parsed' if entry['lvm']['parsed'] else 'rejected'
+    return 'not_reported' if entry['kind']=='regular' else 'not_followed'
+
+
+def _lvm_quote(value):
+    return '"'+value.replace('\\','\\\\').replace('"','\\"')+'"'
+
+
+def _lvm_values_text(values):
+    if values is None:return None
+    parts=[]
+    for kind,value in values:
+        if kind=='string':parts.append(_lvm_quote(value))
+        elif kind=='int':parts.append(str(value))
+        elif kind=='float':parts.append(value)
+    if values[0][0]=='empty_array':return '[]'
+    return parts[0] if len(values)==1 else '['+', '.join(parts)+']'
+
+
+def lvm_text(report):
+    """Canonical libdm-config text for the agent's reduced tree; app/lvm_commands.parse rebuilds the same tree."""
+    lines=[]
+    def assign(item):
+        text=_lvm_values_text(item['values'])
+        return _lvm_quote(item['key'])+(' { }' if text is None else ' = '+text)
+    for section in report['sections']:
+        lines.append(_lvm_quote(section['key'])+' {')
+        lines+=['\t'+assign(v) for v in section['values']]
+        for tag in section.get('tags',()):
+            lines.append('\t'+_lvm_quote(tag['key'])+' {')
+            lines+=['\t\t'+assign(v) for v in tag['values']]
+            lines.append('\t}')
+        lines.append('}')
+    return '\n'.join(lines)+'\n'
+
+
+def lvm_view(inventory):
+    """Evaluate app/lvm_commands over the agents' reduced /etc/lvm trees. Host-tag lvm_<tag>.conf files are
+    not collected yet, so a cascade that names a host tag stays incomplete. Symlinked files are not followed.
+    LVM commands run as root. Never a safety verdict and never authorizes a response."""
+    entries={e['path']:e for e in inventory['entries']}
+    complete=inventory['state']=='collected'
+    files=[];inexact=[];nodename=None
+    for path in persistence.LVM_FILES:
+        entry=entries.get(path);state=lvm_state(entry) if entry else None
+        if entry is None:
+            files.append({'path':path,'state':'absent' if complete or path in inventory['missing_roots'] else 'unknown'})
+        elif state=='parsed':
+            report=entry['lvm'];nodename=nodename or report['nodename']
+            inexact+=[{'path':path,'setting':s} for s in report['inexact']]
+            files.append({'path':path,'state':'regular','text':lvm_text(report)})
+        elif state=='rejected':
+            files.append({'path':path,'state':'regular','parse_error':entry['lvm']['error']})
+        else:
+            files.append({'path':path,'state':'not_regular' if state=='not_followed' else 'unknown'})
+    result=lvm_commands.assess(files,hostname=nodename)
+    gaps=[{**{k:(str(g[k])[:300] if isinstance(g[k],str) else g[k]) for k in g},'blocking':True} for g in result['gaps']]
+    for entry in (entries.get(p) for p in persistence.LVM_FILES):
+        if entry is not None and lvm_state(entry)=='not_reported':
+            gaps.append({'reason':'not_reported_by_agent','path':entry['path'],'blocking':True})
+        if entry is not None and lvm_state(entry)=='not_followed':
+            gaps.append({'reason':'symlink_not_followed','path':entry['path'],'blocking':True})
+    gaps+=[{'reason':'agent_value_inexact','path':i['path'],'setting':i['setting'][:300],'blocking':True} for i in inexact[:64]]
+    return {'settings':result['settings'],'tags':result['tags'][:64],'files':[{k:f[k] for k in ('path','state','parse_error','parsed') if k in f} for f in result['files']],
+            'warnings':result['warnings'][:64],'lvm_starts':result['lvm_starts'],'run_as':result['run_as'],'nodename':nodename,
+            'complete':result['complete'] and not gaps,'gaps':gaps[:100],'not_modelled':result['not_modelled'],
+            'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
+
+
+def lvm_text_search(entry):
+    return ' '.join(v[1] for s in entry.get('lvm',{}).get('sections',()) for i in s['values'] for v in (i['values'] or ()) if v[0]=='string')
 
 def _dovecot_quote(value):
     return '"'+value.replace('\\','\\\\').replace('"','\\"')+'"'
@@ -661,6 +741,10 @@ def catalog_rows(inventory):
             found=[e for e in inventory['entries'] if e['path'] in persistence.CLAMAV_FILES]
             commands=sum(len(clamav_view(e)['commands']) for e in found if 'clamav' in e)
             label+=f' · {commands} parsed event command{"" if commands==1 else "s"}'+(' · rejected by the option parser' if any(e.get('clamav',{}).get('error') for e in found) else '')+(' · not reported by this agent version' if any(clamav_state(e)=='not_reported' for e in found) else '')
+        if key=='lvm':
+            found=[e for e in inventory['entries'] if e['path'] in persistence.LVM_FILES]
+            label+=' · program settings evaluated' if any(lvm_state(e)=='parsed' for e in found) else ''
+            label+=(' · rejected by the LVM parser' if any(lvm_state(e)=='rejected' for e in found) else '')+(' · not reported by this agent version' if any(lvm_state(e)=='not_reported' for e in found) else '')
         if key=='dovecot':
             found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
             states=[dovecot_state(e) for e in found]
@@ -726,6 +810,9 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if entry['path']==dovecot_services.DEFAULT_CONFIG and state=='parsed':
             if dovecot is None:dovecot=dovecot_view(inventory)
             row['dovecot']=dovecot
+        state=lvm_state(entry)
+        if state:row['lvm_state']=state
+        if entry['path']==persistence.LVM_FILES[0]:row['lvm']=lvm_view(inventory)
         state=strongswan_state(entry)
         if state:row['strongswan_state']=state
         if state=='parsed':row['strongswan_statements']=len(entry['strongswan']['statements'])
@@ -738,7 +825,7 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+postgresql_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+lvm_text_search(entry)+' '+postgresql_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     # One runit evaluation (#1628), on the first matching runit row: /etc/service itself when it was recorded.
