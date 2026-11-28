@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence, strongswan_updown
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence, postgresql_commands, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -56,7 +56,7 @@ GAPS=[
     'runit: /etc/service (on Debian and Ubuntu a symlink to runit/runsvdir/current, recorded, not followed), the /etc/runit directory (the 1, 2 and 3 stage scripts, ctrlaltdel and the runsvdir run-level directories of service links) and the /etc/sv service definitions (run, finish, log/run, down and control files) are hashed as startup files, as metadata and SHA-256 only, by agents that report them. Which programs runsvdir makes runsv run, on which event and as which account is not yet evaluated in this view. Service directories outside these paths (such as /usr/share/runit/sv or a runsvdir started with another directory), the supervise state under /run/runit, the contents of run scripts (including any chpst privilege drop), whether runsvdir runs and the programs themselves are not evaluated.',
     'lighttpd: the /etc/lighttpd directory (lighttpd.conf, conf-available, conf-enabled and any other files it holds, including certificates and keys, as metadata and SHA-256 only) is hashed as startup files by agents that report it, but the include_shell commands lighttpd runs as root through $SHELL -c while it parses the configuration, the piped loggers (server.errorlog, server.breakagelog and accesslog.filename starting with |) and the FastCGI/SCGI bin-path backends it starts as server.username are not yet parsed in this view. include_shell output, included files outside /etc/lighttpd (such as /usr/share/lighttpd helper scripts), configuration passed with -f, cgi.assign interpreters, mod_magnet scripts, whether lighttpd runs and the commands themselves are not evaluated.',
     'LVM2: /etc/lvm/lvm.conf and /etc/lvm/lvmlocal.conf are hashed as startup files, as metadata and SHA-256 only, by agents that report them, but which thin/cache check, dump and repair executables, vdoformat and fsadm programs lvm commands run as root, the lvmlockctl kill command, and the dmeventd executable, plugin libraries and thin/vdo commands the configuration names are not yet evaluated in this view. Host-tag files (/etc/lvm/lvm_<tag>.conf), profiles, the archive, backup, cache and devices directories, configuration passed with --config or LVM_SYSTEM_DIR, copies in the initramfs, whether dmeventd runs and the programs themselves are not observed or evaluated. A custom /etc/lvm path saved earlier keeps its own scope and leaves the two files to built-in scope.',
-    'PostgreSQL: the Debian-family /etc/postgresql directory (postgresql.conf, conf.d, pg_hba.conf, pg_ident.conf, start.conf, pg_ctl.conf and environment for each version and cluster, as metadata and SHA-256 only) is hashed as startup files by agents that report it. Which archive, restore, recovery and ssl_passphrase commands the server runs through /bin/sh and which preload libraries it loads as postgres are not yet evaluated in this view. postgresql.auto.conf (written by ALTER SYSTEM, read last) lives in the data directory and is not collected, nor is the RPM-family data directory (/var/lib/pgsql/data or /var/lib/pgsql/<version>/data) that holds postgresql.conf there; add those files as custom paths to hash them. Included files outside /etc/postgresql, /etc/postgresql-common, settings passed on the command line or with ALTER SYSTEM since the last inventory, recovery and standby signal files, whether the server runs and the commands themselves are not evaluated.',
+    'PostgreSQL: the Debian-family /etc/postgresql directory (postgresql.conf, conf.d, pg_hba.conf, pg_ident.conf, start.conf, pg_ctl.conf and environment for each version and cluster, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate, for each /etc/postgresql/<version>/<cluster>/postgresql.conf, which archive, restore, recovery and ssl_passphrase commands the server runs through /bin/sh -c and which archive and preload libraries it loads as the postgres account, with the PostgreSQL 16 rules. Only include directives and the settings the evaluation reads keep their values; every other value is dropped, and lines PostgreSQL rejects keep only their line number. Commands use the same best-effort credential redaction as cron commands. postgresql.auto.conf (written by ALTER SYSTEM, read last) lives in the data directory and is not collected, so every evaluation has a blocking gap for it; nor is the RPM-family data directory (/var/lib/pgsql/data or /var/lib/pgsql/<version>/data) that holds postgresql.conf there. Included files outside /etc/postgresql and symlinked files are not observed. /etc/postgresql-common, settings passed on the command line, recovery and standby signal files, whether the server runs and the commands themselves are not evaluated.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
     'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
@@ -324,6 +324,78 @@ def dovecot_view(inventory):
             'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
 
 
+POSTGRESQL_MAIN=re.compile(r'/etc/postgresql/[^/]+/[^/]+/postgresql\.conf')
+
+
+def postgresql_state(entry):
+    """Whether PostgreSQL statements were reported, refused or not reported (older agent) for this file."""
+    if 'postgresql' in entry:return 'parsed' if entry['postgresql']['parsed'] else 'unparsed'
+    return 'not_reported' if entry['kind']=='regular' and entry['path'].startswith(persistence.POSTGRESQL_DIR+'/') else None
+
+
+def _postgresql_quote(value):
+    out=[]
+    for c in value:
+        if c=="'":out.append("''")
+        elif c=='\\':out.append('\\\\')
+        elif ord(c)<0x20 or c=='\x7f':out.append('\\%03o'%ord(c))
+        else:out.append(c)
+    return "'"+''.join(out)+"'"
+
+
+def postgresql_text(report):
+    """Rebuild configuration text app/postgresql_commands parses identically: each statement on its own line number."""
+    lines={}
+    for item in report['statements']:
+        if item['op']=='error':lines[item['line']]='='
+        else:lines[item['line']]=(item['directive'] if item['op']=='include' else item['name'])+' = '+_postgresql_quote(item['value'])
+    return '\n'.join(lines.get(n,'') for n in range(1,max(lines,default=0)+1))+'\n'
+
+
+def postgresql_view(inventory,config):
+    """Evaluate app/postgresql_commands for one main configuration file over the reported statements.
+    Unreported, unparsed, truncated and symlinked files stay unobserved; absent paths are observed only
+    from a complete collection; include_dir listings come from the agent. Never a safety verdict."""
+    root=persistence.POSTGRESQL_DIR
+    entries={e['path']:e for e in inventory['entries'] if e['path'].startswith(root+'/')}
+    complete=inventory['state']=='collected' and root not in inventory['missing_roots']
+    links=[p for p,e in entries.items() if e['kind']=='symlink']
+    files={};directories={};gaps=[]
+    for path,entry in entries.items():
+        state=postgresql_state(entry)
+        if state=='parsed' and not entry['postgresql']['truncated']:files[path]={'state':'regular','text':postgresql_text(entry['postgresql'])}
+        elif state=='parsed':files[path]={'state':'unknown'};gaps.append({'code':'statements_truncated','path':path,'blocking':True})
+        elif entry['kind']=='symlink':files[path]={'state':'unknown'}
+        for item in entry.get('postgresql',{}).get('statements',()):
+            if item['op']!='include' or item['directive']!='include_dir':continue
+            target=item['value'] if item['value'].startswith('/') else posixpath.normpath(posixpath.join(posixpath.dirname(path),item['value']))
+            if item.get('listing') is not None and target.startswith(root+'/') and not any(target==l or target.startswith(l+'/') for l in links):
+                directories[target]=item['listing']
+    class Observed(dict):
+        def _absent(self,path):
+            return (complete and path.startswith(root+'/') and path not in entries and path not in directories
+                    and not any(path.startswith(l+'/') for l in links) and not any(p.startswith(path+'/') for p in entries))
+        def get(self,path,default=None):
+            if dict.__contains__(self,path):return dict.__getitem__(self,path)
+            return {'state':'absent'} if self._absent(path) else default
+    result=postgresql_commands.assess(Observed(files),config_file=config,directories=directories)
+    keep=('reason','path','state','limit','setting')
+    gaps+=[{'code':g['reason'],'blocking':True,**{k:(str(g[k])[:300] if isinstance(g[k],str) else g[k]) for k in keep[1:] if k in g}} for g in result['gaps']]
+    errors=[{k:e[k] for k in ('reason','file','line','path','state','setting') if k in e} for e in result['errors']]
+    redacted=any(i['op']=='set' and i['redacted'] for e in entries.values() for i in e.get('postgresql',{}).get('statements',()))
+    return {'config_file':config,'data_directory':result['data_directory'],'auto_conf':result['auto_conf'],'server_starts':result['server_starts'],
+            'start_blocker':result.get('start_blocker'),'errors':errors[:50],'files':result['files_read'],
+            'commands':[{k:c[k] for k in ('setting','command','file','line','when','conditions','active','inactive_reason','placeholder_error','invocation')} for c in result['commands']],
+            'libraries':[{k:c.get(k) for k in ('setting','library','raw_value','file','line','when','active','inactive_reason')} for c in result['libraries']],
+            'dynamic_library_path':result.get('dynamic_library_path'),'redacted':redacted,'run_as':'postgres server account',
+            'complete':False,'gaps':gaps[:100],'not_modelled':result['not_modelled'],
+            'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
+
+
+def postgresql_text_search(entry):
+    return ' '.join(i.get('value') or '' for i in entry.get('postgresql',{}).get('statements',()))
+
+
 def dovecot_text_search(entry):
     return ' '.join(i.get('pattern') or i.get('name') or i.get('value') or '' for i in entry.get('dovecot',{}).get('statements',()))
 
@@ -463,6 +535,11 @@ def catalog_rows(inventory):
             states=[dovecot_state(e) for e in found]
             parsed=states.count('parsed')
             label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
+        if key=='postgresql':
+            found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
+            states=[postgresql_state(e) for e in found]
+            parsed=states.count('parsed')
+            label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
         if key in ('strongswan','strongswan_rpm'):
             found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
             states=[strongswan_state(e) for e in found]
@@ -522,11 +599,15 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if state:row['strongswan_state']=state
         if state=='parsed':row['strongswan_statements']=len(entry['strongswan']['statements'])
         if entry['path'] in SWANCTL_CONFIG_PATHS and state=='parsed':row['strongswan']=strongswan_view(inventory,entry['path'])
+        state=postgresql_state(entry)
+        if state:row['postgresql_state']=state
+        if state=='parsed':row['postgresql_statements']=len(entry['postgresql']['statements'])
+        if state=='parsed' and POSTGRESQL_MAIN.fullmatch(entry['path']):row['postgresql']=postgresql_view(inventory,entry['path'])
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+postgresql_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     catalog=catalog_rows(inventory)
