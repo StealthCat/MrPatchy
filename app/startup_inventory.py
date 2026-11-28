@@ -530,7 +530,11 @@ def samba_view(inventory):
         elif state=='not_reported':gaps.append({'code':'not_reported_by_agent','path':path,'blocking':True})
         elif entry['kind']=='symlink':gaps.append({'code':'symlink_not_followed','path':path,'blocking':True})
     def absent(path):
-        return (complete and path.startswith(root+'/') and path not in entries and not any(path.startswith(l+'/') for l in links)
+        # smbd opens the include value literally, so //, /./, x/.. and a trailing / reach files recorded under another
+        # spelling (or leave /etc/samba). Only an already-canonical path can be proven absent; '..' is never resolved
+        # lexically because a symlinked directory makes that unsafe. Any other uncaptured include stays unobserved.
+        return (complete and posixpath.normpath(path)==path and not path.startswith('//') and path.startswith(root+'/')
+                and path not in entries and not any(path.startswith(l+'/') for l in links)
                 and not any(p.startswith(path+'/') for p in entries))
     observed=_SambaObserved(files,absent)
     main=files.get(config)

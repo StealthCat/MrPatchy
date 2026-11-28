@@ -259,3 +259,24 @@ def test_agent_parses_the_hashed_bytes_without_running_anything(tmp_path, monkey
     assert 'parsed' in page_rows
     without = agent.persistence_inventory(time.monotonic() + 5, cron_jobs=False)
     assert all('samba' not in r for r in without['entries'])
+
+
+@pytest.mark.parametrize('include', ['/etc/samba//shares.conf', '/etc/samba/./shares.conf', '/etc/samba/x/../shares.conf',
+                                     '/etc/samba/../../opt/evil.conf', '/etc/samba/shares.conf/'])
+def test_non_canonical_include_is_never_proven_absent(include):
+    # smbd opens the include value literally, so these reach a file recorded under another spelling (or outside
+    # /etc/samba). The view must not call them absent and still report complete (#1717 review).
+    inventory = _inventory(_entry(CONF, f'[global]\ninclude = {include}\n'),
+                           _entry('/etc/samba/shares.conf', '[data]\nroot preexec = /bin/evil\n'))
+    view = si.samba_view(inventory)
+    assert view['complete'] is False
+    assert not any('is absent' in n for n in view['notes'])
+    blocking = [g for g in view['gaps'] if g['blocking']]
+    assert [g['code'] for g in blocking] == ['unobserved_include'] and include in blocking[0]['detail']
+
+
+def test_canonical_include_is_still_captured_or_proven_absent():
+    view = si.samba_view(_inventory(_entry(CONF, '[global]\ninclude = /etc/samba/shares.conf\ninclude = /etc/samba/gone.conf\n'),
+                                    _entry('/etc/samba/shares.conf', '[data]\nroot preexec = /bin/evil\n')))
+    assert view['complete'] is True and any('gone.conf is absent' in n for n in view['notes'])
+    assert [c['command'] for c in view['commands'] if c['share'] == 'data'] == ['/bin/evil']
