@@ -51,6 +51,20 @@ def test_comparison_reports_equivalent_deltas_and_zero_percent():
     assert 'never treated as zero' in result['interpretation']['cost']
 
 
+def test_comparison_accepts_matching_slow_provider_delays_within_the_fixture_bound():
+    baseline = {**report(), 'provider_delay_ms': 5000}
+    candidate = {**report('parallel', 4), 'provider_delay_ms': 5000}
+    assert compare_ai_benchmarks.compare(baseline, candidate)['candidate']['provider_delay_ms'] == 5000
+
+    candidate['provider_delay_ms'] = 4500
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match='provider_delay_ms differs'):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+    candidate['provider_delay_ms'] = 5001
+    with pytest.raises(compare_ai_benchmarks.ComparisonError, match=r'candidate\.provider_delay_ms.*5000'):
+        compare_ai_benchmarks.compare(baseline, candidate)
+
+
 @pytest.mark.parametrize('parallel_peak', [1, 4])
 def test_comparison_preserves_measured_provider_peak(parallel_peak):
     baseline = {**report(), 'peak_provider_requests': 1}
