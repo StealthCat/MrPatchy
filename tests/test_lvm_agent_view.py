@@ -203,3 +203,23 @@ def test_seeded_random_grammar_matches_full_text():
         errors += not agent.parse_lvm_conf(main.encode())['parsed']
         _same(main, local, rng.choice(['vm', 'web', None]))
     assert errors > 20
+
+
+@pytest.mark.parametrize('value', [
+    '9' * 400, '-' + '9' * 400, '+' + '9' * 30, '0' + '7' * 200, '9223372036854775808', '-9223372036854775809',
+    '18446744073709551616', '1.' + '5' * 500, '.' + '0' * 300, '-.' + '1' * 100, '0' * 300 + '9',
+])
+def test_numeric_bounds_hold_from_reducer_to_inventory_validation(value):
+    texts = [f'global {{ thin_check_executable = {value} fsadm_executable = [ "/f", {value} ] }}\n',
+             f'tags {{ hosttags = {value} db {{ host_list = [ "vm", {value} ] }} }}\n',
+             f'tags {{ web {{ host_list = [ {value} ] }} }}\ndmeventd {{ tags = [ {value} ] thin_command = "/x" }}\n']
+    for text in texts:
+        report = agent.parse_lvm_conf(text.encode())
+        assert report['parsed'] is True
+        persistence.validate_lvm(report, LVM)
+        persistence.validate({'state': 'collected', 'scope': ['/etc/lvm/lvm.conf'], 'missing_roots': [], 'gaps': [],
+                              'skipped': 0, 'entries': [{'path': LVM, 'kind': 'regular', 'uid': 0, 'gid': 0,
+                                                         'mode': 0o644, 'size': len(text), 'mtime_ns': 0,
+                                                         'sha256': '0' * 64, 'lvm': report}]})
+        _same(text)
+        _same(PACKAGED_LVM_CONF, local=text, nodename=None)

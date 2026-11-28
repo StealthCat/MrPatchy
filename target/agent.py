@@ -2134,7 +2134,11 @@ def parse_lvm_conf(data):
     def kept(values,name):
         out=[]
         for kind,value in values[:LVM_VALUES]:
-            if kind=='string':
+            # The contract reads only a number's type and whether it is zero, so bounding keeps every outcome:
+            # integers clamp to signed 64 bits (sign and non-zero kept), and decimal text is cut to 64 characters.
+            if kind=='int':value=max(-(1<<63),min((1<<63)-1,value))
+            elif kind=='float':value=value[:64]
+            elif kind=='string':
                 if name in LVM_COMMANDS:
                     value,redacted=redact_cron_command(value)
                     if redacted and name not in result['inexact']:result['inexact'].append(name)
