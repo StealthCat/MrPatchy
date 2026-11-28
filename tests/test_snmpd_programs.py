@@ -384,7 +384,7 @@ def test_undescribed_paths_environment_and_argv_configuration_block():
     assert 'environment_not_observed' in codes(result)
     assert {'/usr/share/snmp', '/var/lib/snmp'} <= {gap.get('path') for gap in result['gaps']}
     assert result['complete'] is False
-    result = run_snapshot({'/etc/snmp/snmpd.conf': ''}, argv=[*sp.DEFAULT_ARGV, '-C'])
+    result = run_snapshot({'/etc/snmp/snmpd.conf': ''}, argv=[*sp.DEFAULT_ARGV, '-Y', 'extend a /bin/a'])
     assert 'argv_config_not_modelled' in codes(result)
     result = run_snapshot({'/etc/snmp/snmpd.conf': None})
     assert 'file_not_observed' in codes(result)
@@ -410,3 +410,60 @@ def test_argv_c_files_read_after_or_with_a_dash_before_the_search_path():
     assert programs(before, name='dup')[0]['argv'] == ['/bin/one']
     relative = run_snapshot(files, dirs, argv=[*sp.DEFAULT_ARGV, '-c', 'one.conf'])
     assert 'optional_config_relative' in codes(relative) and relative['complete'] is False
+
+
+def test_dash_capital_c_skips_both_types_persistent_files_and_include_search():
+    """``-C`` sets DONT_READ_CONFIGS, so ``read_config_files_of_type`` returns at once (snmpd.c, read_config.c)."""
+    files = {
+        '/etc/snmp/snmpd.conf': 'extend etc /bin/etc\n',
+        '/etc/snmp/snmpd.local.conf': 'extend local /bin/local\n',
+        '/etc/snmp/snmp.conf': '[snmpd] extend cross /bin/cross\n',
+        '/var/lib/snmp/snmpd.conf': 'extend persistent /bin/persistent\n',
+        '/var/lib/snmp/snmpd.0.conf': 'extend backup /bin/backup\n',
+        '/opt/only.conf': (
+            'extend only /bin/only\n'
+            'includeSearch site.conf\n'
+            'includeFile /opt/inc.conf\n'
+            'includeDir /opt/d\n'
+        ),
+        '/opt/inc.conf': 'extend inc /bin/inc\n',
+        '/opt/d/one.conf': 'extend dir /bin/dir\n',
+        '/etc/snmp/site.conf': 'extend site /bin/site\n',
+    }
+    dirs = {'/opt': ['only.conf', 'inc.conf', 'd'], '/opt/d': ['one.conf']}
+    base = run_snapshot(files, dirs, argv=[*sp.DEFAULT_ARGV, '-c', '/opt/only.conf'])
+    assert {'etc', 'local', 'persistent', 'backup', 'site', 'only'} <= {row['name'] for row in base['programs']}
+    assert base['default_configs_read'] is True
+
+    result = run_snapshot(files, dirs, argv=[*sp.DEFAULT_ARGV, '-C', '-c', '/opt/only.conf'])
+    assert order(result) == ['/opt/only.conf', '/opt/inc.conf', '/opt/d/one.conf']
+    assert [row['name'] for row in result['programs']] == ['only', 'inc', 'dir']
+    assert all(row['run_user'] == 'Debian-snmp' for row in result['programs'])
+    assert result['default_configs_read'] is False
+    assert {'path': '/opt/only.conf', 'line': 2, 'directive': 'includeSearch', 'status': 'rejected',
+            'reason': 'config_load_disabled'} in result['lines']
+    # Fully derived: no argv_config_not_modelled or cross-type gap remains.
+    assert result['complete'] is True, result['gaps']
+    assert result['contract_version'] == 2 and result['authorizes_response'] is False
+
+    # Option order and a leading '-' on -c do not matter: -C is a boolean.
+    before = run_snapshot(files, dirs, argv=[*sp.DEFAULT_ARGV, '-c', '-/opt/only.conf', '-C'])
+    assert [row['name'] for row in before['programs']] == ['only', 'inc', 'dir']
+    # Bundled with other flags, as glibc getopt allows.
+    bundled = run_snapshot(files, dirs, argv=['/usr/sbin/snmpd', '-LOw', '-u', 'Debian-snmp', '-g', 'Debian-snmp',
+                                              '-I', '-smux,mteTrigger,mteTriggerConf', '-fC', '-p', '/run/x.pid'])
+    assert bundled['programs'] == [] and bundled['read_order'] == [] and bundled['complete'] is True
+
+
+def test_dash_capital_c_without_c_reads_nothing_and_does_not_need_the_search_path():
+    # Undescribed search-path directories would be blocking gaps; -C never visits them.
+    snapshot = {'files': {}, 'directories': {}}
+    result = sp.evaluate_snapshot(snapshot, argv=[*sp.DEFAULT_ARGV, '-C'], environ={},
+                                  passwd_text=PASSWD, group_text=GROUP)
+    assert result['read_order'] == [] and result['programs'] == []
+    assert result['complete'] is True, result['gaps']
+    # An unobserved environment still blocks, and evaluate() still treats -C as unmodelled.
+    unobserved = sp.evaluate_snapshot(snapshot, argv=[*sp.DEFAULT_ARGV, '-C'], passwd_text=PASSWD, group_text=GROUP)
+    assert 'environment_not_observed' in codes(unobserved) and unobserved['complete'] is False
+    trusted = run('extend a /bin/a\n', argv=[*sp.DEFAULT_ARGV, '-C'])
+    assert {'code': 'argv_config_not_modelled', 'blocking': True, 'option': 'C'} in trusted['gaps']

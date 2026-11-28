@@ -80,13 +80,17 @@ Read order (``evaluate_snapshot``) follows ``read_config_files_of_type`` and
 - ``-c FILE[,FILE...]`` (the last one wins) reads absolute, existing files
   with the snmpd handlers after both types, or before them when the value
   starts with ``-``. A relative name resolves against snmpd's working
-  directory, which is not observed, so it is a blocking gap. ``-C`` stays a
-  gap.
+  directory, which is not observed, so it is a blocking gap.
+- ``-C`` sets ``NETSNMP_DS_LIB_DONT_READ_CONFIGS`` (``DISABLE_CONFIG_LOAD``),
+  and ``read_config_files_of_type`` then returns at once. Neither type is read
+  from the search or persistent path, and every ``includeSearch`` reads
+  nothing. ``-c`` files are still read, with their ``includeFile`` and
+  ``includeDir`` lines.
 
 Fail-closed rules: ``evaluate`` takes the order on trust, so it always carries
 the blocking ``read_order_not_derived`` gap and treats includes as
 ``include_not_modelled``. In both modes, command-line configuration
-(``-C``, ``-Y``, ``--token=value`` and, in ``evaluate``, ``-c``), unknown bracketed types,
+(``-Y``, ``--token=value`` and, in ``evaluate``, ``-c`` and ``-C``), unknown bracketed types,
 paths the snapshot does not describe, an unobserved environment,
 directives that load code (``dlmod``, ``perl``, ``procfix``), symbolic OIDs,
 unobserved files and account databases, NUL bytes, invalid UTF-8 and
@@ -99,7 +103,7 @@ import hashlib
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 SOURCE_VERSION = '5.9.4+dfsg-1.1ubuntu3.3'
 SHELL = '/bin/sh'
 STRINGMAX = 1024
@@ -266,6 +270,7 @@ class _State:
         self.user_specs: list[tuple[str, str]] = []
         self.group_specs: list[tuple[str, str]] = []
         self.optional_config: str | None = None
+        self.dont_read_configs = False
 
     def gap(self, code: str, **detail: Any) -> None:
         if len(self.gaps) < MAX_GAPS:
@@ -309,7 +314,8 @@ def _parse_argv(argv: Sequence[str], state: _State) -> dict[str, Any]:
             value: str | None = None
             if mode == 'none':
                 if char == 'C':
-                    state.gap('argv_config_not_modelled', option=char)
+                    # snmpd.c: NETSNMP_DS_LIB_DONT_READ_CONFIGS, alias DISABLE_CONFIG_LOAD.
+                    state.dont_read_configs = True
                 elif char in 'hHv':
                     state.gap('argv_invalid', option=char)
                 offset += 1
@@ -642,6 +648,9 @@ def evaluate(config_files: Sequence[Mapping[str, Any]], *, argv: Sequence[str] |
     modules = _prepare(argv, state)
     if state.optional_config is not None:
         state.gap('argv_config_not_modelled', option='c')
+    if state.dont_read_configs:
+        # The caller's order cannot show which files -C kept out.
+        state.gap('argv_config_not_modelled', option='C')
     digest = hashlib.sha256()
     if len(config_files) > MAX_FILES:
         state.gap('too_many_files', count=len(config_files))
@@ -709,14 +718,20 @@ class _Reader:
             return None
         return kind != 'absent'
 
-    def read_type(self, header: str, context: str, level: int = 0) -> None:
-        """``read_config_files_of_type``: the configuration path, then the persistent directory."""
+    def read_type(self, header: str, context: str, level: int = 0) -> bool:
+        """``read_config_files_of_type``: the configuration path, then the persistent directory.
+
+        Returns False when ``-C`` disables configuration loading, so nothing is read.
+        """
+        if self.state.dont_read_configs:
+            return False
         perspath = self.perspath
         if self.envconfpath is None:
             self.read_in_path(self.confpath, header, context, perspath, level)
             self.read_in_path(self.perspath, header, context, perspath, level)
         else:
             self.read_in_path(self.envconfpath, header, context, perspath, level)
+        return True
 
     def read_in_path(self, path: str, header: str, context: str, perspath: str, level: int) -> None:
         for directory in path.split(':'):
@@ -827,6 +842,9 @@ class _Reader:
                 self.read(f'{target}/{name}', context, level, 'includeDir')
         else:
             header = target[:-5] if len(target.encode('utf-8', 'replace')) > 5 and target.endswith('.conf') else target
+            if self.state.dont_read_configs:
+                self.state.note(path, line, token, 'rejected', 'config_load_disabled')
+                return
             self.state.note(path, line, token, 'included')
             self.read_type(header, context, level)
 
@@ -860,7 +878,8 @@ def evaluate_snapshot(snapshot: Mapping[str, Any], *, argv: Sequence[str] | None
     if optional is not None:
         reader.type_header = 'snmpd'
         reader.read_optional(optional)
-    extra = {'read_order': reader.order, 'search_path': reader.envconfpath if reader.envconfpath is not None
+    extra = {'read_order': reader.order, 'default_configs_read': not state.dont_read_configs,
+             'search_path': reader.envconfpath if reader.envconfpath is not None
              else reader.confpath, 'persistent_dir': reader.perspath}
     return _finish(state, modules, reader.digest, passwd_text, group_text, extra)
 
