@@ -2205,6 +2205,60 @@ def parse_lvm_conf(data):
     result['inexact']=result['inexact'][:LVM_VALUES]
     return result
 
+# rsnapshot configuration (#1530): /etc/rsnapshot.conf is split, from the hashed bytes, into the logical lines
+# rsnapshot 1.4.5 parse_config_file() reads (comments, blank lines, continuation joining, tab-separated fields and
+# the final-"0" stop), exactly as app/rsnapshot_commands does. Nothing is run and no include_conf file is opened.
+# Only the directives that make rsnapshot run programs, plus snapshot_root and backup sources the contract checks,
+# keep their values; every other directive keeps its name and whether it had a value. Command fields get the cron
+# best-effort redaction and fields are cut to 512 characters; both are flagged as inexact by line number.
+RSNAPSHOT_CONF = '/etc/rsnapshot.conf'
+RSNAPSHOT_COMMANDS = frozenset(('include_conf','cmd_preexec','cmd_postexec','backup_script','backup_exec'))
+RSNAPSHOT_KEPT = RSNAPSHOT_COMMANDS|frozenset(('cmd_rsync','cmd_ssh','cmd_cp','cmd_rm','cmd_logger','cmd_du',
+                                              'cmd_rsnapshot_diff','linux_lvm_cmd_lvcreate','linux_lvm_cmd_lvremove',
+                                              'linux_lvm_cmd_mount','linux_lvm_cmd_umount','snapshot_root','backup'))
+RSNAPSHOT_STATEMENTS = 1024
+RSNAPSHOT_NAME_LIMIT = 120
+RSNAPSHOT_SPACE = ' \t\n\r\f\v'
+
+
+def parse_rsnapshot_conf(data):
+    """Reduce the hashed /etc/rsnapshot.conf to the logical lines app/rsnapshot_commands evaluates."""
+    result={'parsed':False,'error':None,'statements':[],'inexact':[],'truncated':False}
+    if b'\x00' in data:result['error']='nul_byte';return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:result['error']='invalid_utf8';return result
+    result['parsed']=True
+    parts=text.split('\n');configs=[p+'\n' for p in parts[:-1]]
+    if parts[-1]:configs.append(parts[-1])
+    def field(value,line,command):
+        out=value
+        if command:out,redacted=redact_cron_command(out)
+        else:redacted=False
+        if len(out)>CRON_COMMAND_LIMIT:out=out[:CRON_COMMAND_LIMIT];redacted=True
+        if redacted and line not in result['inexact']:result['inexact'].append(line)
+        return out
+    i=0
+    while i<len(configs) and configs[i] and configs[i]!='0':
+        line=configs[i][:-1] if configs[i].endswith('\n') else configs[i];i+=1;first=i
+        if line.startswith('#') or not re.search(r'\S',line):continue
+        while i<len(configs) and re.match(r'[\t ]+\S',configs[i]):
+            line=line+'\t'+configs[i].strip(RSNAPSHOT_SPACE);i+=1
+        if len(result['statements'])>=RSNAPSHOT_STATEMENTS:result['truncated']=True;break
+        fields=re.split(r'\t+',line,maxsplit=3);var=fields[0]
+        if len(fields)==1:
+            # No tab: rsnapshot rejects the line. Keep the (redacted, bounded) text it names in its error.
+            values=[];var=field(var,first,True)
+        elif var in RSNAPSHOT_KEPT:
+            values=[field(v,first,var in RSNAPSHOT_COMMANDS) for v in fields[1:]]
+            if var=='backup':values=values[:2]
+        else:
+            values=None
+        if len(var)>RSNAPSHOT_NAME_LIMIT:
+            var=var[:RSNAPSHOT_NAME_LIMIT]
+            if first not in result['inexact']:result['inexact'].append(first)
+        result['statements'].append({'line':first,'end':i,'directive':var,'values':values})
+    return result
+
 # autofs master map (#1375): the hashed /etc/auto.master bytes are reported as bounded latin-1 text and
 # nothing else. No map path the text names is stat-ed, opened or run: the agent cannot establish a
 # non-triggering lookup boundary (symlinks, nested automount points and the live mount topology), and a
@@ -2605,7 +2659,7 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if len(report['gaps'])<50:report['gaps'].append(str(path)+': '+reason)
     cron_total=[0]
     def capture(directory_fd,directory,name):
-        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;request_key=cron_jobs and request_key_reads(str(path));autofs=cron_jobs and str(path)==AUTOFS_MASTER;clamav=CLAMAV_FILES.get(str(path)) if cron_jobs else None;lvm=cron_jobs and str(path) in LVM_FILES;content=bytearray() if form or at_name or anacron or tcpw or kdump or request_key or autofs or clamav or lvm else None
+        path=directory/name;fd=None;form=cron_format(path) if cron_jobs else None;at_name=at_job_name(path) if cron_jobs else None;anacron=cron_jobs and str(path)==ANACRONTAB;tcpw=cron_jobs and str(path) in TCP_WRAPPERS_FILES;kdump=cron_jobs and str(path)==KDUMP_CONF;request_key=cron_jobs and request_key_reads(str(path));autofs=cron_jobs and str(path)==AUTOFS_MASTER;clamav=CLAMAV_FILES.get(str(path)) if cron_jobs else None;lvm=cron_jobs and str(path) in LVM_FILES;rsnapshot=cron_jobs and str(path)==RSNAPSHOT_CONF;content=bytearray() if form or at_name or anacron or tcpw or kdump or request_key or autofs or clamav or lvm or rsnapshot else None
         dovecot=cron_jobs and dovecot_reads(str(path))
         if dovecot and content is None:content=bytearray()
         swanctl=cron_jobs and swanctl_reads(str(path))
@@ -2665,6 +2719,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['clamav']=parse_clamav_conf(bytes(content),clamav)
             if lvm and row['kind']=='regular':
                 row['lvm']=parse_lvm_conf(bytes(content))
+            if rsnapshot and row['kind']=='regular':
+                row['rsnapshot']=parse_rsnapshot_conf(bytes(content))
             if dovecot and row['kind']=='regular':
                 row['dovecot']=parse_dovecot(bytes(content))
             if swanctl and row['kind']=='regular':

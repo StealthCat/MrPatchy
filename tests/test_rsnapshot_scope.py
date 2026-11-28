@@ -118,7 +118,7 @@ def test_catalogs_label_conf_and_state_the_gap():
     mechanism = next(m for m in startup_catalog._MECHANISMS if m['id'] == 'rsnapshot')
     assert mechanism['parse'] == 'metadata' and mechanism['trigger'] == 'schedule'
     assert [loc['path'] for loc in mechanism['locations']] == [CONF]
-    assert any(CONF in gap and 'not yet parsed' in gap and 'include_conf' in gap for gap in startup_inventory.GAPS)
+    assert any(CONF in gap and 'include_conf' in gap and 'not collected' in gap for gap in startup_inventory.GAPS)
 
 
 def test_saved_monitor_policy_with_promoted_conf_path_is_accepted(admin):
