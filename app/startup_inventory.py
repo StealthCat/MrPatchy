@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, lvm_commands, persistence, postgresql_commands, runit_services, strongswan_updown
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, lvm_commands, persistence, postgresql_commands, rsnapshot_commands, runit_services, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -56,7 +56,7 @@ GAPS=[
     '/var/spool/anacron timestamps, user login/autostart/SSH hooks, udev and module-load mechanisms are not comprehensively inventoried.',
     'Exception for anacron: /etc/anacrontab is hashed and its jobs are parsed into period, delay, job identifier and command from the hashed bytes by agents that report them, with the START_HOURS_RANGE and RANDOM_DELAY settings. Other environment values are counted, never stored; commands use the same best-effort redaction and are bounded to 64 jobs; lines anacron would reject are counted as unparsed. Scripts that run-parts commands execute, anacron timestamps and whether anacron runs (cron, systemd timer or boot) are not evaluated.',
     'TCP wrappers: /etc/hosts.allow and /etc/hosts.deny are hashed as startup files, and agents that report them parse their spawn, twist and aclexec commands from the hashed bytes with the libwrap 7.6.q (Debian patch set) rules: backslash continuations, the 2048-byte line limit, first-match order and option errors. Each command runs through /bin/sh -c as the daemon process user, often root, because the patched user and group options change no identity. A command after an entry that matches every daemon and client is shown as shadowed; weaker patterns are never treated as shadowing. Commands use the same best-effort redaction, are bounded to 64 per file and other option values are not stored. Whether any running daemon is linked against libwrap, which daemon and client names match a request, and what the commands do are not evaluated.',
-    'rsnapshot: /etc/rsnapshot.conf is hashed as a startup file by agents that report it, but its cmd_preexec, cmd_postexec, backup_script, backup_exec, program-path and backtick include_conf commands are not yet parsed in this view. Files it includes, alternate configurations passed with -c and which cron entry or timer invokes rsnapshot are not evaluated.',
+    'rsnapshot: /etc/rsnapshot.conf is hashed as a startup file, and agents that report it split it, from the hashed bytes, into the logical lines rsnapshot 1.4.5 reads (comments, continuation lines, tab-separated fields and the final-0 stop). This view shows the cmd_preexec and cmd_postexec hooks, backup_script and backup_exec commands and backtick include_conf commands rsnapshot runs, with argv or /bin/sh -c, when each runs, what a failure does and the configured program paths (cmd_rsync, cmd_ssh, cmd_cp, cmd_rm, cmd_logger, cmd_du, cmd_rsnapshot_diff and linux_lvm_cmd_*), and says when rsnapshot rejects the configuration so no backup command runs. Only those directives, snapshot_root and backup sources keep their values; every other directive keeps only its name. Commands use the same best-effort redaction as cron commands and values are bounded to 512 characters; either makes the view incomplete. Files named by include_conf are not collected, so each include is a blocking gap, and backtick include output is not modelled. Program existence, alternate configurations passed with -c and which cron entry or timer invokes rsnapshot (and as which account) are not evaluated.',
     'autofs: /etc/auto.master is hashed as a startup file, and agents that report it also send its text (up to 64 KiB). This view lists its entries (mount point and map) with the autofs 5.1.9 master-map rules, but the agent never looks up the map paths they name, because a lookup at or below an automount point can mount a map or run a program map. Which maps are program maps that automount runs as root on each key lookup is therefore not resolved, and every entry stays unknown. Also not evaluated: the map files and their + includes and sub-maps, the /etc/auto.master.d directory, master-map + includes, the /etc/auto_master fallback, an alternate master map set in autofs.conf or on the command line, autofs.conf amd sections, nsswitch automount sources, remote (LDAP, NIS, SSS) maps and whether automount runs. The result is never complete.',
     'System git configuration: /etc/gitconfig is hashed as a startup file by agents that report it, but the shell aliases, pagers, editors, credential helpers, hook paths, fsmonitor hooks and diff, filter and merge drivers it can make git run are not yet parsed in this view. Files it includes, per-user, XDG and repository configuration, GIT_CONFIG_* environment overrides and which accounts or jobs run git are not evaluated.',
     'kdump: /etc/kdump.conf is hashed as a startup file, and agents that report it parse its kdump_pre, kdump_post and kdump_emergency programs and core_collector argv from the hashed bytes with the kdump-utils 7bf4714 rules, in capture order. Each runs as root in the crash-capture environment after a kernel crash. Options kdumpctl rejects (unknown, deprecated, empty, repeated, a second dump target or a second --mount) are listed with their line, and such a configuration loads no capture kernel, so nothing runs. Programs use the same best-effort redaction, other option values are never stored, and text over 64 KiB, with 2048 or more lines, not UTF-8 or with NUL bytes is shown as unparsed. The /etc/kdump/pre.d, post.d and emergency.d directories are not yet listed, so their programs are missing from the sequence. The hook programs themselves, other kdumpctl checks, whether the loaded crash-capture initramfs matches the current files and the Debian kdump-tools configuration are not evaluated.',
@@ -342,6 +342,47 @@ def lvm_view(inventory):
 
 def lvm_text_search(entry):
     return ' '.join(v[1] for s in entry.get('lvm',{}).get('sections',()) for i in s['values'] for v in (i['values'] or ()) if v[0]=='string')
+
+def rsnapshot_state(entry):
+    """Whether /etc/rsnapshot.conf lines were parsed, could not be decoded, are not reported (older agent) or sit behind a symlink."""
+    if entry['path']!=persistence.RSNAPSHOT_CONF:return None
+    if 'rsnapshot' in entry:return 'parsed' if entry['rsnapshot']['parsed'] else 'undecodable'
+    return 'not_reported' if entry['kind']=='regular' else 'not_followed'
+
+
+def rsnapshot_text(report):
+    """Rebuild configuration text app/rsnapshot_commands reads identically: each logical line at its own line number."""
+    statements=report['statements']
+    lines=['']*(statements[-1]['end'] if statements else 0)
+    for item in statements:lines[item['line']-1]=persistence.rsnapshot_line(item)
+    return ''.join(line+'\n' for line in lines)
+
+
+def _rsnapshot_bounded(item):
+    return {k:(v[:300] if isinstance(v,str) else v) for k,v in item.items()}
+
+
+def rsnapshot_view(entry):
+    """Evaluate app/rsnapshot_commands over the agent-reported /etc/rsnapshot.conf lines. Included files are not
+    collected, so every include_conf stays a blocking gap. Never a safety verdict and never authorizes a response."""
+    report=entry['rsnapshot']
+    result=rsnapshot_commands.assess_config([{'path':persistence.RSNAPSHOT_CONF,'state':'regular','text':rsnapshot_text(report)}])
+    gaps=[{**_rsnapshot_bounded(g),'blocking':True} for g in result['gaps']]
+    if report['truncated']:gaps.append({'reason':'statement_limit_reached','limit':persistence.RSNAPSHOT_STATEMENTS,'blocking':True})
+    gaps+=[{'reason':'agent_value_inexact','line':line,'blocking':True} for line in report['inexact'][:64]]
+    return {'commands':[_rsnapshot_bounded({k:v for k,v in c.items() if k not in ('argv','dropped_fields')})|{'argv':[a[:300] for a in c['argv'][:64]],'dropped_fields':[d[:300] for d in c.get('dropped_fields',())]} for c in result['commands'][:128]],
+            'programs':[_rsnapshot_bounded({k:v for k,v in p.items() if k!='argv_prefix'})|({'argv_prefix':p['argv_prefix'][:16]} if 'argv_prefix' in p else {}) for p in result['programs'][:64]],
+            'config_errors':[_rsnapshot_bounded(e) for e in result['config_errors'][:64]],'config_error_count':len(result['config_errors']),
+            'warnings':result['warnings'][:64],'rejected_by_parser':result['rejected_by_parser'],'backup_commands_run':result['backup_commands_run'],
+            'ssh_backup_points':result.get('ssh_backup_points'),'lvm_backup_points':result.get('lvm_backup_points'),
+            'files':[{'path':f['path'],'state':f['state']} for f in result['files'][:64]],'run_as':result['run_as'],
+            'complete':result['complete'] and not gaps,'gaps':gaps[:100],'not_modelled':result['not_modelled'],
+            'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
+
+
+def rsnapshot_text_search(entry):
+    return ' '.join(v for i in entry.get('rsnapshot',{}).get('statements',()) for v in (i['values'] or ()))
+
 
 def _dovecot_quote(value):
     return '"'+value.replace('\\','\\\\').replace('"','\\"')+'"'
@@ -748,6 +789,11 @@ def catalog_rows(inventory):
             found=[e for e in inventory['entries'] if e['path'] in persistence.LVM_FILES]
             label+=' · program settings evaluated' if any(lvm_state(e)=='parsed' for e in found) else ''
             label+=(' · rejected by the LVM parser' if any(lvm_state(e)=='rejected' for e in found) else '')+(' · not reported by this agent version' if any(lvm_state(e)=='not_reported' for e in found) else '')
+        if key=='rsnapshot':
+            found=[e for e in inventory['entries'] if e['path']==persistence.RSNAPSHOT_CONF]
+            commands=sum(len(rsnapshot_view(e)['commands']) for e in found if rsnapshot_state(e)=='parsed')
+            label+=f' · {commands} parsed command{"" if commands==1 else "s"}' if any(rsnapshot_state(e)=='parsed' for e in found) else ''
+            label+=(' · not UTF-8 or contains NUL bytes' if any(rsnapshot_state(e)=='undecodable' for e in found) else '')+(' · not reported by this agent version' if any(rsnapshot_state(e)=='not_reported' for e in found) else '')
         if key=='dovecot':
             found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
             states=[dovecot_state(e) for e in found]
@@ -816,6 +862,9 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         state=lvm_state(entry)
         if state:row['lvm_state']=state
         if entry['path']==persistence.LVM_FILES[0]:row['lvm']=lvm_view(inventory)
+        state=rsnapshot_state(entry)
+        if state:row['rsnapshot_state']=state
+        if state=='parsed':row['rsnapshot']=rsnapshot_view(entry)
         state=strongswan_state(entry)
         if state:row['strongswan_state']=state
         if state=='parsed':row['strongswan_statements']=len(entry['strongswan']['statements'])
@@ -828,7 +877,7 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+lvm_text_search(entry)+' '+postgresql_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+lvm_text_search(entry)+' '+postgresql_text_search(entry)+' '+rsnapshot_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     # One runit evaluation (#1628), on the first matching runit row: /etc/service itself when it was recorded.
