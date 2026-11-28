@@ -1,6 +1,11 @@
 name: Native capped AI benchmark
 on:
   workflow_dispatch:
+    inputs:
+      slow_paced_provider:
+        description: Use 4,500 ms loopback responses for the cross-server paced fixture
+        type: boolean
+        default: false
   pull_request:
     paths:
       - '.github/workflows/ai-sqlite-benchmark.yml'
@@ -13,6 +18,8 @@ jobs:
     name: Capped fixture (${{ matrix.database }}, ${{ matrix.layout }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      BENCHMARK_PROVIDER_DELAY: ${{ matrix.layout == 'cross-server-paced' && inputs.slow_paced_provider && '4500' || '150' }}
     strategy:
       fail-fast: false
       matrix:
@@ -79,6 +86,7 @@ jobs:
             printf 'database=%s\n' "$BENCHMARK_DATABASE"
             printf 'fixture_hosts=%s\n' "$BENCHMARK_HOSTS"
             printf 'ai_control_mode=%s\n' "$BENCHMARK_CONTROL_MODE"
+            printf 'provider_delay_ms=%s\n' "$BENCHMARK_PROVIDER_DELAY"
             if [[ -n "$BENCHMARK_RATE" ]]; then
               printf 'starts_per_hour=%s\n' "$BENCHMARK_RATE"
             fi
@@ -90,7 +98,7 @@ jobs:
 
           workload=(--database "$BENCHMARK_DATABASE" --control-mode "$BENCHMARK_CONTROL_MODE" --runs 8
                     --servers "$BENCHMARK_HOSTS"
-                    --provider-delay-ms 150 --ssh-delay-ms 50 --persistence-delay-ms 15
+                    --provider-delay-ms "$BENCHMARK_PROVIDER_DELAY" --ssh-delay-ms 50 --persistence-delay-ms 15
                     --retained-history-rows 1000)
           if [[ -n "$BENCHMARK_RATE" ]]; then
             workload+=(--rate-per-hour "$BENCHMARK_RATE")
@@ -111,7 +119,7 @@ jobs:
                            "$BENCHMARK_DIR/pair-${pair}-slots-4.json")
           done
           python tools/compare_ai_benchmark_series.py "${pairs[@]}" > "$BENCHMARK_DIR/series.json"
-          python - "$BENCHMARK_DIR/series.json" "$BENCHMARK_HOSTS" "$BENCHMARK_CONTROL_MODE" "$BENCHMARK_RATE" <<'PY'
+          python - "$BENCHMARK_DIR/series.json" "$BENCHMARK_HOSTS" "$BENCHMARK_CONTROL_MODE" "$BENCHMARK_RATE" "$BENCHMARK_PROVIDER_DELAY" <<'PY'
           import json
           import sys
           from pathlib import Path
@@ -120,6 +128,7 @@ jobs:
           expected_hosts = int(sys.argv[2])
           expected_mode = sys.argv[3]
           expected_rate = int(sys.argv[4]) if sys.argv[4] else None
+          expected_provider_delay = int(sys.argv[5])
           for mode in ("serial", "parallel"):
               side = series[mode]
               if side["fixture_hosts"] != expected_hosts:
@@ -128,11 +137,13 @@ jobs:
                   raise SystemExit(f"{mode}: expected {expected_mode} AI control mode")
               if side.get("fixture_rate", {}).get("starts_per_hour") != expected_rate:
                   raise SystemExit(f"{mode}: expected starts_per_hour={expected_rate}")
+              if side.get("provider_delay_ms") != expected_provider_delay:
+                  raise SystemExit(f"{mode}: expected provider_delay_ms={expected_provider_delay}")
           PY
       - name: Upload validated captures
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: native-capped-${{ matrix.database }}-ai-benchmark${{ matrix.artifact-suffix }}
+          name: native-capped-${{ matrix.database }}-ai-benchmark${{ matrix.artifact-suffix }}${{ env.BENCHMARK_PROVIDER_DELAY == '4500' && '-slow-provider' || '' }}
           path: ${{ runner.temp }}/ai-${{ matrix.database }}-benchmark/
           if-no-files-found: error
           retention-days: 30
