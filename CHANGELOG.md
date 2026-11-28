@@ -1,3 +1,9 @@
+## 1.135.0 — 2026-11-25
+
+1. [PR #1700](https://github.com/StealthCat/MrPatchy/pull/1700): Startup Files shows the archive, restore, recovery and SSL passphrase commands and the preload libraries PostgreSQL runs or loads from each `/etc/postgresql` cluster configuration. Each shows when it runs, whether it is active, its source line, start blockers and coverage gaps. Agents report only the settings the evaluation needs and drop every other value, including `primary_conninfo` passwords and pg_hba/pg_ident lines; commands get best-effort credential redaction. Directory listing walks path components with no-follow descriptors. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1597.
+
+Integrated through [PR #1706](https://github.com/StealthCat/MrPatchy/pull/1706). This source update does not publish a Docker image.
+
 ## 1.134.0 — 2026-11-25
 
 1. [PR #1698](https://github.com/StealthCat/MrPatchy/pull/1698): Keeps the verified native paced triage benchmark captures (SQLite and MySQL, v1.132) in the repository: 24 raw reports with their series and provenance. Replay tests cover them, and a `docs/benchmarks/.gitattributes` rule keeps the archived bytes identical across platforms. Compatibility: records and tests only. Fixes #1697.
