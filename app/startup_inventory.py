@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, lvm_commands, persistence, postgresql_commands, runit_services, strongswan_updown
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, lvm_commands, persistence, postgresql_commands, runit_services, samba_commands, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -71,7 +71,7 @@ GAPS=[
     'PostgreSQL: the Debian-family /etc/postgresql directory (postgresql.conf, conf.d, pg_hba.conf, pg_ident.conf, start.conf, pg_ctl.conf and environment for each version and cluster, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate, for each /etc/postgresql/<version>/<cluster>/postgresql.conf, which archive, restore, recovery and ssl_passphrase commands the server runs through /bin/sh -c and which archive and preload libraries it loads as the postgres account, with the PostgreSQL 16 rules. Only include directives and the settings the evaluation reads keep their values; every other value is dropped, and lines PostgreSQL rejects keep only their line number. Commands use the same best-effort credential redaction as cron commands. postgresql.auto.conf (written by ALTER SYSTEM, read last) lives in the data directory and is not collected, so every evaluation has a blocking gap for it; nor is the RPM-family data directory (/var/lib/pgsql/data or /var/lib/pgsql/<version>/data) that holds postgresql.conf there. Included files outside /etc/postgresql and symlinked files are not observed. /etc/postgresql-common, settings passed on the command line, recovery and standby signal files, whether the server runs and the commands themselves are not evaluated.',
     'syslog-ng: the /etc/syslog-ng directory (syslog-ng.conf, conf.d, scl.conf, patterndb.d and any other files it holds, as metadata and SHA-256 only) and the Debian-family /etc/default/syslog-ng or RPM-family /etc/sysconfig/syslog-ng option files (which supply SYSLOGNG_OPTS, such as --user and -f) are hashed as startup files by agents that report them, but which program() sources and destinations, hook-commands() and confgen exec() commands syslog-ng runs, and as which account, are not yet evaluated in this view. The SCL under /usr/share/syslog-ng/include, included files outside /etc/syslog-ng, options set in the service unit or passed on the command line, whether syslog-ng runs and the commands themselves are not observed or evaluated. A custom /etc/default or /etc/sysconfig path saved earlier keeps its own scope and leaves these files to built-in scope.',
     'collectd: the Debian-family /etc/collectd directory (collectd.conf, collectd.conf.d, collection.conf, filters.conf and thresholds.conf), the RPM-family /etc/collectd.conf and the /etc/collectd.d directory are hashed as startup files, as metadata and SHA-256 only (network plugin passwords and other values are never stored), by agents that report them. Which Exec programs the exec plugin starts at every daemon start and which NotificationExec programs it runs on every notification, with which argv and as which user[:group], are not yet evaluated in this view. Files named by Include outside these paths, configuration passed with -C, the python and perl plugin modules, whether collectd runs and the programs themselves are not observed or evaluated.',
-    'Samba: the /etc/samba directory (smb.conf, files it includes there, and any other files it holds, such as smbpasswd or lmhosts, as metadata and SHA-256 only) and the RPM-family /etc/sysconfig/samba options file (which supplies SMBDOPTIONS and NMBDOPTIONS) are hashed as startup files by agents that report them, but which root preexec/postexec commands smbd runs as root, which preexec/postexec commands it runs as the connecting user, for which share, and which global add/delete/change scripts, panic action and other configured programs it runs are not yet evaluated in this view. Files included from outside /etc/samba, the registry configuration backend, the private and state directories under /var/lib/samba, options set in the service unit or passed on the command line, whether smbd runs and the commands themselves are not observed or evaluated. A custom /etc/sysconfig path saved earlier keeps its own scope and leaves the options file to built-in scope.',
+    'Samba: the /etc/samba directory (smb.conf, files it includes there, and any other files it holds, such as smbpasswd or lmhosts, as metadata and SHA-256 only) and the RPM-family /etc/sysconfig/samba options file (which supplies SMBDOPTIONS and NMBDOPTIONS) are hashed as startup files, and agents that report them reduce every regular file under /etc/samba from the hashed bytes to logical lines with the Samba 4.19 tini.c rules. This view evaluates /etc/samba/smb.conf and its includes and shows which root preexec/postexec commands smbd runs as root, which preexec/postexec commands it runs as the connecting user or force user account, for which share (including the implicit IPC$ share), whether a failing command refuses the connection, and which global user, group, share and printer management scripts, panic action and other configured programs it runs, with each source line. Only section names and the parameters the evaluation reads keep their text; every other line, including passwords and smbpasswd entries, is dropped, and commands use the same best-effort redaction as cron commands. A file Samba would reject is shown with its line, because smbd then does not load it. Files included from outside /etc/samba, symlinked files, % substituted includes, the registry configuration backend, /etc/passwd (so a force user other than root is not resolved), the private and state directories under /var/lib/samba, options set in the service unit or passed on the command line (-s), printing, dfree and magic script commands, whether smbd runs and the commands themselves are not observed or evaluated. A custom /etc/sysconfig path saved earlier keeps its own scope and leaves the options file to built-in scope.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
     'Package ownership/default authenticity and custom-versus-vendor origin are not assessed; no AI classification is made.',
     'Exception for at queues: Debian-family at job files in /var/spool/cron/atjobs are parsed into a queue, job number, scheduled time, owner and up to 32 command lines from the hashed bytes by agents that report them. Exported environment values are counted, never stored; commands use the same best-effort redaction; unrecognized layouts are shown as unparsed. Whether atd runs is not evaluated, and the RHEL-family /var/spool/at queue is outside built-in scope.',
@@ -487,6 +487,76 @@ def postgresql_text_search(entry):
     return ' '.join(i.get('value') or '' for i in entry.get('postgresql',{}).get('statements',()))
 
 
+def samba_state(entry):
+    """Whether Samba logical lines were reported, refused (NUL or invalid UTF-8) or not reported (older agent)."""
+    if 'samba' in entry:return 'parsed' if entry['samba']['parsed'] else 'unparsed'
+    return 'not_reported' if entry['kind']=='regular' and entry['path'].startswith(persistence.SAMBA_DIR+'/') else None
+
+
+def samba_lines(report):
+    """Logical lines for app/samba_commands from the agent's reduced file; the contract reads them as it reads its own."""
+    if not report['parsed']:return samba_commands.LogicalLines([],report['error'])
+    out=[]
+    for item in report['lines']:
+        if item['op']=='section':out.append((item['line'],'['+item['name']+']'))
+        elif item['op']=='set':out.append((item['line'],item['name']+'='+item['value']))
+        else:out.append((item['line'],'[' if item['reason']=='section_without_bracket' else '='))
+    return samba_commands.LogicalLines(out)
+
+
+class _SambaObserved:
+    """Include targets seen by this inventory: reported files, absent paths from a complete collection, nothing else."""
+    def __init__(self,files,absent):
+        self.files=files;self.absent=absent
+    def __contains__(self,path):
+        return path in self.files or self.absent(path)
+    def __getitem__(self,path):
+        return self.files[path] if path in self.files else None
+
+
+def samba_view(inventory):
+    """Evaluate app/samba_commands for /etc/samba/smb.conf over the agents' reduced files. Unreported, truncated
+    and symlinked files and includes outside /etc/samba stay unobserved. /etc/passwd is not collected, so a
+    force user other than root is not resolved. Never a safety verdict and never authorizes a response."""
+    root=persistence.SAMBA_DIR;config=samba_commands.DEFAULT_CONFIG_PATH
+    entries={e['path']:e for e in inventory['entries'] if e['path'].startswith(root+'/')}
+    complete=inventory['state']=='collected' and root not in inventory['missing_roots']
+    links=[p for p,e in entries.items() if e['kind']=='symlink']
+    files={};gaps=[]
+    for path,entry in entries.items():
+        state=samba_state(entry)
+        if state in ('parsed','unparsed') and not entry['samba']['truncated']:files[path]=samba_lines(entry['samba'])
+        elif state=='parsed':gaps.append({'code':'lines_truncated','path':path,'blocking':True})
+        elif state=='not_reported':gaps.append({'code':'not_reported_by_agent','path':path,'blocking':True})
+        elif entry['kind']=='symlink':gaps.append({'code':'symlink_not_followed','path':path,'blocking':True})
+    def absent(path):
+        return (complete and path.startswith(root+'/') and path not in entries and not any(path.startswith(l+'/') for l in links)
+                and not any(p.startswith(path+'/') for p in entries))
+    observed=_SambaObserved(files,absent)
+    main=files.get(config)
+    if main is None and absent(config):result=None
+    else:result=samba_commands.analyze(main,observed,config_path=config)
+    if result is None:
+        return {'config_file':config,'state':'absent','commands':[],'shares':[],'loads':None,'reject_reason':None,'notes':[],
+                'configured_not_evaluated':[],'redacted':False,'complete':False,'gaps':[{'code':'config_absent','path':config,'blocking':True}],
+                'origin':'not_assessed','authorizes_response':False,'schema':samba_commands.SCHEMA}
+    gaps+=[{'code':g['code'],'detail':g['detail'][:300],'blocking':True} for g in result['gaps']]
+    gaps.append({'code':'passwd_not_collected','detail':'force user accounts other than root are not resolved to a uid','blocking':False})
+    gaps.append({'code':'service_options_not_evaluated','detail':'smbd -s/--configfile options in the service unit or /etc/sysconfig/samba are not evaluated','blocking':False})
+    redacted=any(i['op']=='set' and i['redacted'] for e in entries.values() for i in e.get('samba',{}).get('lines',()))
+    keep=('parameter','share','template','command','account','trigger','file','line','implicit_share','forced_user','root_for_admin_users',
+          'share_available','refuses_connection_on_failure')
+    return {'config_file':config,'state':'evaluated','loads':result['loads'],'reject_reason':(result['reject_reason'] or '')[:300] or None,
+            'commands':[{k:c.get(k) for k in keep} for c in result['commands'][:512]],'root_commands':len(result['root_commands']),
+            'shares':result['shares'][:256],'notes':[n[:300] for n in result['notes']],'configured_not_evaluated':result['configured_not_evaluated'],
+            'redacted':redacted,'complete':result['complete'] and not any(g['blocking'] for g in gaps),'gaps':gaps[:100],
+            'origin':'not_assessed','authorizes_response':False,'schema':result['schema']}
+
+
+def samba_text_search(entry):
+    return ' '.join(i.get('value') or i.get('name') or '' for i in entry.get('samba',{}).get('lines',()))
+
+
 def dovecot_text_search(entry):
     return ' '.join(i.get('pattern') or i.get('name') or i.get('value') or '' for i in entry.get('dovecot',{}).get('statements',()))
 
@@ -758,6 +828,11 @@ def catalog_rows(inventory):
             states=[postgresql_state(e) for e in found]
             parsed=states.count('parsed')
             label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
+        if key=='samba':
+            found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
+            states=[samba_state(e) for e in found]
+            parsed=states.count('parsed')
+            label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
         if key in ('strongswan','strongswan_rpm'):
             found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
             states=[strongswan_state(e) for e in found]
@@ -824,11 +899,14 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if state:row['postgresql_state']=state
         if state=='parsed':row['postgresql_statements']=len(entry['postgresql']['statements'])
         if state=='parsed' and POSTGRESQL_MAIN.fullmatch(entry['path']):row['postgresql']=postgresql_view(inventory,entry['path'])
+        state=samba_state(entry)
+        if state:row['samba_state']=state
+        if entry['path']==samba_commands.DEFAULT_CONFIG_PATH and state in ('parsed','unparsed'):row['samba']=samba_view(inventory)
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+lvm_text_search(entry)+' '+postgresql_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+lvm_text_search(entry)+' '+postgresql_text_search(entry)+' '+samba_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     # One runit evaluation (#1628), on the first matching runit row: /etc/service itself when it was recorded.

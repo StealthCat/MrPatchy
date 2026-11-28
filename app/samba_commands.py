@@ -176,6 +176,34 @@ class _Reject(Exception):
     pass
 
 
+# Agent-reduced files (#1580 increment 3). Agents build logical lines from the hashed bytes with the
+# rules above and keep only section headers, the lines this contract tracks and the line Samba rejects
+# a file at; commands use best-effort credential redaction. ``error`` is ``nul_byte`` or
+# ``invalid_utf8`` for a file the agent did not reduce.
+class LogicalLines:
+    """Logical lines an agent already built with ``_logical_lines`` (first line number, line)."""
+
+    __slots__ = ('lines', 'error')
+
+    def __init__(self, lines: list[tuple[int, str]], error: str | None = None) -> None:
+        self.lines = lines
+        self.error = error
+
+
+TRACKED_NAMES = frozenset(_CANONICAL)
+
+
+def tracked(name: str) -> bool:
+    """Whether a trimmed parameter name is one this contract reads (agents drop every other line)."""
+    return _key(name) in TRACKED_NAMES
+
+
+def command_parameter(name: str) -> bool:
+    """Whether a trimmed parameter name holds a command (agents redact these values)."""
+    canonical = _CANONICAL.get(_key(name))
+    return canonical in SHARE_COMMANDS or canonical in GLOBAL_COMMANDS or canonical in NOT_EVALUATED
+
+
 def analyze(config_text: str | None, includes: Mapping[str, str | None] | None = None,
             config_path: str = DEFAULT_CONFIG_PATH, passwd_text: str | None = None) -> dict[str, Any]:
     """Report the commands configured by ``config_text``.
@@ -185,7 +213,7 @@ def analyze(config_text: str | None, includes: Mapping[str, str | None] | None =
     ``passwd_text`` is captured ``/etc/passwd`` text, used only to resolve ``force user``
     accounts other than ``root`` to a uid.
     """
-    includes = dict(includes or {})
+    includes = includes if includes is not None else {}
     gaps: list[dict[str, str]] = []
     notes: list[str] = []
 
@@ -284,10 +312,18 @@ def analyze(config_text: str | None, includes: Mapping[str, str | None] | None =
         if state['files'] > MAX_FILES:
             gap('too_many_files', f'more than {MAX_FILES} configuration files')
             return
-        checked = check_text(path, text)
-        if checked is None:
-            return
-        for lineno, line in _logical_lines(checked):
+        if isinstance(text, LogicalLines):
+            if text.error is not None:
+                gap(text.error, f'{path}: ' + ('contains a NUL byte, which Samba truncates lines at'
+                                               if text.error == 'nul_byte' else 'not valid UTF-8'))
+                return
+            lines = iter(text.lines)
+        else:
+            checked = check_text(path, text)
+            if checked is None:
+                return
+            lines = _logical_lines(checked)
+        for lineno, line in lines:
             if line.startswith('['):
                 end = line.find(']', 1)
                 if end < 0:
