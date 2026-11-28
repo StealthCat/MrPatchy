@@ -575,6 +575,77 @@ def validate_postgresql(report,path):
     return len(items)
 
 
+# ISC dhcpd (#1593): the agent reduces /etc/dhcp/dhcpd.conf to the token stream app/dhcpd_execute reads.
+# Structural punctuation ({ } ; ( ) :) and keywords are kept everywhere; other values, other punctuation
+# included, only inside execute(...), include, scope declarations and if/elsif/switch conditions.
+# Everything else is a valueless 'dropped' token.
+DHCPD_CONF='/etc/dhcp/dhcpd.conf'
+DHCPD_KEYS={'parsed','tokens','lex_gaps','truncated','redacted'}
+DHCPD_TOKENS=20000
+DHCPD_VALUE=2048
+DHCPD_LINES=262145
+DHCPD_LEX_GAPS=('unusual_escape','unterminated_string','token_over_buffer','retention_bounded')
+DHCPD_EVENTS=('commit','release','expiry','transmission')
+DHCPD_SCOPES=('shared-network','subnet','subnet6','pool','pool6','group','host','class','subclass')
+DHCPD_DATA_BLOCKS=('failover','key','zone','option','authoritative','range6','prefix6','fixed-prefix6')
+DHCPD_KEYWORDS=frozenset(('include','execute','on','or','if','elsif','else','switch','case','default')+DHCPD_EVENTS+DHCPD_SCOPES+DHCPD_DATA_BLOCKS)
+DHCPD_RETAIN=frozenset(('include','execute','if','elsif','switch')+DHCPD_SCOPES)
+DHCPD_STRUCTURE=frozenset('{}();:')
+_DHCPD_WORD=re.compile(r'[A-Za-z0-9-][A-Za-z0-9_-]*')
+
+
+def dhcpd_retained(tokens):
+    """Indexes that may keep a value, the same rule as the agent: from a retaining keyword to ';' at parenthesis
+    depth 0 or the next brace."""
+    keep=[False]*len(tokens);active=False;depth=0
+    for index,(_,kind,value) in enumerate(tokens):
+        if active:
+            if kind=='punct' and value in '{}':active=False
+            elif kind=='punct' and value==';' and not depth:active=False
+            else:
+                keep[index]=True
+                if kind=='punct' and value=='(':depth+=1
+                elif kind=='punct' and value==')':depth=max(0,depth-1)
+                continue
+        if kind=='name' and value.lower() in DHCPD_RETAIN:active=True;depth=0
+    return keep
+
+
+def validate_dhcpd(report,path):
+    """Strictly validate the dhcpd.conf token stream; no value outside the reported statements is accepted."""
+    if path!=DHCPD_CONF:raise ValueError('dhcpd tokens outside /etc/dhcp/dhcpd.conf')
+    if not isinstance(report,dict) or set(report)!=DHCPD_KEYS:raise ValueError('Invalid dhcpd tokens')
+    if any(type(report[k]) is not bool for k in ('parsed','truncated','redacted')):raise ValueError('Invalid dhcpd tokens')
+    tokens,gaps=report['tokens'],report['lex_gaps']
+    if not isinstance(tokens,list) or len(tokens)>DHCPD_TOKENS or not isinstance(gaps,list) or len(gaps)>64:raise ValueError('Invalid dhcpd tokens')
+    if not report['parsed'] and (tokens or gaps or report['truncated'] or report['redacted']):raise ValueError('Invalid dhcpd tokens')
+    for gap in gaps:
+        if not isinstance(gap,dict) or set(gap)!={'code','line'} or gap['code'] not in DHCPD_LEX_GAPS or type(gap['line']) is not int or not 1<=gap['line']<=DHCPD_LINES:
+            raise ValueError('Invalid dhcpd lexer gap')
+    last=1
+    for item in tokens:
+        if not isinstance(item,list) or len(item)!=3 or type(item[0]) is not int or not last<=item[0]<=DHCPD_LINES or not isinstance(item[2],str):
+            raise ValueError('Invalid dhcpd token')
+        last,kind,value=item
+        if kind=='dropped':
+            if value:raise ValueError('dhcpd value not retained by agents')
+        elif kind=='string':
+            if len(value)>DHCPD_VALUE or any(0xd800<=ord(c)<=0xdfff for c in value):raise ValueError('Invalid dhcpd string')
+        elif kind in ('name','number'):
+            if len(value)>DHCPD_VALUE or not _DHCPD_WORD.fullmatch(value) or value=='-' or (kind=='name')!=value[0].isalpha():raise ValueError('Invalid dhcpd word')
+        elif kind=='punct':
+            if len(value)!=1 or value in '"#' or (value!='-' and value.isascii() and (value.isalnum() or value.isspace())) or 0xd800<=ord(value)<=0xdfff:
+                raise ValueError('Invalid dhcpd punctuation')
+        else:raise ValueError('Invalid dhcpd token')
+    keep=dhcpd_retained(tokens)
+    for index,(_,kind,value) in enumerate(tokens):
+        if keep[index] or kind=='dropped':continue
+        if kind=='punct' and value not in DHCPD_STRUCTURE:raise ValueError('dhcpd value not retained by agents')
+        if kind in ('string','number','name') and not (kind=='name' and value.lower() in DHCPD_KEYWORDS):
+            raise ValueError('dhcpd value not retained by agents')
+    return len(tokens)
+
+
 # rsnapshot (#1530): the agent splits /etc/rsnapshot.conf into rsnapshot's logical lines (target/agent.py
 # parse_rsnapshot_conf). Directives that run programs, snapshot_root and backup keep their tab-separated fields;
 # every other directive keeps only its name and whether it had a value (values None).
@@ -635,8 +706,8 @@ def validate_rsnapshot(report,path):
 
 
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL/rsnapshot detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql','rsnapshot')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL/dhcpd/rsnapshot detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql','dhcpd','rsnapshot')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -704,6 +775,9 @@ def validate(inventory):
         if 'postgresql' in row:
             if row['kind']!='regular':raise ValueError('PostgreSQL statements require a regular file')
             validate_postgresql(row['postgresql'],path)
+        if 'dhcpd' in row:
+            if row['kind']!='regular':raise ValueError('dhcpd tokens require a regular file')
+            validate_dhcpd(row['dhcpd'],path)
         if 'rsnapshot' in row:
             if row['kind']!='regular':raise ValueError('rsnapshot statements require a regular file')
             validate_rsnapshot(row['rsnapshot'],path)
