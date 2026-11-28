@@ -1,3 +1,11 @@
+## 1.140.0 — 2026-11-25
+
+1. [PR #1717](https://github.com/StealthCat/MrPatchy/pull/1717): Startup Files shows the commands smbd runs from `/etc/samba/smb.conf` and its includes. For each command it shows the share (including the implicit `IPC$`), the account, the trigger, refusal on failure and the source line, and it flags a configuration Samba would reject. Agents keep only section headers, tracked parameters and the rejection line. Every other line, including passwords, `ldap admin dn` and smbpasswd entries, is dropped and counted, and commands get best-effort redaction. A non-canonical include path stays unobserved, with a blocking gap. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1580.
+2. [PR #1725](https://github.com/StealthCat/MrPatchy/pull/1725): Fixed: the ISC dhcpd contract ended a `case` label at a colon inside a hex constant or expression, which under-reported `execute()` programs. A label now ends only at a depth-0 colon. A bare numeric label that may be ambiguous is reported as a blocking gap. Compatibility: contract evaluation only. Fixes #1719.
+3. [PR #1728](https://github.com/StealthCat/MrPatchy/pull/1728): The optional native benchmark workflow can select 4,500 ms loopback provider responses for manual paced SQLite and MySQL captures, and each slow capture gets its own artifact. Standard and pull-request jobs still use 150 ms. Compatibility: optional CI workflow only. Fixes #1727.
+
+Integrated together through batch [PR #1730](https://github.com/StealthCat/MrPatchy/pull/1730). This source update does not publish a Docker image.
+
 ## 1.139.1 — 2026-11-25
 
 1. [PR #1723](https://github.com/StealthCat/MrPatchy/pull/1723): The paired triage benchmark and its comparator accept synthetic provider delays of up to 5,000 ms, so slower provider responses can be exercised. The default, workload-equivalence checks, report format, rate controls and budget validation are unchanged. Compatibility: benchmark tooling only. Fixes #1722.

@@ -159,7 +159,7 @@ def test_catalogs_label_paths_and_state_the_gap():
     assert startup_inventory.mechanism('/etc/samba.bak')[0] == 'additional'
     assert startup_inventory.mechanism('/etc/sysconfig/network')[0] == 'additional'
     gap = next(g for g in startup_inventory.GAPS if g.startswith('Samba:'))
-    assert 'not yet evaluated' in gap and 'root preexec' in gap and 'registry' in gap and '/var/lib/samba' in gap
+    assert 'This view evaluates /etc/samba/smb.conf' in gap and 'root preexec' in gap and 'registry' in gap and '/var/lib/samba' in gap
     mechanism = next(m for m in startup_catalog._MECHANISMS if m['id'] == 'samba')
     assert [loc['path'] for loc in mechanism['locations']] == list(NEW)
 

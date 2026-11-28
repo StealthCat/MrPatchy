@@ -2552,6 +2552,105 @@ def parse_postgresql(data,path):
     return result
 
 
+# Samba (#1580): every regular file under /etc/samba is reduced, from the exact hashed bytes, to the
+# logical lines app/samba_commands reads (lib/util/tini.c line handling, Samba 4.19). Section headers, the
+# parameters the contract tracks and the line Samba rejects a file at are kept; every other line, including
+# passwords and smbpasswd entries, is dropped and counted. Command values use the best-effort credential
+# redaction used for cron commands. Nothing is run.
+SAMBA_DIR = '/etc/samba'
+SAMBA_LINE_LIMIT = 4000
+SAMBA_VALUE_LIMIT = 4096
+SAMBA_NAME_LIMIT = 1024
+SAMBA_SPACE = ' \t\n\v\f\r'
+SAMBA_COMMANDS = frozenset((
+    'root preexec','preexec','exec','root postexec','postexec',
+    'add user script','delete user script','rename user script','add machine script','add group script',
+    'delete group script','add user to group script','delete user from group script','set primary group script',
+    'check password script','passwd program','username map script','add share command','change share command',
+    'delete share command','addprinter command','deleteprinter command','addport command','enumports command',
+    'shutdown script','abort shutdown script','get quota command','set quota command','panic action',
+    'message command','wins hook','log nt token command',
+    'print command','lpq command','lprm command','lppause command','lpresume command','queuepause command',
+    'queueresume command','dfree command','magic script','dns update command','nsupdate command',
+    'samba kcc command','spn update command','gpo update command','mit kdc command'))
+SAMBA_KEPT = frozenset(SAMBA_COMMANDS|{'root preexec close','preexec close','available','include','copy','config file',
+                                       'config backend','enable asu support','force user','admin users'})
+
+
+def _samba_key(name):
+    return ''.join(ch for ch in name if ch not in SAMBA_SPACE).lower()
+
+
+SAMBA_KEYS = {_samba_key(n):n for n in SAMBA_KEPT}
+SAMBA_COMMAND_KEYS = frozenset(_samba_key(n) for n in SAMBA_COMMANDS)
+
+
+def samba_reads(path):
+    return path.startswith(SAMBA_DIR+'/')
+
+
+def _samba_logical_lines(text):
+    """Yield (first_line_number, line) exactly like app/samba_commands._logical_lines (tini.c get_line)."""
+    i,n,lineno=0,len(text),1
+    while True:
+        while i<n and text[i] in SAMBA_SPACE and text[i]!='\n':i+=1
+        if i>=n:return
+        start=lineno
+        if text[i]=='\n':i+=1;lineno+=1;continue
+        if text[i] in '#;':
+            nl=text.find('\n',i)
+            if nl<0:return
+            i=nl+1;lineno+=1;continue
+        buf=[]
+        while i<n:
+            c=text[i];i+=1
+            if c=='\n':
+                lineno+=1
+                if buf and buf[-1]=='\\':buf.pop();continue
+                if len(buf)>1 and buf[-2]=='\\' and buf[-1] in SAMBA_SPACE:del buf[-2:];continue
+                break
+            if buf and buf[-1] in SAMBA_SPACE and c in SAMBA_SPACE:continue
+            buf.append(c)
+        yield start,''.join(buf)
+
+
+def _samba_trim(value):
+    if value[:1] and value[0] in SAMBA_SPACE:value=value[1:]
+    if value and value[-1] in SAMBA_SPACE:value=value[:-1]
+    return value
+
+
+def parse_smb_conf(data):
+    """Reduce one /etc/samba file to the logical lines app/samba_commands evaluates. Nothing is executed."""
+    result={'parsed':False,'error':None,'lines':[],'dropped':0,'truncated':False}
+    if b'\x00' in data:result['error']='nul_byte';return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:result['error']='invalid_utf8';return result
+    lines=result['lines']
+    def add(item):
+        if len(lines)>=SAMBA_LINE_LIMIT:result['truncated']=True;return False
+        lines.append(item);return True
+    for lineno,line in _samba_logical_lines(text):
+        if line.startswith('['):
+            end=line.find(']',1)
+            if end<0:add({'line':lineno,'op':'reject','reason':'section_without_bracket'});break
+            name=line[1:end]
+            if len(name)>SAMBA_NAME_LIMIT:result['truncated']=True;break
+            if not add({'line':lineno,'op':'section','name':name}):break
+            continue
+        if '=' not in line:result['dropped']+=1;continue
+        name,value=line.split('=',1);name=_samba_trim(name)
+        if not name:add({'line':lineno,'op':'reject','reason':'empty_parameter_name'});break
+        key=_samba_key(name)
+        if key not in SAMBA_KEYS:result['dropped']+=1;continue
+        value=_samba_trim(value);redacted=False
+        if key in SAMBA_COMMAND_KEYS:value,redacted=redact_cron_command(value)
+        if len(name)>SAMBA_NAME_LIMIT or len(value)>SAMBA_VALUE_LIMIT:result['truncated']=True;break
+        if not add({'line':lineno,'op':'set','name':name,'value':value,'redacted':redacted}):break
+    result['parsed']=True
+    return result
+
+
 # strongSwan swanctl (#1624): every regular *.conf file under the Debian-family /etc/swanctl and the
 # RPM-family /etc/strongswan/swanctl is reduced, from the exact hashed bytes, to the statement stream
 # app/strongswan_updown reads (strongSwan 5.9.13 settings lexing). Nothing is run. Section names, include
@@ -2666,6 +2765,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if swanctl and content is None:content=bytearray()
         postgresql=cron_jobs and postgresql_reads(str(path))
         if postgresql and content is None:content=bytearray()
+        samba=cron_jobs and samba_reads(str(path))
+        if samba and content is None:content=bytearray()
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -2727,6 +2828,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['strongswan']=parse_swanctl(bytes(content))
             if postgresql and row['kind']=='regular':
                 row['postgresql']=parse_postgresql(bytes(content),str(path))
+            if samba and row['kind']=='regular':
+                row['samba']=parse_smb_conf(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:

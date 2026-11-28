@@ -1,5 +1,5 @@
 """Compare bounded, immutable startup inventories; differences are not malware verdicts."""
-from . import host_lifecycle
+from . import host_lifecycle, samba_commands
 import re
 from pathlib import PurePosixPath
 
@@ -575,6 +575,55 @@ def validate_postgresql(report,path):
     return len(items)
 
 
+# Samba (#1580): the agent reduces every regular file under /etc/samba to the logical lines
+# app/samba_commands reads: section headers, tracked parameters and the line Samba rejects the file at.
+SAMBA_DIR='/etc/samba'
+SAMBA_KEYS={'parsed','error','lines','dropped','truncated'}
+SAMBA_LINE_KEYS={'section':{'line','op','name'},'set':{'line','op','name','value','redacted'},'reject':{'line','op','reason'}}
+SAMBA_REJECTS=('section_without_bracket','empty_parameter_name')
+SAMBA_ERRORS=('nul_byte','invalid_utf8')
+SAMBA_LINES=4000
+SAMBA_LINE_NUMBER=1024*1024+1
+SAMBA_VALUE=4096
+SAMBA_NAME=1024
+
+
+def _samba_text(value,limit):
+    return isinstance(value,str) and len(value)<=limit and '\x00' not in value and '\n' not in value
+
+
+def validate_samba(report,path):
+    """Strictly validate one file's reduced Samba logical lines (#1580)."""
+    if not path.startswith(SAMBA_DIR+'/'):raise ValueError('Samba lines outside /etc/samba')
+    if not isinstance(report,dict) or set(report)!=SAMBA_KEYS or type(report['parsed']) is not bool or type(report['truncated']) is not bool:
+        raise ValueError('Invalid Samba lines')
+    if type(report['dropped']) is not int or not 0<=report['dropped']<=SAMBA_LINE_NUMBER:raise ValueError('Invalid Samba lines')
+    items=report['lines']
+    if not isinstance(items,list) or len(items)>SAMBA_LINES:raise ValueError('Invalid Samba lines')
+    if not report['parsed']:
+        if report['error'] not in SAMBA_ERRORS or items or report['dropped'] or report['truncated']:raise ValueError('Invalid Samba error')
+        return 0
+    if report['error'] is not None:raise ValueError('Invalid Samba error')
+    last=0
+    for index,item in enumerate(items):
+        op=item.get('op') if isinstance(item,dict) else None
+        if op not in SAMBA_LINE_KEYS or set(item)!=SAMBA_LINE_KEYS[op]:raise ValueError('Invalid Samba line')
+        if type(item['line']) is not int or not last<item['line']<=SAMBA_LINE_NUMBER:raise ValueError('Invalid Samba line')
+        last=item['line']
+        if op=='reject':
+            if item['reason'] not in SAMBA_REJECTS or index!=len(items)-1:raise ValueError('Invalid Samba rejection')
+        elif op=='section':
+            if not _samba_text(item['name'],SAMBA_NAME) or ']' in item['name']:raise ValueError('Invalid Samba section')
+        else:
+            name=item['name']
+            if not _samba_text(name,SAMBA_NAME) or not name or '=' in name or not samba_commands.tracked(name) or name[0] in '[#;':
+                raise ValueError('Samba parameter not retained by agents')
+            if name[0] in ' \t\v\f\r' or name[-1] in ' \t\v\f\r':raise ValueError('Invalid Samba parameter')
+            if not _samba_text(item['value'],SAMBA_VALUE) or type(item['redacted']) is not bool:raise ValueError('Invalid Samba value')
+            if item['redacted'] and not samba_commands.command_parameter(name):raise ValueError('Invalid Samba value')
+    return len(items)
+
+
 # rsnapshot (#1530): the agent splits /etc/rsnapshot.conf into rsnapshot's logical lines (target/agent.py
 # parse_rsnapshot_conf). Directives that run programs, snapshot_root and backup keep their tab-separated fields;
 # every other directive keeps only its name and whether it had a value (values None).
@@ -635,8 +684,8 @@ def validate_rsnapshot(report,path):
 
 
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL/rsnapshot detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql','rsnapshot')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL/rsnapshot/Samba detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql','rsnapshot','samba')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -704,6 +753,9 @@ def validate(inventory):
         if 'postgresql' in row:
             if row['kind']!='regular':raise ValueError('PostgreSQL statements require a regular file')
             validate_postgresql(row['postgresql'],path)
+        if 'samba' in row:
+            if row['kind']!='regular':raise ValueError('Samba lines require a regular file')
+            validate_samba(row['samba'],path)
         if 'rsnapshot' in row:
             if row['kind']!='regular':raise ValueError('rsnapshot statements require a regular file')
             validate_rsnapshot(row['rsnapshot'],path)
