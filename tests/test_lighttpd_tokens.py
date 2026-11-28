@@ -386,3 +386,29 @@ def test_agent_parses_the_hashed_bytes_without_running_anything(tmp_path, monkey
 def test_metadata_comparisons_ignore_parsed_tokens():
     row = _row(CONF, STOCK)
     assert 'lighttpd' not in persistence.metadata(row) and persistence.metadata(row)['sha256'] == row['sha256']
+
+
+# Referenced credential values (coordinator hold on 7dc74e3): a reference must not pull a credential-bearing
+# setting's value into the report; a command built from one is shown with a blocking value_not_retained gap.
+@pytest.mark.parametrize('key', ['auth.backend.ldap.bind-pw', 'auth.backend.mysql.pass', 'mysql-vhost.pass',
+                                 'secdownload.secret', 'ssl.privkey', 'var.db_password', 'var.api-token',
+                                 'var.SecretKey', 'server.credential'])
+def test_referenced_credential_values_are_not_retained(key):
+    text = f'{key} = "{SECRET}"\nvar.a = {key}\naccesslog.filename = "|/bin/log " + {key}\n'
+    report = agent.parse_lighttpd(text.encode())
+    persistence.validate_lighttpd(report, CONF)
+    assert SECRET not in repr(report) and report['dropped'] >= 1
+    view = startup_inventory.lighttpd_view(_inventory({CONF: text}))
+    assert SECRET not in repr(view)
+    assert view['commands'][0]['command'] == '/bin/log ' + startup_inventory.LIGHTTPD_DROPPED
+    assert any(g['code'] == 'value_not_retained' and g['blocking'] for g in view['gaps'])
+
+
+def test_referenced_ordinary_values_and_var_values_are_still_kept():
+    text = ('server.document-root = "/srv/www"\nvar.base = "/opt/app"\n'
+            'accesslog.filename = "|/bin/log " + server.document-root + var.base\n')
+    report = agent.parse_lighttpd(text.encode())
+    assert strings(report)[:2] == ['/srv/www', '/opt/app']
+    view = startup_inventory.lighttpd_view(_inventory({CONF: text}))
+    assert view['commands'][0]['command'] == '/bin/log /srv/www/opt/app'
+    assert not any(g['code'] == 'value_not_retained' for g in view['gaps'])
