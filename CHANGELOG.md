@@ -1,3 +1,16 @@
+## 1.139.0 — 2026-11-25
+
+1. [PR #1715](https://github.com/StealthCat/MrPatchy/pull/1715): Startup Files shows the commands and program paths `/etc/rsnapshot.conf` makes rsnapshot run: pre/post-exec hooks, `backup_script`, `backup_exec` and backtick `include_conf`. Each shows its argv or shell, trigger, failure effect, parser rejection and coverage gaps. Newer agents parse the lines and keep values only for the directives the view evaluates. Commands get best-effort redaction, and any redacted or truncated line is a blocking gap. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1530.
+2. [PR #1718](https://github.com/StealthCat/MrPatchy/pull/1718): Fixed: the ISC dhcpd `execute()` evaluation missed programs after a `case ":"` string label, and it now rejects quoted `;`/`{` lookalikes the way dhcpd does. Compatibility: contract evaluation only. Fixes #1716.
+
+Integrated together through batch [PR #1720](https://github.com/StealthCat/MrPatchy/pull/1720). This source update does not publish a Docker image.
+
+## 1.138.1 — 2026-11-25
+
+1. [PR #1711](https://github.com/StealthCat/MrPatchy/pull/1711): Update scoring revalidates provider replies against fresh package and host evidence while reading less from the database. The package read selects the eight fields the check needs instead of twelve, dropping repository origin text, repository priority, host ID and queue age. Completed scores are kept when only unused repository metadata changes. Assessments whose package or host evidence changed or disappeared are still superseded. Compatibility: the provider request, exact identity, pause checks and admission are unchanged, with no API or schema change. Fixes #1710.
+
+Integrated through [PR #1714](https://github.com/StealthCat/MrPatchy/pull/1714). This source update does not publish a Docker image.
+
 ## 1.138.0 — 2026-11-25
 
 1. [PR #1708](https://github.com/StealthCat/MrPatchy/pull/1708): Agents hash the Samba configuration (`/etc/samba`) and the RPM-family `/etc/sysconfig/samba` options file as metadata-only built-in startup files. Saved custom `/etc/samba` or `/etc/sysconfig` paths stay valid. Startup Files labels them and states that the share preexec/postexec and global script commands are not yet evaluated. The coordinator resolved its overlap with the collectd scope from #1705 as a union. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Refs #1580.
