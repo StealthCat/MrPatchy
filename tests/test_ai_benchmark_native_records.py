@@ -9,21 +9,26 @@ from tests.test_ai_benchmark_series import run_series
 BENCHMARKS = Path(__file__).resolve().parents[1] / 'docs' / 'benchmarks'
 SAME_SERVER_SOURCE = '3a06f2edb48d95f781f6758fe2a8500bb4f82197'
 PACED_SOURCE = '1994e4ad7f50fec2773c95f146ef5dfeb8f143a2'
+SLOW_PACED_SOURCE = '3beb4936ae7c4725c6d936b5864d547ef50ac1d5'
 
 
 @pytest.fixture(params=[
     pytest.param(('ai-capped-v1110-sqlite-linux', 'sqlite', '3.45.1',
-                  'e8ad2b901c2becdb0de3379ffef3790c0953c690', 8, 'daily_cap'), id='sqlite'),
+                  'e8ad2b901c2becdb0de3379ffef3790c0953c690', 8, 'daily_cap', None), id='sqlite'),
     pytest.param(('ai-capped-v1112-mysql-linux', 'mysql', '8.4.13',
-                  '20c950d5bbbfce78aa8cbf42b36712d62ca68b5c', 8, 'daily_cap'), id='mysql'),
+                  '20c950d5bbbfce78aa8cbf42b36712d62ca68b5c', 8, 'daily_cap', None), id='mysql'),
     pytest.param(('ai-capped-v1118-sqlite-linux-same-server', 'sqlite', '3.45.1',
-                  SAME_SERVER_SOURCE, 1, 'daily_cap'), id='sqlite-same-server'),
+                  SAME_SERVER_SOURCE, 1, 'daily_cap', None), id='sqlite-same-server'),
     pytest.param(('ai-capped-v1118-mysql-linux-same-server', 'mysql', '8.4.13',
-                  SAME_SERVER_SOURCE, 1, 'daily_cap'), id='mysql-same-server'),
+                  SAME_SERVER_SOURCE, 1, 'daily_cap', None), id='mysql-same-server'),
     pytest.param(('ai-paced-v1132-sqlite-linux', 'sqlite', '3.45.1',
-                  PACED_SOURCE, 8, 'rate_and_daily'), id='sqlite-paced'),
+                  PACED_SOURCE, 8, 'rate_and_daily', 150), id='sqlite-paced'),
     pytest.param(('ai-paced-v1132-mysql-linux', 'mysql', '8.4.13',
-                  PACED_SOURCE, 8, 'rate_and_daily'), id='mysql-paced'),
+                  PACED_SOURCE, 8, 'rate_and_daily', 150), id='mysql-paced'),
+    pytest.param(('ai-paced-slow-3beb493-sqlite-linux', 'sqlite', '3.45.1',
+                  SLOW_PACED_SOURCE, 8, 'rate_and_daily', 4500), id='sqlite-paced-slow'),
+    pytest.param(('ai-paced-slow-3beb493-mysql-linux', 'mysql', '8.4.13',
+                  SLOW_PACED_SOURCE, 8, 'rate_and_daily', 4500), id='mysql-paced-slow'),
 ])
 def archive(request):
     name, *configuration = request.param
@@ -53,7 +58,7 @@ def test_retained_native_pairs_replay(archive, pairs):
 
 
 def test_retained_native_provenance_and_coverage(archive, pairs):
-    records, backend, version, source, hosts, control_mode = archive
+    records, backend, version, source, hosts, control_mode, delay_ms = archive
     expected = {'provenance.txt', 'series.json'} | {path.name for pair in pairs for path in pair}
     assert {path.name for path in records.iterdir()} == expected
     provenance = (records / 'provenance.txt').read_text(encoding='utf-8').splitlines()
@@ -63,6 +68,8 @@ def test_retained_native_provenance_and_coverage(archive, pairs):
         assert 'ai_control_mode=rate_and_daily' in provenance
         assert 'starts_per_hour=1000' in provenance
         assert f'fixture_hosts={hosts}' in provenance
+        if delay_ms == 4500:
+            assert f'provider_delay_ms={delay_ms}' in provenance
     if hosts == 1:
         assert 'fixture_hosts=1' in provenance
     if backend == 'sqlite':
@@ -82,11 +89,14 @@ def test_retained_native_provenance_and_coverage(archive, pairs):
                 assert report['single_server_slots'] == 4
                 assert report['peak_provider_requests'] == slots
             assert report['ai_control_mode'] == control_mode
+            if delay_ms is not None:
+                assert report['provider_delay_ms'] == delay_ms
             if control_mode == 'rate_and_daily':
                 rate = report['fixture_rate']
                 assert rate['starts_per_hour'] == 1000
                 assert rate['admitted_starts'] == 8
-                assert report['peak_provider_requests'] == 1
+                expected_peak = 3 if delay_ms == 4500 and slots == 4 else 1
+                assert report['peak_provider_requests'] == expected_peak
                 assert report['persisted_assessments'] == {
                     'subjects': 8, 'input_stages': 12, 'follow_up_subjects': 4,
                 }
