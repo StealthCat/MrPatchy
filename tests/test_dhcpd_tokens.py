@@ -103,6 +103,26 @@ def test_braces_inside_parentheses_bound_retention_and_block_the_view():
     assert any(g['code'] == 'retention_bounded' and g['blocking'] for g in view['gaps'])
 
 
+def test_unquoted_secret_punctuation_and_non_ascii_values_are_dropped():
+    # Review of #1713: an unquoted base64 TSIG secret split into words and +, / and = punctuation, which were kept.
+    text = 'key DHCP_UPDATER {\n secret pRP5F+apFo/J95JE+L06sv4PQ==;\n}\noption domain-name caf\u00e9.example;\nexecute("/bin/a", "\u00e9");\n'
+    report = agent.parse_dhcpd(text.encode())
+    persistence.validate_dhcpd(report, CONF)
+    assert [t for t in report['tokens'] if t[0] == 2] == [[2, 'dropped', ''], [2, 'punct', ';']]
+    assert [t for t in report['tokens'] if t[0] == 4] == [[4, 'name', 'option'], [4, 'dropped', ''], [4, 'punct', ';']]
+    kept = {t[2] for t in report['tokens'] if t[1] == 'punct'}
+    assert kept <= set('{}();:,') and not kept & set('+/=.')
+    assert any(t == [5, 'string', '\u00e9'] for t in report['tokens'])  # kept inside execute()
+    raw = de.assess_config([{'path': CONF, 'state': 'regular', 'text': text}])
+    assert _norm(_via_agent(text)[2]) == _norm(raw)
+
+
+def test_retention_bounded_gap_reports_the_brace_line():
+    text = 'execute("/bin/a", {\n\n\n}\noption x 1;\n\n'
+    report = agent.parse_dhcpd(text.encode())
+    assert {'code': 'retention_bounded', 'line': 1} in report['lex_gaps']
+
+
 @pytest.mark.parametrize('data', [b'execute("/bin/a");\x00', b'\xff\xfe', b'#' * (agent.DHCPD_TEXT_LIMIT + 1)])
 def test_nul_non_utf8_and_over_limit_files_are_not_parsed(data):
     report = agent.parse_dhcpd(data)
@@ -160,6 +180,7 @@ def _report():
     lambda r: r['lex_gaps'].append({'code': 'other', 'line': 1}),
     lambda r: r.update(parsed=False),
     lambda r: r['tokens'].extend([[10**6, 'punct', ';']]),
+    lambda r: r['tokens'].__setitem__(1, [r['tokens'][1][0], 'punct', '=']),  # non-structural punctuation outside the reported statements
 ])
 def test_validation_rejects_malformed_reports(mutate):
     report = _report()

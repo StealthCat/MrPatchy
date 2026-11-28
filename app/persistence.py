@@ -576,8 +576,9 @@ def validate_postgresql(report,path):
 
 
 # ISC dhcpd (#1593): the agent reduces /etc/dhcp/dhcpd.conf to the token stream app/dhcpd_execute reads.
-# Punctuation and keywords are kept everywhere; other values only inside execute(...), include, scope
-# declarations and if/elsif/switch conditions. Everything else is a valueless 'dropped' token.
+# Structural punctuation ({ } ; ( ) :) and keywords are kept everywhere; other values, other punctuation
+# included, only inside execute(...), include, scope declarations and if/elsif/switch conditions.
+# Everything else is a valueless 'dropped' token.
 DHCPD_CONF='/etc/dhcp/dhcpd.conf'
 DHCPD_KEYS={'parsed','tokens','lex_gaps','truncated','redacted'}
 DHCPD_TOKENS=20000
@@ -589,6 +590,7 @@ DHCPD_SCOPES=('shared-network','subnet','subnet6','pool','pool6','group','host',
 DHCPD_DATA_BLOCKS=('failover','key','zone','option','authoritative','range6','prefix6','fixed-prefix6')
 DHCPD_KEYWORDS=frozenset(('include','execute','on','or','if','elsif','else','switch','case','default')+DHCPD_EVENTS+DHCPD_SCOPES+DHCPD_DATA_BLOCKS)
 DHCPD_RETAIN=frozenset(('include','execute','if','elsif','switch')+DHCPD_SCOPES)
+DHCPD_STRUCTURE=frozenset('{}();:')
 _DHCPD_WORD=re.compile(r'[A-Za-z0-9-][A-Za-z0-9_-]*')
 
 
@@ -637,7 +639,9 @@ def validate_dhcpd(report,path):
         else:raise ValueError('Invalid dhcpd token')
     keep=dhcpd_retained(tokens)
     for index,(_,kind,value) in enumerate(tokens):
-        if kind in ('string','number','name') and not keep[index] and not (kind=='name' and value.lower() in DHCPD_KEYWORDS):
+        if keep[index] or kind=='dropped':continue
+        if kind=='punct' and value not in DHCPD_STRUCTURE:raise ValueError('dhcpd value not retained by agents')
+        if kind in ('string','number','name') and not (kind=='name' and value.lower() in DHCPD_KEYWORDS):
             raise ValueError('dhcpd value not retained by agents')
     return len(tokens)
 

@@ -2596,11 +2596,12 @@ def parse_swanctl(data):
 
 
 # ISC dhcpd (#1593): /etc/dhcp/dhcpd.conf is reduced, from the exact hashed bytes, to the token stream
-# app/dhcpd_execute reads (a port of its conflex.c tokenizer, dhcpd 4.4.3-P1). Nothing is run. Punctuation
-# and the contract's keywords are kept everywhere. Other values are kept only inside the statements the
-# contract reports: execute(...) arguments, include targets, scope declarations and if/elsif/switch
-# conditions. Every other value, including key secrets, becomes a 'dropped' token, and kept strings get
-# the best-effort credential redaction used for cron commands.
+# app/dhcpd_execute reads (a port of its conflex.c tokenizer, dhcpd 4.4.3-P1). Nothing is run. Structural
+# punctuation ({ } ; ( ) :) and the contract's keywords are kept everywhere. Other values, including other
+# punctuation, are kept only inside the statements the contract reports: execute(...) arguments, include
+# targets, scope declarations and if/elsif/switch conditions. Every other value, including key secrets and
+# the punctuation of unquoted ones, becomes a 'dropped' token, and kept strings get the best-effort
+# credential redaction used for cron commands.
 DHCPD_CONF = '/etc/dhcp/dhcpd.conf'
 DHCPD_TEXT_LIMIT = 262144
 DHCPD_TOKEN_LIMIT = 20000
@@ -2612,6 +2613,7 @@ DHCPD_DATA_BLOCKS = ('failover','key','zone','option','authoritative','range6','
 DHCPD_KEYWORDS = frozenset(('include','execute','on','or','if','elsif','else','switch','case','default')
                            +DHCPD_EVENTS+DHCPD_SCOPES+DHCPD_DATA_BLOCKS)
 DHCPD_RETAIN = frozenset(('include','execute','if','elsif','switch')+DHCPD_SCOPES)
+DHCPD_STRUCTURE = frozenset('{}();:')  # the only punctuation app/dhcpd_execute reads outside kept statements
 
 
 def _dhcpd_lex(text):
@@ -2663,12 +2665,13 @@ def _dhcpd_lex(text):
 
 def dhcpd_retained(tokens):
     """Which token indexes keep their value: from a retaining keyword to ';' at parenthesis depth 0, or to
-    the next brace. A brace inside open parentheses ends retention early and is reported (True at the end)."""
-    keep=[False]*len(tokens);active=False;depth=0;bounded=False
-    for index,(kind,value,_) in enumerate(tokens):
+    the next brace. A brace inside open parentheses ends retention early and is reported with the line of the
+    first such brace (None when retention was never cut)."""
+    keep=[False]*len(tokens);active=False;depth=0;bounded=None
+    for index,(kind,value,line) in enumerate(tokens):
         if active:
             if kind=='punct' and value in '{}':
-                if depth:bounded=True
+                if depth and bounded is None:bounded=line
                 active=False
             elif kind=='punct' and value==';' and not depth:active=False
             else:
@@ -2689,14 +2692,14 @@ def parse_dhcpd(data):
     result['parsed']=True
     toks,gaps=_dhcpd_lex(text)
     keep,bounded=dhcpd_retained(toks)
-    if bounded:gaps.append({'code':'retention_bounded','line':toks[-1][2] if toks else 1})
+    if bounded is not None:gaps.append({'code':'retention_bounded','line':bounded})
     # A kept over-long token is re-detected from the rebuilt text, unless redaction shortened it below the
     # buffer; that one and every dropped one keep the agent's gap so the blocking disclosure survives.
     lex_gaps=[{'code':g['code'],'line':g['line']} for g in gaps if 'token' not in g or not keep[g['token']]]
     over={g['token']:g['line'] for g in gaps if 'token' in g and keep[g['token']]}
     out=result['tokens']
     for index,(kind,value,line) in enumerate(toks):
-        if kind=='punct' or keep[index] or (kind=='name' and value.lower() in DHCPD_KEYWORDS):
+        if keep[index] or (kind=='punct' and value in DHCPD_STRUCTURE) or (kind=='name' and value.lower() in DHCPD_KEYWORDS):
             if kind=='string':
                 value,redacted=redact_cron_command(value)
                 result['redacted']=result['redacted'] or redacted
