@@ -190,7 +190,7 @@ def test_catalogs_label_paths_and_state_the_gap():
     assert [(loc['path'], loc['families']) for loc in mechanism['locations']] == [
         (PG, ('debian',)), ('/var/lib/pgsql/data', ('rpm',))]
     assert PG in startup_catalog._all_locations('debian') and PG not in startup_catalog._all_locations('rpm')
-    assert any(PG in gap and 'not yet evaluated' in gap and 'postgresql.auto.conf' in gap and '/var/lib/pgsql' in gap
+    assert any(PG in gap and 'evaluate' in gap and 'blocking gap' in gap and 'postgresql.auto.conf' in gap and '/var/lib/pgsql' in gap
                for gap in startup_inventory.GAPS)
 
 
