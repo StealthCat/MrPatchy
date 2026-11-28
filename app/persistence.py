@@ -575,9 +575,68 @@ def validate_postgresql(report,path):
     return len(items)
 
 
+# rsnapshot (#1530): the agent splits /etc/rsnapshot.conf into rsnapshot's logical lines (target/agent.py
+# parse_rsnapshot_conf). Directives that run programs, snapshot_root and backup keep their tab-separated fields;
+# every other directive keeps only its name and whether it had a value (values None).
+RSNAPSHOT_CONF='/etc/rsnapshot.conf'
+RSNAPSHOT_KEYS={'parsed','error','statements','inexact','truncated'}
+RSNAPSHOT_KEPT=frozenset(('include_conf','cmd_preexec','cmd_postexec','backup_script','backup_exec','cmd_rsync','cmd_ssh',
+                          'cmd_cp','cmd_rm','cmd_logger','cmd_du','cmd_rsnapshot_diff','linux_lvm_cmd_lvcreate',
+                          'linux_lvm_cmd_lvremove','linux_lvm_cmd_mount','linux_lvm_cmd_umount','snapshot_root','backup'))
+RSNAPSHOT_ERRORS=('nul_byte','invalid_utf8')
+RSNAPSHOT_STATEMENTS=1024
+RSNAPSHOT_NAME_LIMIT=120
+RSNAPSHOT_LINES=1024*1024+1
+RSNAPSHOT_CONTINUATION=re.compile(r'[\t ]+\S')
+
+
+def rsnapshot_line(statement):
+    """The single configuration line a reported statement stands for (app/startup_inventory rebuilds text with it)."""
+    values=statement['values']
+    if values is None:return statement['directive']+'\t-'
+    return '\t'.join([statement['directive'],*values])
+
+
+def validate_rsnapshot(report,path):
+    """Strictly validate the logical rsnapshot.conf lines reported by newer agents (#1530)."""
+    if path!=RSNAPSHOT_CONF:raise ValueError('rsnapshot statements outside /etc/rsnapshot.conf')
+    if not isinstance(report,dict) or set(report)!=RSNAPSHOT_KEYS or type(report['parsed']) is not bool or type(report['truncated']) is not bool:
+        raise ValueError('Invalid rsnapshot statements')
+    statements=report['statements'];inexact=report['inexact']
+    if not isinstance(statements,list) or len(statements)>RSNAPSHOT_STATEMENTS:raise ValueError('Invalid rsnapshot statements')
+    if not isinstance(inexact,list) or len(inexact)>RSNAPSHOT_STATEMENTS or len(set(inexact))!=len(inexact):raise ValueError('Invalid rsnapshot inexact lines')
+    if not report['parsed']:
+        if report['error'] not in RSNAPSHOT_ERRORS or statements or inexact or report['truncated']:raise ValueError('Invalid rsnapshot error')
+        return 0
+    if report['error'] is not None:raise ValueError('Invalid rsnapshot error')
+    previous=0;starts=set()
+    for item in statements:
+        if not isinstance(item,dict) or set(item)!={'line','end','directive','values'}:raise ValueError('Invalid rsnapshot statement')
+        line,end,directive,values=item['line'],item['end'],item['directive'],item['values']
+        if type(line) is not int or type(end) is not int or not previous<line<=end<=RSNAPSHOT_LINES:raise ValueError('Invalid rsnapshot statement lines')
+        if not isinstance(directive,str) or len(directive)>RSNAPSHOT_NAME_LIMIT or any(c in directive for c in '\t\n\x00'):
+            raise ValueError('Invalid rsnapshot directive')
+        if values is None and directive in RSNAPSHOT_KEPT:raise ValueError('rsnapshot values withheld for a retained directive')
+        if values is not None:
+            if values!=[] and directive not in RSNAPSHOT_KEPT:raise ValueError('rsnapshot value not retained by agents')
+            if not isinstance(values,list) or len(values)>(2 if directive=='backup' else 3):raise ValueError('Invalid rsnapshot values')
+            for index,value in enumerate(values):
+                last=index==len(values)-1
+                if not isinstance(value,str) or len(value)>CRON_COMMAND_LIMIT or any(c in value for c in '\n\x00'):raise ValueError('Invalid rsnapshot value')
+                # Only the fourth field can hold tabs (split at most three times), and only the last field can be empty.
+                if ('\t' in value and not (index==2 and value[:1]!='\t')) or (not value and not last):raise ValueError('Invalid rsnapshot value')
+        text=rsnapshot_line(item)
+        if text.startswith('#') or not re.search(r'\S',text):raise ValueError('Invalid rsnapshot statement')
+        # A line led by whitespace right after a statement would be a continuation of it.
+        if RSNAPSHOT_CONTINUATION.match(text) and previous and line==previous+1:raise ValueError('Invalid rsnapshot continuation')
+        starts.add(line);previous=end
+    if not all(type(i) is int and i in starts for i in inexact):raise ValueError('Invalid rsnapshot inexact lines')
+    return len(statements)
+
+
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL/rsnapshot detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql','rsnapshot')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -645,6 +704,9 @@ def validate(inventory):
         if 'postgresql' in row:
             if row['kind']!='regular':raise ValueError('PostgreSQL statements require a regular file')
             validate_postgresql(row['postgresql'],path)
+        if 'rsnapshot' in row:
+            if row['kind']!='regular':raise ValueError('rsnapshot statements require a regular file')
+            validate_rsnapshot(row['rsnapshot'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
