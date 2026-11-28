@@ -27,7 +27,8 @@ def inventory(scope=EARLIER, entries=None, missing=()):
 
 
 def test_agent_built_in_scope_holds_only_the_cascade_files():
-    assert set(NEW) <= set(agent.PERSISTENCE_FILES) and set(NEW) == set(agent.NESTED_PERSISTENCE_FILES)
+    assert set(NEW) <= set(agent.PERSISTENCE_FILES)
+    assert {p for p in agent.NESTED_PERSISTENCE_FILES if p.startswith(LVM_DIR + '/')} == set(NEW)
     assert LVM_DIR not in agent.PERSISTENCE_ROOTS and LVM_DIR not in agent.PERSISTENCE_FILES
     assert set(NEW) <= set(agent.validate_custom_paths([]))
     assert set(NEW) <= set(persistence.ADDITIVE_BUILTIN_SCOPE) and LVM_DIR not in persistence.ADDITIVE_BUILTIN_SCOPE

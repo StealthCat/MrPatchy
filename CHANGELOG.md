@@ -1,3 +1,10 @@
+## 1.134.0 — 2026-11-25
+
+1. [PR #1698](https://github.com/StealthCat/MrPatchy/pull/1698): Keeps the verified native paced triage benchmark captures (SQLite and MySQL, v1.132) in the repository: 24 raw reports with their series and provenance. Replay tests cover them, and a `docs/benchmarks/.gitattributes` rule keeps the archived bytes identical across platforms. Compatibility: records and tests only. Fixes #1697.
+2. [PR #1699](https://github.com/StealthCat/MrPatchy/pull/1699): Agents hash the ISC dhcpd configuration (`/etc/dhcp/dhcpd.conf`, `dhcpd6.conf`) and the Debian-family `/etc/default/isc-dhcp-server` as metadata-only built-in startup files. Saved custom `/etc/dhcp` or `/etc/default` paths stay valid. Startup Files labels the files and states that their `execute()` programs are not yet evaluated. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Increment 2 of #1593.
+
+Integrated together through batch [PR #1703](https://github.com/StealthCat/MrPatchy/pull/1703). This source update does not publish a Docker image.
+
 ## 1.133.0 — 2026-11-25
 
 1. [PR #1690](https://github.com/StealthCat/MrPatchy/pull/1690): Startup Files evaluates runit service directories. For each service in `/etc/service` it shows which `run`, `finish`, `log/run` and `control` programs runsv runs. The view is built from reported metadata only, with symlinks resolved through recorded entries. It discloses the runsvdir, mount-flag and empty-directory gaps, and shows when results are limited for display. Compatibility: no agent, schema, auth or response-authorization change. Increment 3 of #1628.

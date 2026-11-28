@@ -603,12 +603,16 @@ def validate(inventory):
 # only. A custom /etc/lvm saved earlier already observed them, so they keep comparing.
 # PostgreSQL configuration (#1597): the server runs archive, restore, recovery and passphrase commands
 # through /bin/sh and loads preload libraries as postgres; /etc/postgresql/<version>/<cluster> on Debian.
+# ISC dhcpd configuration (#1593): dhcpd runs execute() programs on lease commit, release and expiry
+# as its process user, and global-scope ones as root at every start; /etc/dhcp/dhcpd.conf and
+# dhcpd6.conf, and the Debian-family /etc/default/isc-dhcp-server command-line defaults, only.
 ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                         '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/request-key.d',
                         '/etc/clamav','/etc/clamd.d','/etc/freshclam.conf','/etc/dovecot',
                         '/etc/swanctl','/etc/strongswan','/etc/service','/etc/runit','/etc/sv','/etc/lighttpd',
                         '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
-                        '/etc/postgresql')
+                        '/etc/postgresql',
+                        '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
 
