@@ -1,3 +1,9 @@
+## 1.136.0 — 2026-11-25
+
+1. [PR #1704](https://github.com/StealthCat/MrPatchy/pull/1704): Agents hash the syslog-ng configuration (`/etc/syslog-ng`) and the `/etc/default/syslog-ng` (Debian) or `/etc/sysconfig/syslog-ng` (RPM) option files as metadata-only built-in startup files. Saved custom `/etc/syslog-ng`, `/etc/default` or `/etc/sysconfig` paths stay valid. Startup Files labels them and states that their `program()`, `hook-commands()` and confgen commands are not yet evaluated. Compatibility: older agents keep working. After the agent update, existing baselines show the files as newly in scope until an administrator approves a new baseline. Refs #1570.
+
+Integrated through [PR #1707](https://github.com/StealthCat/MrPatchy/pull/1707). This source update does not publish a Docker image.
+
 ## 1.135.0 — 2026-11-25
 
 1. [PR #1700](https://github.com/StealthCat/MrPatchy/pull/1700): Startup Files shows the archive, restore, recovery and SSL passphrase commands and the preload libraries PostgreSQL runs or loads from each `/etc/postgresql` cluster configuration. Each shows when it runs, whether it is active, its source line, start blockers and coverage gaps. Agents report only the settings the evaluation needs and drop every other value, including `primary_conninfo` passwords and pg_hba/pg_ident lines; commands get best-effort credential redaction. Directory listing walks path components with no-follow descriptors. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1597.
