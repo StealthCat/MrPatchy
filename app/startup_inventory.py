@@ -464,7 +464,9 @@ def postgresql_view(inventory,config):
                 directories[target]=item['listing']
     class Observed(dict):
         def _absent(self,path):
-            return (complete and path.startswith(root+'/') and path not in entries and path not in directories
+            # PostgreSQL opens an absolute include unchanged and the kernel resolves '//', '.' and '..', so only an
+            # exact canonical path can be proven absent; '..' is not resolved lexically past symlinked directories (#1721).
+            return (complete and path.startswith(root+'/') and posixpath.normpath(path)==path and path not in entries and path not in directories
                     and not any(path.startswith(l+'/') for l in links) and not any(p.startswith(path+'/') for p in entries))
         def get(self,path,default=None):
             if dict.__contains__(self,path):return dict.__getitem__(self,path)
