@@ -2278,6 +2278,22 @@ def parse_lighttpd(data):
     referenced={value for index,(kind,value,_) in enumerate(tokens) if kind=='word' and index and
                 (tokens[index-1][0]=='op' and tokens[index-1][1] in LIGHTTPD_EXPRESSION or
                  tokens[index-1][:2] in (['word','include'],['word','include_shell']))}
+    # Names a credential-named key's value is built from (bind-pw = var.x, pass = "a" + server.tag) carry that
+    # credential, so they are dropped too, closed transitively over the assignments of those names.
+    sources={}
+    def assigned(at):
+        return tokens[at][0]=='word' and at+1<len(tokens) and tokens[at+1][0]=='op' and tokens[at+1][1] in LIGHTTPD_ASSIGN
+    for index in range(len(tokens)):
+        if not assigned(index):continue
+        names=sources.setdefault(tokens[index][1],set())
+        for at in range(index+2,len(tokens)):
+            kind,value,_=tokens[at]
+            if assigned(at) or kind=='op' and value not in LIGHTTPD_EXPRESSION and value!=')':break
+            if kind=='word':names.add(value)
+    tainted=set();pending=[name for name in sources if LIGHTTPD_CREDENTIAL_KEY.search(name)]
+    while pending:
+        for name in sources.get(pending.pop(),()):
+            if name not in tainted:tainted.add(name);pending.append(name)
     out=result['tokens']
     def keep(token):
         kept,redacted=redact_cron_command(token[1])
@@ -2330,7 +2346,8 @@ def parse_lighttpd(data):
                 rhs['depth']-=1;out.append(token);continue
             rhs=None
         if kind=='word' and nxt is not None and nxt[0]=='op' and nxt[1] in LIGHTTPD_ASSIGN:
-            mode=('keep' if value in LIGHTTPD_KEPT_KEYS or ((value.startswith('var.') or value in referenced) and not LIGHTTPD_CREDENTIAL_KEY.search(value))
+            mode=('drop' if value in tainted else
+                  'keep' if value in LIGHTTPD_KEPT_KEYS or ((value.startswith('var.') or value in referenced) and not LIGHTTPD_CREDENTIAL_KEY.search(value))
                   else 'backend' if value in LIGHTTPD_BACKEND_KEYS else 'drop')
             rhs={'mode':mode,'depth':0,'expect':None,'bin':None};stmt=None;out.append(token);continue
         if kind=='str':

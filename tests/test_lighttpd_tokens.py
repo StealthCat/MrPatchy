@@ -412,3 +412,28 @@ def test_referenced_ordinary_values_and_var_values_are_still_kept():
     view = startup_inventory.lighttpd_view(_inventory({CONF: text}))
     assert view['commands'][0]['command'] == '/bin/log /srv/www/opt/app'
     assert not any(g['code'] == 'value_not_retained' for g in view['gaps'])
+
+
+# Alias finding on 84378bb (review 2026-11-28T01:37Z): a credential-named key assigned FROM a reference must taint
+# the referenced name, transitively, so its value is dropped and a command built from it is a blocking gap.
+ALIASED_CREDENTIALS = [
+    (f'var.x = "{SECRET}"\nauth.backend.ldap.bind-pw = var.x\n', False),
+    (f'var.x = "{SECRET}"\nmysql-vhost.pass = "a" + var.x\n', False),
+    (f'var.x = "{SECRET}"\nmysql-vhost.pass = "a" + var.x\naccesslog.filename = "|/bin/log " + var.x\n', True),
+    (f'server.tag = "{SECRET}"\nauth.backend.ldap.bind-pw = server.tag\n'
+     'accesslog.filename = "|/bin/log " + server.tag\n', True),
+    (f'auth.backend.ldap.bind-pw = var.y\nvar.y = var.x\nvar.x = "{SECRET}"\n'
+     'accesslog.filename = "|/bin/log " + var.x\n', True),
+]
+
+
+@pytest.mark.parametrize('text,logger', ALIASED_CREDENTIALS)
+def test_values_aliased_into_credential_keys_are_not_retained(text, logger):
+    report = agent.parse_lighttpd(text.encode())
+    persistence.validate_lighttpd(report, CONF)
+    assert SECRET not in repr(report) and report['dropped'] >= 1
+    view = startup_inventory.lighttpd_view(_inventory({CONF: text}))
+    assert SECRET not in repr(view)
+    if logger:
+        assert view['commands'][0]['command'] == '/bin/log ' + startup_inventory.LIGHTTPD_DROPPED
+        assert any(g['code'] == 'value_not_retained' and g['blocking'] for g in view['gaps'])
