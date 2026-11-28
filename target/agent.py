@@ -2390,6 +2390,118 @@ def parse_swanctl(data):
     return result
 
 
+# ISC dhcpd (#1593): /etc/dhcp/dhcpd.conf is reduced, from the exact hashed bytes, to the token stream
+# app/dhcpd_execute reads (a port of its conflex.c tokenizer, dhcpd 4.4.3-P1). Nothing is run. Punctuation
+# and the contract's keywords are kept everywhere. Other values are kept only inside the statements the
+# contract reports: execute(...) arguments, include targets, scope declarations and if/elsif/switch
+# conditions. Every other value, including key secrets, becomes a 'dropped' token, and kept strings get
+# the best-effort credential redaction used for cron commands.
+DHCPD_CONF = '/etc/dhcp/dhcpd.conf'
+DHCPD_TEXT_LIMIT = 262144
+DHCPD_TOKEN_LIMIT = 20000
+DHCPD_VALUE_LIMIT = 2048
+DHCPD_TOKBUF = 1500
+DHCPD_EVENTS = ('commit','release','expiry','transmission')
+DHCPD_SCOPES = ('shared-network','subnet','subnet6','pool','pool6','group','host','class','subclass')
+DHCPD_DATA_BLOCKS = ('failover','key','zone','option','authoritative','range6','prefix6','fixed-prefix6')
+DHCPD_KEYWORDS = frozenset(('include','execute','on','or','if','elsif','else','switch','case','default')
+                           +DHCPD_EVENTS+DHCPD_SCOPES+DHCPD_DATA_BLOCKS)
+DHCPD_RETAIN = frozenset(('include','execute','if','elsif','switch')+DHCPD_SCOPES)
+
+
+def _dhcpd_lex(text):
+    """(kind,value,line) tokens and lexer gaps exactly as app/dhcpd_execute.tokenize."""
+    toks=[];gaps=[];i=0;line=1;n=len(text)
+    while i<n:
+        c=text[i]
+        if c=='\n':line+=1;i+=1;continue
+        if c.isascii() and c.isspace():i+=1;continue
+        if c=='#':
+            while i<n and text[i]!='\n':i+=1
+            continue
+        if c=='"':
+            start=line;i+=1;out=[];closed=False
+            while i<n:
+                ch=text[i]
+                if ch=='"':closed=True;i+=1;break
+                if ch=='\n':line+=1
+                if ch=='\\':
+                    if i+1>=n:break
+                    nxt=text[i+1]
+                    if nxt in 'trnb':out.append({'t':'\t','r':'\r','n':'\n','b':'\b'}[nxt]);i+=2
+                    elif nxt in '0123':
+                        digits=text[i+1:i+4]
+                        if len(digits)==3 and all(d in '01234567' for d in digits):out.append(chr(int(digits,8)));i+=4
+                        else:gaps.append({'code':'unusual_escape','line':line});out.append('�');i+=2
+                    elif nxt=='x':
+                        digits=text[i+2:i+4]
+                        if len(digits)==2 and all(d in '0123456789abcdefABCDEF' for d in digits):out.append(chr(int(digits,16)));i+=4
+                        else:gaps.append({'code':'unusual_escape','line':line});out.append('�');i+=2
+                    else:
+                        if nxt=='\n':line+=1
+                        out.append(nxt);i+=2
+                    continue
+                out.append(ch);i+=1
+            if not closed:gaps.append({'code':'unterminated_string','line':line})
+            value=''.join(out)
+            if len(value.encode('utf-8','surrogateescape'))>=DHCPD_TOKBUF:gaps.append({'code':'token_over_buffer','line':line,'token':len(toks)})
+            toks.append(('string',value,start));continue
+        if c.isascii() and (c.isalnum() or c=='-'):
+            j=i+1
+            while j<n and text[j].isascii() and (text[j].isalnum() or text[j] in '-_'):j+=1
+            value=text[i:j]
+            if len(value)>=DHCPD_TOKBUF:gaps.append({'code':'token_over_buffer','line':line,'token':len(toks)})
+            toks.append(('punct' if value=='-' else 'name' if c.isalpha() else 'number',value,line));i=j;continue
+        toks.append(('punct',c,line));i+=1
+    return toks,gaps
+
+
+def dhcpd_retained(tokens):
+    """Which token indexes keep their value: from a retaining keyword to ';' at parenthesis depth 0, or to
+    the next brace. A brace inside open parentheses ends retention early and is reported (True at the end)."""
+    keep=[False]*len(tokens);active=False;depth=0;bounded=False
+    for index,(kind,value,_) in enumerate(tokens):
+        if active:
+            if kind=='punct' and value in '{}':
+                if depth:bounded=True
+                active=False
+            elif kind=='punct' and value==';' and not depth:active=False
+            else:
+                keep[index]=True
+                if kind=='punct' and value=='(':depth+=1
+                elif kind=='punct' and value==')':depth=max(0,depth-1)
+                continue
+        if kind=='name' and value.lower() in DHCPD_RETAIN:active=True;depth=0
+    return keep,bounded
+
+
+def parse_dhcpd(data):
+    """Reduce /etc/dhcp/dhcpd.conf to app/dhcpd_execute tokens without other values. Nothing is executed."""
+    result={'parsed':False,'tokens':[],'lex_gaps':[],'truncated':False,'redacted':False}
+    if len(data)>DHCPD_TEXT_LIMIT or b'\x00' in data:return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:return result
+    result['parsed']=True
+    toks,gaps=_dhcpd_lex(text)
+    keep,bounded=dhcpd_retained(toks)
+    if bounded:gaps.append({'code':'retention_bounded','line':toks[-1][2] if toks else 1})
+    # A kept over-long token is re-detected from the rebuilt text; only a dropped one needs its own gap.
+    result['lex_gaps']=[{'code':g['code'],'line':g['line']} for g in gaps if 'token' not in g or not keep[g['token']]][:64]
+    out=result['tokens']
+    for index,(kind,value,line) in enumerate(toks):
+        if kind=='punct' or keep[index] or (kind=='name' and value.lower() in DHCPD_KEYWORDS):
+            if kind=='string':
+                value,redacted=redact_cron_command(value)
+                result['redacted']=result['redacted'] or redacted
+            if len(value)>DHCPD_VALUE_LIMIT:result['truncated']=True;break
+            item=[line,kind,value]
+        elif out and out[-1][1]=='dropped' and out[-1][0]==line:continue
+        else:item=[line,'dropped','']
+        if len(out)>=DHCPD_TOKEN_LIMIT:result['truncated']=True;break
+        out.append(item)
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -2407,6 +2519,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if swanctl and content is None:content=bytearray()
         postgresql=cron_jobs and postgresql_reads(str(path))
         if postgresql and content is None:content=bytearray()
+        dhcpd=cron_jobs and str(path)==DHCPD_CONF
+        if dhcpd and content is None:content=bytearray()
         if len(report['entries'])>=256 or time.monotonic()>deadline:
             raise TimeoutError('Persistence inventory budget exhausted')
         try:
@@ -2464,6 +2578,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['strongswan']=parse_swanctl(bytes(content))
             if postgresql and row['kind']=='regular':
                 row['postgresql']=parse_postgresql(bytes(content),str(path))
+            if dhcpd and row['kind']=='regular':
+                row['dhcpd']=parse_dhcpd(bytes(content))
             report['entries'].append(row)
         except (OSError,ValueError) as error:gap(path,type(error).__name__)
         finally:

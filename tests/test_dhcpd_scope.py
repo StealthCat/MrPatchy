@@ -154,7 +154,7 @@ def test_catalogs_label_files_and_state_the_gap():
     assert startup_inventory.mechanism(DEFAULTS) == ('dhcpd_defaults', 'ISC DHCP server defaults')
     assert startup_inventory.mechanism(DHCP_DIR + '/dhclient.conf')[0] == 'additional'
     gap = next(g for g in startup_inventory.GAPS if g.startswith('ISC dhcpd:'))
-    assert 'not yet evaluated' in gap and 'include' in gap and '/etc/ltsp/dhcpd.conf' in gap and 'never stored' in gap
+    assert 'execute() programs dhcpd runs' in gap and 'key secrets, is dropped' in gap and 'include' in gap and '/etc/ltsp/dhcpd.conf' in gap and 'never stored' in gap
     mechanism = next(m for m in startup_catalog._MECHANISMS if m['id'] == 'dhcpd')
     assert [loc['path'] for loc in mechanism['locations']] == list(NEW)
 

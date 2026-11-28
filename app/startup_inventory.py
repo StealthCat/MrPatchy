@@ -1,5 +1,5 @@
 """Read-only review of bounded stored startup metadata and parsed cron jobs, never job/default attestation."""
-from . import autofs_program_maps, clamav_event_commands, cron_loading, dovecot_services, persistence, postgresql_commands, runit_services, strongswan_updown
+from . import autofs_program_maps, clamav_event_commands, cron_loading, dhcpd_execute, dovecot_services, persistence, postgresql_commands, runit_services, strongswan_updown
 from .db import Host
 from .incidents import digest
 import fnmatch
@@ -62,7 +62,7 @@ GAPS=[
     'runit: /etc/service (on Debian and Ubuntu a symlink to runit/runsvdir/current, recorded, not followed), the /etc/runit directory (the 1, 2 and 3 stage scripts, ctrlaltdel and the runsvdir run-level directories of service links) and the /etc/sv service definitions (run, finish, log/run, down and control files) are hashed as startup files, as metadata and SHA-256 only, by agents that report them. Startup Files evaluates which run, finish, log/run and control programs runsv runs for each service in /etc/service, from this recorded metadata only: symlinks are resolved through recorded entries inside these paths, never on the host, and a link leading elsewhere stays unobserved. Directories are known only from files recorded beneath them, so an empty down, log or control directory looks absent. Service directories outside these paths (such as /usr/share/runit/sv or a runsvdir started with another directory), the supervise state under /run/runit, the contents of run scripts (including any chpst privilege drop), whether runsvdir runs (and so whether programs start automatically and as which account), noexec mounts and the programs themselves are not evaluated.',
     'lighttpd: the /etc/lighttpd directory (lighttpd.conf, conf-available, conf-enabled and any other files it holds, including certificates and keys, as metadata and SHA-256 only) is hashed as startup files by agents that report it, but the include_shell commands lighttpd runs as root through $SHELL -c while it parses the configuration, the piped loggers (server.errorlog, server.breakagelog and accesslog.filename starting with |) and the FastCGI/SCGI bin-path backends it starts as server.username are not yet parsed in this view. include_shell output, included files outside /etc/lighttpd (such as /usr/share/lighttpd helper scripts), configuration passed with -f, cgi.assign interpreters, mod_magnet scripts, whether lighttpd runs and the commands themselves are not evaluated.',
     'LVM2: /etc/lvm/lvm.conf and /etc/lvm/lvmlocal.conf are hashed as startup files, as metadata and SHA-256 only, by agents that report them, but which thin/cache check, dump and repair executables, vdoformat and fsadm programs lvm commands run as root, the lvmlockctl kill command, and the dmeventd executable, plugin libraries and thin/vdo commands the configuration names are not yet evaluated in this view. Host-tag files (/etc/lvm/lvm_<tag>.conf), profiles, the archive, backup, cache and devices directories, configuration passed with --config or LVM_SYSTEM_DIR, copies in the initramfs, whether dmeventd runs and the programs themselves are not observed or evaluated. A custom /etc/lvm path saved earlier keeps its own scope and leaves the two files to built-in scope.',
-    'ISC dhcpd: /etc/dhcp/dhcpd.conf, /etc/dhcp/dhcpd6.conf and the Debian-family /etc/default/isc-dhcp-server command-line defaults are hashed as startup files, as metadata and SHA-256 only (dhcpd.conf can hold TSIG and OMAPI key secrets, which are never stored), by agents that report them, but which execute() programs dhcpd runs on lease commit, release and expiry, as the -user account it drops to, and which global-scope ones it runs as root at every start and dhcpd -t, are not yet evaluated in this view. Files named by include statements, the rest of /etc/dhcp (dhclient hooks are described separately, leases are not captured), /etc/ltsp/dhcpd.conf (which the Debian-family unit prefers when present), the RPM-family /etc/sysconfig/dhcpd, configuration passed with -cf, whether dhcpd runs and the programs themselves are not observed or evaluated. A custom /etc/dhcp or /etc/default path saved earlier keeps its own scope and leaves these files to built-in scope.',
+    'ISC dhcpd: /etc/dhcp/dhcpd.conf, /etc/dhcp/dhcpd6.conf and the Debian-family /etc/default/isc-dhcp-server command-line defaults are hashed as startup files, as metadata and SHA-256 only (dhcpd.conf can hold TSIG and OMAPI key secrets, which are never stored), and agents that report them reduce /etc/dhcp/dhcpd.conf, from the hashed bytes, to the dhcpd 4.4.3-P1 conflex tokens. This view shows which execute() programs dhcpd runs on lease commit, release, expiry and transmission, in which scope and under which conditions, as the -user account it drops to, and which global-scope ones it runs as root at every start and dhcpd -t, with replacement by later or inner on statements. Only punctuation, keywords and the values of execute() arguments, include targets, scope declarations and if, elsif and switch conditions are stored; every other value, including key secrets, is dropped, and kept strings use the same best-effort redaction. The -user account assumes the packaged unit (-user dhcpd -group dhcpd) because the command line is not observed, and whether a class or host matches a client and argument expressions are not evaluated. dhcpd6.conf is hashed but not parsed. Files named by include statements, the rest of /etc/dhcp (dhclient hooks are described separately, leases are not captured), /etc/ltsp/dhcpd.conf (which the Debian-family unit prefers when present), the RPM-family /etc/sysconfig/dhcpd, configuration passed with -cf, whether dhcpd runs and the programs themselves are not observed or evaluated. A custom /etc/dhcp or /etc/default path saved earlier keeps its own scope and leaves these files to built-in scope.',
     'PostgreSQL: the Debian-family /etc/postgresql directory (postgresql.conf, conf.d, pg_hba.conf, pg_ident.conf, start.conf, pg_ctl.conf and environment for each version and cluster, as metadata and SHA-256 only) is hashed as startup files by agents that report it, and agents that report parsed statements let this view evaluate, for each /etc/postgresql/<version>/<cluster>/postgresql.conf, which archive, restore, recovery and ssl_passphrase commands the server runs through /bin/sh -c and which archive and preload libraries it loads as the postgres account, with the PostgreSQL 16 rules. Only include directives and the settings the evaluation reads keep their values; every other value is dropped, and lines PostgreSQL rejects keep only their line number. Commands use the same best-effort credential redaction as cron commands. postgresql.auto.conf (written by ALTER SYSTEM, read last) lives in the data directory and is not collected, so every evaluation has a blocking gap for it; nor is the RPM-family data directory (/var/lib/pgsql/data or /var/lib/pgsql/<version>/data) that holds postgresql.conf there. Included files outside /etc/postgresql and symlinked files are not observed. /etc/postgresql-common, settings passed on the command line, recovery and standby signal files, whether the server runs and the commands themselves are not evaluated.',
     'syslog-ng: the /etc/syslog-ng directory (syslog-ng.conf, conf.d, scl.conf, patterndb.d and any other files it holds, as metadata and SHA-256 only) and the Debian-family /etc/default/syslog-ng or RPM-family /etc/sysconfig/syslog-ng option files (which supply SYSLOGNG_OPTS, such as --user and -f) are hashed as startup files by agents that report them, but which program() sources and destinations, hook-commands() and confgen exec() commands syslog-ng runs, and as which account, are not yet evaluated in this view. The SCL under /usr/share/syslog-ng/include, included files outside /etc/syslog-ng, options set in the service unit or passed on the command line, whether syslog-ng runs and the commands themselves are not observed or evaluated. A custom /etc/default or /etc/sysconfig path saved earlier keeps its own scope and leaves these files to built-in scope.',
     'Symlink targets are recorded, not followed. Custom scope does not imply individual jobs or referenced scripts were inspected.',
@@ -404,6 +404,52 @@ def postgresql_text_search(entry):
     return ' '.join(i.get('value') or '' for i in entry.get('postgresql',{}).get('statements',()))
 
 
+def dhcpd_state(entry):
+    """Whether dhcpd tokens were reported, refused or not reported (older agent) for /etc/dhcp/dhcpd.conf."""
+    if 'dhcpd' in entry:return 'parsed' if entry['dhcpd']['parsed'] else 'unparsed'
+    return 'not_reported' if entry['kind']=='regular' and entry['path']==persistence.DHCPD_CONF else None
+
+
+def _dhcpd_quote(value):
+    out=[]
+    for c in value:
+        if c in '"\\':out.append('\\'+c)
+        elif ord(c)<0x20 or c=='\x7f':out.append('\\%03o'%ord(c))
+        else:out.append(c)
+    return '"'+''.join(out)+'"'
+
+
+def dhcpd_text(report):
+    """Rebuild text app/dhcpd_execute tokenizes identically: every token on its own line number, a dropped value as x."""
+    lines={}
+    for line,kind,value in report['tokens']:
+        text=_dhcpd_quote(value) if kind=='string' else 'x' if kind=='dropped' else value
+        lines.setdefault(line,[]).append(text)
+    return '\n'.join(' '.join(lines.get(n,())) for n in range(1,max(lines,default=0)+1))+'\n'
+
+
+def dhcpd_view(entry):
+    """Evaluate app/dhcpd_execute over the reported tokens. The dhcpd command line (-user/-group) is not
+    observed, so the contract assumes the packaged unit. Includes are not followed. Never a safety verdict."""
+    report=entry['dhcpd']
+    result=dhcpd_execute.assess_config([{'path':persistence.DHCPD_CONF,'state':'regular','text':dhcpd_text(report)}])
+    gaps=[{k:(str(g[k])[:300] if isinstance(g[k],str) else g[k]) for k in ('code','line','detail','blocking')} for g in result['gaps']]
+    gaps+=[{'code':g['code'],'line':g['line'],'detail':'','blocking':True} for g in report['lex_gaps']]
+    if report['truncated']:gaps.append({'code':'tokens_truncated','line':None,'detail':'The agent token or value limit was reached.','blocking':True})
+    keep=('program','path_search','truncated_at_nul','argv_literal','arguments','events','scope','conditions','run_as','runs_as_root_at_startup',
+          'replaced_in_same_scope','replaced_events','may_be_replaced_by','line','runs_only_if_config_accepted')
+    programs=[{k:p.get(k,False) if k=='runs_only_if_config_accepted' else p[k] for k in keep} for p in result['programs'][:200]]
+    return {'programs':programs,'root_programs':sum(1 for p in result['programs'] if 'root' in p['run_as']),
+            'process_user':result['process_user'],'rejected_by_parser':result['rejected_by_parser'],
+            'config_errors':result['config_errors'][:50],'gaps':gaps[:100],'not_modelled':result['not_modelled'],
+            'redacted':report['redacted'],'config_path':persistence.DHCPD_CONF,'complete':False,
+            'origin':'not_assessed','authorizes_response':False,'contract_version':result['contract_version']}
+
+
+def dhcpd_text_search(entry):
+    return ' '.join(value for _,kind,value in entry.get('dhcpd',{}).get('tokens',()) if kind=='string')
+
+
 def dovecot_text_search(entry):
     return ' '.join(i.get('pattern') or i.get('name') or i.get('value') or '' for i in entry.get('dovecot',{}).get('statements',()))
 
@@ -671,6 +717,11 @@ def catalog_rows(inventory):
             states=[postgresql_state(e) for e in found]
             parsed=states.count('parsed')
             label+=f' · {parsed} parsed file{"" if parsed==1 else "s"}'+(' · not reported by this agent version' if 'not_reported' in states else '')
+        if key=='dhcpd':
+            state=next((dhcpd_state(e) for e in inventory['entries'] if e['path']==persistence.DHCPD_CONF and e['kind']=='regular'),None)
+            if state=='parsed':label+=' · execute() programs parsed'
+            elif state=='unparsed':label+=' · not parsed (over limit, NUL bytes or not UTF-8)'
+            elif state=='not_reported':label+=' · not reported by this agent version'
         if key in ('strongswan','strongswan_rpm'):
             found=[e for e in inventory['entries'] if mechanism(e['path'])[0]==key and e['kind']=='regular']
             states=[strongswan_state(e) for e in found]
@@ -734,11 +785,14 @@ def page(s,host_id,offset=0,q='',expected_digest=''):
         if state:row['postgresql_state']=state
         if state=='parsed':row['postgresql_statements']=len(entry['postgresql']['statements'])
         if state=='parsed' and POSTGRESQL_MAIN.fullmatch(entry['path']):row['postgresql']=postgresql_view(inventory,entry['path'])
+        state=dhcpd_state(entry)
+        if state:row['dhcpd_state']=state
+        if state=='parsed':row['dhcpd']=dhcpd_view(entry)
         if entry['path'] in loading:row['cron_loading']=loading[entry['path']]
         jobs=' '.join(str(j['account'] or '')+' '+j['command'] for j in entry.get('cron',{}).get('jobs',()))
         # Built-in paths added after the baseline was collected were never compared, so they are not "unchanged".
         if changes is not None and within(entry['path'],newly) and not within(entry['path'],earlier):row['change']='not_in_baseline'
-        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+postgresql_text_search(entry)).casefold():rows.append(row)
+        if q.casefold() in (entry['path']+' '+label+' '+jobs+' '+anacron_text(entry)+' '+tcp_wrappers_text(entry)+' '+kdump_text(entry)+' '+request_key_text(entry)+' '+autofs_text(entry)+' '+clamav_text(entry)+' '+dovecot_text_search(entry)+' '+strongswan_text_search(entry)+' '+postgresql_text_search(entry)+' '+dhcpd_text_search(entry)).casefold():rows.append(row)
     rows.sort(key=lambda r:r['path'])
     rows=with_at_jobs(rows,inventory,q,changes)
     # One runit evaluation (#1628), on the first matching runit row: /etc/service itself when it was recorded.
