@@ -1,0 +1,185 @@
+{
+  "fixture_only": true,
+  "source_commit": "3beb4936ae7c4725c6d936b5864d547ef50ac1d5",
+  "execution": "parallel",
+  "concurrency": 4,
+  "provider_delay_ms": 4500,
+  "ssh_delay_ms": 50,
+  "persistence_delay_ms": 15,
+  "queue_age_seconds": 2,
+  "runs": 8,
+  "provider_calls": 12,
+  "fixture_hosts": 8,
+  "single_server_slots": null,
+  "peak_provider_requests": 3,
+  "database": "mysql",
+  "database_version": "8.4.13",
+  "retained_history_rows": 1000,
+  "connections": 3,
+  "elapsed_seconds": 36.482,
+  "runs_per_second": 0.219,
+  "workload_fingerprint": {
+    "version": 1,
+    "sha256": "9014ae6c2139f0875c424df4f876c657b07fd161ce04d408227066f1c8273a89"
+  },
+  "persisted_assessments": {
+    "subjects": 8,
+    "input_stages": 12,
+    "follow_up_subjects": 4
+  },
+  "ai_control_mode": "rate_and_daily",
+  "fixture_budget": {
+    "pricing_version": "synthetic-v1",
+    "cap_usd": 10,
+    "timezone": "UTC",
+    "settled_calls": 12,
+    "settled_microusd": 240
+  },
+  "fixture_rate": {
+    "starts_per_hour": 1000,
+    "admitted_starts": 8,
+    "dispatch_wait_seconds": 26.863
+  },
+  "stages": {
+    "run": {
+      "count": 8,
+      "p50_ms": 7306.397,
+      "p95_ms": 9640.816
+    },
+    "one_stage": {
+      "count": 4,
+      "p50_ms": 4885.165,
+      "p95_ms": 5000.535
+    },
+    "two_stage": {
+      "count": 4,
+      "p50_ms": 9619.59,
+      "p95_ms": 9640.816
+    },
+    "provider": {
+      "count": 12,
+      "p50_ms": 4584.966,
+      "p95_ms": 4618.075
+    },
+    "ssh_evidence": {
+      "count": 4,
+      "p50_ms": 50.096,
+      "p95_ms": 50.129
+    },
+    "admission": {
+      "count": 8,
+      "p50_ms": 68.194,
+      "p95_ms": 128.225
+    },
+    "queue_age": {
+      "count": 8,
+      "p50_ms": 15553.786,
+      "p95_ms": 28936.112
+    },
+    "executor_wait": {
+      "count": 8,
+      "p50_ms": 0.458,
+      "p95_ms": 0.582
+    },
+    "receipt_persistence": {
+      "count": 12,
+      "p50_ms": 18.734,
+      "p95_ms": 20.082
+    },
+    "usage_persistence": {
+      "count": 12,
+      "p50_ms": 18.429,
+      "p95_ms": 19.745
+    },
+    "budget_reservation": {
+      "count": 12,
+      "p50_ms": 23.018,
+      "p95_ms": 25.15
+    },
+    "budget_reconciliation": {
+      "count": 12,
+      "p50_ms": 20.503,
+      "p95_ms": 21.017
+    }
+  },
+  "persisted_stages": {
+    "claim_lock": {
+      "count": 8,
+      "p50_ms": 17.333,
+      "p95_ms": 44.967
+    },
+    "claim_lock_hold": {
+      "count": 8,
+      "p50_ms": 40.254,
+      "p95_ms": 65.223
+    },
+    "admission": {
+      "count": 8,
+      "p50_ms": 68.151,
+      "p95_ms": 128.177
+    },
+    "queue_age": {
+      "count": 8,
+      "p50_ms": 15553.78,
+      "p95_ms": 28936.107
+    },
+    "file_provenance": {
+      "count": 8,
+      "p50_ms": 43.868,
+      "p95_ms": 47.447
+    },
+    "known_good_lookup": {
+      "count": 8,
+      "p50_ms": 42.02,
+      "p95_ms": 44.081
+    },
+    "provider_admission": {
+      "count": 12,
+      "p50_ms": 67.053,
+      "p95_ms": 75.125
+    },
+    "receipt_persistence": {
+      "count": 12,
+      "p50_ms": 18.737,
+      "p95_ms": 20.087
+    },
+    "provider": {
+      "count": 12,
+      "p50_ms": 4501.859,
+      "p95_ms": 4531.159
+    },
+    "usage_persistence": {
+      "count": 12,
+      "p50_ms": 38.978,
+      "p95_ms": 40.233
+    },
+    "result_persistence": {
+      "count": 8,
+      "p50_ms": 45.24,
+      "p95_ms": 51.999
+    },
+    "run": {
+      "count": 8,
+      "p50_ms": 7190.191,
+      "p95_ms": 9546.997
+    },
+    "ssh_evidence": {
+      "count": 4,
+      "p50_ms": 52.486,
+      "p95_ms": 52.801
+    },
+    "evidence_persistence": {
+      "count": 4,
+      "p50_ms": 43.764,
+      "p95_ms": 44.43
+    }
+  },
+  "input_tokens": 1200,
+  "output_tokens": 240,
+  "completed_subjects": 8,
+  "approved_subjects": 0,
+  "errors": 0,
+  "cost_status": "unavailable: synthetic model/usage, no paid API calls",
+  "initial_fixture_queue_age_seconds": 2,
+  "notes": "Loopback provider, SSH delay, queue age and the optional receipt/usage persistence delay are synthetic; no production/TLS/database speed claim. Admission includes lock/query/run creation; run includes persistence."
+}
