@@ -209,6 +209,10 @@ _MECHANISMS: tuple[dict[str, Any], ...] = (
     {'id': 'lvm', 'label': 'LVM check/repair executables and dmeventd plugins and commands', 'trigger': 'event',
      'scope': 'system', 'parse': 'metadata',
      'locations': (_loc('/etc/lvm/lvm.conf'), _loc('/etc/lvm/lvmlocal.conf'))},
+    {'id': 'dhcpd', 'label': 'ISC dhcpd execute() programs on lease events', 'trigger': 'event', 'scope': 'system',
+     'parse': 'metadata',
+     'locations': (_loc('/etc/dhcp/dhcpd.conf'), _loc('/etc/dhcp/dhcpd6.conf'),
+                   _loc('/etc/default/isc-dhcp-server', ('debian',)))},
     # Debian keeps postgresql.conf under /etc/postgresql/<version>/<cluster>; RPM keeps it in the data
     # directory, which agents do not collect (only its configuration files belong in startup scope).
     {'id': 'postgresql', 'label': 'PostgreSQL archive, recovery and passphrase commands and preload libraries',
