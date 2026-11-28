@@ -1,3 +1,9 @@
+## 1.134.0 — 2026-11-25
+
+1. [PR #1694](https://github.com/StealthCat/MrPatchy/pull/1694): Startup Files shows the `include_shell`, piped-logger and FastCGI/SCGI `bin-path` commands lighttpd runs from `/etc/lighttpd`. Each shows its timing, account, source line and coverage gaps. Agents report configuration tokens, dropping every value the evaluation does not need. The view sits alongside the runit view from v1.133.0; the coordinator resolved their overlap as a union. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1603.
+
+Integrated through [PR #1702](https://github.com/StealthCat/MrPatchy/pull/1702). This source update does not publish a Docker image.
+
 ## 1.133.0 — 2026-11-25
 
 1. [PR #1690](https://github.com/StealthCat/MrPatchy/pull/1690): Startup Files evaluates runit service directories. For each service in `/etc/service` it shows which `run`, `finish`, `log/run` and `control` programs runsv runs. The view is built from reported metadata only, with symlinks resolved through recorded entries. It discloses the runsvdir, mount-flag and empty-directory gaps, and shows when results are limited for display. Compatibility: no agent, schema, auth or response-authorization change. Increment 3 of #1628.
