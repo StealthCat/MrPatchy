@@ -260,6 +260,7 @@ const assert=require('assert/strict');
     await require('./ui_startup_lvm.cjs')(page,capture);
     await require('./ui_startup_dovecot.cjs')(page,capture);
     await require('./ui_startup_strongswan.cjs')(page,capture);
+    await require('./ui_startup_runit.cjs')(page,capture);
     await require('./ui_server_directory.cjs')(page,capture);
     await require('./ui_server_directory_ai.cjs')(page,capture);
     await require('./ui_servers.cjs')(page,capture);
