@@ -60,6 +60,7 @@ and ``authorizes_response`` is always false.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -396,9 +397,11 @@ def _tag(items: list[dict[str, Any]], path: str) -> None:
 
 
 class _Reader:
-    def __init__(self, files: Mapping[str, Any], directories: Mapping[str, Any]) -> None:
+    def __init__(self, files: Mapping[str, Any], directories: Mapping[str, Any],
+                 parsed: Mapping[str, Any] | None = None) -> None:
         self.files = {_norm(k): v for k, v in files.items()}
         self.directories = {_norm(k): v for k, v in directories.items()}
+        self.parsed = {_norm(k): v for k, v in (parsed or {}).items()}
         self.gaps: list[dict[str, Any]] = []
         self.notes: list[dict[str, Any]] = []
         self.read: list[dict[str, Any]] = []
@@ -483,15 +486,22 @@ class _Reader:
         if len(self.read) >= MAX_FILES:
             self.gap('too_many_files', limit=MAX_FILES)
             return None
-        text = self.files[key]
-        if isinstance(text, bytes):
-            text = text.decode('utf-8', 'surrogateescape')
-        if not isinstance(text, str) or len(text) > MAX_TEXT or '\0' in text:
-            self.gap('file_invalid', path=key)
-            self.read.append({'path': key, 'status': 'not_assessed'})
-            return None
         try:
-            items = parse(text)
+            if key in self.parsed:
+                # Items an agent already parsed from the exact file bytes (#1551 increment 3).
+                supplied = self.parsed[key]
+                if isinstance(supplied, ParseError):
+                    raise supplied
+                items = copy.deepcopy(list(supplied))
+            else:
+                text = self.files[key]
+                if isinstance(text, bytes):
+                    text = text.decode('utf-8', 'surrogateescape')
+                if not isinstance(text, str) or len(text) > MAX_TEXT or '\0' in text:
+                    self.gap('file_invalid', path=key)
+                    self.read.append({'path': key, 'status': 'not_assessed'})
+                    return None
+                items = parse(text)
         except ParseError as exc:
             self.read.append({'path': key, 'status': 'parse_error', 'line': exc.line, 'reason': exc.reason})
             return None
@@ -634,15 +644,18 @@ def _fingerprint(rows: list[dict[str, Any]]) -> str:
 
 def evaluate(*, files: Mapping[str, str | bytes | None], directories: Mapping[str, Sequence[str] | None]
              | None = None, passwd_text: str | None = None, group_text: str | None = None,
-             config_path: str = DEFAULT_CONFIG, collectd_uid: int = 0) -> dict[str, Any]:
+             config_path: str = DEFAULT_CONFIG, collectd_uid: int = 0,
+             parsed: Mapping[str, Sequence[dict[str, Any]] | ParseError] | None = None) -> dict[str, Any]:
     """Return the programs collectd's exec plugin starts and the accounts they run as.
 
     ``files`` maps absolute paths to captured text, or ``None`` when the path
     does not exist; ``directories`` maps absolute paths to their entry names,
     or ``None`` when absent. A path in neither mapping is unobserved.
     ``collectd_uid`` is the daemon's real uid (0 for the packaged service).
+    ``parsed`` optionally maps a path in ``files`` to the items :func:`parse`
+    returned for it, or the :class:`ParseError` it raised, instead of text.
     """
-    reader = _Reader(files or {}, directories or {})
+    reader = _Reader(files or {}, directories or {}, parsed)
     if not isinstance(collectd_uid, int) or isinstance(collectd_uid, bool) \
             or not 0 <= collectd_uid <= UID_MAX:
         reader.gap('collectd_uid_invalid')

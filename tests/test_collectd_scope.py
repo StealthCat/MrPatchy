@@ -173,7 +173,7 @@ def test_catalogs_label_paths_and_state_the_gap():
         (DEBIAN, ('debian',)), (RPM_CONF, ('rpm',)), (RPM_D, ('rpm',))]
     assert DEBIAN in startup_catalog._all_locations('debian') and RPM_D in startup_catalog._all_locations('rpm')
     assert any(DEBIAN in gap and RPM_CONF in gap and RPM_D in gap and 'NotificationExec' in gap
-               and 'not yet evaluated' in gap for gap in startup_inventory.GAPS)
+               and 'let this view evaluate' in gap and 'not captured' in gap for gap in startup_inventory.GAPS)
 
 
 def test_saved_monitor_policy_with_promoted_paths_is_accepted(admin):

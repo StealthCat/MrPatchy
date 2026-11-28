@@ -634,9 +634,97 @@ def validate_rsnapshot(report,path):
     return len(statements)
 
 
+# collectd (#1551): agents reduce each file under /etc/collectd, /etc/collectd.conf and /etc/collectd.d to the
+# items app/collectd_exec reads (target/agent.py parse_collectd). Only top-level Include (with Filter),
+# LoadPlugin, AutoLoadPlugin and PluginDir items and <Plugin exec> blocks keep values; other <Plugin exec>
+# options keep only their key (values None) and every other item is dropped and counted.
+COLLECTD_FILE='/etc/collectd.conf'
+COLLECTD_DIRS=('/etc/collectd','/etc/collectd.d')
+COLLECTD_KEYS={'parsed','error','syntax_error','items','dropped','truncated','redacted'}
+COLLECTD_ERRORS=('nul_byte','invalid_utf8','too_deep')
+COLLECTD_ITEM_LIMIT=2000
+COLLECTD_VALUE_LIMIT=4096
+COLLECTD_VALUES=64
+COLLECTD_LINES=1024*1024+1
+COLLECTD_TOP=('include','loadplugin','autoloadplugin','plugindir','plugin')
+COLLECTD_SYNTAX=('option_without_value','expecting_eol','unexpected_block_end','block_name_expected',
+                 'expecting_close_bracket','block_not_closed','unexpected_token')
+COLLECTD_NUMBER=re.compile(r'[+-]?[0-9]*\.[0-9]+(?:[eE][+-][0-9]+)?|0[xX][0-9a-fA-F]+|0[0-7]+|[+-]?[0-9]+')
+COLLECTD_KEY=re.compile(r'[0-9A-Za-z_]+')
+
+
+def collectd_reads(path):
+    return path==COLLECTD_FILE or any(path.startswith(d+'/') for d in COLLECTD_DIRS)
+
+
+def _collectd_values(values,block):
+    # Only a block can have no values (liboconfig rejects a value-less simple option).
+    if not isinstance(values,list) or (not values and not block) or len(values)>COLLECTD_VALUES:raise ValueError('Invalid collectd values')
+    for value in values:
+        if not isinstance(value,list) or len(value)!=2:raise ValueError('Invalid collectd value')
+        kind,raw=value
+        if kind=='boolean':
+            if type(raw) is not bool:raise ValueError('Invalid collectd value')
+        elif kind=='number':
+            if not isinstance(raw,str) or not COLLECTD_NUMBER.fullmatch(raw):raise ValueError('Invalid collectd number')
+        elif kind=='string':
+            if not isinstance(raw,str) or len(raw)>COLLECTD_VALUE_LIMIT or '\x00' in raw:raise ValueError('Invalid collectd string')
+        else:raise ValueError('Invalid collectd value')
+
+
+def _collectd_item(item,kept):
+    if not isinstance(item,dict) or set(item)!={'key','line','values','children','block'}:raise ValueError('Invalid collectd item')
+    if not isinstance(item['key'],str) or not COLLECTD_KEY.fullmatch(item['key']) or len(item['key'])>256:raise ValueError('Invalid collectd key')
+    if type(item['line']) is not int or not 0<item['line']<=COLLECTD_LINES or type(item['block']) is not bool:raise ValueError('Invalid collectd item')
+    if kept:_collectd_values(item['values'],item['block'])
+    elif item['values'] is not None:raise ValueError('collectd value not retained by agents')
+
+
+def validate_collectd(report,path):
+    """Strictly validate the collectd configuration items reported by newer agents (#1551)."""
+    if not collectd_reads(path):raise ValueError('collectd items outside the collectd configuration')
+    if not isinstance(report,dict) or set(report)!=COLLECTD_KEYS:raise ValueError('Invalid collectd items')
+    for key in ('parsed','truncated','redacted'):
+        if type(report[key]) is not bool:raise ValueError('Invalid collectd items')
+    items=report['items']
+    if type(report['dropped']) is not int or not 0<=report['dropped']<=COLLECTD_LINES or not isinstance(items,list) or len(items)>COLLECTD_ITEM_LIMIT:
+        raise ValueError('Invalid collectd items')
+    if not report['parsed']:
+        if report['error'] not in COLLECTD_ERRORS or items or report['syntax_error'] is not None or report['dropped'] or report['truncated'] or report['redacted']:
+            raise ValueError('Invalid collectd error')
+        return 0
+    if report['error'] is not None:raise ValueError('Invalid collectd error')
+    error=report['syntax_error']
+    if error is not None:
+        if (not isinstance(error,dict) or set(error)!={'line','reason'} or error['reason'] not in COLLECTD_SYNTAX
+                or type(error['line']) is not int or not 0<error['line']<=COLLECTD_LINES or items or report['dropped'] or report['truncated'] or report['redacted']):
+            raise ValueError('Invalid collectd syntax error')
+        return 0
+    total=0;previous=0
+    for item in items:
+        _collectd_item(item,True)
+        low=item['key'].lower();children=item['children']
+        if low not in COLLECTD_TOP or not isinstance(children,list):raise ValueError('Invalid collectd item')
+        # Items arrive in file order; a block's children follow its opening line.
+        if item['line']<previous:raise ValueError('Invalid collectd item order')
+        previous=item['line']
+        if low=='plugin' and not (item['values'] and item['values'][0][0]=='string' and item['values'][0][1].lower()=='exec'):raise ValueError('collectd plugin block not retained by agents')
+        if low not in ('include','plugin') and (children or item['block']):raise ValueError('Invalid collectd item')
+        if children and not item['block']:raise ValueError('Invalid collectd block')
+        for child in children:
+            if not isinstance(child,dict):raise ValueError('Invalid collectd item')
+            child_key=child.get('key').lower() if isinstance(child.get('key'),str) else None
+            kept=(child_key=='filter') if low=='include' else child_key in ('exec','notificationexec')
+            _collectd_item(child,kept)
+            if child['children']!=[] or (low=='include' and child['block']) or not item['line']<child['line']:raise ValueError('Invalid collectd child')
+        total+=1+len(children)
+    if total>COLLECTD_ITEM_LIMIT:raise ValueError('Too many collectd items')
+    return len(items)
+
+
 def metadata(row):
     """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL/rsnapshot detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql','rsnapshot')} if row is not None else None
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql','rsnapshot','collectd')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -707,6 +795,9 @@ def validate(inventory):
         if 'rsnapshot' in row:
             if row['kind']!='regular':raise ValueError('rsnapshot statements require a regular file')
             validate_rsnapshot(row['rsnapshot'],path)
+        if 'collectd' in row:
+            if row['kind']!='regular':raise ValueError('collectd items require a regular file')
+            validate_collectd(row['collectd'],path)
     if jobs>CRON_TOTAL_JOBS:raise ValueError('Too many cron jobs')
     if inventory['state']=='collected' and (gaps or inventory['skipped']):raise ValueError('Persistence coverage contradicts collected state')
 
