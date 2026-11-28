@@ -177,7 +177,7 @@ def test_catalogs_label_paths_and_state_the_gap():
     assert mechanism['parse'] == 'metadata' and mechanism['trigger'] == 'boot' and mechanism['scope'] == 'system'
     assert [(loc['path'], loc['families']) for loc in mechanism['locations']] == [(LIGHTTPD, ('debian', 'rpm'))]
     assert LIGHTTPD in startup_catalog._all_locations('debian') and LIGHTTPD in startup_catalog._all_locations('rpm')
-    assert any(LIGHTTPD in gap and 'include_shell' in gap and 'not yet parsed' in gap and 'bin-path' in gap
+    assert any(LIGHTTPD in gap and 'include_shell' in gap and 'from the hashed bytes' in gap and 'bin-path' in gap
                for gap in startup_inventory.GAPS)
 
 
