@@ -1,3 +1,9 @@
+## 1.140.1 — 2026-11-25
+
+1. [PR #1732](https://github.com/StealthCat/MrPatchy/pull/1732): Keeps both native slow-provider benchmark fixture archives in the repository, 28 files matching the original artifacts byte for byte. Replay tests cover all six pairs per database, the 4,500 ms response delay, evidence and synthetic settlements, and the observed one-versus-three peaks. Compatibility: records and tests only. Fixes #1731.
+
+Integrated through [PR #1734](https://github.com/StealthCat/MrPatchy/pull/1734). This source update does not publish a Docker image.
+
 ## 1.140.0 — 2026-11-25
 
 1. [PR #1717](https://github.com/StealthCat/MrPatchy/pull/1717): Startup Files shows the commands smbd runs from `/etc/samba/smb.conf` and its includes. For each command it shows the share (including the implicit `IPC$`), the account, the trigger, refusal on failure and the source line, and it flags a configuration Samba would reject. Agents keep only section headers, tracked parameters and the rejection line. Every other line, including passwords, `ldap admin dn` and smbpasswd entries, is dropped and counted, and commands get best-effort redaction. A non-canonical include path stays unobserved, with a blocking gap. Compatibility: no schema, auth or response-authorization change; older agents show as not reported. Increment 3 of #1580.
