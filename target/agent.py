@@ -1107,12 +1107,14 @@ PERSISTENCE_ROOTS = ('/etc/systemd/system','/etc/cron.d','/etc/cron.daily',
                      '/var/spool/cron','/etc/init.d','/etc/profile.d','/etc/request-key.d',
                      '/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl','/etc/strongswan',
                      '/etc/sv','/etc/runit','/etc/service','/etc/lighttpd','/etc/postgresql',
+                     '/etc/syslog-ng',
                      '/etc/collectd','/etc/collectd.d')
 PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/anacrontab',
                      '/etc/hosts.allow','/etc/hosts.deny','/etc/rsnapshot.conf','/etc/gitconfig',
                      '/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf','/etc/freshclam.conf',
                      '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
                      '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server',
+                     '/etc/default/syslog-ng','/etc/sysconfig/syslog-ng',
                      '/etc/collectd.conf')
 # Built-in files inside a directory an administrator could previously select as a custom path
 # (#1599). Only these two LVM cascade files are built-in: the rest of /etc/lvm (archive/, backup/,
@@ -1122,8 +1124,11 @@ PERSISTENCE_FILES = ('/etc/crontab','/etc/rc.local','/etc/ld.so.preload','/etc/a
 # The ISC dhcpd configuration files and the Debian-family command-line defaults file (#1593) are
 # built-in the same way: /etc/dhcp also holds dhclient hooks and leases, and /etc/default holds
 # every package's defaults, so neither directory is built-in and a saved custom one stays valid.
+# The syslog-ng command-line defaults files (#1570) are built-in the same way: /etc/default and
+# /etc/sysconfig hold every package's defaults.
 NESTED_PERSISTENCE_FILES = ('/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
-                            '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server')
+                            '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server',
+                            '/etc/default/syslog-ng','/etc/sysconfig/syslog-ng')
 # Built-in files that administrators could previously select as custom paths. A stored
 # custom path equal to one of them is already covered by built-in scope, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
@@ -1131,12 +1136,14 @@ PROMOTED_PERSISTENCE_FILES = ('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.d
                               '/etc/gitconfig','/etc/kdump.conf','/etc/auto.master','/etc/request-key.conf',
                               '/etc/freshclam.conf','/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
                               '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server',
+                              '/etc/default/syslog-ng','/etc/sysconfig/syslog-ng',
                               '/etc/collectd.conf')
 # Built-in directories that administrators could previously select, or select files inside,
 # as custom paths. Such a stored path is covered by the built-in directory, so it is
 # accepted and inventoried once instead of failing saved policies after an upgrade.
 PROMOTED_PERSISTENCE_ROOTS = ('/etc/request-key.d','/etc/clamav','/etc/clamd.d','/etc/dovecot','/etc/swanctl',
                               '/etc/strongswan','/etc/sv','/etc/runit','/etc/service','/etc/lighttpd','/etc/postgresql',
+                              '/etc/syslog-ng',
                               '/etc/collectd','/etc/collectd.d')
 # Built-in roots that may themselves be a symlink by design. runit's /etc/service is a directory
 # on some layouts and, on Debian and Ubuntu, the symlink runit/runsvdir/current (#1628). A

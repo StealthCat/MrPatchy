@@ -594,6 +594,9 @@ def validate(inventory):
 # ISC dhcpd configuration (#1593): dhcpd runs execute() programs on lease commit, release and expiry
 # as its process user, and global-scope ones as root at every start; /etc/dhcp/dhcpd.conf and
 # dhcpd6.conf, and the Debian-family /etc/default/isc-dhcp-server command-line defaults, only.
+# syslog-ng configuration (#1570): syslog-ng runs program() sources and destinations, hook-commands()
+# and confgen exec() commands as its user (root unless --user is passed); /etc/syslog-ng on both
+# families, and the /etc/default/syslog-ng (Debian) or /etc/sysconfig/syslog-ng (RPM) option files only.
 # collectd configuration (#1551): the exec plugin starts Exec programs at every daemon start and
 # NotificationExec programs on every notification, as the user[:group] each line names; /etc/collectd
 # (collectd.conf and collectd.conf.d) on Debian, /etc/collectd.conf and /etc/collectd.d on RPM.
@@ -604,6 +607,7 @@ ADDITIVE_BUILTIN_SCOPE=('/etc/anacrontab','/etc/hosts.allow','/etc/hosts.deny','
                         '/etc/lvm/lvm.conf','/etc/lvm/lvmlocal.conf',
                         '/etc/postgresql',
                         '/etc/dhcp/dhcpd.conf','/etc/dhcp/dhcpd6.conf','/etc/default/isc-dhcp-server',
+                        '/etc/syslog-ng','/etc/default/syslog-ng','/etc/sysconfig/syslog-ng',
                         '/etc/collectd','/etc/collectd.conf','/etc/collectd.d')
 NEWLY_IN_SCOPE_NOTE=(' Newly covered built-in paths are not in the earlier inventory, so they are listed separately '
                      'and not reported as added; collect a new baseline to include them in future comparisons.')
