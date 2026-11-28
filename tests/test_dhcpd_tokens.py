@@ -116,6 +116,22 @@ def test_credentials_in_kept_strings_are_redacted():
     assert report['redacted'] and 'hunter2pass' not in repr(report)
 
 
+@pytest.mark.parametrize('value', ['--password=' + 'A' * 1600, 'A' * 1600])
+def test_oversized_kept_string_stays_blocking_through_agent_and_controller(value):
+    # Redaction can shorten a kept string below dhcpd's token buffer; the agent's gap must survive (#1713 review).
+    text = 'on commit { execute("/bin/x", "' + value + '"); }\n'
+    raw = de.assess_config([{'path': CONF, 'state': 'regular', 'text': text}])
+    assert 'token_over_buffer' in {g['code'] for g in raw['gaps']}
+    report = agent.parse_dhcpd(text.encode())
+    persistence.validate_dhcpd(report, CONF)
+    assert report['redacted'] == value.startswith('--password')
+    assert report['redacted'] is False or 'A' * 1600 not in repr(report)
+    view = startup_inventory.dhcpd_view({'path': CONF, 'kind': 'regular', 'dhcpd': report})
+    over = [g for g in view['gaps'] if g['code'] == 'token_over_buffer']
+    assert len(over) == 1 and over[0]['blocking'] and over[0]['code'] in de.BLOCKING
+    assert [p['program'] for p in view['programs']] == ['/bin/x']
+
+
 def test_token_and_value_limits_truncate_and_the_view_blocks(monkeypatch):
     monkeypatch.setattr(agent, 'DHCPD_TOKEN_LIMIT', 5)
     report = agent.parse_dhcpd(b'on commit { execute("/bin/a", "b"); }\n')

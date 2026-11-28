@@ -2683,20 +2683,25 @@ def parse_dhcpd(data):
     toks,gaps=_dhcpd_lex(text)
     keep,bounded=dhcpd_retained(toks)
     if bounded:gaps.append({'code':'retention_bounded','line':toks[-1][2] if toks else 1})
-    # A kept over-long token is re-detected from the rebuilt text; only a dropped one needs its own gap.
-    result['lex_gaps']=[{'code':g['code'],'line':g['line']} for g in gaps if 'token' not in g or not keep[g['token']]][:64]
+    # A kept over-long token is re-detected from the rebuilt text, unless redaction shortened it below the
+    # buffer; that one and every dropped one keep the agent's gap so the blocking disclosure survives.
+    lex_gaps=[{'code':g['code'],'line':g['line']} for g in gaps if 'token' not in g or not keep[g['token']]]
+    over={g['token']:g['line'] for g in gaps if 'token' in g and keep[g['token']]}
     out=result['tokens']
     for index,(kind,value,line) in enumerate(toks):
         if kind=='punct' or keep[index] or (kind=='name' and value.lower() in DHCPD_KEYWORDS):
             if kind=='string':
                 value,redacted=redact_cron_command(value)
                 result['redacted']=result['redacted'] or redacted
+                if index in over and len(value.encode('utf-8','surrogateescape'))<DHCPD_TOKBUF:
+                    lex_gaps.append({'code':'token_over_buffer','line':over[index]})
             if len(value)>DHCPD_VALUE_LIMIT:result['truncated']=True;break
             item=[line,kind,value]
         elif out and out[-1][1]=='dropped' and out[-1][0]==line:continue
         else:item=[line,'dropped','']
         if len(out)>=DHCPD_TOKEN_LIMIT:result['truncated']=True;break
         out.append(item)
+    result['lex_gaps']=lex_gaps[:64]
     return result
 
 
