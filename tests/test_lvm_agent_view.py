@@ -223,3 +223,19 @@ def test_numeric_bounds_hold_from_reducer_to_inventory_validation(value):
                                                          'sha256': '0' * 64, 'lvm': report}]})
         _same(text)
         _same(PACKAGED_LVM_CONF, local=text, nodename=None)
+
+
+def test_long_tag_names_that_collide_after_cutting_keep_the_inventory():
+    long = 'a' * 300
+    text = f'tags {{ {long}1 {{ }} {long}2 {{ host_list = [ "vm" ] }} {"a" * 255} {{ }} ok {{ }} }}\n'
+    report = agent.parse_lvm_conf(text.encode())
+    persistence.validate_lvm(report, LVM)
+    assert [t['key'] for t in report['sections'][0]['tags']] == ['a' * 255, 'ok']
+    assert report['inexact'] == ['tags']
+    view = si.lvm_view(_inventory(text))
+    assert {'reason': 'agent_value_inexact', 'path': LVM, 'setting': 'tags', 'blocking': True} in view['gaps']
+    assert view['complete'] is False
+    many = 'tags { ' + ' '.join(f't{i} {{ }}' for i in range(80)) + ' }\n'
+    report = agent.parse_lvm_conf(many.encode())
+    persistence.validate_lvm(report, LVM)
+    assert len(report['sections'][0]['tags']) == 64 and report['inexact'] == ['tags']

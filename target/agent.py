@@ -2158,14 +2158,25 @@ def parse_lvm_conf(data):
         elif top['key']=='tags':
             values=[{'key':c['key'],'values':kept(c['value'],'tags/'+c['key'])}
                     for c in top['children'] if c['value'] is not None and c['key']=='hosttags']
-            tags=[]
+            tags=[];cut=set()
             for c in top['children']:
                 if c['value'] is not None:continue
                 key=c['key']
-                if len(key)>255:key=key[:255];result['inexact'].append('tags')
+                if len(key)>255:
+                    # A cut name is no longer the tag LVM uses; it is flagged, and dropped below if it collides.
+                    key=key[:255]
+                    if 'tags' not in result['inexact']:result['inexact'].append('tags')
+                    cut.add(len(tags))
                 tags.append({'key':key,'values':[{'key':s['key'],'values':kept(s['value'],'tags/'+key+'/'+s['key'])}
                                                  for s in c['children'] if s['value'] is not None and s['key'] in ('host_list','host_filter')]})
-            if len(tags)>LVM_TAGS:tags=tags[:LVM_TAGS];result['inexact'].append('tags')
+            exact={t['key'] for i,t in enumerate(tags) if i not in cut};seen=set();unique=[]
+            for i,tag in enumerate(tags):
+                if i in cut and (tag['key'] in exact or tag['key'] in seen):continue
+                seen.add(tag['key']);unique.append(tag)
+            tags=unique
+            if len(tags)>LVM_TAGS:
+                tags=tags[:LVM_TAGS]
+                if 'tags' not in result['inexact']:result['inexact'].append('tags')
             result['sections'].append({'key':'tags','values':values,'tags':tags})
     result['inexact']=result['inexact'][:LVM_VALUES]
     return result
