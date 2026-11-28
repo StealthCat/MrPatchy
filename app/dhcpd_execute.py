@@ -374,7 +374,7 @@ def assess_config(files: list[dict[str, Any]] | None, *, config_path: str = DEFA
             args.append({'literal': literal, 'value': expr[0].value if literal else None,
                          'expression': _source(expr)})
         tok = at(k)
-        if tok is None or tok.value != ';':
+        if tok is None or tok.kind != 'punct' or tok.value != ';':
             reject(line, 'semicolon_expected')
             return skip_statement(k)[0]
         k += 1
@@ -450,10 +450,10 @@ def assess_config(files: list[dict[str, Any]] | None, *, config_path: str = DEFA
                 if not evs:
                     continue
                 t = at(k)
-                if t is not None and t.value == ';':
+                if t is not None and t.kind == 'punct' and t.value == ';':
                     k += 1
                     body_empty = True
-                elif t is not None and t.value == '{':
+                elif t is not None and t.kind == 'punct' and t.value == '{':
                     body_empty = False
                 else:
                     reject(line, 'left_brace_expected')
@@ -484,7 +484,8 @@ def assess_config(files: list[dict[str, Any]] | None, *, config_path: str = DEFA
                 continue
             if word in ('case', 'default') and block_kind == 'switch':
                 k += 1
-                while k < len(toks) and toks[k].value != ':':
+                # Only a punctuation ':' ends the label; a string ":" is the case expression (#1716).
+                while k < len(toks) and not (toks[k].kind == 'punct' and toks[k].value == ':'):
                     k += 1
                 k += 1
                 continue
@@ -530,7 +531,7 @@ def assess_config(files: list[dict[str, Any]] | None, *, config_path: str = DEFA
                 if nxt is not None and nxt.word() == 'if':
                     k += 1
                     continue
-                if nxt is None or nxt.value != '{':
+                if nxt is None or nxt.kind != 'punct' or nxt.value != '{':
                     reject(t.line, 'left_brace_expected')
                     return skip_statement(k + 1)[0]
                 branch = tuple('not (%s)' % p for p in previous)

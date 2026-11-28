@@ -252,3 +252,28 @@ def test_module_is_pure():
     assert imported <= {'__future__', 'typing'}
     for name in ('open', 'exec', 'eval', 'subprocess', 'os'):
         assert not any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(tree))
+
+
+def test_case_string_colon_label_does_not_end_label_skip_early():
+    # #1716: a string case label ":" is the case expression, not the label's ':' terminator.
+    template = ('on commit { switch (option host-name) { case %s: execute("/bin/a"); '
+                'default: execute("/bin/b"); } }\n')
+    colon = run(template % '":"')
+    plain = run(template % '"a"')
+    assert [p['program'] for p in colon['programs']] == ['/bin/a', '/bin/b']
+    assert [p['program'] for p in colon['programs']] == [p['program'] for p in plain['programs']]
+    assert colon['rejected_by_parser'] == plain['rejected_by_parser']
+    assert colon['config_errors'] == plain['config_errors']
+
+
+def test_string_punctuation_lookalikes_are_not_syntax():
+    # A quoted ";" or "{" is a string token, so dhcpd rejects these instead of treating them as syntax.
+    for text, reason in (
+            ('on commit ";" execute("/bin/x");', 'left_brace_expected'),
+            ('on commit "{" execute("/bin/x"); }', 'left_brace_expected'),
+            ('if option host-name = "a" { } else "{" execute("/bin/x"); }', 'left_brace_expected'),
+            ('execute("/bin/x") ";"', None)):
+        result = run(text)
+        assert result['rejected_by_parser'], text
+        if reason:
+            assert reason in [e['reason'] for e in result['config_errors']], text
