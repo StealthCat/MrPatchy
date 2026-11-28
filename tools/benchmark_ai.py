@@ -26,6 +26,8 @@ from unittest.mock import patch
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SOURCE_ROOT))
 
+from tools.compare_ai_benchmarks import MAX_PROVIDER_DELAY_MS
+
 MYSQL_URL_ENV = 'AI_BENCHMARK_MYSQL_URL'
 FIXTURE_MODEL = 'fixture-model'
 FIXTURE_PRICE_VERSION = 'synthetic-v1'
@@ -353,7 +355,8 @@ def main():
                         help='place distinct subjects on one server using its maximum supported slots')
     layout.add_argument('--servers', type=int,
                         help='distribute subjects across this many fixture servers (default: one per run)')
-    parser.add_argument('--provider-delay-ms', type=int, default=20)
+    parser.add_argument('--provider-delay-ms', type=int, default=20,
+                        help=f'synthetic loopback provider delay (1–{MAX_PROVIDER_DELAY_MS} ms, default: 20)')
     parser.add_argument('--persistence-delay-ms', type=int, default=0)
     parser.add_argument('--ssh-delay-ms', type=int, default=10,
                         help='simulated latency of a follow-up SSH evidence request (default: 10)')
@@ -396,7 +399,8 @@ def main():
             if (index + 1) * args.follow_up_runs // args.runs > index * args.follow_up_runs // args.runs
         }
     if not 1<=args.concurrency<=8:parser.error('--concurrency must be between 1 and 8')
-    if not 1<=args.provider_delay_ms<=1000:parser.error('--provider-delay-ms must be between 1 and 1000')
+    if not 1 <= args.provider_delay_ms <= MAX_PROVIDER_DELAY_MS:
+        parser.error(f'--provider-delay-ms must be between 1 and {MAX_PROVIDER_DELAY_MS}')
     if not 0<=args.persistence_delay_ms<=1000:parser.error('--persistence-delay-ms must be between 0 and 1000')
     if not 0 <= args.ssh_delay_ms <= 1000:
         parser.error('--ssh-delay-ms must be between 0 and 1000')
