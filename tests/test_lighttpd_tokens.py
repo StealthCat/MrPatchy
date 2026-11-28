@@ -172,6 +172,11 @@ def test_nul_non_utf8_and_over_limit_files_are_not_parsed(data):
     ('x = 1 ;\n', ['char', ';', 1]),
     ('x = 1\n\x0b\n', ['char', '�', 2]),
     ('x = ²\n', ['char', '�', 1]),
+    # Values the controller would reject are lexing gaps, not tokens (review of 050769e).
+    ('x = 1\nserver.port = 1000000000000000000\n', ['char', '�', 2]),
+    ('server.port = 99999999999999999999\n', ['char', '�', 1]),
+    ('x = 1\n$' + 'A' * 64 + '["x"] == "y" { }\n', ['error', 'bad_conditional', 2]),
+    ('$' + 'A' * 70 + '["x"] == "y" { }\n', ['error', 'bad_conditional', 1]),
 ])
 def test_lexing_gaps_keep_their_code_and_line(text, token):
     report = agent.parse_lighttpd(text.encode())
@@ -180,6 +185,23 @@ def test_lexing_gaps_keep_their_code_and_line(text, token):
     result = lc.evaluate(files={CONF: startup_inventory.lighttpd_text(report)})
     blocking = [(g['code'], g.get('line')) for g in result['gaps'] if g['blocking']]
     assert not result['config_accepted'] and blocking == [('parse_error', token[2])]
+
+
+def test_integers_and_conditionals_at_the_controller_bounds_are_kept():
+    report = agent.parse_lighttpd(('server.port = 999999999999999999\n$' + 'A' * 63 + '["x"] == "y" { }\n').encode())
+    assert report['tokens'][2] == ['int', 10 ** 18 - 1, 1] and report['tokens'][3] == ['cond', '$' + 'A' * 63, 2]
+    persistence.validate_lighttpd(report, CONF)
+
+
+@pytest.mark.parametrize('bad', ['server.port = 99999999999999999999\n', '$' + 'A' * 70 + '["x"] == "y" { }\n'])
+def test_one_out_of_bound_file_does_not_void_the_inventory(bad):
+    other = '/etc/lighttpd/conf-available/10-a.conf'
+    inventory = _inventory({CONF: STOCK, other: bad})
+    persistence.validate(inventory)
+    report = next(e for e in inventory['entries'] if e['path'] == other)['lighttpd']
+    assert report['parsed'] and len(report['tokens']) == 1 and report['tokens'][0][0] in ('char', 'error')
+    view = startup_inventory.lighttpd_view(inventory)
+    assert view['commands'] and view['authorizes_response'] is False
 
 
 def test_over_limit_tokens_and_strings_truncate_and_the_view_blocks():

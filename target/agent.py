@@ -2397,6 +2397,8 @@ LIGHTTPD_TEXT_LIMIT = 1024*1024
 LIGHTTPD_TOKEN_LIMIT = 4000
 LIGHTTPD_STRING_LIMIT = 1024
 LIGHTTPD_WORD_LIMIT = 256
+LIGHTTPD_INT_LIMIT = 10**18
+LIGHTTPD_COND_LIMIT = 64  # '$' and at most 63 name characters
 LIGHTTPD_KEPT_KEYS = ('server.username','server.groupname','server.errorlog','server.breakagelog',
                       'accesslog.filename','server.errorlog-use-syslog')
 LIGHTTPD_BACKEND_KEYS = ('fastcgi.server','scgi.server')
@@ -2441,10 +2443,14 @@ def _lighttpd_tokens(text):
             while j<n and text[j].isdigit():j+=1
             try:value=int(text[i:j])
             except ValueError:return ('char','�',line)
+            # The controller accepts integers below LIGHTTPD_INT_LIMIT only; a larger one is reported as the
+            # same whole-file lexing gap as an integer too long to convert, so it cannot void the inventory.
+            if value>=LIGHTTPD_INT_LIMIT:return ('char','�',line)
             out.append(['int',value,line]);i=j
         elif c=='$':
             m=_LIGHTTPD_COND.match(text,i)
-            if not m:return ('error','bad_conditional',line)
+            # No lighttpd conditional is longer than the controller's bound, so a longer one is a lexing gap.
+            if not m or len(m.group(0))>LIGHTTPD_COND_LIMIT:return ('error','bad_conditional',line)
             out.append(['cond',m.group(0),line]);i=m.end()
         else:
             for op in _LIGHTTPD_OPS:
