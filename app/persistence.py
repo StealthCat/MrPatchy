@@ -424,6 +424,64 @@ def validate_swanctl(report,path):
     return len(items)
 
 
+# lighttpd (#1603): the agent reduces every regular *.conf file under /etc/lighttpd to the token stream
+# app/lighttpd_commands reads. Keys, references, operators, conditionals and integers are kept; strings only
+# where the contract reads them, every other string is a 'drop' marker carrying no value.
+LIGHTTPD_DIR='/etc/lighttpd'
+LIGHTTPD_KEYS={'parsed','tokens','truncated','dropped','redacted'}
+LIGHTTPD_TOKENS=4000
+LIGHTTPD_STRING=1024
+LIGHTTPD_LINES=1024*1024+1
+LIGHTTPD_OPS=frozenset(('=>','+=',':=','==','!=','=~','!~','=^','=$')+tuple('=+(){}[],'))
+LIGHTTPD_ERRORS=('unterminated_string','bad_conditional')
+_LIGHTTPD_WORD=re.compile(r'[A-Za-z_][A-Za-z0-9_.\-]{0,255}')
+_LIGHTTPD_COND=re.compile(r'\$[A-Z_]{1,63}')
+
+
+def lighttpd_reads(path):
+    return path.startswith(LIGHTTPD_DIR+'/') and path.endswith('.conf')
+
+
+def validate_lighttpd(report,path):
+    """Strictly validate one file's lighttpd token stream."""
+    if not lighttpd_reads(path):raise ValueError('lighttpd tokens outside /etc/lighttpd')
+    if not isinstance(report,dict) or set(report)!=LIGHTTPD_KEYS:raise ValueError('Invalid lighttpd tokens')
+    if any(type(report[k]) is not bool for k in ('parsed','truncated','redacted')) or type(report['dropped']) is not int or not 0<=report['dropped']<=LIGHTTPD_TOKENS:
+        raise ValueError('Invalid lighttpd tokens')
+    items=report['tokens']
+    if not isinstance(items,list) or len(items)>LIGHTTPD_TOKENS or (not report['parsed'] and (items or report['truncated'] or report['dropped'] or report['redacted'])):
+        raise ValueError('Invalid lighttpd tokens')
+    last=1;dropped=0
+    for index,item in enumerate(items):
+        if not isinstance(item,list) or len(item)!=3:raise ValueError('Invalid lighttpd token')
+        kind,value,line=item
+        if type(line) is not int or not 1<=line<=LIGHTTPD_LINES:raise ValueError('Invalid lighttpd token')
+        start=line-value.count('\n') if kind=='str' and isinstance(value,str) else line
+        if start<last:raise ValueError('Invalid lighttpd token')
+        last=line
+        if kind in ('error','char'):
+            # A lexing gap rejects the whole file, so it is the only token.
+            if len(items)!=1 or report['truncated'] or report['dropped'] or report['redacted']:raise ValueError('Invalid lighttpd error')
+            if kind=='error' and value not in LIGHTTPD_ERRORS:raise ValueError('Invalid lighttpd error')
+            if kind=='char' and (not isinstance(value,str) or len(value)!=1 or not value.isprintable() or value.isspace() or
+                                 value in '"#$=+(){}[],' or value.isdigit() or _LIGHTTPD_WORD.match(value)):raise ValueError('Invalid lighttpd error')
+        elif kind=='str':
+            if not isinstance(value,str) or len(value)>LIGHTTPD_STRING or '\x00' in value or value.endswith('\\'):raise ValueError('Invalid lighttpd string')
+        elif kind=='drop':
+            if value is not None:raise ValueError('lighttpd value not retained by agents')
+            dropped+=1
+        elif kind=='int':
+            if type(value) is not int or not 0<=value<10**18:raise ValueError('Invalid lighttpd integer')
+        elif kind=='word':
+            if not isinstance(value,str) or not _LIGHTTPD_WORD.fullmatch(value):raise ValueError('Invalid lighttpd word')
+        elif kind=='cond':
+            if not isinstance(value,str) or not _LIGHTTPD_COND.fullmatch(value):raise ValueError('Invalid lighttpd conditional')
+        elif kind=='op':
+            if value not in LIGHTTPD_OPS:raise ValueError('Invalid lighttpd operator')
+        else:raise ValueError('Invalid lighttpd token')
+    if dropped!=report['dropped']:raise ValueError('Invalid lighttpd dropped count')
+    return len(items)
+
 
 # LVM2 program settings (#1599): agents parse /etc/lvm/lvm.conf and lvmlocal.conf and keep only the reduced
 # tree app/lvm_commands evaluates (target/agent.py parse_lvm_conf).
@@ -635,8 +693,8 @@ def validate_rsnapshot(report,path):
 
 
 def metadata(row):
-    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/LVM/PostgreSQL/rsnapshot detail, for comparisons and incident evidence."""
-    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lvm','postgresql','rsnapshot')} if row is not None else None
+    """Entry metadata without parsed cron/at/anacron/TCP wrappers/kdump/request-key/autofs/ClamAV/Dovecot/strongSwan/lighttpd/LVM/PostgreSQL/rsnapshot detail, for comparisons and incident evidence."""
+    return {k:v for k,v in row.items() if k not in ('cron','at','anacron','tcp_wrappers','kdump','request_key','autofs','clamav','dovecot','strongswan','lighttpd','lvm','postgresql','rsnapshot')} if row is not None else None
 
 
 MAX_SCOPE=64
@@ -701,6 +759,9 @@ def validate(inventory):
         if 'strongswan' in row:
             if row['kind']!='regular':raise ValueError('strongSwan statements require a regular file')
             validate_swanctl(row['strongswan'],path)
+        if 'lighttpd' in row:
+            if row['kind']!='regular':raise ValueError('lighttpd tokens require a regular file')
+            validate_lighttpd(row['lighttpd'],path)
         if 'postgresql' in row:
             if row['kind']!='regular':raise ValueError('PostgreSQL statements require a regular file')
             validate_postgresql(row['postgresql'],path)

@@ -2649,6 +2649,190 @@ def parse_swanctl(data):
     return result
 
 
+# lighttpd (#1603): every regular *.conf file under /etc/lighttpd is reduced, from the exact hashed bytes,
+# to the token stream app/lighttpd_commands reads (lighttpd 1.4.74 configuration lexing). Nothing is run.
+# Keys, references, operators, conditionals and integers are kept. Strings are kept only where the contract
+# reads them: include/include_shell targets, conditional selector fields and patterns, var.* values,
+# server.username and server.groupname, the piped-logger and syslog keys, keys this file references, and
+# FastCGI/SCGI extension, host and option names with their bin-path and max-procs values. A bare string
+# anywhere else (including in a file lighttpd would reject) is dropped. Every other string, including socket paths,
+# bin-environment values and credentials, is replaced by a dropped marker. Kept strings use the
+# best-effort credential redaction used for cron commands.
+LIGHTTPD_DIR = '/etc/lighttpd'
+LIGHTTPD_TEXT_LIMIT = 1024*1024
+LIGHTTPD_TOKEN_LIMIT = 4000
+LIGHTTPD_STRING_LIMIT = 1024
+LIGHTTPD_WORD_LIMIT = 256
+LIGHTTPD_INT_LIMIT = 10**18
+LIGHTTPD_COND_LIMIT = 64  # '$' and at most 63 name characters
+LIGHTTPD_KEPT_KEYS = ('server.username','server.groupname','server.errorlog','server.breakagelog',
+                      'accesslog.filename','server.errorlog-use-syslog')
+LIGHTTPD_BACKEND_KEYS = ('fastcgi.server','scgi.server')
+# Keys whose values can carry credentials (auth.backend.*.bind-pw/pass, mysql-vhost.pass, secdownload.secret,
+# ssl.* key material, or a var.* named like a secret). Their values are dropped even when the same file
+# references them, so a command built from one shows a blocking value_not_retained gap instead of the value.
+LIGHTTPD_CREDENTIAL_KEY = re.compile(r'(?i)pass|pw|secret|token|cred|key|^auth\.|^secdownload\.|^mysql-vhost\.|^ssl\.')
+LIGHTTPD_BACKEND_VALUES = ('bin-path','max-procs')
+LIGHTTPD_BACKEND_OPTION_DEPTH = 3
+LIGHTTPD_CONDITION_OPS = ('==','!=','=~','!~','=^','=$')
+LIGHTTPD_ASSIGN = ('=','+=',':=')
+# A word right after one of these is a reference inside an expression, never a statement's key.
+LIGHTTPD_EXPRESSION = ('=','+=',':=','+','(',',','=>','==','!=','=~','!~','=^','=$')
+_LIGHTTPD_KEY = re.compile(r'[A-Za-z_][A-Za-z0-9_.\-]*')
+_LIGHTTPD_COND = re.compile(r'\$[A-Z_]+')
+_LIGHTTPD_OPS = ('=>','+=',':=','==','!=','=~','!~','=^','=$')
+
+
+def lighttpd_reads(path):
+    return path.startswith(LIGHTTPD_DIR+'/') and path.endswith('.conf')
+
+
+def _lighttpd_tokens(text):
+    """Tokens exactly as app/lighttpd_commands.tokenize, or ('error'|'char', value, line) on a lexing gap."""
+    out=[];i=0;line=1;n=len(text)
+    while i<n:
+        c=text[i]
+        if c=='\n':line+=1;i+=1
+        elif c in ' \t\r':i+=1
+        elif c=='#':
+            while i<n and text[i]!='\n':i+=1
+        elif c=='"':
+            j=i+1;buf=[]
+            while j<n and text[j]!='"':
+                if text[j]=='\\' and j+1<n and text[j+1]=='"':buf.append('"');j+=2;continue
+                if text[j]=='\n':line+=1
+                buf.append(text[j]);j+=1
+            if j>=n:return ('error','unterminated_string',line)
+            out.append(['str',''.join(buf),line]);i=j+1
+        elif c.isdigit():
+            j=i
+            while j<n and text[j].isdigit():j+=1
+            try:value=int(text[i:j])
+            except ValueError:return ('char','�',line)
+            # The controller accepts integers below LIGHTTPD_INT_LIMIT only; a larger one is reported as the
+            # same whole-file lexing gap as an integer too long to convert, so it cannot void the inventory.
+            if value>=LIGHTTPD_INT_LIMIT:return ('char','�',line)
+            out.append(['int',value,line]);i=j
+        elif c=='$':
+            m=_LIGHTTPD_COND.match(text,i)
+            # No lighttpd conditional is longer than the controller's bound, so a longer one is a lexing gap.
+            if not m or len(m.group(0))>LIGHTTPD_COND_LIMIT:return ('error','bad_conditional',line)
+            out.append(['cond',m.group(0),line]);i=m.end()
+        else:
+            for op in _LIGHTTPD_OPS:
+                if text.startswith(op,i):out.append(['op',op,line]);i+=len(op);break
+            else:
+                if c in '=+(){}[],':out.append(['op',c,line]);i+=1;continue
+                m=_LIGHTTPD_KEY.match(text,i)
+                if not m:return ('char',c if c.isprintable() and not c.isspace() else '�',line)
+                out.append(['word',m.group(0),line]);i=m.end()
+    return out
+
+
+def parse_lighttpd(data):
+    """Reduce one lighttpd configuration file to app/lighttpd_commands tokens. Nothing is executed."""
+    result={'parsed':False,'tokens':[],'truncated':False,'dropped':0,'redacted':False}
+    if len(data)>LIGHTTPD_TEXT_LIMIT or b'\x00' in data:return result
+    try:text=data.decode('utf-8')
+    except UnicodeDecodeError:return result
+    result['parsed']=True
+    tokens=_lighttpd_tokens(text)
+    if isinstance(tokens,tuple):
+        result['tokens'].append(list(tokens));return result
+    if len(tokens)>LIGHTTPD_TOKEN_LIMIT:result['truncated']=True;tokens=tokens[:LIGHTTPD_TOKEN_LIMIT]
+    referenced={value for index,(kind,value,_) in enumerate(tokens) if kind=='word' and index and
+                (tokens[index-1][0]=='op' and tokens[index-1][1] in LIGHTTPD_EXPRESSION or
+                 tokens[index-1][:2] in (['word','include'],['word','include_shell']))}
+    # Names a credential-named key's value is built from (bind-pw = var.x, pass = "a" + server.tag) carry that
+    # credential, so they are dropped too, closed transitively over the assignments of those names.
+    sources={}
+    def assigned(at):
+        return tokens[at][0]=='word' and at+1<len(tokens) and tokens[at+1][0]=='op' and tokens[at+1][1] in LIGHTTPD_ASSIGN
+    for index in range(len(tokens)):
+        if not assigned(index):continue
+        names=sources.setdefault(tokens[index][1],set())
+        for at in range(index+2,len(tokens)):
+            kind,value,_=tokens[at]
+            if assigned(at) or kind=='op' and value not in LIGHTTPD_EXPRESSION and value!=')':break
+            if kind=='word':names.add(value)
+    tainted=set();pending=[name for name in sources if LIGHTTPD_CREDENTIAL_KEY.search(name)]
+    while pending:
+        for name in sources.get(pending.pop(),()):
+            if name not in tainted:tainted.add(name);pending.append(name)
+    out=result['tokens']
+    def keep(token):
+        kept,redacted=redact_cron_command(token[1])
+        # lighttpd strings cannot end in a backslash, so a redacted one that does is not representable.
+        if len(kept)>LIGHTTPD_STRING_LIMIT or kept.endswith('\\'):result['truncated']=True;return False
+        result['redacted']=result['redacted'] or redacted
+        out.append(['str',kept,token[2]]);return True
+    def drop(token):
+        result['dropped']+=1;out.append(['drop',None,token[2]])
+    # rhs: the value of one assignment. mode keep|backend|drop; expect None (operator next), True (a value
+    # next) or False (after a value); bin is the array depth whose bin-path/max-procs value is being read.
+    rhs=None
+    # stmt tracks where a bare string sits outside an assignment. Only an include/include_shell target or a
+    # conditional pattern ('expr', continued by '+' after each 'value') and a conditional selector's field
+    # ('bracket', for a $COND that starts a statement) are kept; every other bare string is dropped.
+    stmt=None
+    for index,token in enumerate(tokens):
+        kind,value,line=token
+        nxt=tokens[index+1][:2] if index+1<len(tokens) else None
+        prev=tokens[index-1][:2] if index else None
+        if kind=='word' and len(value)>LIGHTTPD_WORD_LIMIT:result['truncated']=True;break
+        if rhs is not None and rhs['expect'] is None:
+            rhs['expect']=True;out.append(token);continue
+        if rhs is not None and rhs['expect']:
+            if kind=='op' and value=='(':rhs['depth']+=1;out.append(token);continue
+            if kind=='op' and value==')' and rhs['depth']:
+                rhs['depth']-=1;rhs['expect']=False
+                if rhs['bin'] is not None and rhs['bin']>rhs['depth']:rhs['bin']=None
+                out.append(token);continue
+            if kind=='str':
+                rhs['expect']=False
+                # Backend extension and host names sit at depths 1-2 and options at depth 3; deeper keys,
+                # such as bin-environment names, are values the contract does not read.
+                is_key=nxt==['op','=>'] and rhs['depth']<=LIGHTTPD_BACKEND_OPTION_DEPTH
+                if rhs['mode']=='keep' or (rhs['mode']=='backend' and (is_key or rhs['bin']==rhs['depth'])):
+                    if not keep(token):break
+                    if (rhs['mode']=='backend' and is_key and rhs['depth']==LIGHTTPD_BACKEND_OPTION_DEPTH
+                            and value in LIGHTTPD_BACKEND_VALUES):rhs['bin']=rhs['depth']
+                else:drop(token)
+                continue
+            if kind in ('int','word'):rhs['expect']=False;out.append(token);continue
+            rhs=None
+        elif rhs is not None:
+            if kind=='op' and value=='+':rhs['expect']=True;out.append(token);continue
+            if rhs['depth'] and kind=='op' and value in (',','=>'):
+                if value==',' and rhs['bin']==rhs['depth']:rhs['bin']=None
+                rhs['expect']=True;out.append(token);continue
+            if rhs['depth'] and kind=='op' and value==')':
+                if rhs['bin'] is not None and rhs['bin']>=rhs['depth']:rhs['bin']=None
+                rhs['depth']-=1;out.append(token);continue
+            rhs=None
+        if kind=='word' and nxt is not None and nxt[0]=='op' and nxt[1] in LIGHTTPD_ASSIGN:
+            mode=('drop' if value in tainted else
+                  'keep' if value in LIGHTTPD_KEPT_KEYS or ((value.startswith('var.') or value in referenced) and not LIGHTTPD_CREDENTIAL_KEY.search(value))
+                  else 'backend' if value in LIGHTTPD_BACKEND_KEYS else 'drop')
+            rhs={'mode':mode,'depth':0,'expect':None,'bin':None};stmt=None;out.append(token);continue
+        if kind=='str':
+            if stmt in ('expr','bracket'):
+                if not keep(token):break
+            else:drop(token)
+            stmt='value' if stmt=='expr' else 'field' if stmt=='bracket' else None
+            continue
+        if kind=='word' and value in ('include','include_shell'):stmt='expr'
+        elif kind=='cond':stmt='cond' if not (prev and prev[0]=='op' and prev[1] in LIGHTTPD_EXPRESSION) else None
+        elif stmt=='cond' and [kind,value]==['op','[']:stmt='bracket'
+        elif stmt=='field' and [kind,value]==['op',']']:stmt='close'
+        elif stmt=='close' and kind=='op' and value in LIGHTTPD_CONDITION_OPS:stmt='expr'
+        elif stmt=='expr' and kind in ('int','word'):stmt='value'
+        elif stmt=='value' and [kind,value]==['op','+']:stmt='expr'
+        else:stmt=None
+        out.append(token)
+    return result
+
+
 def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
     paths=[] if custom_paths is None else custom_paths
     scope=validate_custom_paths(paths)
@@ -2664,6 +2848,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
         if dovecot and content is None:content=bytearray()
         swanctl=cron_jobs and swanctl_reads(str(path))
         if swanctl and content is None:content=bytearray()
+        lighttpd=cron_jobs and lighttpd_reads(str(path))
+        if lighttpd and content is None:content=bytearray()
         postgresql=cron_jobs and postgresql_reads(str(path))
         if postgresql and content is None:content=bytearray()
         if len(report['entries'])>=256 or time.monotonic()>deadline:
@@ -2725,6 +2911,8 @@ def persistence_inventory(deadline,custom_paths=None,cron_jobs=False):
                 row['dovecot']=parse_dovecot(bytes(content))
             if swanctl and row['kind']=='regular':
                 row['strongswan']=parse_swanctl(bytes(content))
+            if lighttpd and row['kind']=='regular':
+                row['lighttpd']=parse_lighttpd(bytes(content))
             if postgresql and row['kind']=='regular':
                 row['postgresql']=parse_postgresql(bytes(content),str(path))
             report['entries'].append(row)
